@@ -7,6 +7,8 @@
 # in one place avoids drift; the narrowing here is what gives an LLM caller a small,
 # unambiguous contract. Output defaults to the plain list (-l) unless -j/-J is given.
 set -euo pipefail
+# Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). yt-design.md §28.
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Locate the impl whether invoked via a bin/ symlink (../../shell-scripts) or directly.

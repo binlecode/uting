@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 
+# Portability: must run on bash 3.2 (macOS system bash). No bash-4 features; guard
+# every empty-array expansion (a bare "${arr[@]}" on an empty array aborts under
+# `set -u` on 3.2). See yt-design.md §28.
+#
 # set -e means any unguarded failing command aborts the script. This is desired for
 # this core: search and single-URL playback are non-interactive, so if mpv/yt-dlp
 # fails the script should abort and propagate a real exit code. Where a failure must
