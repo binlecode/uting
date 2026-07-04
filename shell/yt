@@ -25,27 +25,15 @@ SELF="${BASH_SOURCE[0]}"
 # Optional fast-start progressive format for interactive playback.
 : "${YT_VIDEO_FORMAT_FAST:=b[height<=720][ext=mp4]/b[height<=720]/b[ext=mp4]/b}"
 : "${YT_ASCII_VO:=tct}"
-# Optional yt-dlp youtube player_client override (e.g. web_safari) for videos that
-# 403 on the default authenticated client (tv_downgraded). Empty means yt-dlp's default.
-#
-# Why this exists and why it's opt-in rather than a hardcoded default: when cookies
-# are supplied, yt-dlp treats the session as authenticated and hardcodes its client
-# set to (tv_downgraded, web_safari) — other clients (android/mweb/web) need a PO
-# token provider plugin we don't have installed, and just fail format selection.
-# tv_downgraded (client tag TVHTML5) exposes proper audio-only DASH formats but can
-# 403 on specific videos (confirmed: same video 403s 100% of the time on one video,
-# 0% on another — it's per-video, not session flakiness). web_safari never 403s in
-# testing but only exposes muxed HLS (video+audio together) — no audio-only track —
-# so forcing it as the default would silently make "audio-only" mode download full
-# video bytes for every video, not just the rare ones that need it. Hence: leave
-# unset for the bandwidth-efficient default.
-#
-# Leaving this unset does NOT mean 403s go unhandled: play_url_with_fallback()
-# automatically retries once with web_safari when playback fails and this is
-# still empty, so the common case stays bandwidth-efficient and the rare 403
-# self-heals without you needing to notice and set this by hand. Setting it
-# yourself here opts out of that automatic retry (nothing left to fall back to).
-: "${YT_PLAYER_CLIENT:=}"
+# Cookies (login) are ON by default (browser: chrome) so login-gated / members / age-
+# restricted videos — invisible to an anonymous client — play. The trade-off: when cookies
+# are supplied, yt-dlp switches to YouTube's authenticated client set, whose googlevideo
+# media URLs can require a GVS "Proof of Origin" token; without it, mpv's fetch of those
+# URLs 403s on some PUBLIC videos. That case self-heals: play_url_with_fallback() retries
+# once anonymously (drops cookies), and the anonymous client's URLs fetch cleanly (HTTP
+# 206). So login-gated content works on the first try and public 403s recover on the retry.
+# Set YT_COOKIE_BROWSER=none to force anonymous-only (skips the keychain read / retry).
+# The browser's cookie DB should be readable (Chrome ideally closed) for a clean extraction.
 # Optional custom mpv input.conf path; empty means use mpv defaults.
 : "${YT_MPV_INPUT_CONF:=}"
 
@@ -55,16 +43,9 @@ YT_MPV_VIDEO_OPTIONS=(--msg-level=client=error --term-osd-bar)
 # mpv docs suggest sw-fast/really-quiet for terminal VOs to reduce glitches and improve speed.
 YT_MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term-osd-bar)
 
-# Detect if the specified cookie browser exists on this platform.
-# If not, run without cookies to avoid breaking the script.
-#
-# This is a coarse presence check (does the browser's profile directory exist),
-# not a liveness/lock check. yt-dlp's own docs note that reading cookies from a
-# browser while it's actively running can read a locked/inconsistent cookie DB and
-# silently degrade to an unauthenticated extraction — a plausible contributor to
-# the per-video playback flakiness this script guards against via YT_PLAYER_CLIENT
-# (see above). We don't detect that case here; closing the browser before playback
-# is the more reliable workaround, at the cost of convenience.
+# Cookies are ON by default (YT_COOKIE_BROWSER defaults to "chrome"; set "none" to disable).
+# Verify the browser profile exists on this platform; if not, run anonymously rather than
+# break — so a machine without the configured browser degrades gracefully to no-login.
 YT_COOKIE_ARGS=()
 if [[ -n "${YT_COOKIE_BROWSER:-}" && "$YT_COOKIE_BROWSER" != "none" ]]; then
     browser_exists=0
@@ -193,20 +174,18 @@ Dependencies:
   - Playback: mpv
 
 Environment Variables (customizable):
-  YT_COOKIE_BROWSER    Browser for cookie extraction (default: chrome)
+  YT_COOKIE_BROWSER    Browser for cookie extraction / login (default: chrome).
+                       Logged in by default so login-gated / members / age-restricted
+                       videos play. Some PUBLIC videos 403 with cookies (YouTube PO-token
+                       wall on the authenticated client) — that self-heals: playback
+                       retries once anonymously. Set to "none" to force anonymous-only
+                       (skips the keychain read and the retry). Reading the cookie DB is
+                       most reliable with the browser closed.
   YT_AUDIO_FORMAT      Default audio stream format (default: ba)
   YT_VIDEO_FORMAT      Default video stream format (default: bv*+ba/b)
   YT_VIDEO_FORMAT_FAST Fast-start progressive stream format
   YT_ASCII_VO          mpv terminal video output driver (default: tct)
   YT_MPV_INPUT_CONF    Path to optional custom mpv input.conf file
-  YT_PLAYER_CLIENT     Pin yt-dlp's youtube player_client (e.g. web_safari) instead
-                       of the default authenticated client. Empty by default: when
-                       unset, a failed playback automatically retries once with
-                       web_safari before giving up, so this normally never needs to
-                       be set by hand. Setting it yourself opts out of that retry.
-                       Note: web_safari has no audio-only formats, so also set
-                       YT_AUDIO_FORMAT=b (or ba/b) or audio mode will fail with
-                       "Requested format is not available".
 EOF
 }
 
@@ -299,7 +278,10 @@ normalize_playback_mode() {
 # 3. STREAM RESOLUTION & PLAYBACK PIPELINES
 # ==============================================================================
 
-run_yt_dlp_pipe_to_mpv() {
+# Play a URL with mpv. mpv's built-in ytdl_hook resolves the direct stream URL via
+# yt-dlp, then mpv fetches and plays it (this is NOT a yt-dlp|mpv pipe). Cookies, when
+# opted into, are forwarded to that ytdl_hook.
+run_mpv() {
     local url=$1
     local format=$2
     shift 2
@@ -314,14 +296,9 @@ run_yt_dlp_pipe_to_mpv() {
     # Pass format directly to mpv's ytdl integration
     mpv_cmd+=(--ytdl-format="$format")
 
-    # Pass cookie arguments to mpv's ytdl integration if available
+    # Forward cookies to mpv's ytdl integration only when login is opted into.
     if (( ${#YT_COOKIE_ARGS[@]} > 0 )); then
         raw_opts+=("cookies-from-browser=$YT_COOKIE_BROWSER")
-    fi
-
-    # Optional player_client override for videos that 403 on the default authenticated client
-    if [[ -n "$YT_PLAYER_CLIENT" ]]; then
-        raw_opts+=("extractor-args=youtube:player_client=$YT_PLAYER_CLIENT")
     fi
 
     # mpv's --ytdl-raw-options is a single key/value-list flag: multiple keys are
@@ -344,22 +321,22 @@ warn_audio_only_mode() {
 play_audio_url() {
     local url=$1
     warn_audio_only_mode
-    run_yt_dlp_pipe_to_mpv "$url" "$YT_AUDIO_FORMAT" "${YT_MPV_AUDIO_OPTIONS[@]}"
+    run_mpv "$url" "$YT_AUDIO_FORMAT" "${YT_MPV_AUDIO_OPTIONS[@]}"
 }
 
 play_video_url() {
     local url=$1
-    run_yt_dlp_pipe_to_mpv "$url" "$YT_VIDEO_FORMAT" "${YT_MPV_VIDEO_OPTIONS[@]}"
+    run_mpv "$url" "$YT_VIDEO_FORMAT" "${YT_MPV_VIDEO_OPTIONS[@]}"
 }
 
 play_fast_video_url() {
     local url=$1
-    run_yt_dlp_pipe_to_mpv "$url" "$YT_VIDEO_FORMAT_FAST" "${YT_MPV_VIDEO_OPTIONS[@]}"
+    run_mpv "$url" "$YT_VIDEO_FORMAT_FAST" "${YT_MPV_VIDEO_OPTIONS[@]}"
 }
 
 play_ascii_url() {
     local url=$1
-    run_yt_dlp_pipe_to_mpv "$url" "$YT_VIDEO_FORMAT" "${YT_MPV_ASCII_OPTIONS[@]}"
+    run_mpv "$url" "$YT_VIDEO_FORMAT" "${YT_MPV_ASCII_OPTIONS[@]}"
 }
 
 play_viz_url() {
@@ -373,7 +350,7 @@ play_viz_url() {
     size="${width}x${height}"
 
     # Use showwaves filter with TCT terminal output
-    run_yt_dlp_pipe_to_mpv "$url" "$YT_AUDIO_FORMAT" \
+    run_mpv "$url" "$YT_AUDIO_FORMAT" \
         --vo=tct \
         --lavfi-complex="[aid1]asplit[ao][v];[v]showwaves=s=${size}:mode=line:colors=cyan|yellow:r=15[vo]"
 }
@@ -409,33 +386,31 @@ play_mode_url() {
     esac
 }
 
-# One-time automatic fallback retry, kept separate from play_mode_url() (which
-# stays a pure mode dispatcher). If playback fails and the caller hasn't already
-# pinned YT_PLAYER_CLIENT themselves, retry once with `web_safari` — the client
-# yt-dlp's own PO Token Guide documents as not currently requiring a PO token,
-# which is why it doesn't 403 on videos that reject the default authenticated
-# client (tv_downgraded). `local YT_PLAYER_CLIENT=... YT_AUDIO_FORMAT=...` shadow
-# the globals only for this retry call (bash dynamic scoping), so
-# run_yt_dlp_pipe_to_mpv picks them up without touching the real defaults; `b`
-# is needed because web_safari only exposes muxed formats, so plain `ba` would
-# fail format selection entirely (see the design doc). SIGINT (130, user pressed
-# q/ctrl-c) is deliberately excluded — that's an intentional stop, not a failure.
+# One-time automatic fallback retry, kept separate from play_mode_url() (which stays a
+# pure mode dispatcher). With cookies ON by default, the first attempt is authenticated so
+# login-gated content plays; if it fails while cookies are in use, retry once WITHOUT
+# cookies (anonymous). This matches the real failure mode — YouTube 403s the authenticated
+# client's media URLs (GVS PO token) on some PUBLIC videos, while the anonymous client's
+# URLs fetch fine — so a public video that 403s with cookies self-heals on the retry.
+# `local YT_COOKIE_ARGS=()` shadows the global for this retry only (bash dynamic scoping),
+# so run_mpv drops the cookies without touching the real setting. SIGINT (130, user hit
+# q/ctrl-c) is excluded — an intentional stop, not a failure. With YT_COOKIE_BROWSER=none
+# there are no cookies to drop, so this never fires (anonymous-only).
 play_url_with_fallback() {
     local url=$1
     local mode=$2
     local rc=0
 
-    # Global (not local) so the playback JSON emitter can report whether the
-    # web_safari fallback fired. Reset per call so a prior retry doesn't leak.
+    # Global (not local) so the playback JSON emitter can report whether the anonymous
+    # fallback fired. Reset per call so a prior retry doesn't leak.
     PLAYBACK_RETRIED=0
 
     play_mode_url "$url" "$mode" || rc=$?
 
-    if ((rc != 0 && rc != 130)) && [[ -z "$YT_PLAYER_CLIENT" ]]; then
-        echo "Playback failed (exit $rc); retrying once with fallback client web_safari..." >&2
+    if ((rc != 0 && rc != 130)) && ((${#YT_COOKIE_ARGS[@]} > 0)); then
+        echo "Playback failed (exit $rc); retrying once without cookies (anonymous)..." >&2
         PLAYBACK_RETRIED=1
-        local YT_PLAYER_CLIENT=web_safari
-        local YT_AUDIO_FORMAT=b
+        local YT_COOKIE_ARGS=()
         rc=0
         play_mode_url "$url" "$mode" || rc=$?
     fi
@@ -532,7 +507,7 @@ format_for_mode() {
 
 # A detached playback is tracked by its PROCESS GROUP, not a PID tree. The child bash
 # is launched as its own process-group leader (see detach_play), so its pgid == its
-# pid, and every descendant it forks — including the web_safari fallback mpv that
+# pid, and every descendant it forks — including the anonymous-retry fallback mpv that
 # appears only after the first attempt fails — inherits that pgid. This is what a
 # PID-tree walk cannot handle: the fallback mpv is spawned after any one-time snapshot,
 # and once bash exits the mpv reparents to init (ppid=1) so it is no longer findable
@@ -669,7 +644,7 @@ do_stop() {
 # Resolve the direct stream URL(s) for a video without playing — non-blocking and
 # side-effect-free, so an agent can compose playback (fetch the URL, hand it to
 # another player, probe availability) instead of only being able to fire-and-block.
-# Honours the chosen mode's format plus cookies/player_client, mirroring playback.
+# Honours the chosen mode's format plus cookies (when login is opted in), mirroring playback.
 resolve_stream_url() {
     local url=$1 fmt
     fmt=$(format_for_mode "$PLAYBACK_MODE")
@@ -677,9 +652,6 @@ resolve_stream_url() {
     local cmd=(yt-dlp -g -f "$fmt")
     if ((${#YT_COOKIE_ARGS[@]} > 0)); then
         cmd+=("${YT_COOKIE_ARGS[@]}")
-    fi
-    if [[ -n "$YT_PLAYER_CLIENT" ]]; then
-        cmd+=(--extractor-args "youtube:player_client=$YT_PLAYER_CLIENT")
     fi
     cmd+=(--no-warnings --quiet "$url")
 
