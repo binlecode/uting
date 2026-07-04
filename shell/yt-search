@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+# yt-search — dedicated non-interactive YouTube search (narrow, agent-facing surface).
+#
+# This is a real wrapper, not a symlink: it owns a search-only --help, accepts only
+# search flags (rejecting playback/lifecycle flags with a redirect to yt-play), then
+# delegates to the shared implementation yt-search-n-play.sh. Keeping the heavy logic
+# in one place avoids drift; the narrowing here is what gives an LLM caller a small,
+# unambiguous contract. Output defaults to the plain list (-l) unless -j/-J is given.
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Locate the impl whether invoked via a bin/ symlink (../../shell-scripts) or directly.
+if [[ -f "$SCRIPT_DIR/../../shell-scripts/yt-search-n-play.sh" ]]; then
+    IMPL="$SCRIPT_DIR/../../shell-scripts/yt-search-n-play.sh"
+elif [[ -f "$SCRIPT_DIR/yt-search-n-play.sh" ]]; then
+    IMPL="$SCRIPT_DIR/yt-search-n-play.sh"
+else
+    echo "yt-search: cannot locate yt-search-n-play.sh" >&2
+    exit 1
+fi
+
+print_usage() {
+    cat <<'EOF'
+yt-search — non-interactive YouTube search
+
+Usage:
+  yt-search [options] <search query>
+
+Options:
+  -n NUM   Number of results to fetch (default: 25)
+  -m SEC   Minimum duration in seconds
+  -M SEC   Maximum duration in seconds
+  -s FIELD Sort field: duration | view_count (default: view_count)
+  -F SORT  yt-dlp format-sort override
+  -l       Plain text list output (default)
+  -j       JSON: {query, count, results[]} — 8 lean fields per result
+  -J       JSON with full raw yt-dlp fields per result (same envelope)
+  -h       This help
+
+Output (JSON, -j): {"query","count","results":[{id,title,url,channel,duration,
+                    duration_fmt,view_count,live_status}, ...]}
+
+To play a result, pass its url to: yt-play <url>
+EOF
+}
+
+# Value-taking flags (consume the next token) vs boolean flags, restricted to the
+# search surface. Anything outside these is rejected — playback/lifecycle flags get a
+# pointer to yt-play so the caller learns the right tool instead of a bare error.
+# Collect option tokens and query tokens separately: the impl's getopts stops at the
+# first positional, so every flag (including the injected -l default) must be emitted
+# before the query.
+has_format=0
+flags=()
+query=()
+reject_url() {
+    echo "yt-search: '$1' looks like a URL — use 'yt-play $1' to play it" >&2
+    exit 1
+}
+while (($#)); do
+    case "$1" in
+    -h | --help)
+        print_usage
+        exit 0
+        ;;
+    -l | --list | -j | --json | -J | --json-full)
+        has_format=1
+        flags+=("$1")
+        shift
+        ;;
+    --color=*)
+        flags+=("$1")
+        shift
+        ;;
+    -n | -m | -M | -s | -F | -c | --color)
+        [[ $# -ge 2 ]] || {
+            echo "yt-search: $1 requires a value" >&2
+            exit 1
+        }
+        flags+=("$1" "$2")
+        shift 2
+        ;;
+    -f | -p | -d | --detach | --status | --stop | --get-url | --replace)
+        echo "yt-search: $1 is a playback flag — use yt-play for playback" >&2
+        exit 1
+        ;;
+    --)
+        shift
+        while (($#)); do
+            # yt-search searches text; a URL belongs to yt-play.
+            case "$1" in
+            http://* | https://* | www.* | youtube.com/* | youtu.be/*) reject_url "$1" ;;
+            esac
+            query+=("$1")
+            shift
+        done
+        break
+        ;;
+    -*)
+        echo "yt-search: unknown flag '$1' (search flags: -n -m -M -s -F -l -j -J)" >&2
+        exit 1
+        ;;
+    http://* | https://* | www.* | youtube.com/* | youtu.be/*)
+        reject_url "$1"
+        ;;
+    *)
+        query+=("$1")
+        shift
+        ;;
+    esac
+done
+
+if ((${#query[@]} == 0)); then
+    echo "yt-search: a search query is required (see 'yt-search -h')" >&2
+    exit 1
+fi
+
+# Default to the plain list unless the caller picked a JSON format.
+((has_format)) || flags+=("-l")
+
+exec "$IMPL" "${flags[@]}" "${query[@]}"

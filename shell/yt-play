@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+# yt-play — dedicated YouTube URL playback / resolve / lifecycle (narrow, agent-facing).
+#
+# A real wrapper, not a symlink: owns a play-only --help, accepts only playback and
+# lifecycle flags (rejecting search flags with a redirect to yt-search), validates that
+# a URL is present when one is required, then delegates to the shared implementation
+# yt-search-n-play.sh. The heavy logic lives once in the impl; this layer's job is to
+# give an LLM caller a small, single-purpose contract it cannot misuse.
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Locate the impl whether invoked via a bin/ symlink (../../shell-scripts) or directly.
+if [[ -f "$SCRIPT_DIR/../../shell-scripts/yt-search-n-play.sh" ]]; then
+    IMPL="$SCRIPT_DIR/../../shell-scripts/yt-search-n-play.sh"
+elif [[ -f "$SCRIPT_DIR/yt-search-n-play.sh" ]]; then
+    IMPL="$SCRIPT_DIR/yt-search-n-play.sh"
+else
+    echo "yt-play: cannot locate yt-search-n-play.sh" >&2
+    exit 1
+fi
+
+print_usage() {
+    cat <<'EOF'
+yt-play — play, resolve, or manage playback of a YouTube URL
+
+Usage:
+  yt-play [-f mode] [-j] <URL>            Play a URL (blocks until done)
+  yt-play --get-url [-f mode] [-j] <URL>  Resolve stream URL(s), do not play
+  yt-play -d [--replace] <URL>            Detached background audio playback
+  yt-play --status [-j]                   Report what is playing (always exit 0)
+  yt-play --stop [-j]                     Stop detached playback (idempotent)
+
+Options:
+  -f MODE   Playback mode (default: audio):
+            audio | video | fast | ascii | viz
+  -d        --detach: background playback; manage with --status / --stop
+  --replace With -d: replace an already-running detached playback
+  --get-url Resolve direct stream URL(s) instead of playing (non-blocking)
+  --status  Show current detached playback state
+  --stop    Stop current detached playback
+  -j        JSON output (one line): {status,url,mode,exit_code,reason,retried}
+            for playback; {status,...} for --status/--stop/--get-url
+  -h        This help
+
+Playback error reason (JSON): forbidden | unavailable | format_unavailable |
+                              network | stopped_by_user | unknown | null(ok)
+
+To search for something to play, use: yt-search <query>
+EOF
+}
+
+# Collect flags and the URL separately: the impl's getopts stops at the first
+# positional, so flags must be emitted before the URL.
+action=""       # "" | status | stop | geturl
+flags=()
+url=()
+while (($#)); do
+    case "$1" in
+    -h | --help)
+        print_usage
+        exit 0
+        ;;
+    -j | --json | -d | --detach | --replace)
+        flags+=("$1")
+        shift
+        ;;
+    --status)
+        action=status
+        flags+=("$1")
+        shift
+        ;;
+    --stop)
+        action=stop
+        flags+=("$1")
+        shift
+        ;;
+    --get-url)
+        action=geturl
+        flags+=("$1")
+        shift
+        ;;
+    --color=*)
+        flags+=("$1")
+        shift
+        ;;
+    -f | -c | --color)
+        [[ $# -ge 2 ]] || {
+            echo "yt-play: $1 requires a value" >&2
+            exit 1
+        }
+        flags+=("$1" "$2")
+        shift 2
+        ;;
+    -n | -m | -M | -s | -p | -F | -l | -J | --list | --json-full)
+        echo "yt-play: $1 is a search flag — use yt-search for searching" >&2
+        exit 1
+        ;;
+    --)
+        shift
+        while (($#)); do
+            url+=("$1")
+            shift
+        done
+        break
+        ;;
+    -*)
+        echo "yt-play: unknown flag '$1' (play flags: -f -d -j --get-url --status --stop --replace)" >&2
+        exit 1
+        ;;
+    http://* | https://* | www.* | youtube.com/* | youtu.be/*)
+        url+=("$1")
+        shift
+        ;;
+    *)
+        echo "yt-play: '$1' is not a URL — to search for it use 'yt-search $1'" >&2
+        exit 1
+        ;;
+    esac
+done
+
+# --status / --stop act on the tracked playback and take no URL. Everything else
+# (play, --detach, --get-url) needs a URL.
+if [[ "$action" != status && "$action" != stop ]] && ((${#url[@]} == 0)); then
+    echo "yt-play: a YouTube URL is required (see 'yt-play -h')" >&2
+    exit 1
+fi
+
+# flags is always non-empty for status/stop (they add their own flag); for play it may
+# be empty, and url may be empty for status/stop — build the argv guarding both.
+argv=()
+((${#flags[@]})) && argv+=("${flags[@]}")
+((${#url[@]})) && argv+=("${url[@]}")
+exec "$IMPL" "${argv[@]}"

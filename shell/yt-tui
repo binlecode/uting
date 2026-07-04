@@ -1,0 +1,158 @@
+#!/usr/bin/env bash
+# yt-tui — interactive terminal UI for YouTube (fuzzy pick + preview + play).
+#
+# Owned glue, not a client: this is the human-facing surface. It contains ZERO
+# YouTube logic — it composes the headless verbs (yt-search for extraction, yt-play
+# for playback) with fzf (fuzzy picker) and jq (row/preview shaping). Search runs
+# once per session; the picker re-opens over the cached results (no re-fetch) so
+# fuzzy-filtering and repeated play are instant. Esc exits.
+#
+# Dependency seam: fzf is required by this command only; yt/yt-search/yt-play stay
+# fzf-free. Swapping fzf→sk or the verbs is a localized edit here.
+set -euo pipefail
+
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Locate the sibling verbs. They sit next to this file in both layouts: as symlinks
+# in a bin/ dir, or as the real wrappers in shell-scripts/. Fall back to PATH.
+if [[ -x "$SCRIPT_DIR/yt-search" && -x "$SCRIPT_DIR/yt-play" ]]; then
+    YT_SEARCH="$SCRIPT_DIR/yt-search"
+    YT_PLAY="$SCRIPT_DIR/yt-play"
+elif command -v yt-search >/dev/null 2>&1 && command -v yt-play >/dev/null 2>&1; then
+    YT_SEARCH=$(command -v yt-search)
+    YT_PLAY=$(command -v yt-play)
+else
+    echo "yt-tui: cannot locate yt-search / yt-play" >&2
+    exit 1
+fi
+
+print_usage() {
+    cat <<'EOF'
+yt-tui — interactive terminal browser for YouTube
+
+Usage:
+  yt-tui [options] <search query>
+
+Search options (forwarded to yt-search):
+  -n NUM    Number of results to fetch (default: 25)
+  -m SEC    Minimum duration in seconds
+  -M SEC    Maximum duration in seconds
+  -s FIELD  Sort field: duration | view_count (default: view_count)
+
+Playback option (forwarded to yt-play):
+  -f MODE   Playback mode (default: audio): audio | video | fast | ascii | viz
+
+Other:
+  -h        This help
+
+Keys (in the picker):
+  Enter   play the highlighted result (blocks until mpv quits, then re-opens)
+  Tab     mark multiple results; Enter then plays them in sequence (a queue)
+  type    fuzzy-filter within the fetched results
+  Esc     quit
+EOF
+}
+
+die() {
+    echo "yt-tui: $1" >&2
+    exit 1
+}
+
+require_cmd() {
+    for c in "$@"; do
+        command -v "$c" >/dev/null 2>&1 || die "requires '$c' (not found on PATH)"
+    done
+}
+
+# Parse: search-shaping flags collected for yt-search, -f captured for yt-play, the
+# rest is the query. Reject anything outside this small surface so the contract stays
+# unambiguous.
+SEARCH_ARGS=()
+PLAY_MODE="audio"
+query=()
+while (($#)); do
+    case "$1" in
+    -h | --help)
+        print_usage
+        exit 0
+        ;;
+    -n | -m | -M | -s)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        SEARCH_ARGS+=("$1" "$2")
+        shift 2
+        ;;
+    -f)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        PLAY_MODE="$2"
+        shift 2
+        ;;
+    --)
+        shift
+        while (($#)); do
+            query+=("$1")
+            shift
+        done
+        break
+        ;;
+    -*)
+        die "unknown flag '$1' (yt-tui flags: -n -m -M -s -f); run 'yt-tui -h'"
+        ;;
+    *)
+        query+=("$1")
+        shift
+        ;;
+    esac
+done
+
+((${#query[@]})) || die "a search query is required (see 'yt-tui -h')"
+
+require_cmd fzf jq
+# fzf needs a real terminal; refuse cleanly rather than hang when piped (e.g. an agent).
+[[ -t 1 ]] || die "requires a terminal (interactive fzf); use yt-search / yt-play headless"
+
+# One fetch per session. Guard the array expansion for bash 3.2 under set -u.
+search_argv=()
+((${#SEARCH_ARGS[@]})) && search_argv+=("${SEARCH_ARGS[@]}")
+json=$("$YT_SEARCH" -j "${search_argv[@]}" -- "${query[@]}") || die "search failed"
+
+count=$(printf '%s' "$json" | jq -r '.count // 0')
+if [[ "$count" == "0" ]]; then
+    echo "yt-tui: no results for: ${query[*]}" >&2
+    exit 0
+fi
+
+# Cache the results to a temp file: the preview reads it per keystroke (local, no
+# network), and rows are built from it once. Cleaned up on any exit.
+TMP=$(mktemp "${TMPDIR:-/tmp}/yt-tui.XXXXXX")
+trap 'rm -f "$TMP"' EXIT
+printf '%s' "$json" >"$TMP"
+
+# Rows: field 1 = url (hidden via --with-nth=2..), field 2 = display. jq @tsv escapes
+# any tab/newline inside a title so columns never break.
+rows=$(jq -r '.results[] | [ .url,
+    "\(.title)  ·  \(.duration_fmt)  ·  \(.view_count // 0) views  ·  \(.channel // "?")"
+  ] | @tsv' "$TMP")
+
+# Preview: re-read the cache, select the row whose url matches the hidden field 1.
+preview_cmd='jq -r --arg u {1} '\''.results[] | select(.url==$u) |
+    "\(.title)\n\nChannel : \(.channel // "?")\nLength  : \(.duration_fmt)\nViews   : \(.view_count // 0)\nLive    : \(.live_status // "n/a")\n\n\(.url)"'\'' '"$TMP"
+
+while true; do
+    # Esc / no selection → fzf exits non-zero → break out (quit).
+    sel=$(printf '%s\n' "$rows" | fzf \
+        --multi \
+        --delimiter='\t' \
+        --with-nth=2.. \
+        --header='Enter=play  Tab=queue  type=filter  Esc=quit' \
+        --preview="$preview_cmd" \
+        --preview-window='right,45%,wrap') || break
+    [[ -z "$sel" ]] && break
+
+    # Play each selected row in sequence. A failure or mpv-quit must not kill the loop.
+    while IFS= read -r line; do
+        [[ -z "$line" ]] && continue
+        url=$(printf '%s' "$line" | cut -f1)
+        [[ -z "$url" ]] && continue
+        "$YT_PLAY" -f "$PLAY_MODE" -- "$url" || true
+    done <<<"$sel"
+    # Loop: re-open the picker over the cached rows (no re-fetch).
+done
