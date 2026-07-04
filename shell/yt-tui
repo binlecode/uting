@@ -32,7 +32,9 @@ print_usage() {
 yt-tui — interactive terminal browser for YouTube
 
 Usage:
-  yt-tui [options] <search query>
+  yt-tui [options] [search query]
+
+With no query, prompts for one (interactive). Requires a terminal.
 
 Search options (forwarded to yt-search):
   -n NUM    Number of results to fetch (default: 25)
@@ -105,11 +107,19 @@ while (($#)); do
     esac
 done
 
-((${#query[@]})) || die "a search query is required (see 'yt-tui -h')"
-
 require_cmd fzf jq
-# fzf needs a real terminal; refuse cleanly rather than hang when piped (e.g. an agent).
+# fzf and the interactive query prompt both need a real terminal; refuse cleanly rather
+# than hang when piped (e.g. an agent). This also covers a bare `yt-tui` on a pipe.
 [[ -t 1 ]] || die "requires a terminal (interactive fzf); use yt-search / yt-play headless"
+
+# yt-tui is interactive: with no query on the command line, prompt for one rather than
+# erroring. Empty input or Ctrl-D cancels cleanly (exit 0, nothing played).
+if ((${#query[@]} == 0)); then
+    printf 'Search YouTube: ' >&2
+    IFS= read -r _q || { printf '\n' >&2; exit 0; }
+    [[ -n "${_q//[[:space:]]/}" ]] || { echo "yt-tui: no query entered" >&2; exit 0; }
+    query=("$_q")
+fi
 
 # One fetch per session. The ${arr[@]+"${arr[@]}"} form expands to nothing when the
 # array is empty and to its elements otherwise — the portable way to expand a
