@@ -109,10 +109,11 @@ require_cmd fzf jq
 # fzf needs a real terminal; refuse cleanly rather than hang when piped (e.g. an agent).
 [[ -t 1 ]] || die "requires a terminal (interactive fzf); use yt-search / yt-play headless"
 
-# One fetch per session. Guard the array expansion for bash 3.2 under set -u.
-search_argv=()
-((${#SEARCH_ARGS[@]})) && search_argv+=("${SEARCH_ARGS[@]}")
-json=$("$YT_SEARCH" -j "${search_argv[@]}" -- "${query[@]}") || die "search failed"
+# One fetch per session. The ${arr[@]+"${arr[@]}"} form expands to nothing when the
+# array is empty and to its elements otherwise — the portable way to expand a
+# possibly-empty array under `set -u` on bash 3.2 (macOS), where a bare
+# "${arr[@]}" on an empty array aborts with "unbound variable".
+json=$("$YT_SEARCH" -j ${SEARCH_ARGS[@]+"${SEARCH_ARGS[@]}"} -- "${query[@]}") || die "search failed"
 
 count=$(printf '%s' "$json" | jq -r '.count // 0')
 if [[ "$count" == "0" ]]; then
