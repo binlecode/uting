@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
-# yt-tui — interactive terminal UI for YouTube (fuzzy pick + preview + play).
+# yt-tui — interactive terminal browser for YouTube (self-rendered menu). Owned glue, not a
+# client: the human-facing surface, ZERO YouTube logic. It composes the headless verbs with jq.
 #
-# Owned glue, not a client: this is the human-facing surface. It contains ZERO
-# YouTube logic — it composes the headless verbs (yt-search for extraction, yt-play
-# for playback) with fzf (fuzzy picker) and jq (row/preview shaping). Search runs
-# once per session; the picker re-opens over the cached results (no re-fetch) so
-# fuzzy-filtering and repeated play are instant. Esc exits.
+# This is the original yt-search-n-play.sh all-in-one TUI skeleton, with its three core jobs
+# delegated to headless "function-call" binaries — each is UI-less; yt-tui calls it, gets
+# output/exit-code back, and keeps rendering its own menu:
+#   search (network fetch) → yt-search -j <query>   (JSON envelope)
+#   play                   → yt-play -f MODE -- url  (BLOCKING: mpv owns the terminal, so its
+#                            OSD progress bar shows, arrow keys seek, and q returns to the menu)
+#   filter (narrow rows)   → pure bash, no external tool (net-new; the original had no filter)
 #
-# Dependency seam: fzf is required by this command only; yt/yt-search/yt-play stay
-# fzf-free. Swapping fzf→sk or the verbs is a localized edit here.
+# yt-tui renders its OWN menu — it draws every line and reads every key (arrow-key nav,
+# pagination, colors, status/hint lines) — so nothing else owns the terminal. No fzf, no
+# picker library, no detached background player.
 set -euo pipefail
-# Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
-# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). yt-design.md §28.
+# Portability: bash 3.2 (macOS system bash) — no bash-4 features (no ${v,,}, no mapfile); guard
+# empty-array expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). §28.
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# Locate the sibling verbs. They sit next to this file in both layouts: as symlinks
-# in a bin/ dir, or as the real wrappers in shell-scripts/. Fall back to PATH.
+# Locate the sibling verbs. They sit next to this file in both layouts: as symlinks in a
+# bin/ dir, or as the real wrappers in shell-scripts/. Fall back to PATH.
 if [[ -x "$SCRIPT_DIR/yt-search" && -x "$SCRIPT_DIR/yt-play" ]]; then
     YT_SEARCH="$SCRIPT_DIR/yt-search"
     YT_PLAY="$SCRIPT_DIR/yt-play"
@@ -42,17 +46,19 @@ Search options (forwarded to yt-search):
   -M SEC    Maximum duration in seconds
   -s FIELD  Sort field: duration | view_count (default: view_count)
 
-Playback option (forwarded to yt-play):
+Menu options:
   -f MODE   Playback mode (default: audio): audio | video | fast | ascii | viz
-
-Other:
+  -p NUM    Rows per page (default: 10, capped to the terminal height)
+  -c MODE   Color: auto | always | never (default: auto)
   -h        This help
 
-Keys (in the picker):
-  Enter   play the highlighted result (blocks until mpv quits, then re-opens)
-  Tab     mark multiple results; Enter then plays them in sequence (a queue)
-  type    fuzzy-filter within the fetched results
-  Esc     quit
+Keys (in the menu):
+  up/down  move the selection          left/right  page
+  Enter    play the selected result (blocking: mpv owns the terminal;
+             its progress bar shows, arrow keys seek, q returns to the menu)
+  s        new search (fetch a different query via yt-search)
+  /        filter the current results (case-insensitive, space = AND)
+  q        quit
 EOF
 }
 
@@ -67,106 +73,364 @@ require_cmd() {
     done
 }
 
-# Parse: search-shaping flags collected for yt-search, -f captured for yt-play, the
-# rest is the query. Reject anything outside this small surface so the contract stays
-# unambiguous.
+is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
+# Parse: search-shaping flags forwarded to yt-search (and captured for the status line);
+# -f/-p/-c are menu-local. The rest is the query. Reject anything else.
 SEARCH_ARGS=()
 PLAY_MODE="audio"
+COLOR_MODE="auto"
+PAGE_OPT=10
+SORT_DISP="view_count"
+MIN_DISP="0"
+MAX_DISP="0"
 query=()
 while (($#)); do
     case "$1" in
-    -h | --help)
-        print_usage
-        exit 0
-        ;;
-    -n | -m | -M | -s)
+    -h | --help) print_usage; exit 0 ;;
+    -n)
         [[ $# -ge 2 ]] || die "$1 requires a value"
-        SEARCH_ARGS+=("$1" "$2")
-        shift 2
-        ;;
+        SEARCH_ARGS+=("$1" "$2"); shift 2 ;;
+    -s)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        SORT_DISP="$2"; SEARCH_ARGS+=("$1" "$2"); shift 2 ;;
+    -m)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        MIN_DISP="$2"; SEARCH_ARGS+=("$1" "$2"); shift 2 ;;
+    -M)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        MAX_DISP="$2"; SEARCH_ARGS+=("$1" "$2"); shift 2 ;;
     -f)
         [[ $# -ge 2 ]] || die "$1 requires a value"
-        PLAY_MODE="$2"
-        shift 2
-        ;;
+        PLAY_MODE="$2"; shift 2 ;;
+    -p)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        PAGE_OPT="$2"; shift 2 ;;
+    -c | --color)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        COLOR_MODE="$2"; shift 2 ;;
+    --color=*) COLOR_MODE="${1#*=}"; shift ;;
     --)
         shift
-        while (($#)); do
-            query+=("$1")
-            shift
-        done
-        break
-        ;;
-    -*)
-        die "unknown flag '$1' (yt-tui flags: -n -m -M -s -f); run 'yt-tui -h'"
-        ;;
-    *)
-        query+=("$1")
-        shift
-        ;;
+        while (($#)); do query+=("$1"); shift; done
+        break ;;
+    -*) die "unknown flag '$1' (yt-tui flags: -n -m -M -s -f -p -c); run 'yt-tui -h'" ;;
+    *) query+=("$1"); shift ;;
     esac
 done
 
-require_cmd fzf jq
-# fzf and the interactive query prompt both need a real terminal; refuse cleanly rather
-# than hang when piped (e.g. an agent). This also covers a bare `yt-tui` on a pipe.
-[[ -t 1 ]] || die "requires a terminal (interactive fzf); use yt-search / yt-play headless"
+is_uint "$PAGE_OPT" && ((PAGE_OPT > 0)) || die "-p must be a positive integer"
+case "$COLOR_MODE" in auto | always | never) ;; *) die "-c must be one of: auto, always, never" ;; esac
 
-# yt-tui is interactive: with no query on the command line, prompt for one rather than
-# erroring. Empty input or Ctrl-D cancels cleanly (exit 0, nothing played).
+require_cmd jq
+# The self-rendered menu reads keys from stdin and draws to stdout, so BOTH must be a real
+# terminal; refuse cleanly rather than hang/garble when piped (e.g. an agent).
+{ [[ -t 0 ]] && [[ -t 1 ]]; } || die "requires a terminal (interactive menu); use yt-search / yt-play headless"
+
+# ── Colors (init_colors): honour -c auto|always|never, as the original. ─────────────────
+C_RESET=''; C_BOLD=''; C_CYAN=''; C_YELLOW=''; C_DIM=''
+init_colors() {
+    local on=0
+    case "$COLOR_MODE" in
+    auto) [[ -t 1 ]] && on=1 ;;
+    always) on=1 ;;
+    never) on=0 ;;
+    esac
+    if ((on)); then
+        C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_CYAN=$'\033[36m'
+        C_YELLOW=$'\033[33m'; C_DIM=$'\033[2m'
+    fi
+}
+init_colors
+
+MUSIC_CHAR="♫"
+# Page size: default 10 (as the original), capped to what the terminal can show so it never
+# overflows a short window. Width is used to truncate rows to one screen line.
+LINES_N=$(tput lines 2>/dev/null || echo 24)
+COLS=$(tput cols 2>/dev/null || echo 80)
+((COLS >= 24)) || COLS=24
+PAGE_SIZE=$PAGE_OPT
+# Reserve 8 fixed rows (title, status, blank, nav, playback-hint, blank, blank, page footer)
+# so a full page never pushes the footer off a short window.
+PAGE_CAP=$(( LINES_N - 8 ))
+((PAGE_CAP >= 3)) || PAGE_CAP=3
+((PAGE_SIZE <= PAGE_CAP)) || PAGE_SIZE=$PAGE_CAP
+
+# Interactive: with no query on the command line, prompt for one. Empty / Ctrl-D cancels.
 if ((${#query[@]} == 0)); then
     printf 'Search YouTube: ' >&2
     IFS= read -r _q || { printf '\n' >&2; exit 0; }
     [[ -n "${_q//[[:space:]]/}" ]] || { echo "yt-tui: no query entered" >&2; exit 0; }
     query=("$_q")
 fi
+QUERY_LABEL="${query[*]}"
 
-# One fetch per session. The ${arr[@]+"${arr[@]}"} form expands to nothing when the
-# array is empty and to its elements otherwise — the portable way to expand a
-# possibly-empty array under `set -u` on bash 3.2 (macOS), where a bare
-# "${arr[@]}" on an empty array aborts with "unbound variable".
-json=$("$YT_SEARCH" -j ${SEARCH_ARGS[@]+"${SEARCH_ARGS[@]}"} -- "${query[@]}") || die "search failed"
+# ── SEARCH delegate ─────────────────────────────────────────────────────────────────────
+# Fetch results for the current QUERY_LABEL into $json via the headless yt-search verb.
+# Returns: 0 ok; 1 search failed; 2 zero results.
+fetch_json() {
+    local out cnt
+    out=$("$YT_SEARCH" -j ${SEARCH_ARGS[@]+"${SEARCH_ARGS[@]}"} -- "$QUERY_LABEL" 2>/dev/null) || return 1
+    cnt=$(printf '%s' "$out" | jq -r '.count // 0' 2>/dev/null || echo 0)
+    [[ "$cnt" != "0" ]] || return 2
+    json="$out"
+    return 0
+}
 
-count=$(printf '%s' "$json" | jq -r '.count // 0')
-if [[ "$count" == "0" ]]; then
-    echo "yt-tui: no results for: ${query[*]}" >&2
-    exit 0
+# Build master rows (ALL_ROWS) from $json: one "url<TAB>display" line per result. display =
+# "title · dur · views · channel" (NO leading number — the menu numbers rows by visible
+# position, which stays correct after a filter re-orders them). `clean` strips emoji; @tsv
+# escapes any tab/newline so the hidden url field boundary never breaks.
+build_all_rows() {
+    ALL_ROWS=$(printf '%s' "$json" | jq -r '
+      def clean:
+        gsub("[\\x{1F000}-\\x{1FAFF}\\x{2190}-\\x{21FF}\\x{2300}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{2122}\\x{2139}]"; "")
+        | gsub("\\s+"; " ") | gsub("^ | $"; "");
+      .results[]
+      | [ .url,
+          "\(.title | clean)  ·  \(.duration_fmt)  ·  \(.view_count // 0) views  ·  \(.channel // "?")"
+        ] | @tsv')
+}
+
+# Rebuild the whole view from the just-fetched $json. The ONE post-search path: parse rows,
+# clear any filter, reset the cursor to the top, load page 1. Shared by the initial fetch and
+# new_search so the two can never drift.
+apply_search_results() {
+    build_all_rows
+    FILTER_LABEL=""
+    selected=0
+    page_index=1
+    load_rows "$ALL_ROWS"
+}
+
+# Populate the current view (urls[]/options[]) + pagination from a TSV of "url<TAB>display".
+load_rows() {
+    urls=()
+    options=()
+    local url disp
+    while IFS=$'\t' read -r url disp; do
+        [[ -n "$url" ]] || continue
+        urls+=("$url")
+        options+=("$disp")
+    done <<<"$1"
+    NUM_ENTRIES=${#urls[@]}
+    NUM_PAGES=$(( (NUM_ENTRIES + PAGE_SIZE - 1) / PAGE_SIZE ))
+    ((NUM_PAGES > 0)) || NUM_PAGES=1
+}
+
+# Draw the whole menu, sequentially like the original: title, status line, key-hint lines,
+# the current page of rows (♫ marker, selection highlighted), the Page-of footer. We own
+# every line — plain text + ANSI, no box, no frame.
+display_menu() {
+    local page=$1 start end i n disp status_extra pb
+    clear
+    # Title.
+    printf '%s%syt-tui%s  query=%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET" "'$QUERY_LABEL'"
+    # Status line (mirrors the original), plus filter= when a filter is active.
+    if [[ "$PLAY_MODE" == "audio" ]]; then status_extra="audio-only"; else status_extra="video-enabled"; fi
+    printf '%sresults=%s  page=%s/%s  sort=%s  min=%ss  max=%ss  mode=%s (%s)%s\n' \
+        "$C_DIM" "$NUM_ENTRIES" "$page" "$NUM_PAGES" "$SORT_DISP" "$MIN_DISP" "$MAX_DISP" "$PLAY_MODE" "$status_extra" "$C_RESET"
+    [[ -n "$FILTER_LABEL" ]] && printf '%sfilter=%s (/ to change, s for a new search)%s\n' "$C_DIM" "'$FILTER_LABEL'" "$C_RESET"
+    printf '\n'
+    # Key hints: navigation, then playback (mpv keys during blocking play).
+    printf '%sNavigation:%s %sup/down%s item  %sleft/right%s page  %sEnter%s play  %ss%s search  %s/%s filter  %sq%s quit\n' \
+        "$C_BOLD" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" \
+        "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET"
+    if [[ "$PLAY_MODE" == "audio" ]]; then
+        pb='(during play) arrows seek  q stop and return to menu'
+    else
+        pb='(during play) _ toggle video  arrows seek  q stop and return to menu'
+    fi
+    printf '%sPlayback:%s %s%s%s\n\n' "$C_BOLD" "$C_RESET" "$C_DIM" "$pb" "$C_RESET"
+    # Rows for the current page (truncated to one screen line to keep the layout intact).
+    if ((NUM_ENTRIES == 0)); then
+        printf '%s(no matches — press / to change the filter, or s for a new search)%s\n' "$C_DIM" "$C_RESET"
+    else
+        start=$(( (page - 1) * PAGE_SIZE ))
+        end=$(( start + PAGE_SIZE - 1 ))
+        for (( i = start; i <= end && i < NUM_ENTRIES; i++ )); do
+            n=$(( i + 1 ))
+            disp="${options[$i]}"
+            disp="${disp:0:$((COLS - 8))}"
+            if ((i == selected)); then
+                printf '%s> %s %s. %s%s\n' "$C_YELLOW" "$MUSIC_CHAR" "$n" "$disp" "$C_RESET"
+            else
+                printf '  %s %s. %s\n' "$MUSIC_CHAR" "$n" "$disp"
+            fi
+        done
+    fi
+    printf '\n'
+    # Footer: page indicator.
+    printf '%sPage %s of %s%s\n' "$C_BOLD" "$page" "$NUM_PAGES" "$C_RESET"
+}
+
+# ── PLAY delegate ───────────────────────────────────────────────────────────────────────
+# Play the selected row via the headless yt-play verb, BLOCKING: mpv owns the terminal, so its
+# OSD progress bar shows, arrow keys seek, and q ends playback (exit 130) and returns here.
+# Any other non-zero exit is a real failure → show it and wait for a keypress.
+play_selected() {
+    ((NUM_ENTRIES > 0)) || return 0
+    local url="${urls[$selected]}" rc=0
+    clear
+    "$YT_PLAY" -f "$PLAY_MODE" -- "$url" || rc=$?
+    # rc 130 = user pressed q/ctrl-c in mpv (a normal stop), not a failure.
+    if ((rc != 0 && rc != 130)); then
+        printf '\nPlayback failed (exit %s). Press any key to return…' "$rc"
+        IFS= read -rsn1 _ || true
+    fi
+}
+
+# ── SEARCH action (key: s) ──────────────────────────────────────────────────────────────
+# New search: fetch a DIFFERENT query and replace the result set. Empty query keeps current.
+# Terminal is in cooked mode between key reads, so `read` gives normal line editing.
+new_search() {
+    local q prev="$QUERY_LABEL"
+    printf '\n%sNew search%s (empty = keep current): ' "$C_BOLD" "$C_RESET"
+    IFS= read -r q || { printf '\n'; return 0; }
+    [[ -n "${q//[[:space:]]/}" ]] || return 0
+    QUERY_LABEL="$q"
+    printf '\nsearching…\n'
+    local rc=0
+    fetch_json || rc=$?
+    if ((rc != 0)); then
+        [[ $rc -eq 2 ]] && printf 'no results for "%s". ' "$q" || printf 'search failed. '
+        printf 'Press any key…'
+        IFS= read -rsn1 _ || true
+        QUERY_LABEL="$prev"
+        return 0
+    fi
+    apply_search_results
+}
+
+# ── FILTER action (key: /) ──────────────────────────────────────────────────────────────
+# Narrow the already-fetched rows in pure bash — no network, no external tool. Community-
+# standard filter semantics (as fzf's default / git log --grep):
+#   • case-insensitive (shopt -s nocasematch, scoped)
+#   • space-separated AND tokens: a row matches only if it contains EVERY token, any order
+#   • whitespace-trimmed; empty / all-whitespace clears the filter (shows all)
+#   • literal tokens: quoted "$tok" in the glob → user's *, [, ? match literally (no injection)
+# Only the display field (field 2) is matched; the hidden url (field 1) rides along untouched.
+filter_results() {
+    local q url disp tok ok matched=""
+    printf '\n%sFilter%s (empty = show all; space = AND): ' "$C_BOLD" "$C_RESET"
+    IFS= read -r q || { printf '\n'; return 0; }
+    selected=0
+    page_index=1
+    if [[ -z "${q//[[:space:]]/}" ]]; then
+        FILTER_LABEL=""
+        load_rows "$ALL_ROWS"
+        return 0
+    fi
+    FILTER_LABEL="$q"
+    local tokens=()
+    read -ra tokens <<<"$q"
+    shopt -s nocasematch
+    while IFS=$'\t' read -r url disp; do
+        [[ -n "$url" ]] || continue
+        ok=1
+        for tok in ${tokens[@]+"${tokens[@]}"}; do
+            if [[ "$disp" != *"$tok"* ]]; then ok=0; break; fi
+        done
+        ((ok)) && matched+="${url}"$'\t'"${disp}"$'\n'
+    done <<<"$ALL_ROWS"
+    shopt -u nocasematch
+    load_rows "$matched"
+}
+
+# Read one keypress. Arrow keys arrive as a multi-byte ANSI escape sequence (ESC [ A/B/C/D,
+# or ESC O … in application-cursor mode), byte by byte — indistinguishable at the first byte
+# from a lone ESC. The -t 1 timeout on the follow-up reads tells them apart: a real sequence's
+# bytes arrive instantly, so a 1s wait with nothing more means a bare ESC. The trailing loop
+# consumes until an alpha/~ terminator, tolerating modifier digits some terminals insert.
+read_nav_input() {
+    local input="" next="" seq=""
+    if ! IFS= read -rsn1 input; then
+        return 1
+    fi
+    if [[ "$input" != $'\x1b' ]]; then
+        printf "%s" "$input"
+        return 0
+    fi
+    if ! IFS= read -rsn1 -t 1 next; then
+        printf "ESC"
+        return 0
+    fi
+    if [[ "$next" != "[" && "$next" != "O" ]]; then
+        printf "ESC"
+        return 0
+    fi
+    seq="$next"
+    while IFS= read -rsn1 -t 1 next; do
+        seq+="$next"
+        case "$next" in
+        [[:alpha:]~]) break ;;
+        esac
+    done
+    printf "%s" "$seq"
+}
+
+# ── Initial fetch ───────────────────────────────────────────────────────────────────────
+FILTER_LABEL=""
+selected=0
+page_index=1
+rc=0
+fetch_json || rc=$?
+if ((rc != 0)); then
+    ((rc == 2)) && die "no results for: $QUERY_LABEL"
+    die "search failed"
 fi
+apply_search_results
 
-# Cache the results to a temp file: the preview reads it per keystroke (local, no
-# network), and rows are built from it once. Cleaned up on any exit.
-TMP=$(mktemp "${TMPDIR:-/tmp}/yt-tui.XXXXXX")
-trap 'rm -f "$TMP"' EXIT
-printf '%s' "$json" >"$TMP"
-
-# Rows: field 1 = url (hidden via --with-nth=2..), field 2 = display. jq @tsv escapes
-# any tab/newline inside a title so columns never break.
-rows=$(jq -r '.results[] | [ .url,
-    "\(.title)  ·  \(.duration_fmt)  ·  \(.view_count // 0) views  ·  \(.channel // "?")"
-  ] | @tsv' "$TMP")
-
-# Preview: re-read the cache, select the row whose url matches the hidden field 1.
-preview_cmd='jq -r --arg u {1} '\''.results[] | select(.url==$u) |
-    "\(.title)\n\nChannel : \(.channel // "?")\nLength  : \(.duration_fmt)\nViews   : \(.view_count // 0)\nLive    : \(.live_status // "n/a")\n\n\(.url)"'\'' '"$TMP"
-
+# ── Menu loop ─────────────────────────────────────────────────────────────────────────
 while true; do
-    # Esc / no selection → fzf exits non-zero → break out (quit).
-    sel=$(printf '%s\n' "$rows" | fzf \
-        --multi \
-        --layout=reverse \
-        --delimiter='\t' \
-        --with-nth=2.. \
-        --header='Enter=play  Tab=queue  type=filter  Esc=quit' \
-        --preview="$preview_cmd" \
-        --preview-window='right,45%,wrap') || break
-    [[ -z "$sel" ]] && break
+    page_min=$(( (page_index - 1) * PAGE_SIZE ))
+    page_max=$(( page_min + PAGE_SIZE - 1 ))
+    if ((selected < page_min)); then selected=$page_min; fi
+    if ((selected > page_max && selected < NUM_ENTRIES)); then selected=$page_max; fi
 
-    # Play each selected row in sequence. A failure or mpv-quit must not kill the loop.
-    while IFS= read -r line; do
-        [[ -z "$line" ]] && continue
-        url=$(printf '%s' "$line" | cut -f1)
-        [[ -z "$url" ]] && continue
-        "$YT_PLAY" -f "$PLAY_MODE" -- "$url" || true
-    done <<<"$sel"
-    # Loop: re-open the picker over the cached rows (no re-fetch).
+    display_menu "$page_index"
+
+    # Ctrl-D / EOF (read_nav_input returns 1) quits cleanly rather than spinning.
+    input=$(read_nav_input) || break
+
+    case "$input" in
+    "[A" | "OA" | "["*A | "O"*A) # up
+        if ((selected > 0)); then
+            selected=$(( selected - 1 ))
+            if ((selected < page_min && page_index > 1)); then
+                page_index=$(( page_index - 1 ))
+                selected=$(( page_index * PAGE_SIZE - 1 ))
+            fi
+        fi
+        ;;
+    "[B" | "OB" | "["*B | "O"*B) # down
+        if ((selected < NUM_ENTRIES - 1)); then
+            selected=$(( selected + 1 ))
+            if ((selected > page_max && page_index < NUM_PAGES)); then
+                page_index=$(( page_index + 1 ))
+                selected=$(( (page_index - 1) * PAGE_SIZE ))
+            fi
+        fi
+        ;;
+    "[C" | "OC" | "["*C | "O"*C) # right → next page
+        if ((page_index < NUM_PAGES)); then
+            page_index=$(( page_index + 1 ))
+            selected=$(( (page_index - 1) * PAGE_SIZE ))
+        fi
+        ;;
+    "[D" | "OD" | "["*D | "O"*D) # left → prev page
+        if ((page_index > 1)); then
+            page_index=$(( page_index - 1 ))
+            selected=$(( (page_index - 1) * PAGE_SIZE ))
+        fi
+        ;;
+    "") play_selected ;;   # Enter
+    s | S) new_search ;;
+    "/") filter_results ;;
+    q | Q) break ;;
+    ESC) ;; # ignore a stray Esc
+    *) ;;
+    esac
 done
+
+clear
