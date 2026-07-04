@@ -153,6 +153,7 @@ while true; do
     # Esc / no selection → fzf exits non-zero → break out (quit).
     sel=$(printf '%s\n' "$rows" | fzf \
         --multi \
+        --layout=reverse \
         --delimiter='\t' \
         --with-nth=2.. \
         --header='Enter=play  Tab=queue  type=filter  Esc=quit' \
