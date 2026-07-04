@@ -1,0 +1,994 @@
+#!/usr/bin/env bash
+
+# set -e means any unguarded failing command aborts the script. This is desired for
+# this core: search and single-URL playback are non-interactive, so if mpv/yt-dlp
+# fails the script should abort and propagate a real exit code. Where a failure must
+# be captured rather than abort (e.g. classifying a playback error for JSON output),
+# the `cmd || rc=$?` idiom keeps set -e from firing — see play_url_json().
+set -euo pipefail
+
+# ==============================================================================
+# 1. CORE LIBRARY & DEFAULT SETTINGS (Merged from yt-common.sh)
+# ==============================================================================
+SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Path to this script, used to re-exec a detached playback child (see detach_play).
+SELF="${BASH_SOURCE[0]}"
+
+: "${YT_COOKIE_BROWSER:=chrome}"
+: "${YT_AUDIO_FORMAT:=ba}"
+# Default to highest quality video+audio. This can start slower than progressive streams.
+: "${YT_VIDEO_FORMAT:=bv*+ba/b}"
+# Optional fast-start progressive format for interactive playback.
+: "${YT_VIDEO_FORMAT_FAST:=b[height<=720][ext=mp4]/b[height<=720]/b[ext=mp4]/b}"
+: "${YT_ASCII_VO:=tct}"
+# Optional yt-dlp youtube player_client override (e.g. web_safari) for videos that
+# 403 on the default authenticated client (tv_downgraded). Empty means yt-dlp's default.
+#
+# Why this exists and why it's opt-in rather than a hardcoded default: when cookies
+# are supplied, yt-dlp treats the session as authenticated and hardcodes its client
+# set to (tv_downgraded, web_safari) — other clients (android/mweb/web) need a PO
+# token provider plugin we don't have installed, and just fail format selection.
+# tv_downgraded (client tag TVHTML5) exposes proper audio-only DASH formats but can
+# 403 on specific videos (confirmed: same video 403s 100% of the time on one video,
+# 0% on another — it's per-video, not session flakiness). web_safari never 403s in
+# testing but only exposes muxed HLS (video+audio together) — no audio-only track —
+# so forcing it as the default would silently make "audio-only" mode download full
+# video bytes for every video, not just the rare ones that need it. Hence: leave
+# unset for the bandwidth-efficient default.
+#
+# Leaving this unset does NOT mean 403s go unhandled: play_url_with_fallback()
+# automatically retries once with web_safari when playback fails and this is
+# still empty, so the common case stays bandwidth-efficient and the rare 403
+# self-heals without you needing to notice and set this by hand. Setting it
+# yourself here opts out of that automatic retry (nothing left to fall back to).
+: "${YT_PLAYER_CLIENT:=}"
+# Optional custom mpv input.conf path; empty means use mpv defaults.
+: "${YT_MPV_INPUT_CONF:=}"
+
+YT_MPV_AUDIO_OPTIONS=(--msg-level=client=error --term-osd-bar --no-video)
+# Keep video output auto-selected by mpv for compatibility across terminals/displays.
+YT_MPV_VIDEO_OPTIONS=(--msg-level=client=error --term-osd-bar)
+# mpv docs suggest sw-fast/really-quiet for terminal VOs to reduce glitches and improve speed.
+YT_MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term-osd-bar)
+
+# Detect if the specified cookie browser exists on this platform.
+# If not, run without cookies to avoid breaking the script.
+#
+# This is a coarse presence check (does the browser's profile directory exist),
+# not a liveness/lock check. yt-dlp's own docs note that reading cookies from a
+# browser while it's actively running can read a locked/inconsistent cookie DB and
+# silently degrade to an unauthenticated extraction — a plausible contributor to
+# the per-video playback flakiness this script guards against via YT_PLAYER_CLIENT
+# (see above). We don't detect that case here; closing the browser before playback
+# is the more reliable workaround, at the cost of convenience.
+YT_COOKIE_ARGS=()
+if [[ -n "${YT_COOKIE_BROWSER:-}" && "$YT_COOKIE_BROWSER" != "none" ]]; then
+    browser_exists=0
+    case "$YT_COOKIE_BROWSER" in
+    chrome|chromium|brave)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            if [[ -d "$HOME/Library/Application Support/Google/Chrome" || -d "$HOME/Library/Application Support/BraveSoftware" || -d "$HOME/Library/Application Support/Chromium" ]]; then
+                browser_exists=1
+            fi
+        else
+            if [[ -d "$HOME/.config/google-chrome" || -d "$HOME/.config/chromium" || -d "$HOME/.config/BraveSoftware" ]]; then
+                browser_exists=1
+            fi
+        fi
+        ;;
+    safari)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Safari" ]] && browser_exists=1
+        fi
+        ;;
+    firefox)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Firefox" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.mozilla/firefox" ]] && browser_exists=1
+        fi
+        ;;
+    edge)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Microsoft Edge" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/microsoft-edge" ]] && browser_exists=1
+        fi
+        ;;
+    opera)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/com.operasoftware.Opera" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/opera" ]] && browser_exists=1
+        fi
+        ;;
+    vivaldi)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Vivaldi" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/vivaldi" ]] && browser_exists=1
+        fi
+        ;;
+    *)
+        browser_exists=0
+        ;;
+    esac
+
+    if ((browser_exists)); then
+        YT_COOKIE_ARGS=(--cookies-from-browser "$YT_COOKIE_BROWSER")
+    fi
+fi
+
+# ==============================================================================
+# 2. CORE HELPER FUNCTIONS
+# ==============================================================================
+
+usage() {
+    cat <<EOF
+YT CLI Suite - User Guide (yt: full non-interactive core surface)
+
+Four commands. yt is the full non-interactive core (search + play + resolve +
+lifecycle); the others are narrow, single-purpose surfaces that delegate to it.
+  - yt          Full non-interactive core: search or play/resolve/manage a URL.
+  - yt-search   Non-interactive search -> text or JSON.        (run 'yt-search -h')
+  - yt-play     Play / resolve / manage playback of a URL.     (run 'yt-play -h')
+  - yt-tui      Interactive fuzzy browser (fzf): pick + preview + play. (yt-tui -h)
+
+Usage (Core, non-interactive):
+  yt [-n num] [-s sort] [-l|-j|-J] <search query>   # search -> list (default)/JSON
+  yt [-f mode] [-j] <YouTube URL>                   # play a URL
+  yt (no query, no URL)                             # error; use yt-tui to browse
+
+Usage (Search):
+  yt-search [-n num] [-s sort] [-l|-j|-J] <search query>
+
+Usage (Play a URL):
+  yt-play [-f mode] [-j] <YouTube URL>
+  yt-play --get-url [-f mode] [-j] <URL>        # resolve stream URL(s), do not play
+  yt-play -d [--replace] <URL>                  # detached background audio playback
+  yt-play --status [-j]                         # what (if anything) is playing
+  yt-play --stop [-j]                           # stop detached playback (idempotent)
+
+Options:
+  -n  Number of search results to fetch (default: 25)
+  -m  Minimum duration in seconds
+  -M  Maximum duration in seconds
+  -s  Sort field: duration|view_count (default: view_count)
+  -f  Playback mode (default: audio)
+      audio|ba   audio-only
+      video|bv   high-quality video+audio
+      fast|fst   fast-start progressive video
+      ascii|asc  terminal video via mpv terminal VO
+      viz|waves  live audio-responsive spectrum wave visualizer
+  -F  yt-dlp format-sort override
+  -l  Plain text list output (search)
+  -j  JSON output. Search -> {query,count,results[]} envelope; play/lifecycle ->
+      one-line status JSON. Structured output for whatever operation runs.
+  -J  Search JSON with the full raw yt-dlp fields (--json-full), same envelope.
+  -d  --detach: background audio playback; track via --status/--stop
+      (detached has no terminal, so video/ascii/viz can't render — audio only)
+  -h  Show this help message
+
+Long-only flags: --detach --status --stop --get-url --replace --json-full --color
+
+Search JSON envelope (-j): {"query","count","results":[...]}
+  Each result (-j, 8 fields): id, title, url, channel, duration, duration_fmt,
+  view_count, live_status.  With -J: every raw yt-dlp entry field.
+Play JSON (yt-play -j <url>): {status:"ok"|"error", url, mode, exit_code,
+  reason, retried}.  reason taxonomy: forbidden | unavailable |
+  format_unavailable | network | stopped_by_user | unknown | null(ok).
+
+Playback keys (mpv, during 'yt <url>' playback):
+  _  Toggle video track on/off
+  q  Stop playback and exit
+
+For an interactive fuzzy browser (pick + preview + play), use: yt-tui <query>
+
+Dependencies:
+  - Common: yt-dlp, jq
+  - Playback: mpv
+
+Environment Variables (customizable):
+  YT_COOKIE_BROWSER    Browser for cookie extraction (default: chrome)
+  YT_AUDIO_FORMAT      Default audio stream format (default: ba)
+  YT_VIDEO_FORMAT      Default video stream format (default: bv*+ba/b)
+  YT_VIDEO_FORMAT_FAST Fast-start progressive stream format
+  YT_ASCII_VO          mpv terminal video output driver (default: tct)
+  YT_MPV_INPUT_CONF    Path to optional custom mpv input.conf file
+  YT_PLAYER_CLIENT     Pin yt-dlp's youtube player_client (e.g. web_safari) instead
+                       of the default authenticated client. Empty by default: when
+                       unset, a failed playback automatically retries once with
+                       web_safari before giving up, so this normally never needs to
+                       be set by hand. Setting it yourself opts out of that retry.
+                       Note: web_safari has no audio-only formats, so also set
+                       YT_AUDIO_FORMAT=b (or ba/b) or audio mode will fail with
+                       "Requested format is not available".
+EOF
+}
+
+die() {
+    local red='' reset=''
+    case "${COLOR_MODE:-auto}" in
+    always)
+        red=$'\033[31m'
+        reset=$'\033[0m'
+        ;;
+    auto)
+        if [[ -t 2 ]]; then
+            red=$'\033[31m'
+            reset=$'\033[0m'
+        fi
+        ;;
+    never) ;;
+    esac
+    echo "${red}Error:${reset} $*" >&2
+    exit 1
+}
+
+is_non_negative_int() {
+    [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+validate_enum() {
+    local value=$1
+    shift
+    local allowed
+    for allowed in "$@"; do
+        if [[ "$value" == "$allowed" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+require_cmd() {
+    local cmd=$1
+    command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
+}
+
+require_deps() {
+    local cmd
+    for cmd in "$@"; do
+        require_cmd "$cmd"
+    done
+}
+
+mpv_supports_vo() {
+    local vo=$1
+    mpv --vo=help 2>/dev/null | awk 'NR > 1 {print $1}' | grep -Fxq "$vo"
+}
+
+convert_seconds() {
+    local total_seconds=${1:-}
+    local days hours minutes seconds
+
+    if ! [[ "$total_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        echo "00h:00m:00s"
+        return
+    fi
+
+    total_seconds=${total_seconds%.*}
+    days=$((total_seconds / 86400))
+    hours=$(((total_seconds % 86400) / 3600))
+    minutes=$(((total_seconds % 3600) / 60))
+    seconds=$((total_seconds % 60))
+
+    if ((days > 0)); then
+        printf "%dd %02dh:%02dm:%02ds" "$days" "$hours" "$minutes" "$seconds"
+    else
+        printf "%02dh:%02dm:%02ds" "$hours" "$minutes" "$seconds"
+    fi
+}
+
+normalize_playback_mode() {
+    case "$1" in
+    audio | ba) echo "audio" ;;
+    video | bv) echo "video" ;;
+    fast | fst) echo "fast" ;;
+    ascii | asc) echo "ascii" ;;
+    viz | waves | wave) echo "viz" ;;
+    *) die "-f must be one of: audio, video, fast, ascii, viz, waves, ba, bv, fst, asc, wave" ;;
+    esac
+}
+
+# ==============================================================================
+# 3. STREAM RESOLUTION & PLAYBACK PIPELINES
+# ==============================================================================
+
+run_yt_dlp_pipe_to_mpv() {
+    local url=$1
+    local format=$2
+    shift 2
+    local mpv_cmd=(mpv)
+    local raw_opts=()
+
+    # Optionally load caller-provided mpv input bindings.
+    if [[ -n "$YT_MPV_INPUT_CONF" && -r "$YT_MPV_INPUT_CONF" ]]; then
+        mpv_cmd+=(--input-conf="$YT_MPV_INPUT_CONF")
+    fi
+
+    # Pass format directly to mpv's ytdl integration
+    mpv_cmd+=(--ytdl-format="$format")
+
+    # Pass cookie arguments to mpv's ytdl integration if available
+    if (( ${#YT_COOKIE_ARGS[@]} > 0 )); then
+        raw_opts+=("cookies-from-browser=$YT_COOKIE_BROWSER")
+    fi
+
+    # Optional player_client override for videos that 403 on the default authenticated client
+    if [[ -n "$YT_PLAYER_CLIENT" ]]; then
+        raw_opts+=("extractor-args=youtube:player_client=$YT_PLAYER_CLIENT")
+    fi
+
+    # mpv's --ytdl-raw-options is a single key/value-list flag: multiple keys are
+    # joined with commas into one argument (confirmed against mpv -v output), not
+    # passed as repeated flags. `local IFS=,` scopes the join separator to this
+    # function only, so it can't leak into unrelated word-splitting elsewhere.
+    if ((${#raw_opts[@]} > 0)); then
+        local IFS=,
+        mpv_cmd+=(--ytdl-raw-options="${raw_opts[*]}")
+    fi
+
+    # Execute mpv natively with the URL!
+    "${mpv_cmd[@]}" "$@" "$url"
+}
+
+warn_audio_only_mode() {
+    echo "Audio-only mode: no video track. Key '_' cannot turn video on. Use video/ascii mode for visuals." >&2
+}
+
+play_audio_url() {
+    local url=$1
+    warn_audio_only_mode
+    run_yt_dlp_pipe_to_mpv "$url" "$YT_AUDIO_FORMAT" "${YT_MPV_AUDIO_OPTIONS[@]}"
+}
+
+play_video_url() {
+    local url=$1
+    run_yt_dlp_pipe_to_mpv "$url" "$YT_VIDEO_FORMAT" "${YT_MPV_VIDEO_OPTIONS[@]}"
+}
+
+play_fast_video_url() {
+    local url=$1
+    run_yt_dlp_pipe_to_mpv "$url" "$YT_VIDEO_FORMAT_FAST" "${YT_MPV_VIDEO_OPTIONS[@]}"
+}
+
+play_ascii_url() {
+    local url=$1
+    run_yt_dlp_pipe_to_mpv "$url" "$YT_VIDEO_FORMAT" "${YT_MPV_ASCII_OPTIONS[@]}"
+}
+
+play_viz_url() {
+    local url=$1
+    local width height size
+    width=$(tput cols 2>/dev/null || echo 80)
+    height=$(tput lines 2>/dev/null || echo 24)
+    # Cap size to prevent terminal lag
+    if ((width > 120)); then width=120; fi
+    if ((height > 30)); then height=30; fi
+    size="${width}x${height}"
+
+    # Use showwaves filter with TCT terminal output
+    run_yt_dlp_pipe_to_mpv "$url" "$YT_AUDIO_FORMAT" \
+        --vo=tct \
+        --lavfi-complex="[aid1]asplit[ao][v];[v]showwaves=s=${size}:mode=line:colors=cyan|yellow:r=15[vo]"
+}
+
+# Single mode-dispatch table for playback, shared by play_url_directly() (prose
+# `yt <url>`) and play_url_json() (structured output). Kept as one function so the
+# callers can never drift out of sync on which modes exist or what they print.
+play_mode_url() {
+    local url=$1
+    local mode=$2
+
+    case "$mode" in
+    video)
+        printf "Playing video: %s\n" "$url"
+        play_video_url "$url"
+        ;;
+    fast)
+        printf "Playing fast video: %s\n" "$url"
+        play_fast_video_url "$url"
+        ;;
+    ascii)
+        printf "Playing ascii video: %s\n" "$url"
+        play_ascii_url "$url"
+        ;;
+    viz)
+        printf "Playing audio with live visualizer: %s\n" "$url"
+        play_viz_url "$url"
+        ;;
+    *)
+        printf "Playing audio: %s\n" "$url"
+        play_audio_url "$url"
+        ;;
+    esac
+}
+
+# One-time automatic fallback retry, kept separate from play_mode_url() (which
+# stays a pure mode dispatcher). If playback fails and the caller hasn't already
+# pinned YT_PLAYER_CLIENT themselves, retry once with `web_safari` — the client
+# yt-dlp's own PO Token Guide documents as not currently requiring a PO token,
+# which is why it doesn't 403 on videos that reject the default authenticated
+# client (tv_downgraded). `local YT_PLAYER_CLIENT=... YT_AUDIO_FORMAT=...` shadow
+# the globals only for this retry call (bash dynamic scoping), so
+# run_yt_dlp_pipe_to_mpv picks them up without touching the real defaults; `b`
+# is needed because web_safari only exposes muxed formats, so plain `ba` would
+# fail format selection entirely (see the design doc). SIGINT (130, user pressed
+# q/ctrl-c) is deliberately excluded — that's an intentional stop, not a failure.
+play_url_with_fallback() {
+    local url=$1
+    local mode=$2
+    local rc=0
+
+    # Global (not local) so the playback JSON emitter can report whether the
+    # web_safari fallback fired. Reset per call so a prior retry doesn't leak.
+    PLAYBACK_RETRIED=0
+
+    play_mode_url "$url" "$mode" || rc=$?
+
+    if ((rc != 0 && rc != 130)) && [[ -z "$YT_PLAYER_CLIENT" ]]; then
+        echo "Playback failed (exit $rc); retrying once with fallback client web_safari..." >&2
+        PLAYBACK_RETRIED=1
+        local YT_PLAYER_CLIENT=web_safari
+        local YT_AUDIO_FORMAT=b
+        rc=0
+        play_mode_url "$url" "$mode" || rc=$?
+    fi
+
+    return $rc
+}
+
+play_url_directly() {
+    local url=$1
+    play_url_with_fallback "$url" "$PLAYBACK_MODE"
+}
+
+# Map captured mpv/yt-dlp output + exit code to a small, stable taxonomy so an agent
+# caller can branch on `reason` instead of string-matching raw player wording (which
+# is not a contract and drifts across versions). `unknown` is the conservative
+# default — we never guess a specific cause we didn't positively identify.
+classify_playback_error() {
+    local text=$1 rc=$2
+    if ((rc == 130)); then
+        echo "stopped_by_user"
+        return
+    fi
+    if grep -qiE 'HTTP Error 403|[^a-z]403[^0-9]|Forbidden' <<<"$text"; then
+        echo "forbidden"
+        return
+    fi
+    if grep -qiE 'Video unavailable|Private video|has been removed|no longer available|does not exist|account.*terminated|members-only|Sign in to confirm' <<<"$text"; then
+        echo "unavailable"
+        return
+    fi
+    if grep -qiE 'Requested format is not available|No video formats|requested format|only images are available' <<<"$text"; then
+        echo "format_unavailable"
+        return
+    fi
+    if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out' <<<"$text"; then
+        echo "network"
+        return
+    fi
+    echo "unknown"
+}
+
+# Opt-in structured playback (yt-play -j / OUTPUT_MODE=json). Captures the player's
+# stdout+stderr (suppressing its chatter) and emits exactly one final JSON line
+# describing the outcome, reusing play_url_with_fallback unchanged. rc 130 (user hit
+# q/ctrl-c) is a normal stop, reported as status "ok" with reason "stopped_by_user".
+# The real non-zero exit is still propagated so the process exit code stays truthful.
+play_url_json() {
+    local url=$1 mode=$2
+    local tmp rc=0
+    tmp=$(mktemp "${TMPDIR:-/tmp}/yt-cli-play.XXXXXX" 2>/dev/null) || tmp="${TMPDIR:-/tmp}/yt-cli-play.$$"
+
+    play_url_with_fallback "$url" "$mode" >"$tmp" 2>&1 || rc=$?
+
+    local status reason
+    if ((rc == 0)); then
+        status="ok"
+        reason=""
+    elif ((rc == 130)); then
+        status="ok"
+        reason="stopped_by_user"
+    else
+        status="error"
+        reason=$(classify_playback_error "$(cat "$tmp" 2>/dev/null)" "$rc")
+    fi
+    rm -f "$tmp"
+
+    local retried_json="false"
+    ((PLAYBACK_RETRIED)) && retried_json="true"
+
+    jq -nc \
+        --arg status "$status" \
+        --arg url "$url" \
+        --arg mode "$mode" \
+        --argjson exit_code "$rc" \
+        --arg reason "$reason" \
+        --argjson retried "$retried_json" \
+        '{status: $status, url: $url, mode: $mode, exit_code: $exit_code, reason: (if $reason == "" then null else $reason end), retried: $retried}'
+
+    ((rc == 130)) && return 0
+    return "$rc"
+}
+
+# The yt-dlp format string a given playback mode resolves to (used for both the
+# detached-state record and --get-url). Mirrors the per-mode choices in the
+# play_*_url functions above.
+format_for_mode() {
+    case "$1" in
+    video) echo "$YT_VIDEO_FORMAT" ;;
+    fast) echo "$YT_VIDEO_FORMAT_FAST" ;;
+    ascii) echo "$YT_VIDEO_FORMAT" ;;
+    *) echo "$YT_AUDIO_FORMAT" ;; # audio, viz
+    esac
+}
+
+# A detached playback is tracked by its PROCESS GROUP, not a PID tree. The child bash
+# is launched as its own process-group leader (see detach_play), so its pgid == its
+# pid, and every descendant it forks — including the web_safari fallback mpv that
+# appears only after the first attempt fails — inherits that pgid. This is what a
+# PID-tree walk cannot handle: the fallback mpv is spawned after any one-time snapshot,
+# and once bash exits the mpv reparents to init (ppid=1) so it is no longer findable
+# by parentage. The pgid is invariant under reparenting, so group operations always
+# reach it. pgrep -g / kill -<pgid> are available on macOS and Linux.
+
+# True if any process in group $pgid is still alive.
+group_alive() {
+    local pgid=${1:-}
+    [[ -n "$pgid" ]] && [[ -n "$(pgrep -g "$pgid" 2>/dev/null)" ]]
+}
+
+# Stop the whole process group: SIGINT (mpv treats it as a clean stop, like q), wait
+# briefly for graceful exit, then SIGKILL any survivor. Negative PID targets the group.
+stop_group() {
+    local pgid=$1
+    kill -INT -"$pgid" 2>/dev/null || true
+
+    local i
+    for ((i = 0; i < 15; i++)); do
+        group_alive "$pgid" || return 0
+        sleep 0.2
+    done
+
+    kill -KILL -"$pgid" 2>/dev/null || true
+}
+
+state_pid() {
+    [[ -f "$STATE_FILE" ]] || return 1
+    jq -r '.pid // empty' "$STATE_FILE" 2>/dev/null
+}
+
+# Background a playback and record it in a single-slot state file so a later
+# --status/--stop can find it. Re-execs this script (SELF) with a plain, non-detached
+# play invocation via nohup so it survives the launching process exiting; the child
+# is tracked by PID. Refuses to start over a live playback unless --replace, which
+# stops the existing one first. Audio only in practice: a detached process has no
+# controlling terminal, so video/ascii/viz have nowhere to render.
+detach_play() {
+    local url=$1
+    mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+    local existing
+    existing=$(state_pid 2>/dev/null || true)
+    if group_alive "$existing"; then
+        if ((REPLACE)); then
+            stop_group "$existing"
+        else
+            die "already playing (pid $existing); use 'yt-play --stop' first or pass --replace"
+        fi
+    fi
+
+    local fmt started_at pid
+    fmt=$(format_for_mode "$PLAYBACK_MODE")
+    started_at=$(date -u +%FT%TZ 2>/dev/null || echo unknown)
+
+    # Launch the child in its OWN process group so the whole playback (incl. any
+    # fallback mpv) can be stopped as a unit later (see stop_group). Enabling monitor
+    # mode (set -m) makes a backgrounded job a process-group leader whose pgid == its
+    # pid; nohup + disown detach it from this shell so it survives our exit. Job-control
+    # chatter is routed away from stdout so -j output stays a single clean JSON line.
+    set -m
+    nohup bash "$SELF" -f "$PLAYBACK_MODE" "$url" >"$PLAYBACK_LOG" 2>&1 &
+    pid=$!
+    set +m
+    disown "$pid" 2>/dev/null || true
+
+    jq -n \
+        --argjson pid "$pid" \
+        --arg url "$url" \
+        --arg mode "$PLAYBACK_MODE" \
+        --arg format "$fmt" \
+        --arg started_at "$started_at" \
+        --arg log "$PLAYBACK_LOG" \
+        '{pid: $pid, url: $url, mode: $mode, format: $format, started_at: $started_at, log: $log}' >"$STATE_FILE"
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc \
+            --argjson pid "$pid" --arg url "$url" --arg mode "$PLAYBACK_MODE" --arg started_at "$started_at" \
+            '{status: "started", pid: $pid, url: $url, mode: $mode, started_at: $started_at}'
+    else
+        printf "Detached playback started (pid %s, mode %s): %s\n" "$pid" "$PLAYBACK_MODE" "$url"
+        printf "  status: yt-play --status   stop: yt-play --stop   log: %s\n" "$PLAYBACK_LOG"
+    fi
+}
+
+# Report the single-slot playback state. Always exits 0 (an agent polling status must
+# not see a non-zero exit as failure). Clears stale state whose PID is gone.
+do_status() {
+    local pid="" alive=0
+    if [[ -f "$STATE_FILE" ]]; then
+        pid=$(jq -r '.pid // empty' "$STATE_FILE" 2>/dev/null || true)
+        group_alive "$pid" && alive=1
+    fi
+
+    if ((alive)); then
+        if [[ "$OUTPUT_MODE" == "json" ]]; then
+            jq -c '. + {status: "playing"}' "$STATE_FILE"
+        else
+            printf "playing (pid %s, mode %s, since %s): %s\n" \
+                "$pid" "$(jq -r '.mode' "$STATE_FILE")" "$(jq -r '.started_at' "$STATE_FILE")" "$(jq -r '.url' "$STATE_FILE")"
+        fi
+    else
+        [[ -f "$STATE_FILE" ]] && rm -f "$STATE_FILE"
+        if [[ "$OUTPUT_MODE" == "json" ]]; then
+            echo '{"status":"idle"}'
+        else
+            echo "idle (nothing playing)"
+        fi
+    fi
+    exit 0
+}
+
+# Stop the tracked playback. Idempotent: exits 0 whether or not something was playing.
+do_stop() {
+    local pid="" stopped=false
+    if [[ -f "$STATE_FILE" ]]; then
+        pid=$(jq -r '.pid // empty' "$STATE_FILE" 2>/dev/null || true)
+        if group_alive "$pid"; then
+            stop_group "$pid"
+            stopped=true
+        fi
+        rm -f "$STATE_FILE"
+    fi
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --argjson stopped "$stopped" '{status: "stopped", stopped: $stopped}'
+    else
+        if [[ "$stopped" == true ]]; then echo "stopped playback"; else echo "nothing to stop"; fi
+    fi
+    exit 0
+}
+
+# Resolve the direct stream URL(s) for a video without playing — non-blocking and
+# side-effect-free, so an agent can compose playback (fetch the URL, hand it to
+# another player, probe availability) instead of only being able to fire-and-block.
+# Honours the chosen mode's format plus cookies/player_client, mirroring playback.
+resolve_stream_url() {
+    local url=$1 fmt
+    fmt=$(format_for_mode "$PLAYBACK_MODE")
+
+    local cmd=(yt-dlp -g -f "$fmt")
+    if ((${#YT_COOKIE_ARGS[@]} > 0)); then
+        cmd+=("${YT_COOKIE_ARGS[@]}")
+    fi
+    if [[ -n "$YT_PLAYER_CLIENT" ]]; then
+        cmd+=(--extractor-args "youtube:player_client=$YT_PLAYER_CLIENT")
+    fi
+    cmd+=(--no-warnings --quiet "$url")
+
+    local out rc=0
+    out=$("${cmd[@]}" 2>/dev/null) || rc=$?
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        local status="ok"
+        ((rc != 0)) && status="error"
+        printf '%s\n' "$out" | jq -Rn \
+            --arg status "$status" --arg url "$url" --arg mode "$PLAYBACK_MODE" --arg format "$fmt" \
+            '{status: $status, url: $url, mode: $mode, format: $format, stream_urls: [inputs | select(length > 0)]}'
+    else
+        if ((rc != 0)); then
+            die "could not resolve stream URL for: $url"
+        fi
+        printf '%s\n' "$out"
+    fi
+    exit "$rc"
+}
+
+# ==============================================================================
+# 4. SEARCH EXECUTION & INTERACTIVE MENU LOGIC
+# ==============================================================================
+
+fetch_results() {
+    local match_filter_option="duration > $MIN_DURATION"
+    if ((MAX_DURATION > 0)); then
+        match_filter_option+=" and duration < $MAX_DURATION"
+    fi
+
+    local cmd=(
+        yt-dlp
+        "ytsearch${NUM_RESULTS}:${QUERY}"
+        --match-filter "$match_filter_option"
+    )
+
+    if (( ${#YT_COOKIE_ARGS[@]} > 0 )); then
+        cmd+=("${YT_COOKIE_ARGS[@]}")
+    fi
+
+    cmd+=(
+        --flat-playlist
+        --dump-single-json
+        -f ba
+        --skip-download
+        --no-warnings
+        --ignore-errors
+        --quiet
+    )
+
+    if [[ -n "$FORMAT_SORT" ]]; then
+        cmd+=(--format-sort "$FORMAT_SORT")
+    fi
+
+    local result_json
+    result_json=$("${cmd[@]}")
+
+    local jq_filter='.entries'
+    if [[ "$SORT_FIELD" == "duration" ]]; then
+        jq_filter+=" | sort_by(.duration) | reverse"
+    elif [[ "$SORT_FIELD" == "view_count" ]]; then
+        jq_filter+=" | sort_by(.view_count) | reverse"
+    fi
+
+    local raw_json
+    raw_json=$(echo "$result_json" | jq "$jq_filter")
+
+    # Add the synthesized duration_fmt using convert_seconds
+    FILTERED_JSON=$(echo "$raw_json" | jq -c '.[]' | while IFS= read -r item; do
+        local duration duration_fmt
+        duration=$(echo "$item" | jq -r '.duration')
+        duration_fmt=$(convert_seconds "$duration")
+        echo "$item" | jq --arg df "$duration_fmt" '. + {duration_fmt: $df}'
+    done | jq -s '.')
+}
+
+print_list() {
+    echo "$FILTERED_JSON" | jq 'to_entries | map(.value + {index: (.key + 1)})' | jq -c '.[]' |
+        while IFS= read -r line; do
+            local index title duration view_count url duration_fmt
+            index=$(echo "$line" | jq -r '.index')
+            title=$(echo "$line" | jq -r '.title')
+            duration=$(echo "$line" | jq -r '.duration')
+            view_count=$(echo "$line" | jq -r '.view_count')
+            url=$(echo "$line" | jq -r '.url')
+            duration_fmt=$(convert_seconds "$duration")
+            echo "$MUSIC_CHAR $index. $title"
+            echo "  - $duration_fmt"
+            echo "  - $view_count views"
+            echo "  - $url"
+        done
+}
+
+# Structured search output for agent callers. Wraps results in a stable
+# {query, count, results} envelope so a caller gets the query echoed back and a
+# result count without having to derive them. Default (OUTPUT_MODE=json) projects
+# each entry to a lean, high-signal 8-field schema — the raw yt-dlp entries carry
+# ~23 fields (thumbnail arrays, ie_key, x-forwarded-for, two URL variants, …) that
+# are pure token ballast for a headless caller. OUTPUT_MODE=json_full (-J) keeps
+# every raw field for the rare case fidelity is needed. FILTERED_JSON's own shape is
+# left untouched (print_list still reads it), so we project only here.
+emit_search_json() {
+    local projection
+    if [[ "$OUTPUT_MODE" == "json_full" ]]; then
+        projection='.'
+    else
+        projection='map({id, title, url, channel, duration, duration_fmt, view_count, live_status})'
+    fi
+    echo "$FILTERED_JSON" | jq --arg q "$QUERY" "{query: \$q, count: length, results: ($projection)}"
+}
+
+# ==============================================================================
+# 5. CLI OPTIONS PARSING & VALIDATION
+# ==============================================================================
+
+NUM_RESULTS=25
+MIN_DURATION=0
+MAX_DURATION=0
+SORT_FIELD="view_count"
+PLAYBACK_MODE="audio"
+FORMAT_SORT=""
+COLOR_MODE="auto"
+MUSIC_CHAR="♫"
+# Default search output is the plain list; -j/-J/-l override. (No interactive menu:
+# the core is non-interactive — interactive browsing lives in yt-tui.)
+OUTPUT_MODE="list"
+FILTERED_JSON=""
+# Playback lifecycle / structured-output state.
+DETACH=0
+REPLACE=0
+ACTION=""            # "" (normal) | status | stop | geturl
+PLAYBACK_RETRIED=0   # set by play_url_with_fallback; surfaced in the playback JSON
+STATE_DIR="${TMPDIR:-/tmp}/yt-cli-$(id -u)"
+STATE_FILE="$STATE_DIR/state.json"
+PLAYBACK_LOG="$STATE_DIR/playback.log"
+
+normalized_args=()
+while (($#)); do
+    case "$1" in
+    --help)
+        normalized_args+=("-h")
+        shift
+        ;;
+    --color)
+        [[ $# -ge 2 ]] || die "--color requires a value"
+        normalized_args+=("-c" "$2")
+        shift 2
+        ;;
+    --color=*)
+        normalized_args+=("-c" "${1#*=}")
+        shift
+        ;;
+    --list|-l)
+        normalized_args+=("-l")
+        shift
+        ;;
+    --json|-j)
+        normalized_args+=("-j")
+        shift
+        ;;
+    --json-full)
+        normalized_args+=("-J")
+        shift
+        ;;
+    --detach)
+        normalized_args+=("-d")
+        shift
+        ;;
+    --status)
+        ACTION=status
+        shift
+        ;;
+    --stop)
+        ACTION=stop
+        shift
+        ;;
+    --get-url)
+        ACTION=geturl
+        shift
+        ;;
+    --replace)
+        REPLACE=1
+        shift
+        ;;
+    *)
+        normalized_args+=("$1")
+        shift
+        ;;
+    esac
+done
+if ((${#normalized_args[@]})); then
+    set -- "${normalized_args[@]}"
+else
+    set --
+fi
+
+while getopts ":n:m:M:s:f:F:c:dljJh" opt; do
+    case "$opt" in
+    n) NUM_RESULTS="$OPTARG" ;;
+    m) MIN_DURATION="$OPTARG" ;;
+    M) MAX_DURATION="$OPTARG" ;;
+    s) SORT_FIELD="$OPTARG" ;;
+    f) PLAYBACK_MODE=$(normalize_playback_mode "$OPTARG") ;;
+    F) FORMAT_SORT="$OPTARG" ;;
+    c) COLOR_MODE="$OPTARG" ;;
+    d) DETACH=1 ;;
+    l) OUTPUT_MODE="list" ;;
+    j) OUTPUT_MODE="json" ;;
+    J) OUTPUT_MODE="json_full" ;;
+    h)
+        usage
+        exit 0
+        ;;
+    :)
+        die "option -$OPTARG requires an argument"
+        ;;
+    \?)
+        die "invalid option: -$OPTARG"
+        ;;
+    esac
+done
+
+shift $((OPTIND - 1))
+
+QUERY="$*"
+
+if ! is_non_negative_int "$NUM_RESULTS"; then
+    die "-n must be a non-negative integer"
+fi
+if ! is_non_negative_int "$MIN_DURATION"; then
+    die "-m must be a non-negative integer"
+fi
+if ! is_non_negative_int "$MAX_DURATION"; then
+    die "-M must be a non-negative integer"
+fi
+if ((MAX_DURATION > 0 && MAX_DURATION <= MIN_DURATION)); then
+    die "-M must be greater than -m when both are set"
+fi
+if ! validate_enum "$SORT_FIELD" duration view_count; then
+    die "-s must be one of: duration, view_count"
+fi
+if ! validate_enum "$COLOR_MODE" auto always never; then
+    die "--color must be one of: auto, always, never"
+fi
+
+# Detect a URL-shaped query once; both the routing and the guards below key off it.
+IS_URL=0
+if [[ "$QUERY" =~ ^https?:// || "$QUERY" =~ ^www\. || "$QUERY" =~ ^youtube\.com || "$QUERY" =~ ^youtu\.be ]]; then
+    IS_URL=1
+fi
+
+# --get-url and --detach act on a specific video, so a URL is mandatory.
+if [[ "$ACTION" == "geturl" ]] && ((! IS_URL)); then
+    die "--get-url requires a YouTube URL"
+fi
+if ((DETACH)) && ((! IS_URL)); then
+    die "--detach requires a YouTube URL"
+fi
+
+# A bare invocation (no URL, no query, no lifecycle action) is a usage error (D3).
+# Report it before the heavier yt-dlp/mpv dependency check so the message is about
+# the missing input, not a missing player. Interactive browsing lives in yt-tui.
+if ((! IS_URL)) && [[ -z "${QUERY//[[:space:]]/}" ]] && [[ -z "$ACTION" ]]; then
+    die "provide a search query or a URL (for interactive browsing, run yt-tui)"
+fi
+
+# Lifecycle queries need only jq and take no URL — handle them before the heavier
+# yt-dlp/mpv dependency check and before any URL routing.
+if [[ "$ACTION" == "status" ]]; then
+    require_cmd jq
+    do_status
+fi
+if [[ "$ACTION" == "stop" ]]; then
+    require_cmd jq
+    do_stop
+fi
+
+require_deps yt-dlp jq mpv
+
+if [[ "$PLAYBACK_MODE" == "ascii" ]]; then
+    if ! mpv_supports_vo "$YT_ASCII_VO"; then
+        die "mpv does not support --vo=$YT_ASCII_VO (run 'mpv --vo=help' to choose a supported terminal VO)"
+    fi
+fi
+
+# =-----------------------------------------------------------------------------
+# ROUTING: Direct play (URLs) or Non-interactive Search output
+# =-----------------------------------------------------------------------------
+if ((IS_URL)); then
+    if [[ "$ACTION" == "geturl" ]]; then
+        resolve_stream_url "$QUERY" # resolve-only; exits internally
+    fi
+    if ((DETACH)); then
+        detach_play "$QUERY"
+        exit 0
+    fi
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        rc=0
+        play_url_json "$QUERY" "$PLAYBACK_MODE" || rc=$?
+        exit "$rc"
+    fi
+    play_url_directly "$QUERY"
+    exit 0
+fi
+
+# =-----------------------------------------------------------------------------
+# Non-URL: non-interactive search output. (Empty-query guard is enforced above.)
+# =-----------------------------------------------------------------------------
+fetch_results
+if [[ "$OUTPUT_MODE" == "list" ]]; then
+    print_list
+else
+    emit_search_json
+fi
+exit 0

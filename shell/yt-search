@@ -3,19 +3,19 @@
 #
 # This is a real wrapper, not a symlink: it owns a search-only --help, accepts only
 # search flags (rejecting playback/lifecycle flags with a redirect to yt-play), then
-# delegates to the shared implementation yt-search-n-play.sh. Keeping the heavy logic
+# delegates to the shared implementation `yt` (core). Keeping the heavy logic
 # in one place avoids drift; the narrowing here is what gives an LLM caller a small,
 # unambiguous contract. Output defaults to the plain list (-l) unless -j/-J is given.
 set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Locate the impl whether invoked via a bin/ symlink (../../shell-scripts) or directly.
-if [[ -f "$SCRIPT_DIR/../../shell-scripts/yt-search-n-play.sh" ]]; then
-    IMPL="$SCRIPT_DIR/../../shell-scripts/yt-search-n-play.sh"
-elif [[ -f "$SCRIPT_DIR/yt-search-n-play.sh" ]]; then
-    IMPL="$SCRIPT_DIR/yt-search-n-play.sh"
+if [[ -f "$SCRIPT_DIR/../../shell-scripts/yt" ]]; then
+    IMPL="$SCRIPT_DIR/../../shell-scripts/yt"
+elif [[ -f "$SCRIPT_DIR/yt" ]]; then
+    IMPL="$SCRIPT_DIR/yt"
 else
-    echo "yt-search: cannot locate yt-search-n-play.sh" >&2
+    echo "yt-search: cannot locate yt (core)" >&2
     exit 1
 fi
 
@@ -80,7 +80,7 @@ while (($#)); do
         flags+=("$1" "$2")
         shift 2
         ;;
-    -f | -p | -d | --detach | --status | --stop | --get-url | --replace)
+    -f | -d | --detach | --status | --stop | --get-url | --replace)
         echo "yt-search: $1 is a playback flag — use yt-play for playback" >&2
         exit 1
         ;;
