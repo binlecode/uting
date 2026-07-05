@@ -60,7 +60,8 @@ Keys (in the menu):
   n        new search (fetch a different query via yt-search)
   m        more results (re-fetch the current query, +25 to the count)
   o        rotate sort field / order (relevance → view_count → duration → …), re-fetch
-  /        filter the current results (case-insensitive, space = AND)
+  /        live filter — type to narrow instantly (case-insensitive, space = AND);
+             ↑/↓ select, Enter play, Esc clear
   q        quit
 
 Environment:
@@ -239,6 +240,7 @@ build_all_rows() {
 apply_search_results() {
     build_all_rows
     FILTER_LABEL=""
+    FILTER_MODE=0
     selected=0
     page_index=1
     load_rows "$ALL_ROWS"
@@ -263,7 +265,7 @@ load_rows() {
 # the current page of rows (♫ marker, selection highlighted), the Page-of footer. We own
 # every line — plain text + ANSI, no box, no frame.
 display_menu() {
-    local page=$1 start end i n disp status_extra pb p dots
+    local page=$1 start end i n disp status_extra pb p dots caret
     clear
     # Title. The ♫ accent lives here — used ONCE, meaningfully — not repeated on every row.
     printf '%s%s%syt-tui%s  query=%s\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "'$QUERY_LABEL'"
@@ -272,7 +274,13 @@ display_menu() {
     if [[ "$PLAY_MODE" == "audio" ]]; then status_extra="audio-only"; else status_extra="video-enabled"; fi
     printf '%sresults=%s  sort=%s  min=%ss  max=%ss  mode=%s (%s)%s\n' \
         "$C_DIM" "$NUM_ENTRIES" "$SORT_FIELD" "$MIN_DISP" "$MAX_DISP" "$PLAY_MODE" "$status_extra" "$C_RESET"
-    [[ -n "$FILTER_LABEL" ]] && printf '%sfilter=%s (/ to change, n for a new search)%s\n' "$C_DIM" "'$FILTER_LABEL'" "$C_RESET"
+    if ((FILTER_MODE)); then
+        # live filter: query as typed + a caret (the cursor is hidden), plus the filter-mode keys
+        if [[ -n "$C_REVERSE" ]]; then caret="$C_REVERSE $C_RESET$C_DIM"; else caret="_"; fi
+        printf '%sfilter=%s%s (type to narrow, Enter plays, Esc clears)%s\n' "$C_DIM" "'$FILTER_LABEL'" "$caret" "$C_RESET"
+    elif [[ -n "$FILTER_LABEL" ]]; then
+        printf '%sfilter=%s (/ to change, n for a new search)%s\n' "$C_DIM" "'$FILTER_LABEL'" "$C_RESET"
+    fi
     printf '\n'
     # Key hints: navigation, then playback (mpv keys during blocking play).
     printf '%sNavigation:%s %s↑/↓%s item  %s←/→%s page  %s↵%s play  %sv%s mode  %sn%s search  %sm%s more  %so%s sort  %s/%s filter  %sq%s quit\n' \
@@ -447,19 +455,18 @@ cycle_sort() {
     apply_search_results
 }
 
-# ── FILTER action (key: /) ──────────────────────────────────────────────────────────────
-# Narrow the already-fetched rows in pure bash — no network, no external tool. Community-
-# standard filter semantics (as fzf's default / git log --grep):
-#   • case-insensitive (shopt -s nocasematch, scoped)
-#   • space-separated AND tokens: a row matches only if it contains EVERY token, any order
-#   • whitespace-trimmed; empty / all-whitespace clears the filter (shows all)
-#   • literal tokens: quoted "$tok" in the glob → user's *, [, ? match literally (no injection)
-# Only the display field (field 2) is matched; the hidden url (field 1) rides along untouched.
-filter_results() {
-    local q url disp tok ok matched=""
-    printf '\n%s%s Filter%s (Esc to cancel, empty to show all; space = AND): ' "$C_BOLD" "$GL_CARET" "$C_RESET"
-    read_query_input || return 0               # Esc / Ctrl-D → cancel, view unchanged
-    q="$QUERY_INPUT"
+# ── FILTER action (key: /) — LIVE incremental narrow ─────────────────────────────────────
+# Best practice for a LOCAL list-narrow (fzf / command-palette style): each keystroke re-filters
+# the already-fetched rows immediately — no Enter, no network. Split in two:
+#   apply_filter  pure-bash matcher (community semantics: case-insensitive, space = AND,
+#                 glob-literal tokens, empty clears; only the display field is matched, the
+#                 hidden url rides along). The matching logic lives ONCE here.
+#   filter_live   interactive loop: type → narrow live, ↑↓←→ move within the filtered set,
+#                 Enter plays the highlighted match (stays filtering), Esc clears + exits.
+# `n` (new search) stays Enter-submit — it hits the network — so the two prompts diverge on
+# purpose (in-page filter is live; a remote search submits). See yt-design.md §11.
+apply_filter() {
+    local q="$1" url disp tok ok matched="" tokens=()
     selected=0
     page_index=1
     if [[ -z "${q//[[:space:]]/}" ]]; then
@@ -468,7 +475,6 @@ filter_results() {
         return 0
     fi
     FILTER_LABEL="$q"
-    local tokens=()
     read -ra tokens <<<"$q"
     shopt -s nocasematch
     while IFS=$'\t' read -r url disp; do
@@ -481,6 +487,28 @@ filter_results() {
     done <<<"$ALL_ROWS"
     shopt -u nocasematch
     load_rows "$matched"
+}
+
+filter_live() {
+    local query="" input
+    FILTER_MODE=1
+    apply_filter ""                              # enter filter mode showing the full list
+    while true; do
+        display_menu "$page_index"
+        input=$(read_nav_input) || continue      # EOF / transient read fail → re-loop
+        case "$input" in
+        "") play_selected ;;                     # Enter → play highlighted match, stay filtering
+        ESC) break ;;                            # Esc → leave filter mode (cleared below)
+        "[A" | "OA" | "["*A | "O"*A | "[B" | "OB" | "["*B | "O"*B | \
+        "[C" | "OC" | "["*C | "O"*C | "[D" | "OD" | "["*D | "O"*D)
+            move_selection "$input" ;;           # arrows move WITHIN the filtered set (no re-filter)
+        $'\x7f' | $'\b') query="${query%?}"; apply_filter "$query" ;;   # backspace widens
+        ?) query="$query$input"; apply_filter "$query" ;;              # one printable char narrows
+        *) ;;                                    # ignore stray multi-byte / unknown sequences
+        esac
+    done
+    FILTER_MODE=0
+    apply_filter ""                              # Esc clears the filter → restore the full list
 }
 
 # Read one keypress. Arrow keys arrive as a multi-byte ANSI escape sequence (ESC [ A/B/C/D,
@@ -537,8 +565,42 @@ read_query_input() {
     done
 }
 
+# Move the selection / page for an arrow-key input. Mutates selected/page_index, computing the
+# page bounds internally exactly as the menu loop does. Shared by the main loop AND filter_live
+# so paging behaviour can't drift between the two.
+move_selection() {
+    local input="$1" pmin pmax
+    pmin=$(( (page_index - 1) * PAGE_SIZE ))
+    pmax=$(( pmin + PAGE_SIZE - 1 ))
+    case "$input" in
+    "[A" | "OA" | "["*A | "O"*A) # up
+        if ((selected > 0)); then
+            selected=$(( selected - 1 ))
+            if ((selected < pmin && page_index > 1)); then
+                page_index=$(( page_index - 1 )); selected=$(( page_index * PAGE_SIZE - 1 ))
+            fi
+        fi ;;
+    "[B" | "OB" | "["*B | "O"*B) # down
+        if ((selected < NUM_ENTRIES - 1)); then
+            selected=$(( selected + 1 ))
+            if ((selected > pmax && page_index < NUM_PAGES)); then
+                page_index=$(( page_index + 1 )); selected=$(( (page_index - 1) * PAGE_SIZE ))
+            fi
+        fi ;;
+    "[C" | "OC" | "["*C | "O"*C) # right → next page
+        if ((page_index < NUM_PAGES)); then
+            page_index=$(( page_index + 1 )); selected=$(( (page_index - 1) * PAGE_SIZE ))
+        fi ;;
+    "[D" | "OD" | "["*D | "O"*D) # left → prev page
+        if ((page_index > 1)); then
+            page_index=$(( page_index - 1 )); selected=$(( (page_index - 1) * PAGE_SIZE ))
+        fi ;;
+    esac
+}
+
 # ── Initial fetch ───────────────────────────────────────────────────────────────────────
 FILTER_LABEL=""
+FILTER_MODE=0
 selected=0
 page_index=1
 rc=0
@@ -562,42 +624,15 @@ while true; do
     if ! input=$(read_nav_input); then continue; fi
 
     case "$input" in
-    "[A" | "OA" | "["*A | "O"*A) # up
-        if ((selected > 0)); then
-            selected=$(( selected - 1 ))
-            if ((selected < page_min && page_index > 1)); then
-                page_index=$(( page_index - 1 ))
-                selected=$(( page_index * PAGE_SIZE - 1 ))
-            fi
-        fi
-        ;;
-    "[B" | "OB" | "["*B | "O"*B) # down
-        if ((selected < NUM_ENTRIES - 1)); then
-            selected=$(( selected + 1 ))
-            if ((selected > page_max && page_index < NUM_PAGES)); then
-                page_index=$(( page_index + 1 ))
-                selected=$(( (page_index - 1) * PAGE_SIZE ))
-            fi
-        fi
-        ;;
-    "[C" | "OC" | "["*C | "O"*C) # right → next page
-        if ((page_index < NUM_PAGES)); then
-            page_index=$(( page_index + 1 ))
-            selected=$(( (page_index - 1) * PAGE_SIZE ))
-        fi
-        ;;
-    "[D" | "OD" | "["*D | "O"*D) # left → prev page
-        if ((page_index > 1)); then
-            page_index=$(( page_index - 1 ))
-            selected=$(( (page_index - 1) * PAGE_SIZE ))
-        fi
-        ;;
+    "[A" | "OA" | "["*A | "O"*A | "[B" | "OB" | "["*B | "O"*B | \
+    "[C" | "OC" | "["*C | "O"*C | "[D" | "OD" | "["*D | "O"*D)
+        move_selection "$input" ;;   # ↑↓ item · ←→ page (shared with filter_live)
     "") play_selected ;;      # Enter
     n | N) new_search ;;      # new search (re-fetch a different query)
     m | M) more_results ;;    # more: re-fetch current query with 25 more results
     o | O) cycle_sort ;;      # rotate sort field (order): relevance → view_count → duration
     v | V) cycle_mode ;;      # rotate playback mode: audio → video → fast (next Enter)
-    "/") filter_results ;;    # filter the current results in-place
+    "/") filter_live ;;       # LIVE incremental filter (type to narrow; Esc clears)
     q | Q) echo "Quitting…"; exit 0 ;;
     ESC) ;; # ignore a stray Esc
     *) ;;
