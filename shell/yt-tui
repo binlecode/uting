@@ -56,11 +56,16 @@ Keys (in the menu):
   ↑/↓      move the selection          ←/→  page
   Enter    play the selected result (blocking: mpv owns the terminal;
              its progress bar shows, arrow keys seek, q returns to the menu)
+  v        cycle playback mode: audio → video → fast (applies to the next play)
   n        new search (fetch a different query via yt-search)
   m        more results (re-fetch the current query, +25 to the count)
   o        rotate sort field / order (relevance → view_count → duration → …), re-fetch
   /        filter the current results (case-insensitive, space = AND)
   q        quit
+
+Environment:
+  YT_TUI_ASCII=1   Use ASCII glyphs (♫ ● ○ ❯ · → dropped / LIVE / numeric / >) for
+                   terminals whose font can't draw them. Auto-on for non-UTF-8 locales.
 EOF
 }
 
@@ -81,7 +86,8 @@ is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
 # -f/-p/--color are menu-local. The rest is the query. Reject anything else.
 SEARCH_ARGS=()
 RESULT_N=25          # fetch count; -n overrides. Runtime-mutable: S adds 25 (more_results).
-PLAY_MODE="audio"
+PLAY_MODE="audio"        # -f flag overrides. Runtime-mutable: v key rotates it (cycle_mode).
+MODE_CYCLE=(audio video fast)  # order the v key steps through
 COLOR_MODE="auto"
 PAGE_OPT=10
 SORT_FIELD="relevance"   # -s flag overrides. Runtime-mutable: o key rotates it (cycle_sort).
@@ -134,7 +140,7 @@ require_cmd jq
 { [[ -t 0 ]] && [[ -t 1 ]]; } || die "requires a terminal (interactive menu); use yt-search / yt-play headless"
 
 # ── Colors (init_colors): honour --color auto|always|never, as the original. ────────────
-C_RESET=''; C_BOLD=''; C_CYAN=''; C_YELLOW=''; C_DIM=''
+C_RESET=''; C_BOLD=''; C_CYAN=''; C_YELLOW=''; C_DIM=''; C_REVERSE=''
 init_colors() {
     local on=0
     case "$COLOR_MODE" in
@@ -144,12 +150,37 @@ init_colors() {
     esac
     if ((on)); then
         C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_CYAN=$'\033[36m'
-        C_YELLOW=$'\033[33m'; C_DIM=$'\033[2m'
+        C_YELLOW=$'\033[33m'; C_DIM=$'\033[2m'; C_REVERSE=$'\033[7m'
     fi
 }
 init_colors
 
-MUSIC_CHAR="♫"
+# ── Glyphs (init_glyphs): Unicode by default; ASCII fallbacks when the terminal can't draw them.
+# Two triggers: YT_TUI_ASCII=1 (explicit — for a UTF-8 terminal whose FONT lacks these glyphs,
+# which locale can NOT detect), or a non-UTF-8 locale (auto). The reverse-video selection bar needs
+# no fallback (it's an SGR attribute, not a glyph). §16 config: font capability is set-once → env.
+GL_NOTE="♫"; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
+init_glyphs() {
+    case "${YT_TUI_ASCII:-}" in
+    1 | true | yes | on) ASCII_GLYPHS=1 ;;
+    *)
+        case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+        *UTF-8* | *utf-8* | *UTF8* | *utf8*) ASCII_GLYPHS=0 ;;
+        *) ASCII_GLYPHS=1 ;;   # empty / non-UTF-8 locale → assume a limited terminal
+        esac
+        ;;
+    esac
+    if ((ASCII_GLYPHS)); then GL_NOTE=""; GL_LIVE="LIVE"; GL_SEP="|"; GL_CARET=">"; fi
+}
+init_glyphs
+
+# Cursor: hide it while our self-rendered menu is on screen — a block-style terminal cursor
+# otherwise parks on the line below the footer and reads as a stray solid "brick". Restore it on
+# ANY exit (quit, error, Ctrl-C) via trap, and whenever we prompt for typed input or play.
+cursor_hide() { tput civis 2>/dev/null || true; }
+cursor_show() { tput cnorm 2>/dev/null || true; }
+trap cursor_show EXIT
+
 # Page size: default 10 (as the original), capped to what the terminal can show so it never
 # overflows a short window. Rows themselves are printed untruncated (see display_menu).
 LINES_N=$(tput lines 2>/dev/null || echo 24)
@@ -162,7 +193,7 @@ PAGE_CAP=$(( LINES_N - 8 ))
 
 # Interactive: with no query on the command line, prompt for one. Empty / Ctrl-D cancels.
 if ((${#query[@]} == 0)); then
-    printf 'Search YouTube: ' >&2
+    printf '%s Search YouTube: ' "$GL_CARET" >&2
     IFS= read -r _q || { printf '\n' >&2; exit 0; }
     [[ -n "${_q//[[:space:]]/}" ]] || { echo "yt-tui: no query entered" >&2; exit 0; }
     query=("$_q")
@@ -189,15 +220,16 @@ fetch_json() {
 # Build master rows (ALL_ROWS) from $json: one "url<TAB>display" line per result. display =
 # "title · dur · views · channel" (NO leading number — the menu numbers rows by visible
 # position, which stays correct after a filter re-orders them). `clean` strips emoji; @tsv
-# escapes any tab/newline so the hidden url field boundary never breaks.
+# escapes any tab/newline so the hidden url field boundary never breaks. A live stream shows
+# "● LIVE" in place of its (zero-length) duration. Metadata cells are single-spaced " · ".
 build_all_rows() {
-    ALL_ROWS=$(printf '%s' "$json" | jq -r '
+    ALL_ROWS=$(printf '%s' "$json" | jq -r --arg sep " $GL_SEP " --arg live "$GL_LIVE" '
       def clean:
         gsub("[\\x{1F000}-\\x{1FAFF}\\x{2190}-\\x{21FF}\\x{2300}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{2122}\\x{2139}]"; "")
         | gsub("\\s+"; " ") | gsub("^ | $"; "");
       .results[]
       | [ .url,
-          "\(.title | clean)  ·  \(.duration_fmt)  ·  \(.view_count // 0) views  ·  \(.channel // "?")"
+          "\(.title | clean)\($sep)\(if .live_status == "is_live" then $live else .duration_fmt end)\($sep)\(.view_count // 0) views\($sep)\(.channel // "?")"
         ] | @tsv')
 }
 
@@ -231,20 +263,21 @@ load_rows() {
 # the current page of rows (♫ marker, selection highlighted), the Page-of footer. We own
 # every line — plain text + ANSI, no box, no frame.
 display_menu() {
-    local page=$1 start end i n disp status_extra pb
+    local page=$1 start end i n disp status_extra pb p dots
     clear
-    # Title.
-    printf '%s%syt-tui%s  query=%s\n' "$C_BOLD" "$C_CYAN" "$C_RESET" "'$QUERY_LABEL'"
-    # Status line (mirrors the original), plus filter= when a filter is active.
+    # Title. The ♫ accent lives here — used ONCE, meaningfully — not repeated on every row.
+    printf '%s%s%syt-tui%s  query=%s\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "'$QUERY_LABEL'"
+    # Status line. No page=X/Y here — the pagination dots in the footer are the single position
+    # indicator (was doubled: status page= AND footer "Page X of Y"). filter= shown when active.
     if [[ "$PLAY_MODE" == "audio" ]]; then status_extra="audio-only"; else status_extra="video-enabled"; fi
-    printf '%sresults=%s  page=%s/%s  sort=%s  min=%ss  max=%ss  mode=%s (%s)%s\n' \
-        "$C_DIM" "$NUM_ENTRIES" "$page" "$NUM_PAGES" "$SORT_FIELD" "$MIN_DISP" "$MAX_DISP" "$PLAY_MODE" "$status_extra" "$C_RESET"
+    printf '%sresults=%s  sort=%s  min=%ss  max=%ss  mode=%s (%s)%s\n' \
+        "$C_DIM" "$NUM_ENTRIES" "$SORT_FIELD" "$MIN_DISP" "$MAX_DISP" "$PLAY_MODE" "$status_extra" "$C_RESET"
     [[ -n "$FILTER_LABEL" ]] && printf '%sfilter=%s (/ to change, n for a new search)%s\n' "$C_DIM" "'$FILTER_LABEL'" "$C_RESET"
     printf '\n'
     # Key hints: navigation, then playback (mpv keys during blocking play).
-    printf '%sNavigation:%s %s↑/↓%s item  %s←/→%s page  %s↵%s play  %sn%s search  %sm%s more  %so%s sort  %s/%s filter  %sq%s quit\n' \
+    printf '%sNavigation:%s %s↑/↓%s item  %s←/→%s page  %s↵%s play  %sv%s mode  %sn%s search  %sm%s more  %so%s sort  %s/%s filter  %sq%s quit\n' \
         "$C_BOLD" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" \
-        "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET"
+        "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET"
     if [[ "$PLAY_MODE" == "audio" ]]; then
         pb='(during play) ←/→ seek  q stop and return to menu'
     else
@@ -262,16 +295,36 @@ display_menu() {
         for (( i = start; i <= end && i < NUM_ENTRIES; i++ )); do
             n=$(( i + 1 ))
             disp="${options[$i]}"
+            # Focus marker: a reverse-video block in the left gutter — a solid bar that renders in
+            # ANY terminal font (unlike a ▌ block glyph, which some fonts don't draw). Row text
+            # stays yellow. No per-row ♫ (repeated glyph = chrome). Mono fallback: an ASCII ">".
+            # All three branches keep the number at column 2, so the list stays vertically aligned.
             if ((i == selected)); then
-                printf '%s> %s %s. %s%s\n' "$C_YELLOW" "$MUSIC_CHAR" "$n" "$disp" "$C_RESET"
+                if [[ -n "$C_REVERSE" ]]; then
+                    printf '%s %s %s%s. %s%s\n' "$C_REVERSE" "$C_RESET" "$C_YELLOW" "$n" "$disp" "$C_RESET"
+                else
+                    printf '> %s. %s\n' "$n" "$disp"
+                fi
             else
-                printf '  %s %s. %s\n' "$MUSIC_CHAR" "$n" "$disp"
+                printf '  %s. %s\n' "$n" "$disp"
             fi
         done
     fi
     printf '\n'
-    # Footer: page indicator.
-    printf '%sPage %s of %s%s\n' "$C_BOLD" "$page" "$NUM_PAGES" "$C_RESET"
+    # Footer: pagination position — ● current page, ○ the rest (numeric in ASCII mode or beyond a
+    # readable dot cap). Shown ONLY when there's more than one page: a lone dot conveys nothing.
+    if ((NUM_PAGES > 1)); then
+        if ((ASCII_GLYPHS == 0 && NUM_PAGES <= 12)); then
+            dots=""
+            for (( p = 1; p <= NUM_PAGES; p++ )); do
+                if ((p == page)); then dots+="●"; else dots+="○"; fi
+            done
+        else
+            dots="page $page/$NUM_PAGES"   # ASCII mode, or too many pages to dot
+        fi
+        printf '%s%s%s\n' "$C_BOLD" "$dots" "$C_RESET"
+    fi
+    cursor_hide   # no stray block cursor parked below the footer
 }
 
 # ── PLAY delegate ───────────────────────────────────────────────────────────────────────
@@ -280,6 +333,7 @@ display_menu() {
 play_selected() {
     ((NUM_ENTRIES > 0)) || return 0
     local url="${urls[$selected]}" rc=0
+    cursor_show   # mpv owns the terminal during blocking play; next display_menu re-hides
     # DO NOT add `clear` here. This matches the original all-in-one design: play on top
     # of the already-drawn menu so the result list stays visible during playback and mpv's
     # --term-osd-bar prints on the line below the footer. The loop's next display_menu()
@@ -303,12 +357,26 @@ play_selected() {
     fi
 }
 
+# ── MODE action (key: v) ────────────────────────────────────────────────────────────────
+# Rotate PLAY_MODE to the next entry in MODE_CYCLE (audio → video → fast). Playback mode is
+# purely local: it only changes the -f handed to yt-play on the NEXT Enter, so this is a
+# no-network state flip (unlike cycle_sort, which must re-fetch). The menu loop redraws on
+# return, so the status line's mode=… and the Playback hint update immediately. A launch mode
+# outside the cycle (-f ascii / -f viz) counts as position 0, so the first v enters at video.
+cycle_mode() {
+    local i n=${#MODE_CYCLE[@]} cur=0
+    for (( i = 0; i < n; i++ )); do
+        [[ "${MODE_CYCLE[$i]}" == "$PLAY_MODE" ]] && { cur=$i; break; }
+    done
+    PLAY_MODE="${MODE_CYCLE[$(( (cur + 1) % n ))]}"
+}
+
 # ── SEARCH action (key: n) ──────────────────────────────────────────────────────────────
 # New search: fetch a DIFFERENT query and replace the result set. Esc/Ctrl-D or an empty
 # line cancels (keeps the current results); the query is read via read_query_input.
 new_search() {
     local q prev="$QUERY_LABEL" rc=0
-    printf '\n%sNew search%s (Esc or empty to cancel): ' "$C_BOLD" "$C_RESET"
+    printf '\n%s%s New search%s (Esc or empty to cancel): ' "$C_BOLD" "$GL_CARET" "$C_RESET"
     read_query_input || return 0               # Esc / Ctrl-D → cancel back to menu
     q="$QUERY_INPUT"
     [[ -n "${q//[[:space:]]/}" ]] || return 0  # blank Enter → keep current results
@@ -389,7 +457,7 @@ cycle_sort() {
 # Only the display field (field 2) is matched; the hidden url (field 1) rides along untouched.
 filter_results() {
     local q url disp tok ok matched=""
-    printf '\n%sFilter%s (Esc to cancel, empty to show all; space = AND): ' "$C_BOLD" "$C_RESET"
+    printf '\n%s%s Filter%s (Esc to cancel, empty to show all; space = AND): ' "$C_BOLD" "$GL_CARET" "$C_RESET"
     read_query_input || return 0               # Esc / Ctrl-D → cancel, view unchanged
     q="$QUERY_INPUT"
     selected=0
@@ -457,6 +525,7 @@ read_nav_input() {
 # a stray Esc byte to the query.)
 read_query_input() {
     local char="" query=""
+    cursor_show   # a typed prompt needs a visible cursor; menu redraw re-hides afterward
     while true; do
         IFS= read -rsn1 char || return 1
         case "$char" in
@@ -527,8 +596,9 @@ while true; do
     n | N) new_search ;;      # new search (re-fetch a different query)
     m | M) more_results ;;    # more: re-fetch current query with 25 more results
     o | O) cycle_sort ;;      # rotate sort field (order): relevance → view_count → duration
+    v | V) cycle_mode ;;      # rotate playback mode: audio → video → fast (next Enter)
     "/") filter_results ;;    # filter the current results in-place
-    q | Q) echo "Quitting..."; exit 0 ;;
+    q | Q) echo "Quitting…"; exit 0 ;;
     ESC) ;; # ignore a stray Esc
     *) ;;
     esac
