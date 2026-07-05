@@ -41,7 +41,20 @@ SELF="${BASH_SOURCE[0]}"
 
 YT_MPV_AUDIO_OPTIONS=(--msg-level=client=error --term-osd-bar --no-video)
 # Keep video output auto-selected by mpv for compatibility across terminals/displays.
-YT_MPV_VIDEO_OPTIONS=(--msg-level=client=error --term-osd-bar)
+# --osd-level=0 fixes the video-mode terminal flood at its root: mpv otherwise renders the
+# media TITLE as a video OSD via libass, and a title with glyphs no font covers (emoji —
+# pervasive on YouTube) makes libass emit a per-frame "[osd/libass] fontselect: failed to
+# find any fallback with glyph …" warning AND macOS CoreText a ".LastResort" note. Each
+# interrupts mpv's in-place status line so it scrolls endlessly, burying yt-tui's menu.
+# Turning the video OSD off stops that render, killing BOTH sources; the ASCII --term-osd-bar
+# (no libass) keeps drawing the progress line. --msg-level=osd/libass=error is belt-and-
+# suspenders for any residual OSD path and keeps error level for the -j classifier. Verified:
+# emoji-titled play drops from 12 fontselect + 7 CoreText lines to 0/0 with the bar intact.
+# NB: --msg-level=all=error also silences the noise but over-suppresses the useful status bar
+# (blank playback); OS_ACTIVITY_MODE=disable does NOT stop the CoreText notes — both tried and
+# rejected. audio is immune (--no-video → no OSD); ascii uses --really-quiet. Cost: no
+# on-window OSD/OSC overlay for video/fast (keys still work). See yt-design.md.
+YT_MPV_VIDEO_OPTIONS=(--msg-level=osd/libass=error --osd-level=0 --term-osd-bar)
 # mpv docs suggest sw-fast/really-quiet for terminal VOs to reduce glitches and improve speed.
 YT_MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term-osd-bar)
 
