@@ -144,6 +144,7 @@ Usage (Search):
 
 Usage (Play a URL):
   yt-play [-f mode] [-j] <YouTube URL>
+  yt-play --info [-j|-J] <URL>                  # fetch metadata (title/chapters/desc), do not play
   yt-play --get-url [-f mode] [-j] <URL>        # resolve stream URL(s), do not play
   yt-play -d [--replace] <URL>                  # detached background audio playback
   yt-play --status [-j]                         # what (if anything) is playing
@@ -169,7 +170,7 @@ Options:
       (detached has no terminal, so video/ascii/viz can't render — audio only)
   -h  Show this help message
 
-Long-only flags: --detach --status --stop --get-url --replace --json-full --color
+Long-only flags: --detach --status --stop --get-url --info --replace --json-full --color
 
 Search JSON envelope (-j): {"query","count","results":[...]}
   Each result (-j, 8 fields): id, title, url, channel, duration, duration_fmt,
@@ -177,6 +178,9 @@ Search JSON envelope (-j): {"query","count","results":[...]}
 Play JSON (yt-play -j <url>): {status:"ok"|"error", url, mode, exit_code,
   reason, retried}.  reason taxonomy: forbidden | unavailable |
   format_unavailable | network | stopped_by_user | unknown | null(ok).
+Info JSON (yt-play --info -j <url>): {status, id, title, url, channel, uploader,
+  upload_date, duration, duration_fmt, view_count, like_count, live_status,
+  description, chapters}.  With -J: the full raw yt-dlp record.
 
 Playback keys (mpv, during 'yt <url>' playback):
   _  Toggle video track on/off
@@ -742,6 +746,97 @@ resolve_stream_url() {
     exit "$rc"
 }
 
+# Fetch rich metadata for a video WITHOUT playing — read-only, non-blocking, and
+# side-effect-free. Closes the gap where an agent had to leave this ecosystem and drop
+# to raw `yt-dlp --dump-json` just to learn what a video is (description, chapters,
+# uploader, upload date, like count). Honours cookies like playback so login-gated
+# videos resolve. Output mirrors search's field discipline: -j projects a lean,
+# high-signal schema (the raw record carries ~40 fields of formats/thumbnails/fragments
+# that are pure token ballast for a headless caller); -J returns the full raw record;
+# default is a readable text block. duration_fmt is synthesized the same way search
+# does, so info and search agree on the shape.
+resolve_info() {
+    local url=$1
+
+    local cmd=(yt-dlp --dump-single-json --skip-download)
+    if ((${#YT_COOKIE_ARGS[@]} > 0)); then
+        cmd+=("${YT_COOKIE_ARGS[@]}")
+    fi
+    cmd+=(--no-warnings --quiet "$url")
+
+    local raw rc=0
+    raw=$("${cmd[@]}" 2>/dev/null) || rc=$?
+
+    if ((rc != 0)) || [[ -z "$raw" ]]; then
+        if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+            jq -nc --arg url "$url" '{status: "error", url: $url, reason: "could not fetch metadata"}'
+            exit 1
+        fi
+        die "could not fetch metadata for: $url"
+    fi
+
+    local duration duration_fmt
+    duration=$(printf '%s' "$raw" | jq -r '.duration // empty')
+    if [[ -n "$duration" ]]; then
+        duration_fmt=$(convert_seconds "$duration")
+    else
+        duration_fmt=""
+    fi
+
+    case "$OUTPUT_MODE" in
+    json_full)
+        printf '%s\n' "$raw" | jq '.'
+        ;;
+    json)
+        printf '%s\n' "$raw" | jq --arg df "$duration_fmt" '{
+            status: "ok",
+            id, title,
+            url: .webpage_url,
+            channel, uploader, upload_date,
+            duration, duration_fmt: $df,
+            view_count, like_count, live_status,
+            description,
+            chapters: (if (.chapters | type) == "array"
+                       then [.chapters[] | {start_time, end_time, title}]
+                       else null end)
+        }'
+        ;;
+    *)
+        local title channel upload_date view_count like_count live_status webpage_url description
+        title=$(printf '%s' "$raw" | jq -r '.title // "(untitled)"')
+        channel=$(printf '%s' "$raw" | jq -r '.channel // .uploader // "?"')
+        upload_date=$(printf '%s' "$raw" | jq -r '.upload_date // "?"')
+        view_count=$(printf '%s' "$raw" | jq -r '.view_count // "?"')
+        like_count=$(printf '%s' "$raw" | jq -r '.like_count // "?"')
+        live_status=$(printf '%s' "$raw" | jq -r '.live_status // "?"')
+        webpage_url=$(printf '%s' "$raw" | jq -r '.webpage_url // empty')
+        description=$(printf '%s' "$raw" | jq -r '.description // ""')
+
+        printf '%s %s\n' "$MUSIC_CHAR" "$title"
+        printf '  - channel: %s\n' "$channel"
+        printf '  - uploaded: %s\n' "$upload_date"
+        [[ -n "$duration_fmt" ]] && printf '  - duration: %s\n' "$duration_fmt"
+        printf '  - views: %s   likes: %s\n' "$view_count" "$like_count"
+        printf '  - live: %s\n' "$live_status"
+        [[ -n "$webpage_url" ]] && printf '  - url: %s\n' "$webpage_url"
+
+        local chapters_txt
+        chapters_txt=$(printf '%s' "$raw" | jq -r '
+            if (.chapters | type) == "array" and (.chapters | length) > 0 then
+                .chapters[]
+                | ((.start_time // 0) | floor) as $s
+                | (($s / 60) | floor) as $m
+                | ($s - $m * 60) as $sec
+                | "  " + ($m | tostring) + ":" + (if $sec < 10 then "0" else "" end) + ($sec | tostring) + "  " + (.title // "")
+            else empty end')
+        [[ -n "$chapters_txt" ]] && printf '\nChapters:\n%s\n' "$chapters_txt"
+
+        [[ -n "$description" ]] && printf '\nDescription:\n%s\n' "$description"
+        ;;
+    esac
+    exit "$rc"
+}
+
 # ==============================================================================
 # 4. SEARCH EXECUTION & INTERACTIVE MENU LOGIC
 # ==============================================================================
@@ -907,6 +1002,10 @@ while (($#)); do
         ACTION=geturl
         shift
         ;;
+    --info)
+        ACTION=info
+        shift
+        ;;
     --replace)
         REPLACE=1
         shift
@@ -981,6 +1080,9 @@ fi
 if [[ "$ACTION" == "geturl" ]] && ((! IS_URL)); then
     die "--get-url requires a YouTube URL"
 fi
+if [[ "$ACTION" == "info" ]] && ((! IS_URL)); then
+    die "--info requires a YouTube URL"
+fi
 if ((DETACH)) && ((! IS_URL)); then
     die "--detach requires a YouTube URL"
 fi
@@ -1001,6 +1103,12 @@ fi
 if [[ "$ACTION" == "stop" ]]; then
     require_cmd jq
     do_stop
+fi
+# --info is a read-only metadata fetch: needs yt-dlp + jq, but NOT mpv (nothing plays).
+# Handle it before the playback dependency check so a metadata lookup never demands mpv.
+if [[ "$ACTION" == "info" ]]; then
+    require_deps yt-dlp jq
+    resolve_info "$QUERY"
 fi
 
 require_deps yt-dlp jq mpv
