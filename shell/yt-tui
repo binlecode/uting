@@ -141,7 +141,7 @@ require_cmd jq
 { [[ -t 0 ]] && [[ -t 1 ]]; } || die "requires a terminal (interactive menu); use yt-search / yt-play headless"
 
 # ── Colors (init_colors): honour --color auto|always|never, as the original. ────────────
-C_RESET=''; C_BOLD=''; C_CYAN=''; C_YELLOW=''; C_DIM=''; C_REVERSE=''
+C_RESET=''; C_BOLD=''; C_CYAN=''; C_YELLOW=''; C_DIM=''
 init_colors() {
     local on=0
     case "$COLOR_MODE" in
@@ -151,7 +151,7 @@ init_colors() {
     esac
     if ((on)); then
         C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_CYAN=$'\033[36m'
-        C_YELLOW=$'\033[33m'; C_DIM=$'\033[2m'; C_REVERSE=$'\033[7m'
+        C_YELLOW=$'\033[33m'; C_DIM=$'\033[2m'
     fi
 }
 init_colors
@@ -265,7 +265,7 @@ load_rows() {
 # the current page of rows (♫ marker, selection highlighted), the Page-of footer. We own
 # every line — plain text + ANSI, no box, no frame.
 display_menu() {
-    local page=$1 start end i n disp status_extra pb p dots caret
+    local page=$1 start end i n disp status_extra pb p dots
     clear
     # Title. The ♫ accent lives here — used ONCE, meaningfully — not repeated on every row.
     printf '%s%s%syt-tui%s  query=%s\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "'$QUERY_LABEL'"
@@ -274,13 +274,6 @@ display_menu() {
     if [[ "$PLAY_MODE" == "audio" ]]; then status_extra="audio-only"; else status_extra="video-enabled"; fi
     printf '%sresults=%s  sort=%s  min=%ss  max=%ss  mode=%s (%s)%s\n' \
         "$C_DIM" "$NUM_ENTRIES" "$SORT_FIELD" "$MIN_DISP" "$MAX_DISP" "$PLAY_MODE" "$status_extra" "$C_RESET"
-    if ((FILTER_MODE)); then
-        # live filter: query as typed + a caret (the cursor is hidden), plus the filter-mode keys
-        if [[ -n "$C_REVERSE" ]]; then caret="$C_REVERSE $C_RESET$C_DIM"; else caret="_"; fi
-        printf '%sfilter=%s%s (type to narrow, Enter plays, Esc clears)%s\n' "$C_DIM" "'$FILTER_LABEL'" "$caret" "$C_RESET"
-    elif [[ -n "$FILTER_LABEL" ]]; then
-        printf '%sfilter=%s (/ to change, n for a new search)%s\n' "$C_DIM" "'$FILTER_LABEL'" "$C_RESET"
-    fi
     printf '\n'
     # Key hints: navigation, then playback (mpv keys during blocking play).
     printf '%sNavigation:%s %s↑/↓%s item  %s←/→%s page  %s↵%s play  %sv%s mode  %sn%s search  %sm%s more  %so%s sort  %s/%s filter  %sq%s quit\n' \
@@ -303,16 +296,12 @@ display_menu() {
         for (( i = start; i <= end && i < NUM_ENTRIES; i++ )); do
             n=$(( i + 1 ))
             disp="${options[$i]}"
-            # Focus marker: a reverse-video block in the left gutter — a solid bar that renders in
-            # ANY terminal font (unlike a ▌ block glyph, which some fonts don't draw). Row text
-            # stays yellow. No per-row ♫ (repeated glyph = chrome). Mono fallback: an ASCII ">".
-            # All three branches keep the number at column 2, so the list stays vertically aligned.
+            # Focus marker: a "> " caret in the left gutter + the row in yellow. ASCII, so it
+            # renders in ANY font (a ▌/reverse-video block reads as an ugly solid box on fonts
+            # that lack the glyph). No per-row ♫ (repeated glyph = chrome). "> " and the "  "
+            # gutter are both 2 cols, so the number stays at column 2 and the list stays aligned.
             if ((i == selected)); then
-                if [[ -n "$C_REVERSE" ]]; then
-                    printf '%s %s %s%s. %s%s\n' "$C_REVERSE" "$C_RESET" "$C_YELLOW" "$n" "$disp" "$C_RESET"
-                else
-                    printf '> %s. %s\n' "$n" "$disp"
-                fi
+                printf '%s> %s. %s%s\n' "$C_YELLOW" "$n" "$disp" "$C_RESET"
             else
                 printf '  %s. %s\n' "$n" "$disp"
             fi
@@ -332,7 +321,16 @@ display_menu() {
         fi
         printf '%s%s%s\n' "$C_BOLD" "$dots" "$C_RESET"
     fi
-    cursor_hide   # no stray block cursor parked below the footer
+    # LIVE filter input lives at the BOTTOM (fzf-style, below the list), printed with NO trailing
+    # newline so the REAL terminal cursor rests right after the query — that IS the input caret
+    # (no fake reverse-video block). Everywhere else the cursor stays hidden.
+    if ((FILTER_MODE)); then
+        printf '%sfilter%s %s(type to narrow, Enter plays, Esc clears)%s\n' "$C_BOLD" "$C_RESET" "$C_DIM" "$C_RESET"
+        printf '%s>%s %s' "$C_YELLOW" "$C_RESET" "$FILTER_LABEL"
+        cursor_show
+    else
+        cursor_hide   # no stray block cursor parked below the footer
+    fi
 }
 
 # ── PLAY delegate ───────────────────────────────────────────────────────────────────────
