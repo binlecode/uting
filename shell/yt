@@ -29,10 +29,12 @@ SELF="${BASH_SOURCE[0]}"
 # restricted videos — invisible to an anonymous client — play. The trade-off: when cookies
 # are supplied, yt-dlp switches to YouTube's authenticated client set, whose googlevideo
 # media URLs can require a GVS "Proof of Origin" token; without it, mpv's fetch of those
-# URLs 403s on some PUBLIC videos. That case self-heals: play_url_with_fallback() retries
-# once anonymously (drops cookies), and the anonymous client's URLs fetch cleanly (HTTP
-# 206). So login-gated content works on the first try and public 403s recover on the retry.
-# Set YT_COOKIE_BROWSER=none to force anonymous-only (skips the keychain read / retry).
+# URLs 403s on some PUBLIC videos. To avoid a visible failed attempt, play_url_with_probe()
+# probes up front (yt-dlp resolve + 1-byte ranged GET) which client actually fetches the
+# media, then plays ONCE with it — cookies for login-gated, anonymous for cookie-403 public
+# videos. So both cases play cleanly with no error dump (curl-less machines degrade to a
+# play-fail-replay retry instead). yt-design.md §8.2.
+# Set YT_COOKIE_BROWSER=none to force anonymous-only (skips the keychain read / probe).
 # The browser's cookie DB should be readable (Chrome ideally closed) for a clean extraction.
 # Optional custom mpv input.conf path; empty means use mpv defaults.
 : "${YT_MPV_INPUT_CONF:=}"
@@ -177,10 +179,10 @@ Environment Variables (customizable):
   YT_COOKIE_BROWSER    Browser for cookie extraction / login (default: chrome).
                        Logged in by default so login-gated / members / age-restricted
                        videos play. Some PUBLIC videos 403 with cookies (YouTube PO-token
-                       wall on the authenticated client) — that self-heals: playback
-                       retries once anonymously. Set to "none" to force anonymous-only
-                       (skips the keychain read and the retry). Reading the cookie DB is
-                       most reliable with the browser closed.
+                       wall on the authenticated client); yt probes which client can fetch
+                       BEFORE playing and uses the working one, so playback stays clean.
+                       Set to "none" to force anonymous-only (skips the keychain read and
+                       the probe). Reading the cookie DB is most reliable with browser closed.
   YT_AUDIO_FORMAT      Default audio stream format (default: ba)
   YT_VIDEO_FORMAT      Default video stream format (default: bv*+ba/b)
   YT_VIDEO_FORMAT_FAST Fast-start progressive stream format
@@ -386,41 +388,89 @@ play_mode_url() {
     esac
 }
 
-# One-time automatic fallback retry, kept separate from play_mode_url() (which stays a
-# pure mode dispatcher). With cookies ON by default, the first attempt is authenticated so
-# login-gated content plays; if it fails while cookies are in use, retry once WITHOUT
-# cookies (anonymous). This matches the real failure mode — YouTube 403s the authenticated
-# client's media URLs (GVS PO token) on some PUBLIC videos, while the anonymous client's
-# URLs fetch fine — so a public video that 403s with cookies self-heals on the retry.
-# `local YT_COOKIE_ARGS=()` shadows the global for this retry only (bash dynamic scoping),
-# so run_mpv drops the cookies without touching the real setting. SIGINT (130, user hit
-# q/ctrl-c) is excluded — an intentional stop, not a failure. With YT_COOKIE_BROWSER=none
-# there are no cookies to drop, so this never fires (anonymous-only).
-play_url_with_fallback() {
-    local url=$1
-    local mode=$2
-    local rc=0
+# The probe path needs curl to test-fetch a byte of the resolved media URL. yt-dlp is
+# already a hard dependency (require_deps); curl is near-universal but optional here, so
+# we degrade to the play-fail-replay retry when it is absent rather than break.
+have_probe_tools() {
+    command -v curl >/dev/null 2>&1
+}
 
-    # Global (not local) so the playback JSON emitter can report whether the anonymous
-    # fallback fired. Reset per call so a prior retry doesn't leak.
+# True (0) if the given client can actually FETCH this video's media stream — not merely
+# resolve a URL, but pull a byte from it. Resolves the direct media URL with yt-dlp using
+# the passed client (cookie args, if any), then issues a 1-byte ranged GET: a signed
+# googlevideo URL answers 206 when the client is authorized and 403 when it is missing the
+# GVS "Proof of Origin" token. That 403 is the exact failure that makes mpv abort mid-load,
+# so the probe's verdict matches what playback would do — letting us pick the working
+# client BEFORE launching mpv. Any resolve/transport failure returns non-zero (treated as
+# "this client can't fetch"). Called only from `if` conditions, so set -e stays disarmed.
+probe_media_fetchable() {
+    local url=$1 fmt=$2
+    shift 2 # remaining args (if any) are the client, e.g. --cookies-from-browser chrome
+    local media
+    media=$(yt-dlp -g -f "$fmt" "$@" --no-warnings --quiet "$url" 2>/dev/null) || return 1
+    media=${media%%$'\n'*} # video mode yields video+audio lines; the first is enough
+    [[ -n "$media" ]] || return 1
+    local code
+    code=$(curl -sSL -o /dev/null -r 0-0 --max-time 10 -w '%{http_code}' "$media" 2>/dev/null) || return 1
+    [[ "$code" == 2* ]]
+}
+
+# Probe-then-play, kept separate from play_mode_url() (which stays a pure mode dispatcher).
+# Cookies are ON by default so login-gated content plays; but some PUBLIC videos 403 with
+# cookies (missing GVS PO token) while the anonymous client fetches fine, and login-gated
+# videos are the reverse. The naive approach — play, let mpv 403, then replay without
+# cookies — dumps mpv's error wall on screen before the retry. Instead we probe up front
+# which client actually fetches the media, then launch mpv ONCE with it: no failed first
+# attempt, no error dump, in either case. Cost: one extra yt-dlp resolve + a 1-byte HTTP
+# probe before playback (a login-gated hit probes once; a cookie-403 public video probes
+# twice). `local YT_COOKIE_ARGS=()` shadows the global (bash dynamic scoping) so run_mpv
+# drops cookies for this play without touching the real setting. PLAYBACK_RETRIED records
+# that we fell back to anonymous, surfaced in the playback JSON's `retried` field.
+# With YT_COOKIE_BROWSER=none there is nothing to choose, so we skip the probe entirely.
+# When curl is unavailable we cannot probe, so we fall back to the older play-fail-replay
+# retry (SIGINT 130 excluded — an intentional stop, not a failure).
+play_url_with_probe() {
+    local url=$1 mode=$2 rc=0 fmt
+
+    # Global (not local) so the playback JSON emitter can report the anonymous fallback.
+    # Reset per call so a prior play doesn't leak.
     PLAYBACK_RETRIED=0
 
-    play_mode_url "$url" "$mode" || rc=$?
+    # Anonymous-only (no cookies to weigh) → play directly, no probe.
+    if ((${#YT_COOKIE_ARGS[@]} == 0)); then
+        play_mode_url "$url" "$mode" || rc=$?
+        return $rc
+    fi
 
-    if ((rc != 0 && rc != 130)) && ((${#YT_COOKIE_ARGS[@]} > 0)); then
+    if have_probe_tools; then
+        fmt=$(format_for_mode "$mode")
+        # Keep cookies if they fetch; otherwise, only switch to anonymous if THAT fetches.
+        # If neither does (network down, unresolvable, both 403), keep cookies and let mpv
+        # produce the real error/exit code so the JSON reason taxonomy stays accurate.
+        if ! probe_media_fetchable "$url" "$fmt" "${YT_COOKIE_ARGS[@]}" &&
+            probe_media_fetchable "$url" "$fmt"; then
+            PLAYBACK_RETRIED=1
+            local YT_COOKIE_ARGS=()
+        fi
+        play_mode_url "$url" "$mode" || rc=$?
+        return $rc
+    fi
+
+    # No curl: fall back to play-fail-replay (drop cookies once if the cookies attempt fails).
+    play_mode_url "$url" "$mode" || rc=$?
+    if ((rc != 0 && rc != 130)); then
         echo "Playback failed (exit $rc); retrying once without cookies (anonymous)..." >&2
         PLAYBACK_RETRIED=1
         local YT_COOKIE_ARGS=()
         rc=0
         play_mode_url "$url" "$mode" || rc=$?
     fi
-
     return $rc
 }
 
 play_url_directly() {
     local url=$1
-    play_url_with_fallback "$url" "$PLAYBACK_MODE"
+    play_url_with_probe "$url" "$PLAYBACK_MODE"
 }
 
 # Map captured mpv/yt-dlp output + exit code to a small, stable taxonomy so an agent
@@ -454,7 +504,7 @@ classify_playback_error() {
 
 # Opt-in structured playback (yt-play -j / OUTPUT_MODE=json). Captures the player's
 # stdout+stderr (suppressing its chatter) and emits exactly one final JSON line
-# describing the outcome, reusing play_url_with_fallback unchanged. rc 130 (user hit
+# describing the outcome, reusing play_url_with_probe unchanged. rc 130 (user hit
 # q/ctrl-c) is a normal stop, reported as status "ok" with reason "stopped_by_user".
 # The real non-zero exit is still propagated so the process exit code stays truthful.
 play_url_json() {
@@ -462,7 +512,7 @@ play_url_json() {
     local tmp rc=0
     tmp=$(mktemp "${TMPDIR:-/tmp}/yt-cli-play.XXXXXX" 2>/dev/null) || tmp="${TMPDIR:-/tmp}/yt-cli-play.$$"
 
-    play_url_with_fallback "$url" "$mode" >"$tmp" 2>&1 || rc=$?
+    play_url_with_probe "$url" "$mode" >"$tmp" 2>&1 || rc=$?
 
     local status reason
     if ((rc == 0)); then
@@ -507,12 +557,12 @@ format_for_mode() {
 
 # A detached playback is tracked by its PROCESS GROUP, not a PID tree. The child bash
 # is launched as its own process-group leader (see detach_play), so its pgid == its
-# pid, and every descendant it forks — including the anonymous-retry fallback mpv that
-# appears only after the first attempt fails — inherits that pgid. This is what a
-# PID-tree walk cannot handle: the fallback mpv is spawned after any one-time snapshot,
-# and once bash exits the mpv reparents to init (ppid=1) so it is no longer findable
-# by parentage. The pgid is invariant under reparenting, so group operations always
-# reach it. pgrep -g / kill -<pgid> are available on macOS and Linux.
+# pid, and every descendant it forks — the probe's yt-dlp/curl, mpv, and (on curl-less
+# machines) any late play-fail-replay mpv — inherits that pgid. This is what a PID-tree
+# walk cannot handle: a late-spawned mpv appears after any one-time snapshot, and once
+# bash exits the mpv reparents to init (ppid=1) so it is no longer findable by parentage.
+# The pgid is invariant under reparenting, so group operations always reach it.
+# pgrep -g / kill -<pgid> are available on macOS and Linux.
 
 # True if any process in group $pgid is still alive.
 group_alive() {
@@ -784,7 +834,7 @@ FILTERED_JSON=""
 DETACH=0
 REPLACE=0
 ACTION=""            # "" (normal) | status | stop | geturl
-PLAYBACK_RETRIED=0   # set by play_url_with_fallback; surfaced in the playback JSON
+PLAYBACK_RETRIED=0   # set by play_url_with_probe; surfaced in the playback JSON
 STATE_DIR="${TMPDIR:-/tmp}/yt-cli-$(id -u)"
 STATE_FILE="$STATE_DIR/state.json"
 PLAYBACK_LOG="$STATE_DIR/playback.log"
