@@ -85,7 +85,7 @@ while (($#)); do
         flags+=("$1")
         shift
         ;;
-    -f | -c | --color)
+    -f | --color)
         [[ $# -ge 2 ]] || {
             echo "yt-play: $1 requires a value" >&2
             exit 1
@@ -93,7 +93,7 @@ while (($#)); do
         flags+=("$1" "$2")
         shift 2
         ;;
-    -n | -m | -M | -s | -F | -l | -J | --list | --json-full)
+    -n | -m | -M | -s | -S | -l | -J | --list | --json-full)
         echo "yt-play: $1 is a search flag — use yt-search for searching" >&2
         exit 1
         ;;

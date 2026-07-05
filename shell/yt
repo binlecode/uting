@@ -119,7 +119,7 @@ lifecycle); the others are narrow, single-purpose surfaces that delegate to it.
   - yt          Full non-interactive core: search or play/resolve/manage a URL.
   - yt-search   Non-interactive search -> text or JSON.        (run 'yt-search -h')
   - yt-play     Play / resolve / manage playback of a URL.     (run 'yt-play -h')
-  - yt-tui      Interactive fuzzy browser (fzf): pick + preview + play. (yt-tui -h)
+  - yt-tui      Interactive terminal browser (self-rendered menu): pick + play. (yt-tui -h)
 
 Usage (Core, non-interactive):
   yt [-n num] [-s sort] [-l|-j|-J] <search query>   # search -> list (default)/JSON
@@ -140,14 +140,14 @@ Options:
   -n  Number of search results to fetch (default: 25)
   -m  Minimum duration in seconds
   -M  Maximum duration in seconds
-  -s  Sort field: duration|view_count (default: view_count)
+  -s  Sort field: relevance|view_count|duration (default: relevance)
   -f  Playback mode (default: audio)
       audio|ba   audio-only
       video|bv   high-quality video+audio
       fast|fst   fast-start progressive video
       ascii|asc  terminal video via mpv terminal VO
       viz|waves  live audio-responsive spectrum wave visualizer
-  -F  yt-dlp format-sort override
+  -S  yt-dlp format-sort override (--format-sort; e.g. res:720,fps)
   -l  Plain text list output (search)
   -j  JSON output. Search -> {query,count,results[]} envelope; play/lifecycle ->
       one-line status JSON. Structured output for whatever operation runs.
@@ -169,7 +169,7 @@ Playback keys (mpv, during 'yt <url>' playback):
   _  Toggle video track on/off
   q  Stop playback and exit
 
-For an interactive fuzzy browser (pick + preview + play), use: yt-tui <query>
+For an interactive terminal browser (pick + play), use: yt-tui <query>
 
 Dependencies:
   - Common: yt-dlp, jq
@@ -760,12 +760,17 @@ fetch_results() {
     local result_json
     result_json=$("${cmd[@]}")
 
+    # Sort is a client-side jq re-order of the fetched set. "relevance" keeps YouTube's
+    # native ranking (the order ytsearch returned) — no re-sort. The numeric fields sort
+    # descending (reverse). view_count/duration are always present in flat search results;
+    # like_count/comment_count are NOT (they need per-video extraction — see yt-design.md).
     local jq_filter='.entries'
-    if [[ "$SORT_FIELD" == "duration" ]]; then
-        jq_filter+=" | sort_by(.duration) | reverse"
-    elif [[ "$SORT_FIELD" == "view_count" ]]; then
-        jq_filter+=" | sort_by(.view_count) | reverse"
-    fi
+    case "$SORT_FIELD" in
+    relevance) ;;  # native YouTube ranking; leave order untouched
+    duration) jq_filter+=" | sort_by(.duration) | reverse" ;;
+    view_count) jq_filter+=" | sort_by(.view_count) | reverse" ;;
+    *) echo "yt: unknown sort field '$SORT_FIELD' (relevance|view_count|duration)" >&2; exit 1 ;;
+    esac
 
     local raw_json
     raw_json=$(echo "$result_json" | jq "$jq_filter")
@@ -821,7 +826,7 @@ emit_search_json() {
 NUM_RESULTS=25
 MIN_DURATION=0
 MAX_DURATION=0
-SORT_FIELD="view_count"
+SORT_FIELD="relevance"
 PLAYBACK_MODE="audio"
 FORMAT_SORT=""
 COLOR_MODE="auto"
@@ -848,11 +853,11 @@ while (($#)); do
         ;;
     --color)
         [[ $# -ge 2 ]] || die "--color requires a value"
-        normalized_args+=("-c" "$2")
+        COLOR_MODE="$2"
         shift 2
         ;;
     --color=*)
-        normalized_args+=("-c" "${1#*=}")
+        COLOR_MODE="${1#*=}"
         shift
         ;;
     --list|-l)
@@ -899,15 +904,14 @@ else
     set --
 fi
 
-while getopts ":n:m:M:s:f:F:c:dljJh" opt; do
+while getopts ":n:m:M:s:f:S:dljJh" opt; do
     case "$opt" in
     n) NUM_RESULTS="$OPTARG" ;;
     m) MIN_DURATION="$OPTARG" ;;
     M) MAX_DURATION="$OPTARG" ;;
     s) SORT_FIELD="$OPTARG" ;;
     f) PLAYBACK_MODE=$(normalize_playback_mode "$OPTARG") ;;
-    F) FORMAT_SORT="$OPTARG" ;;
-    c) COLOR_MODE="$OPTARG" ;;
+    S) FORMAT_SORT="$OPTARG" ;;
     d) DETACH=1 ;;
     l) OUTPUT_MODE="list" ;;
     j) OUTPUT_MODE="json" ;;
@@ -941,8 +945,8 @@ fi
 if ((MAX_DURATION > 0 && MAX_DURATION <= MIN_DURATION)); then
     die "-M must be greater than -m when both are set"
 fi
-if ! validate_enum "$SORT_FIELD" duration view_count; then
-    die "-s must be one of: duration, view_count"
+if ! validate_enum "$SORT_FIELD" relevance view_count duration; then
+    die "-s must be one of: relevance, view_count, duration"
 fi
 if ! validate_enum "$COLOR_MODE" auto always never; then
     die "--color must be one of: auto, always, never"
