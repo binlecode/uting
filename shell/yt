@@ -655,15 +655,53 @@ detach_play() {
         --arg format "$fmt" \
         --arg started_at "$started_at" \
         --arg log "$PLAYBACK_LOG" \
-        '{pid: $pid, url: $url, mode: $mode, format: $format, started_at: $started_at, log: $log}' >"$STATE_FILE"
+        '{pid: $pid, url: $url, mode: $mode, format: $format, started_at: $started_at, log: $log, title: null}' >"$STATE_FILE"
+
+    # Title is unknown here and resolving it is a ~3s yt-dlp round-trip — detach must
+    # return immediately, so we do NOT block on it. Spawn an independent background updater
+    # that fetches the title and patches it into the state file a few seconds later.
+    # --status shows title:null until it lands. See detach_title_updater for the guards.
+    detach_title_updater "$pid" "$url" &
+    disown 2>/dev/null || true
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         jq -nc \
             --argjson pid "$pid" --arg url "$url" --arg mode "$PLAYBACK_MODE" --arg started_at "$started_at" \
-            '{status: "started", pid: $pid, url: $url, mode: $mode, started_at: $started_at}'
+            '{status: "started", pid: $pid, url: $url, mode: $mode, started_at: $started_at, title: null}'
     else
         printf "Detached playback started (pid %s, mode %s): %s\n" "$pid" "$PLAYBACK_MODE" "$url"
         printf "  status: yt-play --status   stop: yt-play --stop   log: %s\n" "$PLAYBACK_LOG"
+    fi
+}
+
+# Background metadata backfill for a detached playback: fetch the title (the ~3s yt-dlp
+# round-trip we deliberately keep OFF the detach hot path) and patch it into the state
+# file. Playback-independent — it is not the play child, so it neither blocks the detach
+# return nor is stopped by playback lifecycle. Self-guarding: it patches ONLY while this
+# pid is still the current slot, so a --stop / --replace during the fetch window wins and
+# is never clobbered (jq emits nothing when the pid no longer matches, and the empty temp
+# is dropped without touching the live file). Honours cookies like playback. Best-effort:
+# any failure leaves title:null, which every caller already tolerates. `trap '' HUP INT`
+# lets it outlive the returning parent without nohup plumbing.
+detach_title_updater() {
+    local pid=$1 url=$2 title tmp
+    trap '' HUP INT
+
+    local ycmd=(yt-dlp --print "%(title)s" --skip-download)
+    ((${#YT_COOKIE_ARGS[@]} > 0)) && ycmd+=("${YT_COOKIE_ARGS[@]}")
+    ycmd+=(--no-warnings --quiet "$url")
+
+    title=$("${ycmd[@]}" 2>/dev/null) || return 0
+    [[ -n "$title" ]] || return 0
+    [[ -f "$STATE_FILE" ]] || return 0
+
+    tmp="$STATE_FILE.tmp.$pid"
+    if jq --arg t "$title" --arg p "$pid" \
+        'if ((.pid | tostring) == $p) then (.title = $t) else empty end' \
+        "$STATE_FILE" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
+        mv -f "$tmp" "$STATE_FILE"
+    else
+        rm -f "$tmp" 2>/dev/null || true
     fi
 }
 
@@ -680,8 +718,15 @@ do_status() {
         if [[ "$OUTPUT_MODE" == "json" ]]; then
             jq -c '. + {status: "playing"}' "$STATE_FILE"
         else
-            printf "playing (pid %s, mode %s, since %s): %s\n" \
-                "$pid" "$(jq -r '.mode' "$STATE_FILE")" "$(jq -r '.started_at' "$STATE_FILE")" "$(jq -r '.url' "$STATE_FILE")"
+            local title
+            title=$(jq -r '.title // empty' "$STATE_FILE" 2>/dev/null || true)
+            if [[ -n "$title" ]]; then
+                printf "playing (pid %s, mode %s, since %s): %s\n  %s\n" \
+                    "$pid" "$(jq -r '.mode' "$STATE_FILE")" "$(jq -r '.started_at' "$STATE_FILE")" "$title" "$(jq -r '.url' "$STATE_FILE")"
+            else
+                printf "playing (pid %s, mode %s, since %s): %s\n" \
+                    "$pid" "$(jq -r '.mode' "$STATE_FILE")" "$(jq -r '.started_at' "$STATE_FILE")" "$(jq -r '.url' "$STATE_FILE")"
+            fi
         fi
     else
         [[ -f "$STATE_FILE" ]] && rm -f "$STATE_FILE"
