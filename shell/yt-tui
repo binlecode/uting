@@ -48,6 +48,8 @@ Search options (forwarded to yt-search):
 
 Menu options:
   -f MODE   Playback mode (default: audio): audio | video | fast | ascii | viz
+  --volume N  mpv startup volume, 0-100 (default: unset -> mpv's own default;
+              launch-time only, no live volume-cycle key)
   -p NUM    Rows per page (default: 10, capped to the terminal height)
   --color MODE  Color: auto | always | never (default: auto)
   -h        This help
@@ -89,6 +91,7 @@ SEARCH_ARGS=()
 RESULT_N=25          # fetch count; -n overrides. Runtime-mutable: S adds 25 (more_results).
 PLAY_MODE="audio"        # -f flag overrides. Runtime-mutable: v key rotates it (cycle_mode).
 MODE_CYCLE=(audio video fast)  # order the v key steps through
+PLAY_VOLUME=""           # --volume flag overrides; launch-time only, no live cycle key (yt-design.md §26)
 COLOR_MODE="auto"
 PAGE_OPT=10
 SORT_FIELD="relevance"   # -s flag overrides. Runtime-mutable: o key rotates it (cycle_sort).
@@ -121,11 +124,15 @@ while (($#)); do
         [[ $# -ge 2 ]] || die "$1 requires a value"
         COLOR_MODE="$2"; shift 2 ;;
     --color=*) COLOR_MODE="${1#*=}"; shift ;;
+    --volume)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        PLAY_VOLUME="$2"; shift 2 ;;
+    --volume=*) PLAY_VOLUME="${1#*=}"; shift ;;
     --)
         shift
         while (($#)); do query+=("$1"); shift; done
         break ;;
-    -*) die "unknown flag '$1' (yt-tui flags: -n -m -M -s -f -p --color); run 'yt-tui -h'" ;;
+    -*) die "unknown flag '$1' (yt-tui flags: -n -m -M -s -f -p --color --volume); run 'yt-tui -h'" ;;
     *) query+=("$1"); shift ;;
     esac
 done
@@ -265,15 +272,17 @@ load_rows() {
 # the current page of rows (♫ marker, selection highlighted), the Page-of footer. We own
 # every line — plain text + ANSI, no box, no frame.
 display_menu() {
-    local page=$1 start end i n disp status_extra pb p dots
+    local page=$1 start end i n disp status_extra vol_extra pb p dots
     clear
     # Title. The ♫ accent lives here — used ONCE, meaningfully — not repeated on every row.
     printf '%s%s%syt-tui%s  query=%s\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "'$QUERY_LABEL'"
     # Status line. No page=X/Y here — the pagination dots in the footer are the single position
     # indicator (was doubled: status page= AND footer "Page X of Y"). filter= shown when active.
     if [[ "$PLAY_MODE" == "audio" ]]; then status_extra="audio-only"; else status_extra="video-enabled"; fi
-    printf '%sresults=%s  sort=%s  min=%ss  max=%ss  mode=%s (%s)%s\n' \
-        "$C_DIM" "$NUM_ENTRIES" "$SORT_FIELD" "$MIN_DISP" "$MAX_DISP" "$PLAY_MODE" "$status_extra" "$C_RESET"
+    vol_extra=""
+    [[ -n "$PLAY_VOLUME" ]] && vol_extra="  volume=$PLAY_VOLUME"
+    printf '%sresults=%s  sort=%s  min=%ss  max=%ss  mode=%s (%s)%s%s\n' \
+        "$C_DIM" "$NUM_ENTRIES" "$SORT_FIELD" "$MIN_DISP" "$MAX_DISP" "$PLAY_MODE" "$status_extra" "$vol_extra" "$C_RESET"
     printf '\n'
     # Key hints: navigation, then playback (mpv keys during blocking play).
     printf '%sNavigation:%s %s↑/↓%s item  %s←/→%s page  %s↵%s play  %sv%s mode  %sn%s search  %sm%s more  %so%s sort  %s/%s filter  %sq%s quit\n' \
@@ -346,7 +355,7 @@ play_selected() {
     # does its own clear and redraws on return. A `clear` here blanks the list and leaves
     # only mpv's bar on an otherwise-empty screen (the list scrolls into scrollback) — the
     # regression this deliberately avoids.
-    "$YT_PLAY" -f "$PLAY_MODE" -- "$url" || rc=$?
+    "$YT_PLAY" -f "$PLAY_MODE" ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" || rc=$?
     # mpv exits 130 (128+SIGINT) when the user hits q/ctrl-c to stop playback and return to
     # the menu — the documented, expected way to end playback, not a failure. Match the original
     # all-in-one here: no stdin flush after playback. The menu loop's read_nav_input blocks on

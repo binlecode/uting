@@ -26,7 +26,7 @@ print_usage() {
 yt-play — play, resolve, or manage playback of a YouTube URL
 
 Usage:
-  yt-play [-f mode] [-j] <URL>            Play a URL (blocks until done)
+  yt-play [-f mode] [--volume N] [-j] <URL>  Play a URL (blocks until done)
   yt-play --info [-j|-J] <URL>            Fetch metadata (title/chapters/desc), do not play
   yt-play --get-url [-f mode] [-j] <URL>  Resolve stream URL(s), do not play
   yt-play -d [--replace] <URL>            Detached background audio playback
@@ -36,6 +36,8 @@ Usage:
 Options:
   -f MODE   Playback mode (default: audio):
             audio | video | fast | ascii | viz
+  --volume N  mpv startup volume, 0-100 (default: unset -> mpv's own default;
+              launch-time only, no runtime volume control while playing)
   -d        --detach: background playback; manage with --status / --stop
   --replace With -d: replace an already-running detached playback
   --info    Fetch rich metadata (read-only, non-blocking): title, channel,
@@ -93,11 +95,11 @@ while (($#)); do
         flags+=("$1")
         shift
         ;;
-    --color=*)
+    --color=* | --volume=*)
         flags+=("$1")
         shift
         ;;
-    -f | --color)
+    -f | --color | --volume)
         [[ $# -ge 2 ]] || {
             echo "yt-play: $1 requires a value" >&2
             exit 1

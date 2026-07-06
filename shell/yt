@@ -136,7 +136,7 @@ lifecycle); the others are narrow, single-purpose surfaces that delegate to it.
 
 Usage (Core, non-interactive):
   yt [-n num] [-s sort] [-l|-j|-J] <search query>   # search -> list (default)/JSON
-  yt [-f mode] [-j] <YouTube URL>                   # play a URL
+  yt [-f mode] [--volume N] [-j] <YouTube URL>      # play a URL
   yt (no query, no URL)                             # error; use yt-tui to browse
 
 Usage (Search):
@@ -162,6 +162,8 @@ Options:
       ascii|asc  terminal video via mpv terminal VO
       viz|waves  live audio-responsive spectrum wave visualizer
   -S  yt-dlp format-sort override (--format-sort; e.g. res:720,fps)
+  --volume N  mpv startup volume, 0-100 (default: unset -> mpv's own default;
+              launch-time only, no runtime volume control while playing)
   -l  Plain text list output (search)
   -j  JSON output. Search -> {query,count,results[]} envelope; play/lifecycle ->
       one-line status JSON. Structured output for whatever operation runs.
@@ -170,7 +172,7 @@ Options:
       (detached has no terminal, so video/ascii/viz can't render — audio only)
   -h  Show this help message
 
-Long-only flags: --detach --status --stop --get-url --info --replace --json-full --color
+Long-only flags: --detach --status --stop --get-url --info --replace --json-full --color --volume
 
 Search JSON envelope (-j): {"query","count","results":[...]}
   Each result (-j, 8 fields): id, title, url, channel, duration, duration_fmt,
@@ -310,6 +312,11 @@ run_mpv() {
     # Optionally load caller-provided mpv input bindings.
     if [[ -n "$YT_MPV_INPUT_CONF" && -r "$YT_MPV_INPUT_CONF" ]]; then
         mpv_cmd+=(--input-conf="$YT_MPV_INPUT_CONF")
+    fi
+
+    # Launch-time volume only (no runtime control/IPC — see yt-design.md §26).
+    if [[ -n "$VOLUME" ]]; then
+        mpv_cmd+=(--volume="$VOLUME")
     fi
 
     # Pass format directly to mpv's ytdl integration
@@ -633,9 +640,11 @@ detach_play() {
         fi
     fi
 
-    local fmt started_at pid
+    local fmt started_at pid volume_json
     fmt=$(format_for_mode "$PLAYBACK_MODE")
     started_at=$(date -u +%FT%TZ 2>/dev/null || echo unknown)
+    volume_json=null
+    [[ -n "$VOLUME" ]] && volume_json="$VOLUME"
 
     # Launch the child in its OWN process group so the whole playback (incl. any
     # fallback mpv) can be stopped as a unit later (see stop_group). Enabling monitor
@@ -643,7 +652,7 @@ detach_play() {
     # pid; nohup + disown detach it from this shell so it survives our exit. Job-control
     # chatter is routed away from stdout so -j output stays a single clean JSON line.
     set -m
-    nohup bash "$SELF" -f "$PLAYBACK_MODE" "$url" >"$PLAYBACK_LOG" 2>&1 &
+    nohup bash "$SELF" -f "$PLAYBACK_MODE" ${VOLUME:+--volume "$VOLUME"} "$url" >"$PLAYBACK_LOG" 2>&1 &
     pid=$!
     set +m
     disown "$pid" 2>/dev/null || true
@@ -655,7 +664,8 @@ detach_play() {
         --arg format "$fmt" \
         --arg started_at "$started_at" \
         --arg log "$PLAYBACK_LOG" \
-        '{pid: $pid, url: $url, mode: $mode, format: $format, started_at: $started_at, log: $log, title: null}' >"$STATE_FILE"
+        --argjson volume "$volume_json" \
+        '{pid: $pid, url: $url, mode: $mode, format: $format, started_at: $started_at, log: $log, title: null, volume: $volume}' >"$STATE_FILE"
 
     # Title is unknown here and resolving it is a ~3s yt-dlp round-trip — detach must
     # return immediately, so we do NOT block on it. Spawn an independent background updater
@@ -718,14 +728,16 @@ do_status() {
         if [[ "$OUTPUT_MODE" == "json" ]]; then
             jq -c '. + {status: "playing"}' "$STATE_FILE"
         else
-            local title
+            local title volume vol_suffix=""
             title=$(jq -r '.title // empty' "$STATE_FILE" 2>/dev/null || true)
+            volume=$(jq -r '.volume // empty' "$STATE_FILE" 2>/dev/null || true)
+            [[ -n "$volume" ]] && vol_suffix=", volume $volume"
             if [[ -n "$title" ]]; then
-                printf "playing (pid %s, mode %s, since %s): %s\n  %s\n" \
-                    "$pid" "$(jq -r '.mode' "$STATE_FILE")" "$(jq -r '.started_at' "$STATE_FILE")" "$title" "$(jq -r '.url' "$STATE_FILE")"
+                printf "playing (pid %s, mode %s%s, since %s): %s\n  %s\n" \
+                    "$pid" "$(jq -r '.mode' "$STATE_FILE")" "$vol_suffix" "$(jq -r '.started_at' "$STATE_FILE")" "$title" "$(jq -r '.url' "$STATE_FILE")"
             else
-                printf "playing (pid %s, mode %s, since %s): %s\n" \
-                    "$pid" "$(jq -r '.mode' "$STATE_FILE")" "$(jq -r '.started_at' "$STATE_FILE")" "$(jq -r '.url' "$STATE_FILE")"
+                printf "playing (pid %s, mode %s%s, since %s): %s\n" \
+                    "$pid" "$(jq -r '.mode' "$STATE_FILE")" "$vol_suffix" "$(jq -r '.started_at' "$STATE_FILE")" "$(jq -r '.url' "$STATE_FILE")"
             fi
         fi
     else
@@ -988,6 +1000,7 @@ MAX_DURATION=0
 SORT_FIELD="relevance"
 PLAYBACK_MODE="audio"
 FORMAT_SORT=""
+VOLUME=""
 COLOR_MODE="auto"
 MUSIC_CHAR="♫"
 # Default search output is the plain list; -j/-J/-l override. (No interactive menu:
@@ -1017,6 +1030,15 @@ while (($#)); do
         ;;
     --color=*)
         COLOR_MODE="${1#*=}"
+        shift
+        ;;
+    --volume)
+        [[ $# -ge 2 ]] || die "--volume requires a value"
+        VOLUME="$2"
+        shift 2
+        ;;
+    --volume=*)
+        VOLUME="${1#*=}"
         shift
         ;;
     --list|-l)
@@ -1113,6 +1135,14 @@ if ! validate_enum "$SORT_FIELD" relevance view_count duration; then
 fi
 if ! validate_enum "$COLOR_MODE" auto always never; then
     die "--color must be one of: auto, always, never"
+fi
+if [[ -n "$VOLUME" ]]; then
+    if ! is_non_negative_int "$VOLUME"; then
+        die "--volume must be a non-negative integer"
+    fi
+    if ((VOLUME > 100)); then
+        die "--volume must be between 0 and 100"
+    fi
 fi
 
 # Detect a URL-shaped query once; both the routing and the guards below key off it.
