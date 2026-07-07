@@ -680,6 +680,11 @@ detach_play() {
     # IPC socket (a control channel — a peer could drive mpv). macOS $TMPDIR is already
     # per-user; the /tmp fallback (Linux) is world-traversable at umask 022, so pin the
     # mode explicitly on both the parent and the players/ dir.
+    # mkdir -p is the sole creator of both STATE_DIR (parent) and PLAYERS_DIR; -m 700 only
+    # takes on the dir it actually creates, so the following chmod re-asserts 700 on both.
+    # Idempotent and cheap (two syscalls) — deliberately re-run every launch as a safety net
+    # rather than trust the mode was never widened after creation; nothing in this codebase
+    # resets it between launches.
     mkdir -p -m 700 "$PLAYERS_DIR" 2>/dev/null || true
     chmod 700 "$STATE_DIR" "$PLAYERS_DIR" 2>/dev/null || true
 
@@ -710,7 +715,16 @@ detach_play() {
     set +m
     disown "$pid" 2>/dev/null || true
 
-    jq -n \
+    # Persist state under a guarded write. new_player_id created a bare "$PLAYERS_DIR/$id"
+    # (mktemp) to reserve the id; the real state lives in "$id.json". The reservation token
+    # is only reaped AFTER the real file lands, so under `set -euo pipefail` a bare jq/mv
+    # failure (disk full, permissions changed mid-run by a concurrent reap) would abort
+    # before cleanup and orphan the token forever — the *.json reap globs never touch a
+    # bare non-.json file. Guard both steps so the token is reaped on every path, and stop
+    # the just-launched mpv group if we can't track it (else it plays on as an orphan the
+    # lifecycle verbs can't find).
+    local sf; sf=$(player_state "$id")
+    if ! jq -n \
         --arg id "$id" \
         --argjson pid "$pid" \
         --arg url "$url" \
@@ -720,12 +734,16 @@ detach_play() {
         --arg log "$log" \
         --arg sock "$sock" \
         --argjson volume "$volume_json" \
-        '{id: $id, pid: $pid, url: $url, mode: $mode, format: $format, started_at: $started_at, log: $log, sock: $sock, title: null, volume: $volume}' >"$(player_state "$id").tmp.$pid"
-    mv -f "$(player_state "$id").tmp.$pid" "$(player_state "$id")"
-
-    # new_player_id created a bare "$PLAYERS_DIR/$id" (mktemp) to reserve the id; the
-    # real state lives in "$id.json". Remove the bare token so it doesn't leak (the
-    # *.json reap globs would never touch it).
+        '{id: $id, pid: $pid, url: $url, mode: $mode, format: $format, started_at: $started_at, log: $log, sock: $sock, title: null, volume: $volume}' >"$sf.tmp.$pid"; then
+        rm -f "$sf.tmp.$pid" "$PLAYERS_DIR/$id" 2>/dev/null || true
+        stop_group "$pid"
+        die "failed to write player state for $url"
+    fi
+    if ! mv -f "$sf.tmp.$pid" "$sf"; then
+        rm -f "$sf.tmp.$pid" "$PLAYERS_DIR/$id" 2>/dev/null || true
+        stop_group "$pid"
+        die "failed to persist player state for $url"
+    fi
     rm -f "$PLAYERS_DIR/$id" 2>/dev/null || true
 
     # Title is unknown here and resolving it is a ~3s yt-dlp round-trip — detach must
@@ -779,6 +797,38 @@ detach_title_updater() {
     unlock_player_state "$id"
 }
 
+# Scan $PLAYERS_DIR once, reaping any player whose process group is gone (rm its
+# state/sock/log). "What counts as dead" (currently: group not alive) lives here in exactly
+# one place, shared by resolve_target, do_status, and do_stop --all so those verbs can never
+# disagree about which players exist.
+#
+# RETURN-VALUE DISCIPLINE (do NOT capture in $(...); bash 3.2 arrays don't survive command
+# substitution): sets three PARALLEL GLOBAL arrays for the survivors, index-aligned —
+#   LIVE_PLAYER_FILES[i] = players/<id>.json path
+#   LIVE_PLAYER_IDS[i]   = its .id
+#   LIVE_PLAYER_PIDS[i]  = its .pid
+# reading .id/.pid once here means no caller has to reopen the file for them.
+reap_dead_players() {
+    LIVE_PLAYER_FILES=()
+    LIVE_PLAYER_IDS=()
+    LIVE_PLAYER_PIDS=()
+    local f id pid
+    [[ -d "$PLAYERS_DIR" ]] || return 0
+    for f in "$PLAYERS_DIR"/*.json; do
+        [[ -e "$f" ]] || continue
+        id=$(jq -r '.id // empty' "$f" 2>/dev/null || true)
+        pid=$(jq -r '.pid // empty' "$f" 2>/dev/null || true)
+        if group_alive "$pid"; then
+            LIVE_PLAYER_FILES+=("$f")
+            LIVE_PLAYER_IDS+=("$id")
+            LIVE_PLAYER_PIDS+=("$pid")
+        else
+            rm -f "$f" 2>/dev/null || true
+            [[ -n "$id" ]] && rm -f "$(player_sock "$id")" "$(player_log "$id")" 2>/dev/null || true
+        fi
+    done
+}
+
 # Map a request to a single live player, reaping any dead ones along the way. The single
 # place --set-volume and --stop share for target selection.
 #
@@ -793,32 +843,21 @@ detach_title_updater() {
 #   no --id, 0 players   -> not_playing
 #   no --id, 2+ players  -> ambiguous (candidates in RESOLVE_PLAYERS_JSON)
 resolve_target() {
-    local want_id=$1 f id pid live_ids=() live_files=()
+    local want_id=$1
     RESOLVED_ID=""
     RESOLVE_ERR=""
     RESOLVE_PLAYERS_JSON="[]"
 
-    if [[ -d "$PLAYERS_DIR" ]]; then
-        for f in "$PLAYERS_DIR"/*.json; do
-            [[ -e "$f" ]] || continue
-            id=$(jq -r '.id // empty' "$f" 2>/dev/null || true)
-            pid=$(jq -r '.pid // empty' "$f" 2>/dev/null || true)
-            if group_alive "$pid"; then
-                live_ids+=("$id")
-                live_files+=("$f")
-            else
-                rm -f "$f" 2>/dev/null || true
-                [[ -n "$id" ]] && rm -f "$(player_sock "$id")" "$(player_log "$id")" 2>/dev/null || true
-            fi
-        done
-    fi
-
-    local n=${#live_ids[@]}
+    # Read the live set from reap_dead_players' globals directly — copying via
+    # ("${arr[@]}") would abort under `set -u` on bash 3.2 when the array is empty (the
+    # common "nothing playing" case). Index access and count are safe on an empty array.
+    reap_dead_players
+    local n=${#LIVE_PLAYER_IDS[@]}
 
     if [[ -n "$want_id" ]]; then
         local i
         for ((i = 0; i < n; i++)); do
-            if [[ "${live_ids[$i]}" == "$want_id" ]]; then
+            if [[ "${LIVE_PLAYER_IDS[$i]}" == "$want_id" ]]; then
                 RESOLVED_ID="$want_id"
                 return 0
             fi
@@ -831,11 +870,11 @@ resolve_target() {
         RESOLVE_ERR="not_playing"
         return 1
     elif ((n == 1)); then
-        RESOLVED_ID="${live_ids[0]}"
+        RESOLVED_ID="${LIVE_PLAYER_IDS[0]}"
         return 0
     else
         RESOLVE_ERR="ambiguous"
-        RESOLVE_PLAYERS_JSON=$(jq -s '[.[] | {id, pid, title, url}]' "${live_files[@]}")
+        RESOLVE_PLAYERS_JSON=$(jq -s '[.[] | {id, pid, title, url}]' "${LIVE_PLAYER_FILES[@]}")
         return 1
     fi
 }
@@ -843,40 +882,35 @@ resolve_target() {
 # List ALL live detached players (reaping dead ones). Always exits 0 (an agent polling
 # status must not see a non-zero exit as failure); empty set is still a success.
 do_status() {
-    local f pid id live_files=()
-    if [[ -d "$PLAYERS_DIR" ]]; then
-        for f in "$PLAYERS_DIR"/*.json; do
-            [[ -e "$f" ]] || continue
-            pid=$(jq -r '.pid // empty' "$f" 2>/dev/null || true)
-            if group_alive "$pid"; then
-                live_files+=("$f")
-            else
-                id=$(jq -r '.id // empty' "$f" 2>/dev/null || true)
-                rm -f "$f" 2>/dev/null || true
-                [[ -n "$id" ]] && rm -f "$(player_sock "$id")" "$(player_log "$id")" 2>/dev/null || true
-            fi
-        done
-    fi
+    reap_dead_players
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
-        if ((${#live_files[@]})); then
-            jq -s '{status: "players", players: [.[] | {id, pid, url, mode, volume, title, started_at}]}' "${live_files[@]}"
+        if ((${#LIVE_PLAYER_FILES[@]})); then
+            jq -s '{status: "players", players: [.[] | {id, pid, url, mode, volume, title, started_at}]}' "${LIVE_PLAYER_FILES[@]}"
         else
             echo '{"status":"players","players":[]}'
         fi
     else
-        if ((${#live_files[@]})); then
-            for f in "${live_files[@]}"; do
-                local title volume vol_suffix=""
+        if ((${#LIVE_PLAYER_FILES[@]})); then
+            local f id pid mode started_at url title volume vol_suffix
+            for f in "${LIVE_PLAYER_FILES[@]}"; do
+                vol_suffix=""
+                # One jq call for the structural fields (never contain tabs/newlines) via
+                # @tsv, instead of five separate per-field forks. title stays on its own
+                # jq -r so a title with an embedded tab/newline round-trips byte-for-byte
+                # rather than being @tsv-escaped.
+                IFS=$'\t' read -r id pid mode started_at url < <(
+                    jq -r '[.id, .pid, .mode, .started_at, .url] | @tsv' "$f" 2>/dev/null
+                ) || true
                 title=$(jq -r '.title // empty' "$f" 2>/dev/null || true)
                 volume=$(jq -r '.volume // empty' "$f" 2>/dev/null || true)
                 [[ -n "$volume" ]] && vol_suffix=", volume $volume"
                 if [[ -n "$title" ]]; then
                     printf "playing (id %s, pid %s, mode %s%s, since %s): %s\n  %s\n" \
-                        "$(jq -r '.id' "$f")" "$(jq -r '.pid' "$f")" "$(jq -r '.mode' "$f")" "$vol_suffix" "$(jq -r '.started_at' "$f")" "$title" "$(jq -r '.url' "$f")"
+                        "$id" "$pid" "$mode" "$vol_suffix" "$started_at" "$title" "$url"
                 else
                     printf "playing (id %s, pid %s, mode %s%s, since %s): %s\n" \
-                        "$(jq -r '.id' "$f")" "$(jq -r '.pid' "$f")" "$(jq -r '.mode' "$f")" "$vol_suffix" "$(jq -r '.started_at' "$f")" "$(jq -r '.url' "$f")"
+                        "$id" "$pid" "$mode" "$vol_suffix" "$started_at" "$url"
                 fi
             done
         else
@@ -891,22 +925,19 @@ do_status() {
 # (exactly-one is zero-friction; 2+ without --id is ambiguous → exit 4).
 do_stop() {
     local want_id=$1 stop_all=$2
-    local f id pid any=false
+    local id any=false
 
     if ((stop_all)); then
-        if [[ -d "$PLAYERS_DIR" ]]; then
-            for f in "$PLAYERS_DIR"/*.json; do
-                [[ -e "$f" ]] || continue
-                id=$(jq -r '.id // empty' "$f" 2>/dev/null || true)
-                pid=$(jq -r '.pid // empty' "$f" 2>/dev/null || true)
-                if group_alive "$pid"; then
-                    stop_group "$pid"
-                    any=true
-                fi
-                rm -f "$f" 2>/dev/null || true
-                [[ -n "$id" ]] && rm -f "$(player_sock "$id")" "$(player_log "$id")" 2>/dev/null || true
-            done
-        fi
+        # reap_dead_players already rm'd every dead player's state/sock/log; the survivors
+        # are exactly the ones to stop. Kill each group, then remove its state/sock/log.
+        reap_dead_players
+        local i n=${#LIVE_PLAYER_FILES[@]}
+        ((n > 0)) && any=true
+        for ((i = 0; i < n; i++)); do
+            stop_group "${LIVE_PLAYER_PIDS[$i]}"
+            rm -f "${LIVE_PLAYER_FILES[$i]}" 2>/dev/null || true
+            rm -f "$(player_sock "${LIVE_PLAYER_IDS[$i]}")" "$(player_log "${LIVE_PLAYER_IDS[$i]}")" 2>/dev/null || true
+        done
         if [[ "$OUTPUT_MODE" == "json" ]]; then
             jq -nc --argjson stopped "$any" '{status: "stopped", scope: "all", stopped: $stopped}'
         else
