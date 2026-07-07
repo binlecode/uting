@@ -146,9 +146,10 @@ Usage (Play a URL):
   yt-play [-f mode] [-j] <YouTube URL>
   yt-play --info [-j|-J] <URL>                  # fetch metadata (title/chapters/desc), do not play
   yt-play --get-url [-f mode] [-j] <URL>        # resolve stream URL(s), do not play
-  yt-play -d [--replace] <URL>                  # detached background audio playback
-  yt-play --status [-j]                         # what (if anything) is playing
-  yt-play --stop [-j]                           # stop detached playback (idempotent)
+  yt-play -d <URL>                              # detached background audio (concurrent players OK)
+  yt-play --status [-j]                         # list live detached players
+  yt-play --stop [--id ID | --all] [-j]         # stop one player (or all); idempotent
+  yt-play --set-volume N [--id ID] [-j]         # live volume on a detached player (0-100)
 
 Options:
   -n  Number of search results to fetch (default: 25)
@@ -162,8 +163,9 @@ Options:
       ascii|asc  terminal video via mpv terminal VO
       viz|waves  live audio-responsive spectrum wave visualizer
   -S  yt-dlp format-sort override (--format-sort; e.g. res:720,fps)
-  --volume N  mpv startup volume, 0-100 (default: unset -> mpv's own default;
-              launch-time only, no runtime volume control while playing)
+  --volume N  mpv startup volume, 0-100 (default: unset -> mpv's own default).
+              For detached playback this is the STARTING volume; adjust it live
+              with 'yt-play --set-volume N [--id ID]'.
   -l  Plain text list output (search)
   -j  JSON output. Search -> {query,count,results[]} envelope; play/lifecycle ->
       one-line status JSON. Structured output for whatever operation runs.
@@ -172,7 +174,7 @@ Options:
       (detached has no terminal, so video/ascii/viz can't render — audio only)
   -h  Show this help message
 
-Long-only flags: --detach --status --stop --get-url --info --replace --json-full --color --volume
+Long-only flags: --detach --status --stop --get-url --info --set-volume --id --all --json-full --color --volume
 
 Search JSON envelope (-j): {"query","count","results":[...]}
   Each result (-j, 8 fields): id, title, url, channel, duration, duration_fmt,
@@ -314,9 +316,20 @@ run_mpv() {
         mpv_cmd+=(--input-conf="$YT_MPV_INPUT_CONF")
     fi
 
-    # Launch-time volume only (no runtime control/IPC — see yt-design.md §26).
+    # Launch-time volume. For a foreground/blocking session this is the only lever
+    # (mpv's own volume keys work via the TTY); for detached playback it is just the
+    # STARTING volume — live adjustment happens over the per-instance IPC socket
+    # (see YT_IPC_SOCK below and do_set_volume). yt-design.md §26.
     if [[ -n "$VOLUME" ]]; then
         mpv_cmd+=(--volume="$VOLUME")
+    fi
+
+    # Runtime control channel: only when launched under detach_play, which exports
+    # YT_IPC_SOCK. mpv's --input-ipc-server is per-process, so each detached player
+    # points at its own socket and is driven independently. A foreground/blocking
+    # session has a real TTY and needs no IPC. yt-design.md §26.
+    if [[ -n "${YT_IPC_SOCK:-}" ]]; then
+        mpv_cmd+=(--input-ipc-server="$YT_IPC_SOCK")
     fi
 
     # Pass format directly to mpv's ytdl integration
@@ -615,86 +628,134 @@ stop_group() {
     kill -KILL -"$pgid" 2>/dev/null || true
 }
 
-state_pid() {
-    [[ -f "$STATE_FILE" ]] || return 1
-    jq -r '.pid // empty' "$STATE_FILE" 2>/dev/null
+# Per-instance derived paths. Functions, not constants, since they key off the id;
+# every detached player owns players/<id>.json, mpv-<id>.sock, mpv-<id>.log.
+player_state() { echo "$PLAYERS_DIR/$1.json"; }
+player_sock() { echo "$STATE_DIR/mpv-$1.sock"; }
+player_log() { echo "$STATE_DIR/mpv-$1.log"; }
+player_lock_dir() { echo "$STATE_DIR/lock-$1"; }
+
+# Serialize concurrent read-modify-write patches to the same player state file (e.g.
+# detach_title_updater's ~3s-delayed title backfill racing a --set-volume call): both
+# do temp+mv RMW with no version check, so without mutual exclusion whichever mv lands
+# last silently clobbers the other's field. `mkdir` is atomic on POSIX, making it a
+# portable lock on bash 3.2 (no flock binary on stock macOS). Bounded spin (5s) so a
+# lock left behind by a crashed holder can't wedge callers forever; on timeout the
+# caller proceeds unlocked, same best-effort risk these patches already tolerated
+# before this lock existed.
+lock_player_state() {
+    local id=$1 dir
+    dir=$(player_lock_dir "$id")
+    local i
+    for ((i = 0; i < 50; i++)); do
+        mkdir "$dir" 2>/dev/null && return 0
+        sleep 0.1
+    done
+    return 1
 }
 
-# Background a playback and record it in a single-slot state file so a later
-# --status/--stop can find it. Re-execs this script (SELF) with a plain, non-detached
-# play invocation via nohup so it survives the launching process exiting; the child
-# is tracked by PID. Refuses to start over a live playback unless --replace, which
-# stops the existing one first. Audio only in practice: a detached process has no
-# controlling terminal, so video/ascii/viz have nowhere to render.
+unlock_player_state() {
+    rmdir "$(player_lock_dir "$1")" 2>/dev/null || true
+}
+
+# Mint a fresh, collision-free player id by atomically creating a reservation file
+# with mktemp; the id is its basename. Done BEFORE launch so the socket path is
+# known up front (the child's pid isn't available until $! after launch) and so the
+# handle is immune to pid reuse. detach_play removes the bare reservation file once
+# the real <id>.json is written.
+new_player_id() {
+    basename "$(mktemp "$PLAYERS_DIR/XXXXXX")"
+}
+
+# Background a playback and record it in a per-player state file (players/<id>.json)
+# so a later --status/--stop/--set-volume can find it. Re-execs this script (SELF)
+# with a plain, non-detached play invocation via nohup so it survives the launching
+# process exiting; the child is tracked by its PROCESS GROUP. Multiple detached
+# players run concurrently — each gets its own id, IPC socket, state file, and log,
+# so a 2nd -d is NOT refused (that is the point). Audio only in practice: a detached
+# process has no controlling terminal, so video/ascii/viz have nowhere to render.
 detach_play() {
     local url=$1
-    mkdir -p "$STATE_DIR" 2>/dev/null || true
+    # SECURITY: 0700 so no other local user can traverse in and connect to a player's
+    # IPC socket (a control channel — a peer could drive mpv). macOS $TMPDIR is already
+    # per-user; the /tmp fallback (Linux) is world-traversable at umask 022, so pin the
+    # mode explicitly on both the parent and the players/ dir.
+    mkdir -p -m 700 "$PLAYERS_DIR" 2>/dev/null || true
+    chmod 700 "$STATE_DIR" "$PLAYERS_DIR" 2>/dev/null || true
 
-    local existing
-    existing=$(state_pid 2>/dev/null || true)
-    if group_alive "$existing"; then
-        if ((REPLACE)); then
-            stop_group "$existing"
-        else
-            die "already playing (pid $existing); use 'yt-play --stop' first or pass --replace"
-        fi
-    fi
-
-    local fmt started_at pid volume_json
+    local fmt started_at pid volume_json id sock log
     fmt=$(format_for_mode "$PLAYBACK_MODE")
     started_at=$(date -u +%FT%TZ 2>/dev/null || echo unknown)
     volume_json=null
     [[ -n "$VOLUME" ]] && volume_json="$VOLUME"
 
+    # Mint the handle BEFORE launch so the socket path is known up front (see
+    # new_player_id): the child's pid isn't available until $! after launch, but the
+    # socket must be named at launch via YT_IPC_SOCK. The id is a monotonic token,
+    # immune to pid reuse; the pid is stored in the state file for liveness only.
+    id=$(new_player_id)
+    sock=$(player_sock "$id")
+    log=$(player_log "$id")
+    rm -f "$sock" 2>/dev/null || true
+
     # Launch the child in its OWN process group so the whole playback (incl. any
     # fallback mpv) can be stopped as a unit later (see stop_group). Enabling monitor
     # mode (set -m) makes a backgrounded job a process-group leader whose pgid == its
-    # pid; nohup + disown detach it from this shell so it survives our exit. Job-control
-    # chatter is routed away from stdout so -j output stays a single clean JSON line.
+    # pid; nohup + disown detach it from this shell so it survives our exit. YT_IPC_SOCK
+    # is exported into the child's environment so its run_mpv adds --input-ipc-server.
+    # Job-control chatter is routed away from stdout so -j output stays one JSON line.
     set -m
-    nohup bash "$SELF" -f "$PLAYBACK_MODE" ${VOLUME:+--volume "$VOLUME"} "$url" >"$PLAYBACK_LOG" 2>&1 &
+    YT_IPC_SOCK="$sock" nohup bash "$SELF" -f "$PLAYBACK_MODE" ${VOLUME:+--volume "$VOLUME"} "$url" >"$log" 2>&1 &
     pid=$!
     set +m
     disown "$pid" 2>/dev/null || true
 
     jq -n \
+        --arg id "$id" \
         --argjson pid "$pid" \
         --arg url "$url" \
         --arg mode "$PLAYBACK_MODE" \
         --arg format "$fmt" \
         --arg started_at "$started_at" \
-        --arg log "$PLAYBACK_LOG" \
+        --arg log "$log" \
+        --arg sock "$sock" \
         --argjson volume "$volume_json" \
-        '{pid: $pid, url: $url, mode: $mode, format: $format, started_at: $started_at, log: $log, title: null, volume: $volume}' >"$STATE_FILE"
+        '{id: $id, pid: $pid, url: $url, mode: $mode, format: $format, started_at: $started_at, log: $log, sock: $sock, title: null, volume: $volume}' >"$(player_state "$id").tmp.$pid"
+    mv -f "$(player_state "$id").tmp.$pid" "$(player_state "$id")"
+
+    # new_player_id created a bare "$PLAYERS_DIR/$id" (mktemp) to reserve the id; the
+    # real state lives in "$id.json". Remove the bare token so it doesn't leak (the
+    # *.json reap globs would never touch it).
+    rm -f "$PLAYERS_DIR/$id" 2>/dev/null || true
 
     # Title is unknown here and resolving it is a ~3s yt-dlp round-trip — detach must
     # return immediately, so we do NOT block on it. Spawn an independent background updater
     # that fetches the title and patches it into the state file a few seconds later.
     # --status shows title:null until it lands. See detach_title_updater for the guards.
-    detach_title_updater "$pid" "$url" &
+    detach_title_updater "$id" "$pid" "$url" &
     disown 2>/dev/null || true
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         jq -nc \
-            --argjson pid "$pid" --arg url "$url" --arg mode "$PLAYBACK_MODE" --arg started_at "$started_at" \
-            '{status: "started", pid: $pid, url: $url, mode: $mode, started_at: $started_at, title: null}'
+            --arg id "$id" --argjson pid "$pid" --arg url "$url" --arg mode "$PLAYBACK_MODE" --arg started_at "$started_at" \
+            '{status: "started", id: $id, pid: $pid, url: $url, mode: $mode, started_at: $started_at, title: null}'
     else
-        printf "Detached playback started (pid %s, mode %s): %s\n" "$pid" "$PLAYBACK_MODE" "$url"
-        printf "  status: yt-play --status   stop: yt-play --stop   log: %s\n" "$PLAYBACK_LOG"
+        printf "Detached playback started (id %s, pid %s, mode %s): %s\n" "$id" "$pid" "$PLAYBACK_MODE" "$url"
+        printf "  status: yt-play --status   stop: yt-play --stop --id %s   log: %s\n" "$id" "$log"
     fi
 }
 
 # Background metadata backfill for a detached playback: fetch the title (the ~3s yt-dlp
-# round-trip we deliberately keep OFF the detach hot path) and patch it into the state
-# file. Playback-independent — it is not the play child, so it neither blocks the detach
-# return nor is stopped by playback lifecycle. Self-guarding: it patches ONLY while this
-# pid is still the current slot, so a --stop / --replace during the fetch window wins and
-# is never clobbered (jq emits nothing when the pid no longer matches, and the empty temp
-# is dropped without touching the live file). Honours cookies like playback. Best-effort:
-# any failure leaves title:null, which every caller already tolerates. `trap '' HUP INT`
-# lets it outlive the returning parent without nohup plumbing.
+# round-trip we deliberately keep OFF the detach hot path) and patch it into the player's
+# state file. Playback-independent — it is not the play child, so it neither blocks the
+# detach return nor is stopped by playback lifecycle. Self-guarding: it patches ONLY while
+# this pid still owns the state file, so a --stop during the fetch window wins and is never
+# clobbered (jq emits nothing when the pid no longer matches, and the empty temp is dropped
+# without touching the live file). Honours cookies like playback. Best-effort: any failure
+# leaves title:null, which every caller already tolerates. `trap '' HUP INT` lets it outlive
+# the returning parent without nohup plumbing.
 detach_title_updater() {
-    local pid=$1 url=$2 title tmp
+    local id=$1 pid=$2 url=$3 title tmp sf
     trap '' HUP INT
 
     local ycmd=(yt-dlp --print "%(title)s" --skip-download)
@@ -703,47 +764,121 @@ detach_title_updater() {
 
     title=$("${ycmd[@]}" 2>/dev/null) || return 0
     [[ -n "$title" ]] || return 0
-    [[ -f "$STATE_FILE" ]] || return 0
+    sf=$(player_state "$id")
+    [[ -f "$sf" ]] || return 0
 
-    tmp="$STATE_FILE.tmp.$pid"
+    tmp="$sf.tmp.$pid"
+    lock_player_state "$id"
     if jq --arg t "$title" --arg p "$pid" \
         'if ((.pid | tostring) == $p) then (.title = $t) else empty end' \
-        "$STATE_FILE" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
-        mv -f "$tmp" "$STATE_FILE"
+        "$sf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
+        mv -f "$tmp" "$sf"
     else
         rm -f "$tmp" 2>/dev/null || true
     fi
+    unlock_player_state "$id"
 }
 
-# Report the single-slot playback state. Always exits 0 (an agent polling status must
-# not see a non-zero exit as failure). Clears stale state whose PID is gone.
-do_status() {
-    local pid="" alive=0
-    if [[ -f "$STATE_FILE" ]]; then
-        pid=$(jq -r '.pid // empty' "$STATE_FILE" 2>/dev/null || true)
-        group_alive "$pid" && alive=1
+# Map a request to a single live player, reaping any dead ones along the way. The single
+# place --set-volume and --stop share for target selection.
+#
+# RETURN-VALUE DISCIPLINE (do NOT capture in $(...)): on success sets the GLOBAL
+# RESOLVED_ID and returns 0; on failure sets RESOLVE_ERR ("not_playing"|"ambiguous")
+# (+ RESOLVE_PLAYERS_JSON for ambiguous) and returns non-zero. Nothing is echoed to
+# stdout — the caller decides how to render (a --stop treats not_playing as idempotent
+# success; a --set-volume treats it as exit 4), so the error text must not be trapped
+# by command substitution.
+#   --id given          -> that player if live, else not_playing
+#   no --id, exactly 1  -> that player (common case, zero-friction)
+#   no --id, 0 players   -> not_playing
+#   no --id, 2+ players  -> ambiguous (candidates in RESOLVE_PLAYERS_JSON)
+resolve_target() {
+    local want_id=$1 f id pid live_ids=() live_files=()
+    RESOLVED_ID=""
+    RESOLVE_ERR=""
+    RESOLVE_PLAYERS_JSON="[]"
+
+    if [[ -d "$PLAYERS_DIR" ]]; then
+        for f in "$PLAYERS_DIR"/*.json; do
+            [[ -e "$f" ]] || continue
+            id=$(jq -r '.id // empty' "$f" 2>/dev/null || true)
+            pid=$(jq -r '.pid // empty' "$f" 2>/dev/null || true)
+            if group_alive "$pid"; then
+                live_ids+=("$id")
+                live_files+=("$f")
+            else
+                rm -f "$f" 2>/dev/null || true
+                [[ -n "$id" ]] && rm -f "$(player_sock "$id")" "$(player_log "$id")" 2>/dev/null || true
+            fi
+        done
     fi
 
-    if ((alive)); then
-        if [[ "$OUTPUT_MODE" == "json" ]]; then
-            jq -c '. + {status: "playing"}' "$STATE_FILE"
-        else
-            local title volume vol_suffix=""
-            title=$(jq -r '.title // empty' "$STATE_FILE" 2>/dev/null || true)
-            volume=$(jq -r '.volume // empty' "$STATE_FILE" 2>/dev/null || true)
-            [[ -n "$volume" ]] && vol_suffix=", volume $volume"
-            if [[ -n "$title" ]]; then
-                printf "playing (pid %s, mode %s%s, since %s): %s\n  %s\n" \
-                    "$pid" "$(jq -r '.mode' "$STATE_FILE")" "$vol_suffix" "$(jq -r '.started_at' "$STATE_FILE")" "$title" "$(jq -r '.url' "$STATE_FILE")"
-            else
-                printf "playing (pid %s, mode %s%s, since %s): %s\n" \
-                    "$pid" "$(jq -r '.mode' "$STATE_FILE")" "$vol_suffix" "$(jq -r '.started_at' "$STATE_FILE")" "$(jq -r '.url' "$STATE_FILE")"
+    local n=${#live_ids[@]}
+
+    if [[ -n "$want_id" ]]; then
+        local i
+        for ((i = 0; i < n; i++)); do
+            if [[ "${live_ids[$i]}" == "$want_id" ]]; then
+                RESOLVED_ID="$want_id"
+                return 0
             fi
+        done
+        RESOLVE_ERR="not_playing"
+        return 1
+    fi
+
+    if ((n == 0)); then
+        RESOLVE_ERR="not_playing"
+        return 1
+    elif ((n == 1)); then
+        RESOLVED_ID="${live_ids[0]}"
+        return 0
+    else
+        RESOLVE_ERR="ambiguous"
+        RESOLVE_PLAYERS_JSON=$(jq -s '[.[] | {id, pid, title, url}]' "${live_files[@]}")
+        return 1
+    fi
+}
+
+# List ALL live detached players (reaping dead ones). Always exits 0 (an agent polling
+# status must not see a non-zero exit as failure); empty set is still a success.
+do_status() {
+    local f pid id live_files=()
+    if [[ -d "$PLAYERS_DIR" ]]; then
+        for f in "$PLAYERS_DIR"/*.json; do
+            [[ -e "$f" ]] || continue
+            pid=$(jq -r '.pid // empty' "$f" 2>/dev/null || true)
+            if group_alive "$pid"; then
+                live_files+=("$f")
+            else
+                id=$(jq -r '.id // empty' "$f" 2>/dev/null || true)
+                rm -f "$f" 2>/dev/null || true
+                [[ -n "$id" ]] && rm -f "$(player_sock "$id")" "$(player_log "$id")" 2>/dev/null || true
+            fi
+        done
+    fi
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        if ((${#live_files[@]})); then
+            jq -s '{status: "players", players: [.[] | {id, pid, url, mode, volume, title, started_at}]}' "${live_files[@]}"
+        else
+            echo '{"status":"players","players":[]}'
         fi
     else
-        [[ -f "$STATE_FILE" ]] && rm -f "$STATE_FILE"
-        if [[ "$OUTPUT_MODE" == "json" ]]; then
-            echo '{"status":"idle"}'
+        if ((${#live_files[@]})); then
+            for f in "${live_files[@]}"; do
+                local title volume vol_suffix=""
+                title=$(jq -r '.title // empty' "$f" 2>/dev/null || true)
+                volume=$(jq -r '.volume // empty' "$f" 2>/dev/null || true)
+                [[ -n "$volume" ]] && vol_suffix=", volume $volume"
+                if [[ -n "$title" ]]; then
+                    printf "playing (id %s, pid %s, mode %s%s, since %s): %s\n  %s\n" \
+                        "$(jq -r '.id' "$f")" "$(jq -r '.pid' "$f")" "$(jq -r '.mode' "$f")" "$vol_suffix" "$(jq -r '.started_at' "$f")" "$title" "$(jq -r '.url' "$f")"
+                else
+                    printf "playing (id %s, pid %s, mode %s%s, since %s): %s\n" \
+                        "$(jq -r '.id' "$f")" "$(jq -r '.pid' "$f")" "$(jq -r '.mode' "$f")" "$vol_suffix" "$(jq -r '.started_at' "$f")" "$(jq -r '.url' "$f")"
+                fi
+            done
         else
             echo "idle (nothing playing)"
         fi
@@ -751,22 +886,137 @@ do_status() {
     exit 0
 }
 
-# Stop the tracked playback. Idempotent: exits 0 whether or not something was playing.
+# Stop detached playback. Idempotent: exits 0 when nothing (or nothing matching) is
+# playing. --all stops every live player; otherwise a single target is resolved
+# (exactly-one is zero-friction; 2+ without --id is ambiguous → exit 4).
 do_stop() {
-    local pid="" stopped=false
-    if [[ -f "$STATE_FILE" ]]; then
-        pid=$(jq -r '.pid // empty' "$STATE_FILE" 2>/dev/null || true)
-        if group_alive "$pid"; then
-            stop_group "$pid"
-            stopped=true
+    local want_id=$1 stop_all=$2
+    local f id pid any=false
+
+    if ((stop_all)); then
+        if [[ -d "$PLAYERS_DIR" ]]; then
+            for f in "$PLAYERS_DIR"/*.json; do
+                [[ -e "$f" ]] || continue
+                id=$(jq -r '.id // empty' "$f" 2>/dev/null || true)
+                pid=$(jq -r '.pid // empty' "$f" 2>/dev/null || true)
+                if group_alive "$pid"; then
+                    stop_group "$pid"
+                    any=true
+                fi
+                rm -f "$f" 2>/dev/null || true
+                [[ -n "$id" ]] && rm -f "$(player_sock "$id")" "$(player_log "$id")" 2>/dev/null || true
+            done
         fi
-        rm -f "$STATE_FILE"
+        if [[ "$OUTPUT_MODE" == "json" ]]; then
+            jq -nc --argjson stopped "$any" '{status: "stopped", scope: "all", stopped: $stopped}'
+        else
+            if [[ "$any" == true ]]; then echo "stopped all playback"; else echo "nothing to stop"; fi
+        fi
+        exit 0
     fi
 
+    if ! resolve_target "$want_id"; then
+        if [[ "$RESOLVE_ERR" == "ambiguous" ]]; then
+            if [[ "$OUTPUT_MODE" == "json" ]]; then
+                jq -nc --argjson players "$RESOLVE_PLAYERS_JSON" '{status: "ambiguous", reason: "multiple_players", players: $players}'
+            else
+                echo "multiple players playing; specify --id or --all (see 'yt-play --status')" >&2
+            fi
+            exit 4
+        fi
+        # not_playing → idempotent success, not an error.
+        if [[ "$OUTPUT_MODE" == "json" ]]; then
+            jq -nc '{status: "stopped", stopped: false}'
+        else
+            echo "nothing to stop"
+        fi
+        exit 0
+    fi
+
+    local sf pid_stop
+    id=$RESOLVED_ID
+    sf=$(player_state "$id")
+    pid_stop=$(jq -r '.pid // empty' "$sf" 2>/dev/null || true)
+    if group_alive "$pid_stop"; then
+        stop_group "$pid_stop"
+        any=true
+    fi
+    rm -f "$sf" 2>/dev/null || true
+    rm -f "$(player_sock "$id")" "$(player_log "$id")" 2>/dev/null || true
+
     if [[ "$OUTPUT_MODE" == "json" ]]; then
-        jq -nc --argjson stopped "$stopped" '{status: "stopped", stopped: $stopped}'
+        jq -nc --arg id "$id" --argjson stopped "$any" '{status: "stopped", id: $id, stopped: $stopped}'
     else
-        if [[ "$stopped" == true ]]; then echo "stopped playback"; else echo "nothing to stop"; fi
+        if [[ "$any" == true ]]; then echo "stopped playback (player $id)"; else echo "nothing to stop"; fi
+    fi
+    exit 0
+}
+
+# Adjust volume on a detached player via mpv's per-instance JSON IPC socket. One-shot:
+# open, send, read the matching ack, close, exit (stateless-per-call). Exit 4 for any
+# "did not take effect" (no such/no player, ambiguous, or IPC failure); the -j
+# status/reason carries the why. See yt-design.md §14/§15.
+do_set_volume() {
+    local n=$1 want_id=$2
+    is_non_negative_int "$n" || die "--set-volume must be a non-negative integer"
+    ((n <= 100)) || die "--set-volume must be between 0 and 100" # symmetry w/ launch --volume
+
+    if ! resolve_target "$want_id"; then
+        if [[ "$OUTPUT_MODE" == "json" ]]; then
+            if [[ "$RESOLVE_ERR" == "ambiguous" ]]; then
+                jq -nc --argjson players "$RESOLVE_PLAYERS_JSON" '{status: "ambiguous", reason: "multiple_players", players: $players}'
+            else
+                echo '{"status":"not_playing"}'
+            fi
+        else
+            if [[ "$RESOLVE_ERR" == "ambiguous" ]]; then
+                echo "multiple players playing; specify --id (see 'yt-play --status')" >&2
+            else
+                echo "nothing playing" >&2
+            fi
+        fi
+        exit 4
+    fi
+
+    local id sock
+    id=$RESOLVED_ID
+    sock=$(player_sock "$id")
+    if [[ ! -S "$sock" ]]; then
+        [[ "$OUTPUT_MODE" == "json" ]] && echo '{"status":"error","reason":"ipc_failed"}' || echo "failed to set volume (no IPC socket)" >&2
+        exit 4
+    fi
+
+    # request_id correlation: mpv multiplexes ASYNC EVENTS to every client, interleaved
+    # with replies (mpv ipc.rst), so head -1 alone can grab an event. Filter by request_id.
+    # `|| true` is REQUIRED — under set -euo pipefail the pipeline exits non-zero on nc
+    # timeout / SIGPIPE (head closing early) and would abort the script AT the assignment.
+    local reply
+    reply=$(printf '{"command":["set_property","volume",%d],"request_id":1}\n' "$n" |
+        nc -U -w1 "$sock" 2>/dev/null |
+        jq -c 'select(.request_id==1)' 2>/dev/null | head -1) || true
+
+    if [[ "$(jq -r '.error // empty' <<<"$reply" 2>/dev/null)" != success ]]; then
+        [[ "$OUTPUT_MODE" == "json" ]] && echo '{"status":"error","reason":"ipc_failed"}' || echo "failed to set volume" >&2
+        exit 4
+    fi
+
+    # Atomic patch of this player's state file (temp+mv, same idiom as detach_title_updater),
+    # under the same per-id lock so this can't interleave with a concurrent title backfill.
+    local sf tmp
+    sf=$(player_state "$id")
+    tmp="$sf.tmp.$$"
+    lock_player_state "$id"
+    if jq --argjson v "$n" '.volume = $v' "$sf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
+        mv -f "$tmp" "$sf"
+    else
+        rm -f "$tmp" 2>/dev/null || true
+    fi
+    unlock_player_state "$id"
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --arg id "$id" --argjson volume "$n" '{status: "ok", id: $id, volume: $volume}'
+    else
+        echo "volume set to $n (player $id)"
     fi
     exit 0
 }
@@ -1009,12 +1259,16 @@ OUTPUT_MODE="list"
 FILTERED_JSON=""
 # Playback lifecycle / structured-output state.
 DETACH=0
-REPLACE=0
-ACTION=""            # "" (normal) | status | stop | geturl
+ACTION=""            # "" (normal) | status | stop | geturl | info | set-volume
 PLAYBACK_RETRIED=0   # set by play_url_with_probe; surfaced in the playback JSON
+SET_VOLUME_ARG=""    # value from --set-volume N
+TARGET_ID=""         # value from --id (target a specific detached player)
+STOP_ALL=0           # --stop --all
+RESOLVED_ID=""       # resolve_target out-param: the resolved player id
+RESOLVE_ERR=""       # resolve_target out-param: "not_playing" | "ambiguous"
+RESOLVE_PLAYERS_JSON="[]"  # resolve_target out-param: candidates on ambiguity
 STATE_DIR="${TMPDIR:-/tmp}/yt-cli-$(id -u)"
-STATE_FILE="$STATE_DIR/state.json"
-PLAYBACK_LOG="$STATE_DIR/playback.log"
+PLAYERS_DIR="$STATE_DIR/players"   # one <id>.json per detached player
 
 normalized_args=()
 while (($#)); do
@@ -1073,8 +1327,28 @@ while (($#)); do
         ACTION=info
         shift
         ;;
-    --replace)
-        REPLACE=1
+    --set-volume)
+        [[ $# -ge 2 ]] || die "--set-volume requires a value"
+        ACTION=set-volume
+        SET_VOLUME_ARG="$2"
+        shift 2
+        ;;
+    --set-volume=*)
+        ACTION=set-volume
+        SET_VOLUME_ARG="${1#*=}"
+        shift
+        ;;
+    --id)
+        [[ $# -ge 2 ]] || die "--id requires a value"
+        TARGET_ID="$2"
+        shift 2
+        ;;
+    --id=*)
+        TARGET_ID="${1#*=}"
+        shift
+        ;;
+    --all)
+        STOP_ALL=1
         shift
         ;;
     *)
@@ -1177,7 +1451,16 @@ if [[ "$ACTION" == "status" ]]; then
 fi
 if [[ "$ACTION" == "stop" ]]; then
     require_cmd jq
-    do_stop
+    do_stop "${TARGET_ID:-}" "$STOP_ALL"
+fi
+# --set-volume drives a running player over its IPC socket: needs jq + nc, but NOT
+# yt-dlp/mpv and takes no URL. nc is gated lazily HERE (not in require_deps) so a plain
+# `yt <query>` search never demands it. BSD `nc -U` is stock on macOS (first use in
+# this script); on Linux the -U flag varies by netcat variant (known gap, yt-design.md).
+if [[ "$ACTION" == "set-volume" ]]; then
+    require_cmd jq
+    require_cmd nc
+    do_set_volume "$SET_VOLUME_ARG" "${TARGET_ID:-}"
 fi
 # --info is a read-only metadata fetch: needs yt-dlp + jq, but NOT mpv (nothing plays).
 # Handle it before the playback dependency check so a metadata lookup never demands mpv.

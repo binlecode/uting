@@ -29,30 +29,41 @@ Usage:
   yt-play [-f mode] [--volume N] [-j] <URL>  Play a URL (blocks until done)
   yt-play --info [-j|-J] <URL>            Fetch metadata (title/chapters/desc), do not play
   yt-play --get-url [-f mode] [-j] <URL>  Resolve stream URL(s), do not play
-  yt-play -d [--replace] <URL>            Detached background audio playback
-  yt-play --status [-j]                   Report what is playing (always exit 0)
-  yt-play --stop [-j]                     Stop detached playback (idempotent)
+  yt-play -d <URL>                        Detached background audio (concurrent players OK)
+  yt-play --status [-j]                   List live detached players (always exit 0)
+  yt-play --stop [--id ID | --all] [-j]   Stop one player (or all); idempotent
+  yt-play --set-volume N [--id ID] [-j]   Live volume on a detached player (0-100)
 
 Options:
   -f MODE   Playback mode (default: audio):
             audio | video | fast | ascii | viz
-  --volume N  mpv startup volume, 0-100 (default: unset -> mpv's own default;
-              launch-time only, no runtime volume control while playing)
-  -d        --detach: background playback; manage with --status / --stop
-  --replace With -d: replace an already-running detached playback
+  --volume N  mpv startup volume, 0-100 (default: unset -> mpv's own default).
+              For detached playback this is the STARTING volume; adjust it live
+              with --set-volume.
+  -d        --detach: background playback; manage with --status / --stop / --set-volume.
+            Multiple concurrent detached players are supported, each addressed by --id.
+  --set-volume N  Set volume (0-100) on a running detached player. With one player,
+            --id is optional; with several, --id is required (else 'ambiguous').
+  --id ID   Target a specific detached player (id from --status / a -d launch).
+  --all     With --stop: stop every live detached player.
   --info    Fetch rich metadata (read-only, non-blocking): title, channel,
             uploader, upload_date, duration, view/like counts, live_status,
             description, chapters. Text by default; -j lean JSON; -J full raw record
   --get-url Resolve direct stream URL(s) instead of playing (non-blocking)
-  --status  Show current detached playback state
-  --stop    Stop current detached playback
+  --status  List live detached players (JSON: a 'players' array)
+  --stop    Stop a detached player (--id ID), or all (--all)
   -j        JSON output (one line): {status,url,mode,exit_code,reason,retried}
-            for playback; {status,...} for --status/--stop/--get-url/--info
+            for playback; {status,...} for --status/--stop/--get-url/--info/--set-volume
   -J        Full raw yt-dlp record (with --info)
   -h        This help
 
 Playback error reason (JSON): forbidden | unavailable | format_unavailable |
                               network | stopped_by_user | unknown | null(ok)
+Lifecycle JSON:
+  --status      {status:"players",players:[{id,pid,url,mode,volume,title,started_at}...]}
+  --stop        {status:"stopped",id,stopped} | {status:"stopped",scope:"all",stopped}
+  --set-volume  {status:"ok",id,volume} | {status:"not_playing"}
+                | {status:"ambiguous",players:[...]} | {status:"error",reason:"ipc_failed"}
 Info JSON (--info -j): {status,id,title,url,channel,uploader,upload_date,duration,
                        duration_fmt,view_count,like_count,live_status,description,chapters}
 
@@ -71,7 +82,7 @@ while (($#)); do
         print_usage
         exit 0
         ;;
-    -j | --json | -J | --json-full | -d | --detach | --replace)
+    -j | --json | -J | --json-full | -d | --detach | --all)
         flags+=("$1")
         shift
         ;;
@@ -95,11 +106,25 @@ while (($#)); do
         flags+=("$1")
         shift
         ;;
-    --color=* | --volume=*)
+    --set-volume=*)
+        action=set-volume
         flags+=("$1")
         shift
         ;;
-    -f | --color | --volume)
+    --set-volume)
+        [[ $# -ge 2 ]] || {
+            echo "yt-play: $1 requires a value" >&2
+            exit 1
+        }
+        action=set-volume
+        flags+=("$1" "$2")
+        shift 2
+        ;;
+    --color=* | --volume=* | --id=*)
+        flags+=("$1")
+        shift
+        ;;
+    -f | --color | --volume | --id)
         [[ $# -ge 2 ]] || {
             echo "yt-play: $1 requires a value" >&2
             exit 1
@@ -120,7 +145,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "yt-play: unknown flag '$1' (play flags: -f -d -j --get-url --status --stop --replace)" >&2
+        echo "yt-play: unknown flag '$1' (play flags: -f -d -j --get-url --status --stop --set-volume --id --all)" >&2
         exit 1
         ;;
     http://* | https://* | www.* | youtube.com/* | youtu.be/*)
@@ -134,9 +159,9 @@ while (($#)); do
     esac
 done
 
-# --status / --stop act on the tracked playback and take no URL. Everything else
-# (play, --detach, --get-url) needs a URL.
-if [[ "$action" != status && "$action" != stop ]] && ((${#url[@]} == 0)); then
+# --status / --stop / --set-volume act on already-running detached players and take
+# no URL. Everything else (play, --detach, --get-url, --info) needs a URL.
+if [[ "$action" != status && "$action" != stop && "$action" != set-volume ]] && ((${#url[@]} == 0)); then
     echo "yt-play: a YouTube URL is required (see 'yt-play -h')" >&2
     exit 1
 fi

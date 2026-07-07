@@ -82,7 +82,7 @@ while (($#)); do
         flags+=("$1" "$2")
         shift 2
         ;;
-    -f | -d | --detach | --status | --stop | --get-url | --info | --replace)
+    -f | -d | --detach | --status | --stop | --get-url | --info | --set-volume | --id | --all)
         echo "yt-search: $1 is a playback flag — use yt-play for playback" >&2
         exit 1
         ;;
