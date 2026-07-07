@@ -91,7 +91,7 @@ SEARCH_ARGS=()
 RESULT_N=25          # fetch count; -n overrides. Runtime-mutable: S adds 25 (more_results).
 PLAY_MODE="audio"        # -f flag overrides. Runtime-mutable: v key rotates it (cycle_mode).
 MODE_CYCLE=(audio video fast)  # order the v key steps through
-PLAY_VOLUME=""           # --volume flag overrides; launch-time only, no live cycle key (yt-design.md §26)
+PLAY_VOLUME=""           # --volume flag overrides; launch-time only, no live cycle key (DESIGN-yt.md §26)
 COLOR_MODE="auto"
 PAGE_OPT=10
 SORT_FIELD="relevance"   # -s flag overrides. Runtime-mutable: o key rotates it (cycle_sort).
@@ -362,7 +362,7 @@ play_selected() {
     # the next real keypress, so a single q is consumed by mpv and never leaks to the loop.
     # (A prior non-blocking flush HUNG on bash 3.2: `read -n <count>` installs its own termios
     # and waits for input regardless of `stty min 0 time 0`, so it blocked forever when the tty
-    # buffer was empty — which is the normal case on every return. See yt-design.md §11/§27.)
+    # buffer was empty — which is the normal case on every return. See DESIGN-yt.md §11/§27.)
     ((rc == 130)) && rc=0
     if ((rc != 0)); then
         printf '\nPlayback failed (exit %s). Check network/cookies/format.\n' "$rc" >&2
@@ -471,7 +471,7 @@ cycle_sort() {
 #   filter_live   interactive loop: type → narrow live, ↑↓←→ move within the filtered set,
 #                 Enter plays the highlighted match (stays filtering), Esc clears + exits.
 # `n` (new search) stays Enter-submit — it hits the network — so the two prompts diverge on
-# purpose (in-page filter is live; a remote search submits). See yt-design.md §11.
+# purpose (in-page filter is live; a remote search submits). See DESIGN-yt.md §11.
 apply_filter() {
     local q="$1" url disp tok ok matched="" tokens=()
     selected=0

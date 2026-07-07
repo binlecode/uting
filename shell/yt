@@ -2,7 +2,7 @@
 
 # Portability: must run on bash 3.2 (macOS system bash). No bash-4 features; guard
 # every empty-array expansion (a bare "${arr[@]}" on an empty array aborts under
-# `set -u` on 3.2). See yt-design.md §28.
+# `set -u` on 3.2). See DESIGN-yt.md §28.
 #
 # set -e means any unguarded failing command aborts the script. This is desired for
 # this core: search and single-URL playback are non-interactive, so if mpv/yt-dlp
@@ -33,7 +33,7 @@ SELF="${BASH_SOURCE[0]}"
 # probes up front (yt-dlp resolve + 1-byte ranged GET) which client actually fetches the
 # media, then plays ONCE with it — cookies for login-gated, anonymous for cookie-403 public
 # videos. So both cases play cleanly with no error dump (curl-less machines degrade to a
-# play-fail-replay retry instead). yt-design.md §8.2.
+# play-fail-replay retry instead). DESIGN-yt.md §8.2.
 # Set YT_COOKIE_BROWSER=none to force anonymous-only (skips the keychain read / probe).
 # The browser's cookie DB should be readable (Chrome ideally closed) for a clean extraction.
 # Optional custom mpv input.conf path; empty means use mpv defaults.
@@ -53,7 +53,7 @@ YT_MPV_AUDIO_OPTIONS=(--msg-level=client=error --term-osd-bar --no-video)
 # STDERR, so filtering stderr never touches the progress bar. audio is immune (--no-video → no
 # OSD); ascii uses --really-quiet. Rejected: --osd-level=0 (kills the noise but also the
 # on-window OSD/OSC); --msg-level=all=error (blanks the status bar); OS_ACTIVITY_MODE=disable
-# (does NOT stop CoreText). See yt-design.md §8.1.
+# (does NOT stop CoreText). See DESIGN-yt.md §8.1.
 YT_MPV_VIDEO_OPTIONS=(--msg-level=osd/libass=error --term-osd-bar)
 # mpv docs suggest sw-fast/really-quiet for terminal VOs to reduce glitches and improve speed.
 YT_MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term-osd-bar)
@@ -319,7 +319,7 @@ run_mpv() {
     # Launch-time volume. For a foreground/blocking session this is the only lever
     # (mpv's own volume keys work via the TTY); for detached playback it is just the
     # STARTING volume — live adjustment happens over the per-instance IPC socket
-    # (see YT_IPC_SOCK below and do_set_volume). yt-design.md §26.
+    # (see YT_IPC_SOCK below and do_set_volume). DESIGN-yt.md §26.
     if [[ -n "$VOLUME" ]]; then
         mpv_cmd+=(--volume="$VOLUME")
     fi
@@ -327,7 +327,7 @@ run_mpv() {
     # Runtime control channel: only when launched under detach_play, which exports
     # YT_IPC_SOCK. mpv's --input-ipc-server is per-process, so each detached player
     # points at its own socket and is driven independently. A foreground/blocking
-    # session has a real TTY and needs no IPC. yt-design.md §26.
+    # session has a real TTY and needs no IPC. DESIGN-yt.md §26.
     if [[ -n "${YT_IPC_SOCK:-}" ]]; then
         mpv_cmd+=(--input-ipc-server="$YT_IPC_SOCK")
     fi
@@ -986,7 +986,7 @@ do_stop() {
 # Adjust volume on a detached player via mpv's per-instance JSON IPC socket. One-shot:
 # open, send, read the matching ack, close, exit (stateless-per-call). Exit 4 for any
 # "did not take effect" (no such/no player, ambiguous, or IPC failure); the -j
-# status/reason carries the why. See yt-design.md §14/§15.
+# status/reason carries the why. See DESIGN-yt.md §14/§15.
 do_set_volume() {
     local n=$1 want_id=$2
     is_non_negative_int "$n" || die "--set-volume must be a non-negative integer"
@@ -1215,7 +1215,7 @@ fetch_results() {
     # Sort is a client-side jq re-order of the fetched set. "relevance" keeps YouTube's
     # native ranking (the order ytsearch returned) — no re-sort. The numeric fields sort
     # descending (reverse). view_count/duration are always present in flat search results;
-    # like_count/comment_count are NOT (they need per-video extraction — see yt-design.md).
+    # like_count/comment_count are NOT (they need per-video extraction — see DESIGN-yt.md).
     local jq_filter='.entries'
     case "$SORT_FIELD" in
     relevance) ;;  # native YouTube ranking; leave order untouched
@@ -1487,7 +1487,7 @@ fi
 # --set-volume drives a running player over its IPC socket: needs jq + nc, but NOT
 # yt-dlp/mpv and takes no URL. nc is gated lazily HERE (not in require_deps) so a plain
 # `yt <query>` search never demands it. BSD `nc -U` is stock on macOS (first use in
-# this script); on Linux the -U flag varies by netcat variant (known gap, yt-design.md).
+# this script); on Linux the -U flag varies by netcat variant (known gap, DESIGN-yt.md).
 if [[ "$ACTION" == "set-volume" ]]; then
     require_cmd jq
     require_cmd nc
