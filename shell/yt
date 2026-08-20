@@ -19,7 +19,7 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SELF="${BASH_SOURCE[0]}"
 
 : "${YT_COOKIE_BROWSER:=chrome}"
-: "${YT_AUDIO_FORMAT:=ba}"
+: "${YT_AUDIO_FORMAT:=ba/b}"
 # Default to highest quality video+audio. This can start slower than progressive streams.
 : "${YT_VIDEO_FORMAT:=bv*+ba/b}"
 # Optional fast-start progressive format for interactive playback.
@@ -204,7 +204,7 @@ Environment Variables (customizable):
                        BEFORE playing and uses the working one, so playback stays clean.
                        Set to "none" to force anonymous-only (skips the keychain read and
                        the probe). Reading the cookie DB is most reliable with browser closed.
-  YT_AUDIO_FORMAT      Default audio stream format (default: ba)
+  YT_AUDIO_FORMAT      Default audio stream format (default: ba/b)
   YT_VIDEO_FORMAT      Default video stream format (default: bv*+ba/b)
   YT_VIDEO_FORMAT_FAST Fast-start progressive stream format
   YT_ASCII_VO          mpv terminal video output driver (default: tct)
@@ -335,9 +335,12 @@ run_mpv() {
     # Pass format directly to mpv's ytdl integration
     mpv_cmd+=(--ytdl-format="$format")
 
-    # Forward cookies to mpv's ytdl integration only when login is opted into.
+    # Forward cookies to mpv's ytdl integration only when login is opted into;
+    # otherwise set player_client=android so anonymous streaming avoids 403 on range requests.
     if (( ${#YT_COOKIE_ARGS[@]} > 0 )); then
         raw_opts+=("cookies-from-browser=$YT_COOKIE_BROWSER")
+    else
+        raw_opts+=("extractor-args=youtube:player_client=android")
     fi
 
     # mpv's --ytdl-raw-options is a single key/value-list flag: multiple keys are
@@ -440,21 +443,31 @@ have_probe_tools() {
 
 # True (0) if the given client can actually FETCH this video's media stream — not merely
 # resolve a URL, but pull a byte from it. Resolves the direct media URL with yt-dlp using
-# the passed client (cookie args, if any), then issues a 1-byte ranged GET: a signed
-# googlevideo URL answers 206 when the client is authorized and 403 when it is missing the
+# the passed client (cookie args, if any), then issues an open-ended ranged HEAD/GET: a signed
+# googlevideo URL answers 206/200 when authorized and 403 when it is missing the
 # GVS "Proof of Origin" token. That 403 is the exact failure that makes mpv abort mid-load,
 # so the probe's verdict matches what playback would do — letting us pick the working
-# client BEFORE launching mpv. Any resolve/transport failure returns non-zero (treated as
-# "this client can't fetch"). Called only from `if` conditions, so set -e stays disarmed.
+# client BEFORE launching mpv. For HLS playlists (m3u8), the probe inspects the first
+# segment URL so manifest 200s with 403 segments are caught. Any resolve/transport failure
+# returns non-zero (treated as "this client can't fetch"). Called only from `if` conditions.
 probe_media_fetchable() {
     local url=$1 fmt=$2
     shift 2 # remaining args (if any) are the client, e.g. --cookies-from-browser chrome
+    local client_args=("$@")
+    if (( ${#client_args[@]} == 0 )); then
+        client_args=(--extractor-args "youtube:player_client=android")
+    fi
     local media
-    media=$(yt-dlp -g -f "$fmt" "$@" --no-warnings --quiet "$url" 2>/dev/null) || return 1
+    media=$(yt-dlp -g -f "$fmt" "${client_args[@]}" --no-warnings --quiet "$url" 2>/dev/null) || return 1
     media=${media%%$'\n'*} # video mode yields video+audio lines; the first is enough
     [[ -n "$media" ]] || return 1
+    if [[ "$media" == *"m3u8"* || "$media" == *"/hls_playlist/"* ]]; then
+        local first_seg
+        first_seg=$(curl -sSL --max-time 5 "$media" 2>/dev/null | grep -E '^https?://' | head -n 1 || true)
+        [[ -n "$first_seg" ]] && media="$first_seg"
+    fi
     local code
-    code=$(curl -sSL -o /dev/null -r 0-0 --max-time 10 -w '%{http_code}' "$media" 2>/dev/null) || return 1
+    code=$(curl -sSL -o /dev/null -I -r 0- --max-time 10 -w '%{http_code}' "$media" 2>/dev/null) || return 1
     [[ "$code" == 2* ]]
 }
 
@@ -1063,6 +1076,8 @@ resolve_stream_url() {
     local cmd=(yt-dlp -g -f "$fmt")
     if ((${#YT_COOKIE_ARGS[@]} > 0)); then
         cmd+=("${YT_COOKIE_ARGS[@]}")
+    else
+        cmd+=(--extractor-args "youtube:player_client=android")
     fi
     cmd+=(--no-warnings --quiet "$url")
 

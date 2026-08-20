@@ -249,7 +249,7 @@ touching that consumer. (Schemas → §14.)
 ```
   PLAYBACK_MODE   format_for_mode()          mpv option set
   ─────────────   ───────────────────        ───────────────────────────────
-  audio           YT_AUDIO_FORMAT (ba)        --no-video (audio only)
+  audio           YT_AUDIO_FORMAT (ba/b)      --no-video (audio only)
   video           YT_VIDEO_FORMAT (bv*+ba/b)  default VO
   fast            YT_VIDEO_FORMAT_FAST        default VO (progressive, fast start)
   ascii           YT_VIDEO_FORMAT             --vo=<YT_ASCII_VO> --profile=sw-fast
@@ -258,6 +258,7 @@ touching that consumer. (Schemas → §14.)
   run_mpv(url, format, mpv_opts…):
      mpv --ytdl-format=<format>
          [--ytdl-raw-options=cookies-from-browser=<B>]   # when login on (the default)
+         [--ytdl-raw-options=extractor-args=youtube:player_client=android] # anonymous fallback
          <mpv_opts…> <url>
 ```
 
@@ -308,18 +309,20 @@ public videos*, while the anonymous client's URLs need no token and fetch cleanl
 The naive fix — play, let mpv 403, replay anonymous — works but dumps mpv's error wall
 on screen before the retry. Instead the default **probes which client can actually
 fetch the media BEFORE launching mpv**, then plays **once** with the winner.
-`probe_media_fetchable` resolves the direct media URL (`yt-dlp -g`) and issues a
-**1-byte ranged GET** (`curl -r 0-0`): 206 ⇒ authorized; 403 ⇒ missing PO token — the
-same verdict mpv would reach mid-load.
+`probe_media_fetchable` resolves the direct media URL (`yt-dlp -g`) and issues an
+**open-ended ranged request** (`curl -I -r 0-`): 206/200 ⇒ authorized; 403 ⇒ missing PO token — the
+same verdict mpv would reach mid-load (and for HLS `.m3u8` playlists, probes the first segment).
+Anonymous fallback and anonymous probe use `extractor-args=youtube:player_client=android` to ensure
+YouTube's CDN serves streams that do not 403 on range requests.
 
 ```
    play_url_with_probe(url, mode):
       PLAYBACK_RETRIED=0
       cookies OFF (none) ──────────────► play_mode_url(url, mode)   # nothing to weigh, no probe
       curl present:                                                 # PROBE-THEN-PLAY (default)
-        probe cookies  (resolve + 1-byte GET) ── 206 ─► keep cookies       # e.g. login-gated
-                                              └─ 403 ─► probe anonymous ── 206 ─► drop cookies
-                                                                             PLAYBACK_RETRIED=1
+        probe cookies  (resolve + ranged check) ── 206 ─► keep cookies       # e.g. login-gated
+                                              └─ 403 ─► probe anonymous ── 206 ─► drop cookies + use android client
+                                                                              PLAYBACK_RETRIED=1
         (neither fetches → keep cookies, let mpv emit the real error / exit code)
         play_mode_url(url, mode)  ──► rc     # a SINGLE play, with the chosen client
       curl absent:                                                  # graceful fallback
