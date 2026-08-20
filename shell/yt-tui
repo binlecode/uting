@@ -45,21 +45,23 @@ Search options (forwarded to yt-search):
   -s FIELD  Sort field: relevance | view_count | duration (default: relevance)
 
 Menu options:
-  -f MODE   Playback mode (default: audio): audio | video | fast | ascii | viz
+  -f MODE   Playback mode (default: audio): audio | video | fast
+            (playback is detached — ascii/viz need a terminal to draw on)
   --volume N  mpv startup volume, 0-100 (default: unset -> mpv's own default;
               launch-time only, no live volume-cycle key)
   -p NUM    Rows per page (default: 10, capped to the terminal height)
   --color MODE  Color: auto | always | never (default: auto)
   -h        This help
 
-Keys (in the menu):
+Keys (List View):
   ↑/↓      move selection              ←/→  change page
   Enter    play / switch track (non-blocking background playback)
-  Tab / p  toggle view: List View (Mode B) ↔ Now Playing Focus Card (Mode A)
+  Tab / p  cycle view: List → Now Playing card → mini player → List
+  Esc      (in card / mini player) back to List View
   Space    pause / resume playback
   s        stop playback
   9 / 0    volume down / up (via IPC)
-  [ / ]    seek backward / forward 10s (via IPC)
+  [ / ]    seek backward / forward 10s (via IPC; works in every view)
   v        cycle playback mode: audio → video → fast (applies to next play)
   n        new search (fetch a different query without interrupting music)
   m        more results (re-fetch current query, +25 to count)
@@ -67,9 +69,15 @@ Keys (in the menu):
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
   q        quit (stops background playback on exit)
 
+Keys (Now Playing card / mini player):
+  ←/→      seek backward / forward 5s   ↑/↓  volume down / up
+  Tab      next view                    Esc  back to List View
+  Space    pause / resume               s    stop playback     q  quit
+
 Environment:
-  YT_TUI_ASCII=1   Use ASCII glyphs (♫ ● ○ ❯ · → dropped / LIVE / numeric / >) for
+  YT_ASCII=1       Use ASCII glyphs (♫ ● ○ ❯ · → dropped / LIVE / numeric / >) for
                    terminals whose font can't draw them. Auto-on for non-UTF-8 locales.
+                   Shared with the rest of the suite. Legacy alias: YT_TUI_ASCII.
 EOF
 }
 
@@ -117,7 +125,7 @@ while (($#)); do
         MAX_DISP="$2"; SEARCH_ARGS+=("$1" "$2"); shift 2 ;;
     -f)
         [[ $# -ge 2 ]] || die "$1 requires a value"
-        PLAY_MODE="$2"; shift 2 ;;
+        PLAY_MODE="$2"; shift 2 ;;   # validated against MODE_CYCLE below
     -p)
         [[ $# -ge 2 ]] || die "$1 requires a value"
         PAGE_OPT="$2"; shift 2 ;;
@@ -141,6 +149,10 @@ done
 is_uint "$PAGE_OPT" && ((PAGE_OPT > 0)) || die "-p must be a positive integer"
 is_uint "$RESULT_N" && ((RESULT_N > 0)) || die "-n must be a positive integer"
 case " ${SORT_CYCLE[*]} " in *" $SORT_FIELD "*) ;; *) die "-s must be one of: ${SORT_CYCLE[*]}" ;; esac
+# Playback is DETACHED here (yt-play -d), and a detached player has no terminal, so the
+# terminal-rendering modes (ascii/viz) cannot work — the core rejects them for -d. Validate
+# up front instead of letting an Enter fail silently. Same list the v key cycles.
+case " ${MODE_CYCLE[*]} " in *" $PLAY_MODE "*) ;; *) die "-f must be one of: ${MODE_CYCLE[*]} (ascii/viz need a terminal, which detached playback has none of)" ;; esac
 case "$COLOR_MODE" in auto | always | never) ;; *) die "--color must be one of: auto, always, never" ;; esac
 
 require_cmd jq
@@ -167,7 +179,9 @@ init_colors
 # ── Glyphs (init_glyphs): Unicode by default; ASCII fallbacks ───────────────────────────
 GL_NOTE="♫"; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
 init_glyphs() {
-    case "${YT_TUI_ASCII:-}" in
+    # One switch for the whole suite: YT_ASCII, with YT_TUI_ASCII kept as a legacy alias
+    # (the core reads the same pair — a font that can't draw ♫ can't draw it anywhere).
+    case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
     1 | true | yes | on) ASCII_GLYPHS=1 ;;
     *)
         case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
@@ -194,6 +208,21 @@ CURRENT_PLAY_SOCK=""
 CURRENT_PLAY_PAUSED=0
 
 # Cursor helpers
+# Terminal size. NOT `$(tput cols)`: inside command substitution ncurses can miss the
+# window-size ioctl and silently answer with terminfo's default 80x24 — measured here, a
+# 60-column tmux pane reported 80, so the card drew 80-wide rails and every line (rails,
+# wrapped title, progress bar) wrapped. `stty size` reads the real ioctl through /dev/tty,
+# which this UI is guaranteed to have (it refuses to start without a TTY on stdin+stdout).
+# tput stays as the fallback, then a hard default.
+term_size() {
+    local sz
+    sz=$(stty size </dev/tty 2>/dev/null || true)
+    TERM_LINES=${sz%% *}
+    TERM_COLS=${sz##* }
+    [[ "$TERM_COLS" =~ ^[0-9]+$ ]] || TERM_COLS=$(tput cols 2>/dev/null || echo 80)
+    [[ "$TERM_LINES" =~ ^[0-9]+$ ]] || TERM_LINES=$(tput lines 2>/dev/null || echo 24)
+}
+
 cursor_hide() { tput civis 2>/dev/null || true; }
 cursor_show() { tput cnorm 2>/dev/null || true; }
 
@@ -217,25 +246,45 @@ fmt_sec() {
     fi
 }
 
+# Repeat a single-cell glyph n times (n may be 0). NOT `printf 'x%.0s' $(seq 1 $n)`:
+# printf always walks its format at least once, so with zero arguments that idiom emits
+# one stray cell — which is what made the bar 46 cells wide at 0% and 47 at 100%.
+repeat_glyph() {
+    local glyph=$1 n=$2 out=""
+    while ((n > 0)); do
+        out+="$glyph"
+        ((n--))
+    done
+    printf '%s' "$out"
+}
+
+# Progress bar sized to the caller's layout. $2 is the FULL cell width the bar may occupy,
+# brackets included, so a caller can line its right edge up with the card's divider rails
+# (or the mini player's content edge) instead of the old hardcoded 44 columns that ignored
+# the terminal width entirely. The rendered string is ALWAYS exactly that many cells —
+# the head glyph is part of the track, and `filled` is capped at width-1 so it stays so at
+# 100%; a bar whose length changed with position made the whole line jitter every second.
 render_prog_bar() {
-    local pct=${1%.*} width=42
+    local pct=${1%.*} total=${2:-44}
     [[ "$pct" =~ ^[0-9]+$ ]] || { echo ""; return; }
     ((pct > 100)) && pct=100
     ((pct < 0)) && pct=0
-    local filled=$((pct * width / 100))
-    local empty=$((width - filled - 1))
-    ((empty < 0)) && empty=0
+    ((total < 10)) && total=10
 
-    local f_str e_str
-    f_str=$(printf '━%.0s' $(seq 1 $filled 2>/dev/null || true))
-    e_str=$(printf '─%.0s' $(seq 1 $empty 2>/dev/null || true))
+    local width=$((total - 2))            # the track, minus the two brackets
+    local filled=$((pct * width / 100))
+    ((filled > width - 1)) && filled=$((width - 1))
+    local empty=$((width - filled - 1))   # track = filled + head + empty
+
+    local f_str e_str head='●' fill='━' rest='─'
     if ((ASCII_GLYPHS)); then
-        f_str=$(printf '=%.0s' $(seq 1 $filled 2>/dev/null || true))
-        e_str=$(printf -- '-%.0s' $(seq 1 $empty 2>/dev/null || true))
-        echo "[${f_str}#${e_str}]"
-    else
-        echo "[${f_str}●${e_str}]"
+        head='#'
+        fill='='
+        rest='-'
     fi
+    f_str=$(repeat_glyph "$fill" "$filled")
+    e_str=$(repeat_glyph "$rest" "$empty")
+    printf '[%s%s%s]\n' "$f_str" "$head" "$e_str"
 }
 
 wrap_print() {
@@ -359,7 +408,7 @@ cleanup_on_exit() {
 trap cleanup_on_exit EXIT INT TERM HUP
 
 # Page size: default 10, capped to terminal height
-LINES_N=$(tput lines 2>/dev/null || echo 24)
+term_size; LINES_N=$TERM_LINES
 PAGE_SIZE=$PAGE_OPT
 PAGE_CAP=$(( LINES_N - 8 ))
 ((PAGE_CAP >= 3)) || PAGE_CAP=3
@@ -396,7 +445,7 @@ build_all_rows() {
         | gsub("\\s+"; " ") | gsub("^ | $"; "");
       .results[]
       | [ .url,
-          "\(.title | clean)\($sep)\(if .live_status == "is_live" then $live else .duration_fmt end)\($sep)\(.view_count // 0) views\($sep)\(.channel // "?")"
+          "\(.title | clean)\($sep)\(if .live_status == "is_live" then $live else (.duration_fmt // "--") end)\($sep)\(.view_count // 0) views\($sep)\(.channel // "?")"
         ] | @tsv')
 }
 
@@ -507,7 +556,7 @@ display_now_playing_card() {
     cursor_hide
     # Reposition cursor to top-left without blanking the screen (eliminates flicker)
     printf '\033[H'
-    printf '%s%s%syt-tui%s  •  %sNOW PLAYING FOCUS%s\033[K\n\n' \
+    printf '%s%s%syt-tui%s  •  %sNOW PLAYING FOCUS%s\033[K\n\033[K\n' \
         "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "$C_BOLD" "$C_RESET"
 
     local p_status="● Playing" p_color="$C_GREEN"
@@ -517,7 +566,7 @@ display_now_playing_card() {
     fi
 
     local cols
-    cols=$(tput cols 2>/dev/null || echo 80)
+    term_size; cols=$TERM_COLS
     ((cols > 80)) && cols=80
     ((cols < 40)) && cols=40
     local div
@@ -549,7 +598,9 @@ display_now_playing_card() {
             if [[ -n "$raw_pct" && "$raw_pct" != "null" ]]; then
                 local pct_int=${raw_pct%.*}
                 pct_str=" (${pct_int}%)"
-                bar_str=$(render_prog_bar "$pct_int")
+                # The bar is indented like the rest of the card body (4 cells) and ends
+                # flush with the divider rails, which are `cols` wide from column 0.
+                bar_str=$(render_prog_bar "$pct_int" $((cols - 4)))
             fi
         fi
 
@@ -564,7 +615,10 @@ display_now_playing_card() {
             "$C_DIM" "$C_RESET" "$CURRENT_PLAY_MODE" \
             "$C_DIM" "$C_RESET" "$p_color" "$p_status" "$C_RESET"
         if [[ -n "$bar_str" ]]; then
-            printf '\n    %s%s%s\033[K\n' "$C_YELLOW" "$bar_str" "$C_RESET"
+            # \033[K on the spacer row too: the card grows by two rows the moment the
+            # bar appears (mpv has no time-pos for the first second or so), so an
+            # uncleared spacer kept showing the divider rail the previous frame drew there.
+            printf '\033[K\n    %s%s%s\033[K\n' "$C_YELLOW" "$bar_str" "$C_RESET"
         fi
         printf '%s%s%s\033[K\n' "$C_DIM" "$div" "$C_RESET"
         printf '  %sControls:%s   [Tab / Esc] 返回列表选单     [Space] 暂停 / 继续\033[K\n' "$C_BOLD" "$C_RESET"
@@ -580,11 +634,11 @@ display_now_playing_card() {
 display_mini_player() {
     cursor_hide
     printf '\033[H'
-    printf '%s%s%syt-tui%s  •  %sMINI PLAYER%s\033[K\n\n' \
+    printf '%s%s%syt-tui%s  •  %sMINI PLAYER%s\033[K\n\033[K\n' \
         "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "$C_BOLD" "$C_RESET"
 
     if [[ -z "$CURRENT_PLAY_ID" ]]; then
-        printf '  %s(暂无正在播放的音频)%s\033[K\n\n' "$C_DIM" "$C_RESET"
+        printf '  %s(暂无正在播放的音频)%s\033[K\n\033[K\n' "$C_DIM" "$C_RESET"
         printf '  按 %s[Tab]%s 或 %s[Esc]%s 返回搜索列表，选择任意歌曲按 %s[Enter]%s 即可后台播放\033[K\n' \
             "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET" "$C_YELLOW" "$C_RESET"
     else
@@ -594,7 +648,14 @@ display_mini_player() {
             p_color="$C_YELLOW"
         fi
 
-        local cur_time="--:--" total_time="${CURRENT_PLAY_DURATION}" pct_str="" bar_str=""
+        local cols
+        term_size; cols=$TERM_COLS
+        ((cols > 80)) && cols=80
+        ((cols < 40)) && cols=40
+        local text_w=$((cols - 6))
+        ((text_w < 30)) && text_w=30
+
+        local cur_time="--:--" total_time="${CURRENT_PLAY_DURATION}" pct_str="" bar_str="" bar_pct=""
         if [[ -n "$CURRENT_PLAY_SOCK" && -S "$CURRENT_PLAY_SOCK" ]]; then
             local raw_pos raw_dur raw_pct
             raw_pos=$(echo '{"command":["get_property","time-pos"]}' | nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null | jq -r '.data // empty' 2>/dev/null || true)
@@ -608,20 +669,23 @@ display_mini_player() {
                 total_time=$(fmt_sec "$raw_dur")
             fi
             if [[ -n "$raw_pct" && "$raw_pct" != "null" ]]; then
-                local pct_int=${raw_pct%.*}
-                pct_str=" (${pct_int}%)"
-                bar_str=$(render_prog_bar "$pct_int")
+                bar_pct=${raw_pct%.*}
+                pct_str=" (${bar_pct}%)"
             fi
         fi
 
-        local cols
-        cols=$(tput cols 2>/dev/null || echo 80)
-        ((cols > 80)) && cols=80
-        local text_w=$((cols - 6))
-        ((text_w < 30)) && text_w=30
+        # The bar shares its line with the time readout, so it gets whatever the readout
+        # leaves and ends at the same right edge as the wrapped title above (cols). All the
+        # prefix cells are ASCII, so ${#var} is their display width: 2 indent + "cur / tot"
+        # + " (NN%)" + 2 separating spaces.
+        if [[ -n "$bar_pct" ]]; then
+            local bar_total=$((cols - (2 + ${#cur_time} + 3 + ${#total_time} + ${#pct_str} + 2)))
+            ((bar_total < 12)) && bar_total=12
+            bar_str=$(render_prog_bar "$bar_pct" "$bar_total")
+        fi
 
         wrap_print "$CURRENT_PLAY_TITLE" "$text_w" "  ${p_color}${p_icon}${C_RESET} ${C_BOLD}" "    ${C_BOLD}"
-        printf '  %s%s / %s%s%s  %s%s%s\033[K\n\n' "$C_DIM" "$cur_time" "$total_time" "$pct_str" "$C_RESET" "$C_YELLOW" "$bar_str" "$C_RESET"
+        printf '  %s%s / %s%s%s  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$cur_time" "$total_time" "$pct_str" "$C_RESET" "$C_YELLOW" "$bar_str" "$C_RESET"
         printf '  %s[Tab / Esc] 列表选单  [Space] 暂停  [←/→] 5s快进退  [9/0] 音量  [s] 停止  [q] 退出%s\033[K\n' "$C_DIM" "$C_RESET"
     fi
     printf '\033[J'
@@ -643,17 +707,23 @@ play_selected() {
 
     stop_current_playback
 
+    local sock
     out=$("$YT_PLAY" -d -j -f "$PLAY_MODE" ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>/dev/null) || return 1
-    id=$(printf '%s' "$out" | jq -r '.id // empty' 2>/dev/null || true)
-    pid=$(printf '%s' "$out" | jq -r '.pid // empty' 2>/dev/null || true)
+    # id/pid/sock in one jq pass. The socket path is READ FROM THE ENVELOPE, never rebuilt:
+    # it is the core's private state layout, and hardcoding "$TMPDIR/yt-cli-$(id -u)/mpv-
+    # $id.sock" here duplicated it in a second script that would break silently if the core
+    # ever moved its state dir. DESIGN-yt.md §9.3.
+    IFS=$'\t' read -r id pid sock < <(
+        printf '%s' "$out" | jq -r '[.id // "", .pid // "", .sock // ""] | @tsv' 2>/dev/null
+    ) || true
 
-    [[ -n "$id" ]] || return 1
+    [[ -n "$id" && -n "$sock" ]] || return 1
 
     CURRENT_PLAY_ID="$id"
     CURRENT_PLAY_PID="$pid"
     CURRENT_PLAY_URL="$url"
     CURRENT_PLAY_MODE="$PLAY_MODE"
-    CURRENT_PLAY_SOCK="${TMPDIR:-/tmp}/yt-cli-$(id -u)/mpv-$id.sock"
+    CURRENT_PLAY_SOCK="$sock"
     CURRENT_PLAY_PAUSED=0
 
     # Parse metadata from display line using parameter expansion
