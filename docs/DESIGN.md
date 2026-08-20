@@ -784,8 +784,21 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     80x24 — measured: a 60-column pane reported 80, so the card drew 80-wide rails and every
     line (rails, title, bar) wrapped. `term_size()` reads the real ioctl through the TTY this
     UI already requires, with `tput` and then 80x24 as fallbacks. (`yt`'s `viz` mode sizes
-    its showwaves filter the same way.) Two fixed-text rows — the card's `Time/Mode/Status`
-    line and the CJK `Controls` block — still overflow below ~72 columns; unadapted.
+    its showwaves filter the same way.)
+  - **All chrome rows are laid out to the measured width, not written as fixed strings.**
+    `disp_w` measures PLAIN text (a non-ASCII cell counts as two — the labels are CJK, so
+    they run out of room sooner than their character count suggests) and returns through a
+    global, since this runs several times per redraw and `$(...)` would fork. On top of it:
+    `print_hints` packs `key<TAB>label` items (or bare fields) into as few lines as fit,
+    with a first/continuation prefix; `truncate_disp` elides a variable-length value that
+    shares a one-line budget with fixed chrome. Applied to the navigation row, the card's
+    `Controls` block, the mini player's hint row, the empty-state copy, and the list's
+    status row (whose `min=`/`max=` now appear only when set — at their `0s` default they
+    were pure width). The card's `Time / Mode / Status` row measures its three segments and
+    splits onto two lines when they do not fit, and the Now-Playing banner gives the title
+    whatever the fixed parts leave, dropping its inline hint block before it would squeeze
+    the title below 12 cells. Result: every chrome line fits at 46 columns, where the old
+    fixed strings wrapped mid-item from ~72 down.
   - Pressing `Tab` cycles views; pressing `Esc` in Card/Mini view instantly returns to List View.
 - **PROCESS CLEANUP GUARANTEE.** An `EXIT INT TERM HUP` trap ensures any background player
   spawned during the `yt-tui` session is automatically and cleanly stopped upon quit (`q`).
@@ -979,7 +992,10 @@ kept out of flags to keep each verb's flag surface narrow.
                       YT_AUDIO_FORMAT (ba)  YT_VIDEO_FORMAT (bv*+ba/b)
                       YT_VIDEO_FORMAT_FAST  YT_ASCII_VO (tct)  YT_MPV_INPUT_CONF
                       YT_ASCII (1 = ASCII glyph fallbacks; auto-on for a non-UTF-8 locale;
-                        read by BOTH the core and yt-tui — legacy alias YT_TUI_ASCII)
+                        read by BOTH the core and yt-tui — legacy alias YT_TUI_ASCII).
+                        Covers the WHOLE glyph set: ♫ ● ○ ❯ · ▶ ❚❚ • … → — ↑/↓ ←/→ ↵
+                        and the bar/rail runs. Verified by asserting a rendered pane
+                        holds no non-ASCII beyond the (CJK) label text.
    Internal (set by the core for its own detached child, not a user knob):
                       YT_IPC_SOCK (per-player mpv IPC socket)  YT_DETACHED (=1: no
                       terminal, so quiet mpv + no stderr filter)
@@ -1235,6 +1251,12 @@ first; gate deletions by grep so no dangling reference survives.
                 Live stream: card/mini show "Tuned: MM:SS · ● LIVE" with the counter
                 ticking and NO bar (never mpv's ~99.98% percent-pos); a VOD in the same
                 build still shows "00:05 / 02:03:54 (0%)" + a rail-flush bar
+                Narrow terminals: at 100/72/60/46 columns EVERY chrome line fits the
+                width in all three views (max measured = the rails/bar themselves) —
+                nav + controls + mini hints + empty-state repack, the card's
+                Time/Mode/Status row splits, the banner elides its title
+                YT_ASCII=1: a rendered pane contains no non-ASCII beyond the CJK label
+                text (>, ||, *, Up/Dn, Lt/Rt, Enter, -, ..., ->, [#---], |)
                 9/0 volume; ] seek; q → exits and reaps ONLY its own player;
                 music keeps playing across `n` (new search) and `/` (live filter);
                 Enter on another row switches track without a gap;
