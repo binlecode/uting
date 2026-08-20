@@ -785,6 +785,13 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     line (rails, title, bar) wrapped. `term_size()` reads the real ioctl through the TTY this
     UI already requires, with `tput` and then 80x24 as fallbacks. (`yt`'s `viz` mode sizes
     its showwaves filter the same way.)
+  - **The chrome speaks ONE language per run.** Its labels used to be Chinese literals
+    while help text, errors and field labels were English, so the tool read as two
+    languages at once. `init_ui_strings` resolves every label ONCE into globals — bash 3.2
+    has no associative arrays, and a per-draw lookup would fork or re-branch on every
+    redraw — choosing from `YT_LANG=en|zh`, else a `zh*` locale, else English (which also
+    covers cron/CI, where `LANG` is unset). Wrapped-row indents are measured with `disp_w`,
+    not `${#var}`: "导航:" is 3 characters but 5 cells.
   - **All chrome rows are laid out to the measured width, not written as fixed strings.**
     `disp_w` measures PLAIN text (a non-ASCII cell counts as two — the labels are CJK, so
     they run out of room sooner than their character count suggests) and returns through a
@@ -995,7 +1002,10 @@ kept out of flags to keep each verb's flag surface narrow.
                         read by BOTH the core and yt-tui — legacy alias YT_TUI_ASCII).
                         Covers the WHOLE glyph set: ♫ ● ○ ❯ · ▶ ❚❚ • … → — ↑/↓ ←/→ ↵
                         and the bar/rail runs. Verified by asserting a rendered pane
-                        holds no non-ASCII beyond the (CJK) label text.
+                        holds no non-ASCII beyond the label text.
+                      YT_LANG (en|zh) = language of yt-tui's menu chrome; default zh
+                        under a zh* locale, English otherwise. Help output, errors and
+                        the card's field labels stay English in both.
    Internal (set by the core for its own detached child, not a user knob):
                       YT_IPC_SOCK (per-player mpv IPC socket)  YT_DETACHED (=1: no
                       terminal, so quiet mpv + no stderr filter)
