@@ -37,6 +37,7 @@ Usage:
 Options:
   -f MODE   Playback mode (default: audio):
             audio | video | fast | ascii | viz
+            (-d rejects ascii/viz: a detached player has no terminal to draw on)
   --volume N  mpv startup volume, 0-100 (default: unset -> mpv's own default).
               For detached playback this is the STARTING volume; adjust it live
               with --set-volume.
@@ -60,7 +61,9 @@ Options:
 Playback error reason (JSON): forbidden | unavailable | format_unavailable |
                               network | stopped_by_user | unknown | null(ok)
 Lifecycle JSON:
+  -d            {status:"started",id,pid,url,mode,started_at,title,sock,log}
   --status      {status:"players",players:[{id,pid,url,mode,volume,title,started_at}...]}
+                volume is read live from the player; title lands a few seconds after -d
   --stop        {status:"stopped",id,stopped} | {status:"stopped",scope:"all",stopped}
   --set-volume  {status:"ok",id,volume} | {status:"not_playing"}
                 | {status:"ambiguous",players:[...]} | {status:"error",reason:"ipc_failed"}
@@ -168,7 +171,10 @@ fi
 
 # flags is always non-empty for status/stop (they add their own flag); for play it may
 # be empty, and url may be empty for status/stop — build the argv guarding both.
+# `--` is FORWARDED (not just consumed here) so the impl stops option parsing before the
+# URL — a URL or query-shaped token beginning with '-' can never be read as a flag.
+# DESIGN-yt.md §6.
 argv=()
 ((${#flags[@]})) && argv+=("${flags[@]}")
-((${#url[@]})) && argv+=("${url[@]}")
+((${#url[@]})) && argv+=(-- "${url[@]}")
 exec "$IMPL" "${argv[@]}"

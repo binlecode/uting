@@ -120,4 +120,7 @@ fi
 # Default to the plain list unless the caller picked a JSON format.
 ((has_format)) || flags+=("-l")
 
-exec "$IMPL" "${flags[@]}" "${query[@]}"
+# `--` is FORWARDED, not just consumed here: it is what stops the impl from reading a
+# query that looks like a flag as one (`yt-search -- --status` must search for the text,
+# not list players). DESIGN-yt.md §6.
+exec "$IMPL" "${flags[@]}" -- "${query[@]}"

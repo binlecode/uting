@@ -125,90 +125,88 @@ fi
 
 usage() {
     cat <<EOF
-YT CLI Suite - User Guide (yt: full non-interactive core surface)
+yt — the non-interactive core engine of the YT CLI suite (search / play / resolve /
+detached-playback lifecycle). This is the shared implementation the suite's three PATH
+surfaces delegate to, not itself an advertised command — prefer them (each has its own
+-h, and each gates the flags it cannot use):
 
-Four commands. yt is the full non-interactive core (search + play + resolve +
-lifecycle); the others are narrow, single-purpose surfaces that delegate to it.
-  - yt          Full non-interactive core: search or play/resolve/manage a URL.
-  - yt-search   Non-interactive search -> text or JSON.        (run 'yt-search -h')
-  - yt-play     Play / resolve / manage playback of a URL.     (run 'yt-play -h')
-  - yt-tui      Interactive terminal browser (self-rendered menu): pick + play. (yt-tui -h)
+  yt-search   search -> text list or JSON
+  yt-play     play / resolve / manage playback of a URL
+  yt-tui      interactive terminal browser (pick + play)
 
-Usage (Core, non-interactive):
-  yt [-n num] [-s sort] [-l|-j|-J] <search query>   # search -> list (default)/JSON
-  yt [-f mode] [--volume N] [-j] <YouTube URL>      # play a URL
-  yt (no query, no URL)                             # error; use yt-tui to browse
-
-Usage (Search):
-  yt-search [-n num] [-s sort] [-l|-j|-J] <search query>
-
-Usage (Play a URL):
-  yt-play [-f mode] [-j] <YouTube URL>
-  yt-play --info [-j|-J] <URL>                  # fetch metadata (title/chapters/desc), do not play
-  yt-play --get-url [-f mode] [-j] <URL>        # resolve stream URL(s), do not play
-  yt-play -d <URL>                              # detached background audio (concurrent players OK)
-  yt-play --status [-j]                         # list live detached players
-  yt-play --stop [--id ID | --all] [-j]         # stop one player (or all); idempotent
-  yt-play --set-volume N [--id ID] [-j]         # live volume on a detached player (0-100)
+Usage (everything after -- is the query/URL, so a query may start with '-'):
+  yt [-n num] [-m sec] [-M sec] [-s sort] [-S fmt] [-l|-j|-J] -- <search query>
+  yt [-f mode] [--volume N] [-j] -- <URL>              play a URL (blocks)
+  yt --info [-j|-J] -- <URL>                           metadata only, no playback
+  yt --get-url [-f mode] [-j] -- <URL>                 resolve stream URL(s), no playback
+  yt -d [-f mode] [--volume N] [-j] -- <URL>           detached background playback
+  yt --status [-j]                                     list live detached players
+  yt --stop [--id ID | --all] [-j]                     stop one player (or all); idempotent
+  yt --set-volume N [--id ID] [-j]                     live volume on a detached player
+  yt (no query, no URL, no action)                     usage error; use yt-tui to browse
 
 Options:
-  -n  Number of search results to fetch (default: 25)
-  -m  Minimum duration in seconds
-  -M  Maximum duration in seconds
-  -s  Sort field: relevance|view_count|duration (default: relevance)
-  -f  Playback mode (default: audio)
-      audio|ba   audio-only
-      video|bv   high-quality video+audio
-      fast|fst   fast-start progressive video
-      ascii|asc  terminal video via mpv terminal VO
-      viz|waves  live audio-responsive spectrum wave visualizer
-  -S  yt-dlp format-sort override (--format-sort; e.g. res:720,fps)
-  --volume N  mpv startup volume, 0-100 (default: unset -> mpv's own default).
-              For detached playback this is the STARTING volume; adjust it live
-              with 'yt-play --set-volume N [--id ID]'.
-  -l  Plain text list output (search)
-  -j  JSON output. Search -> {query,count,results[]} envelope; play/lifecycle ->
-      one-line status JSON. Structured output for whatever operation runs.
-  -J  Search JSON with the full raw yt-dlp fields (--json-full), same envelope.
-  -d  --detach: background audio playback; track via --status/--stop
-      (detached has no terminal, so video/ascii/viz can't render — audio only)
-  -h  Show this help message
+  -n NUM      Number of search results to fetch (default: 25)
+  -m SEC      Minimum duration in seconds (entries of unknown duration are excluded)
+  -M SEC      Maximum duration in seconds (same)
+  -s FIELD    Sort field: relevance|view_count|duration (default: relevance)
+  -S SORT     yt-dlp format-sort override (--format-sort; e.g. res:720,fps)
+  -f MODE     Playback mode (default: audio)
+              audio|ba  audio-only          video|bv  high-quality video+audio
+              fast|fst  progressive video   ascii|asc terminal video (mpv terminal VO)
+              viz|waves live audio spectrum wave visualizer
+              (-d rejects ascii/viz: a detached player has no terminal to draw on)
+  --volume N  mpv startup volume, 0-100 (default: mpv's own). For -d this is the STARTING
+              volume; change it live with --set-volume.
+  -l          Plain text list output (search; default)
+  -j          JSON output: search envelope, or one-line status JSON for play/lifecycle
+  -J          Search/--info JSON with the full raw yt-dlp fields
+  -d          --detach: background playback; manage with --status/--stop/--set-volume
+  --color M   auto|always|never (default: auto). No -c short form.
+  -h          This help
 
-Long-only flags: --detach --status --stop --get-url --info --set-volume --id --all --json-full --color --volume
+Long-only flags: --detach --status --stop --get-url --info --set-volume --id --all
+                 --json --json-full --list --color --volume
 
-Search JSON envelope (-j): {"query","count","results":[...]}
-  Each result (-j, 8 fields): id, title, url, channel, duration, duration_fmt,
-  view_count, live_status.  With -J: every raw yt-dlp entry field.
-Play JSON (yt-play -j <url>): {status:"ok"|"error", url, mode, exit_code,
-  reason, retried}.  reason taxonomy: forbidden | unavailable |
-  format_unavailable | network | stopped_by_user | unknown | null(ok).
-Info JSON (yt-play --info -j <url>): {status, id, title, url, channel, uploader,
-  upload_date, duration, duration_fmt, view_count, like_count, live_status,
-  description, chapters}.  With -J: the full raw yt-dlp record.
+Output contracts (full schemas: macos/docs/DESIGN-yt.md §14):
+  search    {query, count, results[8 lean fields]}  (-J: raw fields)
+            failure -> {status:"error", query, count:0, results:[], reason}
+  play -j   {status, url, mode, exit_code, reason, retried}
+            reason: forbidden|unavailable|format_unavailable|network|stopped_by_user|
+                    unknown|null(ok)
+  -d -j     {status:"started", id, pid, url, mode, started_at, title, sock, log}
+  --status  {status:"players", players:[{id,pid,url,mode,volume,title,started_at}]}
+  --stop    {status:"stopped", id, stopped} | {status:"stopped", scope:"all", stopped}
+  --set-vol {status:"ok", id, volume} | {status:"not_playing"} | {status:"ambiguous", …}
+            | {status:"error", reason:"ipc_failed"}
+  --get-url {status, url, mode, format, stream_urls[]}
+  --info    {status, id, title, url, channel, uploader, upload_date, duration,
+             duration_fmt, view_count, like_count, live_status, description, chapters}
+  duration_fmt is null when the duration is unknown (e.g. a live stream).
 
-Playback keys (mpv, during 'yt <url>' playback):
-  _  Toggle video track on/off
-  q  Stop playback and exit
+Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp/mpv failure · 4 lifecycle
+            call did not take effect (no such player / ambiguous / IPC failure)
 
-For an interactive terminal browser (pick + play), use: yt-tui <query>
+Playback keys (mpv, during a blocking 'yt <url>' playback):
+  _  toggle video track on/off        q  stop playback and exit
 
-Dependencies:
-  - Common: yt-dlp, jq
-  - Playback: mpv
+Dependencies: yt-dlp + jq (search, --info); mpv (playback); nc (--set-volume);
+              curl optional (play-time client probe, §8.2)
 
-Environment Variables (customizable):
-  YT_COOKIE_BROWSER    Browser for cookie extraction / login (default: chrome).
-                       Logged in by default so login-gated / members / age-restricted
-                       videos play. Some PUBLIC videos 403 with cookies (YouTube PO-token
-                       wall on the authenticated client); yt probes which client can fetch
-                       BEFORE playing and uses the working one, so playback stays clean.
-                       Set to "none" to force anonymous-only (skips the keychain read and
-                       the probe). Reading the cookie DB is most reliable with browser closed.
-  YT_AUDIO_FORMAT      Default audio stream format (default: ba/b)
-  YT_VIDEO_FORMAT      Default video stream format (default: bv*+ba/b)
+Environment:
+  YT_COOKIE_BROWSER    Browser for cookie extraction / login (default: chrome; "none" =
+                       anonymous only). Logged in by default so login-gated / members /
+                       age-restricted videos play. Some PUBLIC videos 403 with cookies
+                       (YouTube PO-token wall); yt probes which client can fetch BEFORE
+                       playing and uses that one, so playback stays clean. Reading the
+                       cookie DB is most reliable with the browser closed.
+  YT_AUDIO_FORMAT      Audio stream format (default: ba/b)
+  YT_VIDEO_FORMAT      Video stream format (default: bv*+ba/b)
   YT_VIDEO_FORMAT_FAST Fast-start progressive stream format
   YT_ASCII_VO          mpv terminal video output driver (default: tct)
-  YT_MPV_INPUT_CONF    Path to optional custom mpv input.conf file
+  YT_MPV_INPUT_CONF    Path to an optional custom mpv input.conf
+  YT_ASCII=1           Drop non-ASCII glyphs (shared with yt-tui; auto-on for a
+                       non-UTF-8 locale). Legacy alias: YT_TUI_ASCII.
 EOF
 }
 
@@ -264,27 +262,25 @@ mpv_supports_vo() {
     mpv --vo=help 2>/dev/null | awk 'NR > 1 {print $1}' | grep -Fxq "$vo"
 }
 
-convert_seconds() {
-    local total_seconds=${1:-}
-    local days hours minutes seconds
-
-    if ! [[ "$total_seconds" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
-        echo "00h:00m:00s"
-        return
-    fi
-
-    total_seconds=${total_seconds%.*}
-    days=$((total_seconds / 86400))
-    hours=$(((total_seconds % 86400) / 3600))
-    minutes=$(((total_seconds % 3600) / 60))
-    seconds=$((total_seconds % 60))
-
-    if ((days > 0)); then
-        printf "%dd %02dh:%02dm:%02ds" "$days" "$hours" "$minutes" "$seconds"
-    else
-        printf "%02dh:%02dm:%02ds" "$hours" "$minutes" "$seconds"
-    fi
-}
+# The ONE implementation of duration formatting: seconds -> "[Nd ]HHh:MMm:SSs". It is a
+# jq prelude, not a bash function, because every consumer (search shaping, --info, the
+# prose list) is already shaping JSON with jq — a bash version meant forking jq once per
+# row just to read a field back out (25 results = 50+ forks, measured 40x slower than one
+# jq program) and keeping two copies of the same padding logic. An unknown duration yields
+# NULL rather than a fake "00h:00m:00s", so each caller decides how to render it (a live
+# stream has no duration). DESIGN-yt.md §7.
+JQ_PRELUDE='
+def p2: tostring | if length < 2 then "0" + . else . end;
+def fmt_dur:
+  if type != "number" then null
+  else (. | floor) as $t
+    | ($t / 86400 | floor) as $d
+    | (($t % 86400) / 3600 | floor) as $h
+    | (($t % 3600) / 60 | floor) as $m
+    | ($t % 60) as $s
+    | (if $d > 0 then "\($d)d " else "" end) + "\($h | p2)h:\($m | p2)m:\($s | p2)s"
+  end;
+'
 
 normalize_playback_mode() {
     case "$1" in
@@ -352,18 +348,34 @@ run_mpv() {
         mpv_cmd+=(--ytdl-raw-options="${raw_opts[*]}")
     fi
 
-    # Execute mpv natively with the URL. Filter STDERR only, to drop the macOS CoreText
+    # Detached playback has no terminal, so nobody ever reads mpv's status line — but mpv
+    # keeps writing it into mpv-<id>.log anyway (~2.4 MB/h measured on a 24/7 stream, i.e.
+    # unbounded growth in TMPDIR for exactly the long-lived players -d exists for). Silence
+    # the cosmetic chatter there and keep error level, so the log stays small and still
+    # explains a failure. These go AFTER the caller's mode options so they win (mpv: last
+    # flag wins). DESIGN-yt.md §9.1.
+    local detached_opts=()
+    if [[ -n "${YT_DETACHED:-}" ]]; then
+        detached_opts=(--no-term-osd-bar --msg-level=all=error)
+    fi
+
+    # Execute mpv natively with the URL. The STDERR filter drops the macOS CoreText
     # ".LastResort" notes (no mpv flag reaches them) plus any residual libass fontselect
     # warning that emoji-titled video would otherwise flood (see YT_MPV_VIDEO_OPTIONS). The
     # useful --term-osd-bar/AV status prints on STDOUT, so the progress bar is never touched;
     # real (non-noise) errors still pass through to >&2 for the -j classifier. Process
-    # substitution (not a pipe) leaves $? as mpv's own exit code. No-op for modes without the
-    # noise (audio/ascii/viz).
-    "${mpv_cmd[@]}" "$@" "$url" 2> >(grep --line-buffered -vE 'CoreText note|\.LastResort|fontselect' >&2)
-}
-
-warn_audio_only_mode() {
-    echo "Audio-only mode: no video track. Key '_' cannot turn video on. Use video/ascii mode for visuals." >&2
+    # substitution (not a pipe) leaves $? as mpv's own exit code.
+    #
+    # It runs ONLY when a human is watching this terminal. Under -j the caller captures
+    # stdout+stderr into a temp file that is never displayed, and a detached child writes to
+    # its log — there the filter buys nothing and costs correctness: process substitution is
+    # not waited on, so play_url_json (which reads the temp file the instant mpv exits) could
+    # miss a late-flushed error line and classify a real 403 as `unknown`.
+    if [[ "$OUTPUT_MODE" == "json" || -n "${YT_DETACHED:-}" ]]; then
+        "${mpv_cmd[@]}" "$@" ${detached_opts[@]+"${detached_opts[@]}"} "$url"
+    else
+        "${mpv_cmd[@]}" "$@" "$url" 2> >(grep --line-buffered -vE 'CoreText note|\.LastResort|fontselect' >&2)
+    fi
 }
 
 play_audio_url() {
@@ -388,9 +400,15 @@ play_ascii_url() {
 
 play_viz_url() {
     local url=$1
-    local width height size
-    width=$(tput cols 2>/dev/null || echo 80)
-    height=$(tput lines 2>/dev/null || echo 24)
+    # Real terminal size via the ioctl. `$(tput cols)` can answer with terminfo's
+    # default 80x24 inside command substitution (measured: 80 in a 60-column pane), which
+    # would size the visualizer for a window that isn't there.
+    local width height size sz
+    sz=$(stty size </dev/tty 2>/dev/null || true)
+    height=${sz%% *}
+    width=${sz##* }
+    [[ "$width" =~ ^[0-9]+$ ]] || width=$(tput cols 2>/dev/null || echo 80)
+    [[ "$height" =~ ^[0-9]+$ ]] || height=$(tput lines 2>/dev/null || echo 24)
     # Cap size to prevent terminal lag
     if ((width > 120)); then width=120; fi
     if ((height > 30)); then height=30; fi
@@ -550,7 +568,7 @@ classify_playback_error() {
         echo "format_unavailable"
         return
     fi
-    if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out' <<<"$text"; then
+    if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out|Unable to download (webpage|API page|JSON metadata)' <<<"$text"; then
         echo "network"
         return
     fi
@@ -565,7 +583,10 @@ classify_playback_error() {
 play_url_json() {
     local url=$1 mode=$2
     local tmp rc=0
-    tmp=$(mktemp "${TMPDIR:-/tmp}/yt-cli-play.XXXXXX" 2>/dev/null) || tmp="${TMPDIR:-/tmp}/yt-cli-play.$$"
+    # Keep the capture file inside the 0700 state dir: the mktemp-less fallback name is
+    # predictable, and on Linux ${TMPDIR:-/tmp} is a shared world-writable directory.
+    ensure_state_dir
+    tmp=$(mktemp "$STATE_DIR/play.XXXXXX" 2>/dev/null) || tmp="$STATE_DIR/play.$$"
 
     play_url_with_probe "$url" "$mode" >"$tmp" 2>&1 || rc=$?
 
@@ -640,6 +661,36 @@ stop_group() {
     kill -KILL -"$pgid" 2>/dev/null || true
 }
 
+# Create the per-user state dir (and the players/ dir under it) with a pinned 0700 mode.
+# SECURITY: 0700 so no other local user can traverse in and connect to a player's IPC
+# socket (a control channel — a peer could drive mpv). macOS $TMPDIR is already per-user;
+# the /tmp fallback (Linux) is world-traversable at umask 022, so pin the mode explicitly
+# on both dirs. `mkdir -p -m 700` only applies the mode to dirs it actually creates, so the
+# chmod re-asserts it on both; idempotent and cheap (two syscalls), deliberately re-run on
+# every use as a safety net rather than trusting the mode was never widened after creation.
+ensure_state_dir() {
+    mkdir -p -m 700 "$PLAYERS_DIR" 2>/dev/null || true
+    chmod 700 "$STATE_DIR" "$PLAYERS_DIR" 2>/dev/null || true
+}
+
+# Live volume read straight off a player's IPC socket. The state file's `volume` is only
+# what was recorded at launch or by the last --set-volume, so anything driving the socket
+# directly (yt-tui's 9/0 keys — see DESIGN-yt.md §9.3) moves the real value without
+# telling us; mpv is the source of truth. One cheap round trip (~10ms measured: `head`
+# closes the pipe and nc exits at once, so the -w1 timeout is never reached), soft-gated on
+# nc so --status keeps working with jq alone (§15). Echoes nothing when unavailable.
+live_volume() {
+    local sock=$1 reply
+    command -v nc >/dev/null 2>&1 || return 0
+    [[ -S "$sock" ]] || return 0
+    reply=$(printf '{"command":["get_property","volume"],"request_id":1}\n' |
+        nc -U -w1 "$sock" 2>/dev/null |
+        jq -r 'select(.request_id==1) | select(.error=="success") | .data' 2>/dev/null | head -1) || true
+    # mpv answers with a float (100.000000); report an integer, like --set-volume takes.
+    [[ "$reply" =~ ^[0-9]+ ]] || return 0
+    printf '%s' "${reply%.*}"
+}
+
 # Per-instance derived paths. Functions, not constants, since they key off the id;
 # every detached player owns players/<id>.json, mpv-<id>.sock, mpv-<id>.log.
 player_state() { echo "$PLAYERS_DIR/$1.json"; }
@@ -688,17 +739,7 @@ new_player_id() {
 # process has no controlling terminal, so video/ascii/viz have nowhere to render.
 detach_play() {
     local url=$1
-    # SECURITY: 0700 so no other local user can traverse in and connect to a player's
-    # IPC socket (a control channel — a peer could drive mpv). macOS $TMPDIR is already
-    # per-user; the /tmp fallback (Linux) is world-traversable at umask 022, so pin the
-    # mode explicitly on both the parent and the players/ dir.
-    # mkdir -p is the sole creator of both STATE_DIR (parent) and PLAYERS_DIR; -m 700 only
-    # takes on the dir it actually creates, so the following chmod re-asserts 700 on both.
-    # Idempotent and cheap (two syscalls) — deliberately re-run every launch as a safety net
-    # rather than trust the mode was never widened after creation; nothing in this codebase
-    # resets it between launches.
-    mkdir -p -m 700 "$PLAYERS_DIR" 2>/dev/null || true
-    chmod 700 "$STATE_DIR" "$PLAYERS_DIR" 2>/dev/null || true
+    ensure_state_dir
 
     local fmt started_at pid volume_json id sock log
     fmt=$(format_for_mode "$PLAYBACK_MODE")
@@ -721,8 +762,12 @@ detach_play() {
     # pid; nohup + disown detach it from this shell so it survives our exit. YT_IPC_SOCK
     # is exported into the child's environment so its run_mpv adds --input-ipc-server.
     # Job-control chatter is routed away from stdout so -j output stays one JSON line.
+    # YT_DETACHED tells the child's run_mpv there is no terminal to draw on (quiet mpv,
+    # no stderr filter). -S is forwarded like --volume so a format-sort override isn't
+    # silently lost on the detached path; `--` guards a URL that begins with a dash.
     set -m
-    YT_IPC_SOCK="$sock" nohup bash "$SELF" -f "$PLAYBACK_MODE" ${VOLUME:+--volume "$VOLUME"} "$url" >"$log" 2>&1 &
+    YT_IPC_SOCK="$sock" YT_DETACHED=1 nohup bash "$SELF" -f "$PLAYBACK_MODE" \
+        ${VOLUME:+--volume "$VOLUME"} ${FORMAT_SORT:+-S "$FORMAT_SORT"} -- "$url" >"$log" 2>&1 &
     pid=$!
     set +m
     disown "$pid" 2>/dev/null || true
@@ -762,13 +807,24 @@ detach_play() {
     # return immediately, so we do NOT block on it. Spawn an independent background updater
     # that fetches the title and patches it into the state file a few seconds later.
     # --status shows title:null until it lands. See detach_title_updater for the guards.
-    detach_title_updater "$id" "$pid" "$url" &
+    #
+    # Its fds MUST be redirected: a background job inherits this shell's stdout, and a
+    # caller that captures our output (`out=$(yt-play -d -j …)` — exactly what yt-tui does)
+    # blocks until every writer closes that pipe, not just until we exit. Without this the
+    # updater held the pipe for its whole ~3s yt-dlp round trip, so the "instant" detach
+    # measured 1.7s captured vs 0.04s uncaptured — reintroducing the very latency the async
+    # backfill exists to avoid.
+    detach_title_updater "$id" "$pid" "$url" >/dev/null 2>&1 &
     disown 2>/dev/null || true
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
+        # sock/log are part of the envelope so a caller never has to RECONSTRUCT them from
+        # the state-dir layout (yt-tui used to hardcode "$TMPDIR/yt-cli-$(id -u)/mpv-$id.sock",
+        # duplicating a private path in a second script). DESIGN-yt.md §9.3.
         jq -nc \
-            --arg id "$id" --argjson pid "$pid" --arg url "$url" --arg mode "$PLAYBACK_MODE" --arg started_at "$started_at" \
-            '{status: "started", id: $id, pid: $pid, url: $url, mode: $mode, started_at: $started_at, title: null}'
+            --arg id "$id" --argjson pid "$pid" --arg url "$url" --arg mode "$PLAYBACK_MODE" \
+            --arg started_at "$started_at" --arg sock "$sock" --arg log "$log" \
+            '{status: "started", id: $id, pid: $pid, url: $url, mode: $mode, started_at: $started_at, title: null, sock: $sock, log: $log}'
     else
         printf "Detached playback started (id %s, pid %s, mode %s): %s\n" "$id" "$pid" "$PLAYBACK_MODE" "$url"
         printf "  status: yt-play --status   stop: yt-play --stop --id %s   log: %s\n" "$id" "$log"
@@ -893,12 +949,24 @@ resolve_target() {
 
 # List ALL live detached players (reaping dead ones). Always exits 0 (an agent polling
 # status must not see a non-zero exit as failure); empty set is still a success.
+# `volume` is reported LIVE (queried off the player's socket) with the value recorded in
+# the state file as the fallback: the record only knows about launch --volume and
+# --set-volume, so a client driving the socket itself (yt-tui's 9/0 keys) would otherwise
+# make --status lie. live_volume() is a no-op without nc, keeping the jq-only dep contract.
 do_status() {
     reap_dead_players
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
-        if ((${#LIVE_PLAYER_FILES[@]})); then
-            jq -s '{status: "players", players: [.[] | {id, pid, url, mode, volume, title, started_at}]}' "${LIVE_PLAYER_FILES[@]}"
+        local n=${#LIVE_PLAYER_FILES[@]}
+        if ((n)); then
+            local i vol parts=()
+            for ((i = 0; i < n; i++)); do
+                vol=$(live_volume "$(player_sock "${LIVE_PLAYER_IDS[$i]}")")
+                parts+=("$(jq -c --argjson live "${vol:-null}" \
+                    '{id, pid, url, mode, volume: ($live // .volume), title, started_at}' \
+                    "${LIVE_PLAYER_FILES[$i]}")")
+            done
+            printf '%s\n' "${parts[@]}" | jq -s '{status: "players", players: .}'
         else
             echo '{"status":"players","players":[]}'
         fi
@@ -915,7 +983,8 @@ do_status() {
                     jq -r '[.id, .pid, .mode, .started_at, .url] | @tsv' "$f" 2>/dev/null
                 ) || true
                 title=$(jq -r '.title // empty' "$f" 2>/dev/null || true)
-                volume=$(jq -r '.volume // empty' "$f" 2>/dev/null || true)
+                volume=$(live_volume "$(player_sock "$id")")
+                [[ -n "$volume" ]] || volume=$(jq -r '.volume // empty' "$f" 2>/dev/null || true)
                 [[ -n "$volume" ]] && vol_suffix=", volume $volume"
                 if [[ -n "$title" ]]; then
                     printf "playing (id %s, pid %s, mode %s%s, since %s): %s\n  %s\n" \
@@ -1127,13 +1196,9 @@ resolve_info() {
         die "could not fetch metadata for: $url"
     fi
 
-    local duration duration_fmt
-    duration=$(printf '%s' "$raw" | jq -r '.duration // empty')
-    if [[ -n "$duration" ]]; then
-        duration_fmt=$(convert_seconds "$duration")
-    else
-        duration_fmt=""
-    fi
+    # Same jq prelude as search, so --info and search can never drift on this format.
+    local duration_fmt
+    duration_fmt=$(printf '%s' "$raw" | jq -r "$JQ_PRELUDE (.duration | fmt_dur) // empty")
 
     case "$OUTPUT_MODE" in
     json_full)
@@ -1145,7 +1210,7 @@ resolve_info() {
             id, title,
             url: .webpage_url,
             channel, uploader, upload_date,
-            duration, duration_fmt: $df,
+            duration, duration_fmt: (if $df == "" then null else $df end),
             view_count, like_count, live_status,
             description,
             chapters: (if (.chapters | type) == "array"
@@ -1164,7 +1229,7 @@ resolve_info() {
         webpage_url=$(printf '%s' "$raw" | jq -r '.webpage_url // empty')
         description=$(printf '%s' "$raw" | jq -r '.description // ""')
 
-        printf '%s %s\n' "$MUSIC_CHAR" "$title"
+        if [[ -n "$MUSIC_CHAR" ]]; then printf '%s %s\n' "$MUSIC_CHAR" "$title"; else printf '%s\n' "$title"; fi
         printf '  - channel: %s\n' "$channel"
         printf '  - uploaded: %s\n' "$upload_date"
         [[ -n "$duration_fmt" ]] && printf '  - duration: %s\n' "$duration_fmt"
@@ -1194,16 +1259,24 @@ resolve_info() {
 # ==============================================================================
 
 fetch_results() {
-    local match_filter_option="duration > $MIN_DURATION"
-    if ((MAX_DURATION > 0)); then
-        match_filter_option+=" and duration < $MAX_DURATION"
-    fi
-
     local cmd=(
         yt-dlp
         "ytsearch${NUM_RESULTS}:${QUERY}"
-        --match-filter "$match_filter_option"
     )
+
+    # Duration bounds are enforced CLIENT-SIDE (in the jq shaping below); --match-filter is
+    # only a cheap server-side pre-filter. Reason: with --flat-playlist yt-dlp marks entries
+    # "incomplete", so a filter on a field a flat entry doesn't carry (a live stream has no
+    # duration) cannot decide and KEEPS the entry — verified: `-m 999999` still returned a
+    # live result. The filter is also sent only when a bound was actually asked for; the old
+    # unconditional "duration > 0" filtered nothing and only muddied the contract.
+    local match_filter=""
+    ((MIN_DURATION > 0)) && match_filter="duration > $MIN_DURATION"
+    if ((MAX_DURATION > 0)); then
+        [[ -n "$match_filter" ]] && match_filter+=" and "
+        match_filter+="duration < $MAX_DURATION"
+    fi
+    [[ -n "$match_filter" ]] && cmd+=(--match-filter "$match_filter")
 
     if (( ${#YT_COOKIE_ARGS[@]} > 0 )); then
         cmd+=("${YT_COOKIE_ARGS[@]}")
@@ -1223,48 +1296,61 @@ fetch_results() {
         cmd+=(--format-sort "$FORMAT_SORT")
     fi
 
-    local result_json
-    result_json=$("${cmd[@]}")
+    # Search used to be the one surface with NO error contract: a yt-dlp failure aborted on
+    # `set -e` with raw stderr even under -j, so an agent got a jq parse error instead of a
+    # shape it could branch on. Capture the failure and emit the same {status:"error",
+    # reason} taxonomy the playback path uses; the exit code stays yt-dlp's own.
+    ensure_state_dir
+    local result_json rc=0 err="$STATE_DIR/search.$$"
+    result_json=$("${cmd[@]}" 2>"$err") || rc=$?
+    if ((rc != 0)) || [[ -z "$result_json" ]]; then
+        local reason
+        reason=$(classify_playback_error "$(cat "$err" 2>/dev/null)" "$rc")
+        if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+            jq -nc --arg q "$QUERY" --arg reason "$reason" \
+                '{status: "error", query: $q, count: 0, results: [], reason: $reason}'
+        else
+            cat "$err" >&2 2>/dev/null || true
+            echo "Error: search failed for '$QUERY' ($reason)" >&2
+        fi
+        rm -f "$err" 2>/dev/null || true
+        # §15 reserves 1 for usage/validation, so a propagated extractor failure reports
+        # 2+ even when yt-dlp itself exited 1; -j callers branch on .status instead.
+        exit $((rc <= 1 ? 2 : rc))
+    fi
+    rm -f "$err" 2>/dev/null || true
 
-    # Sort is a client-side jq re-order of the fetched set. "relevance" keeps YouTube's
-    # native ranking (the order ytsearch returned) — no re-sort. The numeric fields sort
-    # descending (reverse). view_count/duration are always present in flat search results;
-    # like_count/comment_count are NOT (they need per-video extraction — see DESIGN-yt.md).
-    local jq_filter='.entries'
+    # ONE jq program does the whole shaping: duration bounds -> duration_fmt -> sort.
+    # Sort is a client-side re-order of the fetched set; "relevance" keeps YouTube's native
+    # ranking (the order ytsearch returned) — no re-sort. Numeric fields sort descending,
+    # with unknown values (live streams) last. SORT_FIELD is validated at startup, so there
+    # is no unknown-field branch to handle here.
+    local sort_expr=""
     case "$SORT_FIELD" in
-    relevance) ;;  # native YouTube ranking; leave order untouched
-    duration) jq_filter+=" | sort_by(.duration) | reverse" ;;
-    view_count) jq_filter+=" | sort_by(.view_count) | reverse" ;;
-    *) echo "yt: unknown sort field '$SORT_FIELD' (relevance|view_count|duration)" >&2; exit 1 ;;
+    duration) sort_expr=' | sort_by(.duration // -1) | reverse' ;;
+    view_count) sort_expr=' | sort_by(.view_count // -1) | reverse' ;;
     esac
 
-    local raw_json
-    raw_json=$(echo "$result_json" | jq "$jq_filter")
+    local bounds="true"
+    ((MIN_DURATION > 0)) && bounds+=" and (.duration != null and .duration > $MIN_DURATION)"
+    ((MAX_DURATION > 0)) && bounds+=" and (.duration != null and .duration < $MAX_DURATION)"
 
-    # Add the synthesized duration_fmt using convert_seconds
-    FILTERED_JSON=$(echo "$raw_json" | jq -c '.[]' | while IFS= read -r item; do
-        local duration duration_fmt
-        duration=$(echo "$item" | jq -r '.duration')
-        duration_fmt=$(convert_seconds "$duration")
-        echo "$item" | jq --arg df "$duration_fmt" '. + {duration_fmt: $df}'
-    done | jq -s '.')
+    FILTERED_JSON=$(printf '%s' "$result_json" | jq "$JQ_PRELUDE
+        [ (.entries // [])[] | select($bounds) | . + {duration_fmt: (.duration | fmt_dur)} ]$sort_expr")
 }
 
+# Prose list. One jq program (it used to fork five jq per row — 125 for -n 25 — and
+# re-derive duration_fmt that FILTERED_JSON already carries). Unknown fields render as
+# LIVE / "--" / "-" instead of leaking a raw JSON `null` into human output.
 print_list() {
-    echo "$FILTERED_JSON" | jq 'to_entries | map(.value + {index: (.key + 1)})' | jq -c '.[]' |
-        while IFS= read -r line; do
-            local index title duration view_count url duration_fmt
-            index=$(echo "$line" | jq -r '.index')
-            title=$(echo "$line" | jq -r '.title')
-            duration=$(echo "$line" | jq -r '.duration')
-            view_count=$(echo "$line" | jq -r '.view_count')
-            url=$(echo "$line" | jq -r '.url')
-            duration_fmt=$(convert_seconds "$duration")
-            echo "$MUSIC_CHAR $index. $title"
-            echo "  - $duration_fmt"
-            echo "  - $view_count views"
-            echo "  - $url"
-        done
+    printf '%s' "$FILTERED_JSON" | jq -r --arg note "$MUSIC_CHAR" '
+        to_entries[]
+        | (.key + 1) as $i
+        | .value
+        | (if $note == "" then "" else $note + " " end) + "\($i). \(.title)",
+          "  - " + (if .live_status == "is_live" then "LIVE" else (.duration_fmt // "--") end),
+          "  - " + (if .view_count == null then "n/a" else (.view_count | tostring) end) + " views",
+          "  - \(.url)"'
 }
 
 # Structured search output for agent callers. Wraps results in a stable
@@ -1276,13 +1362,13 @@ print_list() {
 # every raw field for the rare case fidelity is needed. FILTERED_JSON's own shape is
 # left untouched (print_list still reads it), so we project only here.
 emit_search_json() {
-    local projection
     if [[ "$OUTPUT_MODE" == "json_full" ]]; then
-        projection='.'
+        printf '%s' "$FILTERED_JSON" | jq --arg q "$QUERY" '{query: $q, count: length, results: .}'
     else
-        projection='map({id, title, url, channel, duration, duration_fmt, view_count, live_status})'
+        printf '%s' "$FILTERED_JSON" | jq --arg q "$QUERY" \
+            '{query: $q, count: length,
+              results: map({id, title, url, channel, duration, duration_fmt, view_count, live_status})}'
     fi
-    echo "$FILTERED_JSON" | jq --arg q "$QUERY" "{query: \$q, count: length, results: ($projection)}"
 }
 
 # ==============================================================================
@@ -1297,7 +1383,19 @@ PLAYBACK_MODE="audio"
 FORMAT_SORT=""
 VOLUME=""
 COLOR_MODE="auto"
+# Glyph fallback shares ONE switch with yt-tui (YT_ASCII, legacy alias YT_TUI_ASCII): a
+# terminal whose font can't draw ♫ can't draw it in either surface, and a non-UTF-8 locale
+# (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as yt-tui does.
 MUSIC_CHAR="♫"
+case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
+1 | true | yes | on) MUSIC_CHAR="" ;;
+"")
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *UTF-8* | *utf-8* | *UTF8* | *utf8*) ;;
+    *) MUSIC_CHAR="" ;;
+    esac
+    ;;
+esac
 # Default search output is the plain list; -j/-J/-l override. (No interactive menu:
 # the core is non-interactive — interactive browsing lives in yt-tui.)
 OUTPUT_MODE="list"
@@ -1305,6 +1403,7 @@ FILTERED_JSON=""
 # Playback lifecycle / structured-output state.
 DETACH=0
 ACTION=""            # "" (normal) | status | stop | geturl | info | set-volume
+ACTION_FLAG=""       # the flag that set ACTION, for conflict messages
 PLAYBACK_RETRIED=0   # set by play_url_with_probe; surfaced in the playback JSON
 SET_VOLUME_ARG=""    # value from --set-volume N
 TARGET_ID=""         # value from --id (target a specific detached player)
@@ -1315,9 +1414,35 @@ RESOLVE_PLAYERS_JSON="[]"  # resolve_target out-param: candidates on ambiguity
 STATE_DIR="${TMPDIR:-/tmp}/yt-cli-$(id -u)"
 PLAYERS_DIR="$STATE_DIR/players"   # one <id>.json per detached player
 
+# Actions are mutually exclusive; a caller asking for two used to silently get whichever
+# flag came last. Name both flags in the error instead of guessing an intent.
+set_action() {
+    local want=$1 flag=$2
+    if [[ -n "$ACTION" && "$ACTION" != "$want" ]]; then
+        die "conflicting actions: $ACTION_FLAG and $flag"
+    fi
+    ACTION="$want"
+    ACTION_FLAG="$flag"
+}
+
 normalized_args=()
 while (($#)); do
     case "$1" in
+    --)
+        # End of options: everything after it is the query/URL, VERBATIM. Without this the
+        # loop kept scanning past `--`, so a query that merely LOOKS like a long flag became
+        # an action (`yt -l -- --status` listed players instead of searching for the text).
+        # The `--` is forwarded to getopts too — getopts stops there (verified on bash 3.2),
+        # so a query/URL starting with a single dash survives as well. This is the guard the
+        # wrappers rely on when they delegate (DESIGN-yt.md §6).
+        normalized_args+=("--")
+        shift
+        while (($#)); do
+            normalized_args+=("$1")
+            shift
+        done
+        break
+        ;;
     --help)
         normalized_args+=("-h")
         shift
@@ -1357,29 +1482,29 @@ while (($#)); do
         shift
         ;;
     --status)
-        ACTION=status
+        set_action status --status
         shift
         ;;
     --stop)
-        ACTION=stop
+        set_action stop --stop
         shift
         ;;
     --get-url)
-        ACTION=geturl
+        set_action geturl --get-url
         shift
         ;;
     --info)
-        ACTION=info
+        set_action info --info
         shift
         ;;
     --set-volume)
         [[ $# -ge 2 ]] || die "--set-volume requires a value"
-        ACTION=set-volume
+        set_action set-volume --set-volume
         SET_VOLUME_ARG="$2"
         shift 2
         ;;
     --set-volume=*)
-        ACTION=set-volume
+        set_action set-volume --set-volume
         SET_VOLUME_ARG="${1#*=}"
         shift
         ;;
@@ -1462,6 +1587,22 @@ if [[ -n "$VOLUME" ]]; then
     if ((VOLUME > 100)); then
         die "--volume must be between 0 and 100"
     fi
+fi
+
+# Flag combinations that used to be accepted and silently ignored. --id/--all only mean
+# something to the lifecycle verbs, -d is a launch rather than an action, and a detached
+# player has no terminal for the terminal-rendering modes to draw into (§9.2).
+if [[ -n "$TARGET_ID" ]] && [[ "$ACTION" != stop && "$ACTION" != set-volume ]]; then
+    die "--id applies only to --stop and --set-volume"
+fi
+if ((STOP_ALL)) && [[ "$ACTION" != stop ]]; then
+    die "--all applies only to --stop"
+fi
+if ((DETACH)) && [[ -n "$ACTION" ]]; then
+    die "-d/--detach cannot be combined with $ACTION_FLAG"
+fi
+if ((DETACH)) && [[ "$PLAYBACK_MODE" == "ascii" || "$PLAYBACK_MODE" == "viz" ]]; then
+    die "-d/--detach cannot use -f $PLAYBACK_MODE: a detached player has no terminal to render into (use audio, video, or fast)"
 fi
 
 # Detect a URL-shaped query once; both the routing and the guards below key off it.
