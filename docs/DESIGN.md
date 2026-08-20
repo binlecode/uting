@@ -83,9 +83,9 @@ is the interactive human surface — pure orchestration with **zero** search/pla
 ```
                           PATH entries (per OS)
         macos/bin/                               linux/bin/
-        ├── yt-search                            ├── yt-search
-        ├── yt-play                              ├── yt-play
-        └── yt-tui                               └── yt-tui
+        ├── yt-search · yts                      ├── yt-search · yts
+        ├── yt-play   · ytp                      ├── yt-play   · ytp
+        └── yt-tui    · ytt                      └── yt-tui    · ytt
               (symlinks → ../../shell-scripts/…)
 
         shell-scripts/
@@ -265,16 +265,16 @@ touching that consumer. (Schemas → §14.)
 mpv drives yt-dlp internally (its `ytdl_hook`); cookies (when login is on) pass through
 `--ytdl-raw-options` (one comma-joined key/value flag).
 
-**Terminal-noise quieting (windowed video modes).** `video`/`fast` render the media
+**Terminal-noise quieting & viewport shielding (video and audio modes).** `video`/`fast` render the media
 **title** as a video OSD via libass. When the title carries glyphs no font covers (emoji —
 pervasive on YouTube), libass emits a per-frame `[osd/libass] fontselect: failed to find
 any fallback with glyph …` warning and macOS CoreText emits a `CoreText note: … .LastResort
-…` line. At ~30/s these interrupt mpv's in-place (`\r`) status line, so the `AV:`/
-`--term-osd-bar` line scrolls endlessly and buries yt-tui's menu. The fix keeps the
-on-window OSD/OSC (the video window still shows its seek bar and controls) via two parts:
+…` line. Furthermore, mpv's default startup dumps 8–10 lines of metadata (`File tags:`, `Date:`,
+`Uploader:`), which pushes `yt-tui`'s menu into scrollback and displaces the progress bar.
+The fix keeps the on-window OSD/OSC and terminal progress bar stable via two parts:
 
-1. **`--msg-level=osd/libass=error`** suppresses the libass `fontselect` warnings at the
-   source, keeping error level for the `-j` classifier (§8.3).
+1. **`--msg-level=display-tags=warn,osd/libass=error`** suppresses the libass `fontselect` warnings
+   and multi-line metadata tag dumps (`File tags:`) at the source, keeping error level for the `-j` classifier (§8.3).
 2. **A stderr filter in `run_mpv`** drops the leftover CoreText notes — which no mpv flag
    can reach — with `2> >(grep -vE 'CoreText note|\.LastResort|fontselect' >&2)`.
 
@@ -283,9 +283,9 @@ The split is what makes this safe: mpv prints the useful `--term-osd-bar`/`AV:` 
 Process substitution (not a pipe) leaves `$?` as mpv's own exit code, so `q` (130) and real
 failures still propagate. The filter drops only non-error lines, so the `-j` error taxonomy
 is unaffected — the classifier still sees `403`/unavailable/etc., and the JSON status line
-(emitted on real stdout) is never routed through the filter. `audio` is immune by
-construction (`--no-video` → no OSD); `ascii` uses `--really-quiet`; the filter is a
-harmless no-op for both.
+(emitted on real stdout) is never routed through the filter. `audio` mode avoids vertical menu
+displacement (`--no-video` + suppressed tags), keeping `yt-tui`'s menu intact while mpv's in-place
+status bar (`A: ...`) updates directly below it; `ascii` uses `--really-quiet`.
 
 Three alternatives were tested and rejected: **`--osd-level=0`** kills the noise at the root
 but also disables the on-window OSD/OSC (no seek bar/controls in the window);
@@ -613,33 +613,45 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
         ▼
    load_rows → urls[] / options[] / NUM_ENTRIES / NUM_PAGES
         ▼
-   ┌─ SELF-RENDERED MENU LOOP (yt-tui draws every line, reads every key; plain ─────┐
-   │  text + ANSI — no picker, no box, no frame; nothing else owns the screen)      │
-   │  display_menu: title · status line (results/sort/min/max/mode[/filter]) ·      │
-   │    colored Nav+Playback hint lines · rows w/ the '>' sel  (♫=title accent) ·   │
-   │    ●○○ pagination dots.   -p rows/page (default 10, capped to terminal height) │
-   │  read_nav_input: one keypress; decodes ESC-[/O arrow sequences                 │
-   │    ↑/↓  move selection (paginate at edges)      ←/→  page                      │
-   │    Enter → play_selected:   yt-play -f MODE -- url   (BLOCKING; bullet below)  │
-   │    v     → cycle_mode:     PLAY_MODE audio→video→fast (local; next Enter)      │
-   │    n     → new_search:     read query (Esc cancels) → fetch_json → reload      │
-   │    m     → more_results:   re-fetch CURRENT query, RESULT_N += 25 (else keep)  │
-   │    o     → cycle_sort:     rotate SORT_FIELD, re-fetch (relevance→views→dur)   │
-   │    /     → filter_live:  LIVE narrow — type to filter, Esc clears              │
-   │    q     → exit 0        Ctrl-D → re-loop        stray Esc → ignored           │
-   └────────────────────────────────────────────────────────────────────────────────┘
+    ┌─ SELF-RENDERED MENU LOOP (yt-tui draws every line, reads every key; plain ─────┐
+    │  text + ANSI — 3-view switchable cycling: List ↔ Mode A (Card) ↔ Mode B (Mini))│
+    │  display_menu:                                                                 │
+    │    List View:     title · status · live Now-Playing mini banner · results ·    │
+    │                   pagination dots · live filter input                          │
+    │    Mode A (Card): full-screen rail-bounded card with metadata, progress bar &  │
+    │                   interactive controls                                         │
+    │    Mode B (Mini): ultra-minimalist 3-line mini-player with live progress bar   │
+    │  read_nav_input: one keypress; decodes ESC-[/O arrow sequences                 │
+    │    ↑/↓  move selection (paginate at edges)      ←/→  page / seek               │
+    │    Enter → play_selected:   yt-play -d -j -f MODE -- url  (NON-BLOCKING)       │
+    │    Tab/p → toggle view:     List View ──► Mode A (Card) ──► Mode B (Mini) ──►  │
+    │    Space → toggle pause:    sends IPC cycle pause over UNIX socket             │
+    │    s     → stop playback:   yt-play --stop --id ID                             │
+    │    9/0   → volume:          adjusts volume via socket IPC                      │
+    │    v     → cycle_mode:      PLAY_MODE audio→video→fast (local; next Enter)     │
+    │    n     → new_search:      read query → fetch_json → reload (music continues) │
+    │    m     → more_results:    re-fetch CURRENT query, RESULT_N += 25 (else keep) │
+    │    o     → cycle_sort:      rotate SORT_FIELD, re-fetch (relevance→views→dur)  │
+    │    /     → filter_live:     LIVE narrow — type to filter, Esc clears           │
+    │    q     → exit 0           reaps background players cleanly on trap EXIT      │
+    └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **PLAY is blocking, with no `clear` first.** mpv owns the terminal for the duration:
-  its OSD progress bar shows, arrow keys seek, `q` ends playback and returns to the
-  menu. Playback deliberately runs *on top of* the already-drawn menu so the result
-  list stays visible and mpv's `--term-osd-bar` prints below the footer; the loop's
-  next `display_menu` does its own `clear`. Exit handling: rc 130 (SIGINT = user `q`)
-  → 0; any other non-zero → one-line "Playback failed … press any key". **No stdin
-  flush after playback** — the loop's blocking `read_nav_input` consumes the next real
-  keypress. (A prior non-blocking flush was reverted: on bash 3.2, `read -n <count>`
-  installs its own termios and blocks waiting for input regardless of
-  `stty min 0 time 0`, so it hung on every return from playback.)
+- **PLAY is asynchronous & non-blocking via `yt-play -d -j`.** Playback launches in an
+  independent, detached process group so `yt-tui` retains full terminal control. Audio
+  streams uninterrupted while users browse results, change pages, or initiate a new search
+  (`n`). A single `Enter` on any track cleanly stops the previous player and starts the
+  new selection without latency.
+- **THREE SWITCHABLE VIEWS cycled with `Tab` (or `p`):**
+  - **List View (Search & Browse)**: Interactive multi-row list with a top Now-Playing banner.
+  - **Mode A (Now Playing Focus Card)**: Clean distraction-free card with word-wrapped title within
+    adaptive divider rails, live `playtime / total time (pct%)`, and dynamic visual progress bar.
+  - **Mode B (Minimalist Mini-Player)**: Ultra-clean 3-line player with progress bar for zero visual noise.
+  - **Anti-Flicker in-place rendering**: Real-time 1s timer refreshes time and progress bars smoothly
+    via `\033[H` (cursor home) without full-screen blanking or flashing.
+  - Pressing `Tab` cycles views; pressing `Esc` in Card/Mini view instantly returns to List View.
+- **PROCESS CLEANUP GUARANTEE.** An `EXIT INT TERM HUP` trap ensures any background player
+  spawned during the `yt-tui` session is automatically and cleanly stopped upon quit (`q`).
 - **FILTER is a LIVE pure-bash narrow** of the fetched rows — no network, no re-fetch, no
   external tool (this is what makes D5 hold). `/` enters filter mode; **each keystroke** re-runs
   `apply_filter` over `ALL_ROWS` and redraws, so the list narrows *as you type* (best practice
