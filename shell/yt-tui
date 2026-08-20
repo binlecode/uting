@@ -270,6 +270,10 @@ init_glyphs() {
 }
 init_glyphs
 
+# Field separator inside the row records that build_all_rows emits and load_rows /
+# apply_filter split: ASCII US (0x1f), deliberately NOT tab. See build_all_rows.
+US=$'\x1f'
+
 # ── Playback & View State Model ─────────────────────────────────────────────────────────
 TUI_VIEW_MODE="list"       # "list" (Search List) | "card" (Mode A: Focus Card) | "mini" (Mode B: Mini Player)
 
@@ -335,6 +339,49 @@ fmt_sec() {
     else
         printf "%02d:%02d" "$m" "$sec"
     fi
+}
+
+# The envelope's duration_fmt (`06h:10m:58s`, or `1d 00h:37m:03s` past a day) is a wire
+# format, not a column: 11 cells of zero padding and unit letters for what reads as 6:10:58.
+# Sets SHORT_DUR. Unparseable or empty -> "--:--"; a LIVE row is NOT detected here, because
+# the row carries live_status as its own field and the caller reads that instead of
+# inferring liveness from a missing duration.
+# Pure bash by the same rule as the width layer: this runs once per row per redraw, so a
+# sed/awk here would be one fork per row per keystroke in filter mode.
+SHORT_DUR=""
+short_dur() {
+    local s=$1 d h m sec
+    if [[ "$s" =~ ^(([0-9]+)d[[:space:]]+)?([0-9]+)h:([0-9]+)m:([0-9]+)s$ ]]; then
+        d=${BASH_REMATCH[2]:-0}
+        # 10# on every field: "06" and "08" are octal to $(( )), and "08" is not even valid
+        # octal — an 8-minute video would have aborted the redraw.
+        h=$((10#${BASH_REMATCH[3]} + 24 * 10#$d))
+        m=$((10#${BASH_REMATCH[4]}))
+        sec=$((10#${BASH_REMATCH[5]}))
+        if ((h > 0)); then
+            printf -v SHORT_DUR '%d:%02d:%02d' "$h" "$m" "$sec"
+        else
+            printf -v SHORT_DUR '%d:%02d' "$m" "$sec"
+        fi
+        return 0
+    fi
+    SHORT_DUR="--:--"
+}
+
+# 27264629 -> 27,264,629. Sets COMMAS. Same no-fork rule as short_dur (`sed -e :a -e
+# s/.../` per row per redraw was the alternative). Non-numeric input passes through.
+COMMAS=""
+commas() {
+    local n=$1 out=""
+    if [[ ! "$n" =~ ^[0-9]+$ ]]; then
+        COMMAS="$n"
+        return 0
+    fi
+    while ((${#n} > 3)); do
+        out=",${n: -3}$out"
+        n=${n:0:${#n} - 3}
+    done
+    COMMAS="$n$out"
 }
 
 # Repeat a single-cell glyph n times (n may be 0). NOT `printf 'x%.0s' $(seq 1 $n)`:
@@ -698,8 +745,19 @@ render_prog_bar() {
     PROG_BAR="[${f_str}${head}${e_str}]"
 }
 
+# One emit point for every line wrap_print produces, so WRAP_LINES and the measure switch
+# cannot drift from the printer (a separate estimator would be free to disagree — the same
+# reason print_hints measures through its own packing code).
+WRAP_LINES=0
+WRAP_MEASURE=0
+wrap_emit() {
+    ((WRAP_MEASURE)) || printf '%s%s\033[K\n' "$1" "$2"
+    WRAP_LINES=$((WRAP_LINES + 1))
+}
+
 wrap_print() {
     local text="$1" max_w="$2" first_p="$3" cont_p="$4"
+    WRAP_LINES=0
     local words=()
     read -ra words <<< "$text"
 
@@ -713,10 +771,10 @@ wrap_print() {
         if ((w_len > max_w)); then
             if [[ -n "$line" ]]; then
                 if ((first)); then
-                    printf '%s%s\033[K\n' "$first_p" "$line"
+                    wrap_emit "$first_p" "$line"
                     first=0
                 else
-                    printf '%s%s\033[K\n' "$cont_p" "$line"
+                    wrap_emit "$cont_p" "$line"
                 fi
                 line=""
                 cur_w=0
@@ -732,10 +790,10 @@ wrap_print() {
                 c_w=$CHAR_W
                 if ((cur_w + c_w > max_w)); then
                     if ((first)); then
-                        printf '%s%s\033[K\n' "$first_p" "$line"
+                        wrap_emit "$first_p" "$line"
                         first=0
                     else
-                        printf '%s%s\033[K\n' "$cont_p" "$line"
+                        wrap_emit "$cont_p" "$line"
                     fi
                     line="$c"
                     cur_w=$c_w
@@ -752,10 +810,10 @@ wrap_print() {
 
         if ((cur_w + need_w > max_w)); then
             if ((first)); then
-                printf '%s%s\033[K\n' "$first_p" "$line"
+                wrap_emit "$first_p" "$line"
                 first=0
             else
-                printf '%s%s\033[K\n' "$cont_p" "$line"
+                wrap_emit "$cont_p" "$line"
             fi
             line="$w"
             cur_w=$w_len
@@ -772,11 +830,66 @@ wrap_print() {
 
     if [[ -n "$line" ]]; then
         if ((first)); then
-            printf '%s%s\033[K\n' "$first_p" "$line"
+            wrap_emit "$first_p" "$line"
         else
-            printf '%s%s\033[K\n' "$cont_p" "$line"
+            wrap_emit "$cont_p" "$line"
         fi
     fi
+}
+
+# print_details <width> <index> — the details section under the list: a rail, the FULL
+# title wrapped over as many lines as it needs, and one dim metadata line. This is the half
+# of a result a single row cannot show: the rows spend their width on titles and a duration
+# rail, and the full title, channel, view count and video id live here for the SELECTED row
+# only. Recovering the full title is the reason the block exists — it is the one field a row
+# can never show whole — so it is wrapped, not elided, and takes the height it needs.
+#
+# DETAIL_MEASURE=1 runs the identical code path and reports DETAIL_LINES without drawing,
+# mirroring HINT_MEASURE / print_hints. The measure mode is not a convenience: the block
+# prints AFTER the rows but its height has to be known BEFORE them, or a long title costs
+# the header instead of a row.
+DETAIL_LINES=0
+DETAIL_MEASURE=0
+print_details() {
+    local width=$1 i=$2 dur views vid meta
+    DETAIL_LINES=0
+    ((i >= 0 && i < NUM_ENTRIES)) || return 0
+    if [[ "${R_LIVE[$i]}" == "is_live" ]]; then
+        # Here a glyph reads as a badge, so the details line gets the "● LIVE" form the rows
+        # deliberately do not (a numeric column wants no glyph in it).
+        dur="$GL_LIVE"
+        views="live now"
+    else
+        short_dur "${R_DUR[$i]}"
+        dur="$SHORT_DUR"
+        # An absent view count is NOT zero views: the envelope reports null when the count
+        # was not published, and printing "0 views" for it states a fact we do not have.
+        if [[ -n "${R_VIEWS[$i]}" ]]; then
+            commas "${R_VIEWS[$i]}"
+            views="$COMMAS views"
+        else
+            views=""
+        fi
+    fi
+    card_divider "$width"
+    ((DETAIL_MEASURE)) || printf '%s%s%s\n' "$C_DIM" "$DIV_STR" "$C_RESET"
+    DETAIL_LINES=1
+    # The same clean-ed title the row measured, so a row and its details cannot disagree
+    # about what the video is called.
+    WRAP_MEASURE=$DETAIL_MEASURE
+    wrap_print "${R_TITLE[$i]}" $((width - 2)) "  " "  "
+    WRAP_MEASURE=0
+    DETAIL_LINES=$((DETAIL_LINES + WRAP_LINES))
+    # The id is DERIVED from the url rather than carried as a seventh field. The '?' below is
+    # a glob metacharacter in this expansion and matches the literal '?' of "watch?v=".
+    vid="${urls[$i]}"
+    vid="${vid#*watch?v=}"
+    meta="${R_CHAN[$i]} $GL_SEP $dur"
+    [[ -n "$views" ]] && meta+=" $GL_SEP $views"
+    meta+=" $GL_SEP $vid"
+    truncate_disp "$meta" $((width - 2))
+    ((DETAIL_MEASURE)) || printf '  %s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+    DETAIL_LINES=$((DETAIL_LINES + 1))
 }
 
 toggle_pause() {
@@ -852,15 +965,32 @@ fetch_json() {
     return 0
 }
 
+# ONE record per result: six raw fields, no composed display string. The composed string
+# was the whole bug — a row was `title · dur · views · channel` elided from the right, so a
+# narrow terminal spent the entire truncation budget on the metadata and left a chopped
+# title with nothing beside it. Now the row renders title + duration rail, print_details
+# renders the rest for the selected row, and apply_filter synthesizes its own haystack.
+#
+# Joined by US (0x1f), NOT tab: `IFS=$'\t' read` COLLAPSES RUNS OF TABS because tab is an
+# IFS *whitespace* character, so one empty field shifts every field after it — and a live
+# row has an empty duration_fmt, which is exactly how the mockup came to read a channel
+# name as a view count. US is not IFS whitespace, so empty fields survive the split.
+# `oneline` on the channel for the same reason `clean` collapses the title: a newline in a
+# field would split one record into two.
 build_all_rows() {
-    ALL_ROWS=$(printf '%s' "$json" | jq -r --arg sep " $GL_SEP " --arg live "$GL_LIVE" '
+    ALL_ROWS=$(printf '%s' "$json" | jq -r '
       def clean:
         gsub("[\\x{1F000}-\\x{1FAFF}\\x{2190}-\\x{21FF}\\x{2300}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{2122}\\x{2139}]"; "")
         | gsub("\\s+"; " ") | gsub("^ | $"; "");
+      def oneline: gsub("\\s+"; " ") | gsub("^ | $"; "");
       .results[]
       | [ .url,
-          "\(.title | clean)\($sep)\(if .live_status == "is_live" then $live else (.duration_fmt // "--") end)\($sep)\(.view_count // 0) views\($sep)\(.channel // "?")"
-        ] | @tsv')
+          (.title // "" | clean),
+          (.duration_fmt // ""),
+          (.view_count | if . == null then "" else tostring end),
+          (.channel // "?" | oneline),
+          (.live_status // "")
+        ] | join("\u001f")')
 }
 
 apply_search_results() {
@@ -872,14 +1002,22 @@ apply_search_results() {
     load_rows "$ALL_ROWS"
 }
 
+# Split the records into parallel arrays (bash 3.2 — no associative arrays, no array of
+# arrays). `urls` keeps its name and its job: the play target. The R_ arrays are the fields
+# the row rail and the details block read; nothing here is pre-rendered, so both can render
+# from the same numbers and cannot disagree about a row.
 load_rows() {
     urls=()
-    options=()
-    local url disp
-    while IFS=$'\t' read -r url disp; do
+    R_TITLE=(); R_DUR=(); R_VIEWS=(); R_CHAN=(); R_LIVE=()
+    local url title dur views chan live
+    while IFS="$US" read -r url title dur views chan live; do
         [[ -n "$url" ]] || continue
         urls+=("$url")
-        options+=("$disp")
+        R_TITLE+=("$title")
+        R_DUR+=("$dur")
+        R_VIEWS+=("$views")
+        R_CHAN+=("$chan")
+        R_LIVE+=("$live")
     done <<<"$1"
     NUM_ENTRIES=${#urls[@]}
     NUM_PAGES=$(( (NUM_ENTRIES + PAGE_SIZE - 1) / PAGE_SIZE ))
@@ -890,7 +1028,7 @@ load_rows() {
 
 # Mode B: List View + Mini-Player Banner
 display_list_menu() {
-    local page=$1 start end i n disp status_extra p dots row_w
+    local page=$1 start end i n disp status_extra p dots row_w rail rail_w
     # One size read per redraw, shared by the banner (title elision), the result rows and the
     # packed navigation hints below. No width cap: unlike the player cards, the list wants the
     # whole width for its rows. LINES_N is refreshed here too — it is what the reflow below
@@ -978,8 +1116,17 @@ display_list_menu() {
     print_hints "$nav_cols" "$S_NAV " "$nav_pad" "${nav_items[@]}"
     HINT_MEASURE=0
     local nav_h=$HINT_LINES
-    # 4 = the blank line after the block, the footer, one result row, the cursor's resting row
-    if ((LINES_N - chrome_h - nav_h >= 4)); then
+    # 4 = the blank line after the block, one result row, the blank line after the rows, the
+    # cursor's resting row. Plus one more for the PAGINATION row whenever the list can
+    # paginate at all: this gate only bites on a short terminal, and on a short terminal more
+    # than one entry always means more than one page. Measured without that +1 (and true of
+    # the shipped version too, at any width where the block fits in one fewer line than the
+    # gate believes): a 62x10 terminal kept the block and then printed 7 chrome lines, one
+    # row, a blank and the page counter — eleven lines into ten, and the header went off the
+    # top, which is the one thing this reflow exists to prevent.
+    local nav_need=4
+    ((NUM_ENTRIES > 1)) && nav_need=5
+    if ((LINES_N - chrome_h - nav_h >= nav_need)); then
         print_hints "$nav_cols" "$S_NAV " "$nav_pad" "${nav_items[@]}"
         chrome_h=$((chrome_h + nav_h))
     fi
@@ -1000,9 +1147,37 @@ display_list_menu() {
         disp_w "> $FILTER_LABEL"
         filter_h=$((filter_h + 1 + (DISP_W + nav_cols - 1) / nav_cols))
     fi
+    # ── The details block is CHROME, and variable-height chrome at that ─────────────────
+    # Its height is however far the selected title wraps, so it has to be charged against
+    # the row budget before a single row is printed — measure it after the rows and a long
+    # title costs the header instead of a row. The order below is what keeps that
+    # non-circular: clamp the selection (needs no page geometry), measure the block for it,
+    # derive PAGE_SIZE from the measured chrome, then derive the page from the selection.
+    # Because the page follows the selection, the row this block describes is always on
+    # screen, so the page can never move the selection out from under the measurement and
+    # there is nothing to settle over multiple frames. PAGE_SIZE therefore changes by one as
+    # the selection crosses a one-line/three-line title — the accepted cost of decision 1
+    # (the block takes the space it needs; no fixed reservation, no cap on the title).
+    ((selected < 0)) && selected=0
+    ((NUM_ENTRIES > 0 && selected > NUM_ENTRIES - 1)) && selected=$((NUM_ENTRIES - 1))
+    local detail_h=0 show_details=0
+    if ((NUM_ENTRIES > 0)); then
+        DETAIL_MEASURE=1
+        print_details "$nav_cols" "$selected"
+        DETAIL_MEASURE=0
+        detail_h=$DETAIL_LINES
+        # A terminal too short to pay for both drops the block and keeps the rows — the same
+        # trade the navigation hints make above, and the reason "no cap on the title" is safe:
+        # 2 = one result row and the pagination row it would otherwise have eaten.
+        if ((LINES_N - chrome_h - filter_h - 1 - detail_h >= 2)); then
+            show_details=1
+        else
+            detail_h=0
+        fi
+    fi
     # -1 for the cursor's resting row: filling the last line and emitting its newline scrolls
     # the screen up by one, which would cost the header again.
-    avail=$((LINES_N - chrome_h - filter_h - 1))
+    avail=$((LINES_N - chrome_h - filter_h - detail_h - 1))
     psize=$PAGE_OPT
     ((psize > avail)) && psize=$avail
     # The pagination dots only cost a line when there IS more than one page. Checking against
@@ -1046,21 +1221,46 @@ display_list_menu() {
     else
         for (( i = start; i <= end && i < NUM_ENTRIES; i++ )); do
             n=$(( i + 1 ))
-            # These were the last rows in the UI printed unmeasured, and the ones that
-            # mattered most: the reflow above hands out exactly one line per entry. At 62
-            # columns a title-plus-metadata row took two or three, so ten entries filled 21
-            # lines and scrolled the header, the status row, the Now-Playing banner and the
-            # entire navigation block off the top — all of print_hints' layout work spent on
-            # rows that then scrolled away. Elide to what the prefix leaves: "> 10. " /
-            # "  10. " is 4 cells plus the digits.
-            row_w=$(( nav_cols - 4 - ${#n} ))
-            ((row_w < 12)) && row_w=12
-            truncate_disp "${options[$i]}" "$row_w"
-            disp="$TRUNC_TEXT"
-            if ((i == selected)); then
-                printf '%s> %s. %s%s\n' "$C_YELLOW" "$n" "$disp" "$C_RESET"
+            # A row is a TITLE and a duration rail — nothing else. It used to be
+            # `title · duration · views · channel` composed into one string and elided from
+            # the right, which spent the whole truncation budget on the metadata: at 62
+            # columns the ellipsis ate duration, views and channel first and left a chopped
+            # title with no metadata beside it. Views and channel moved to print_details.
+            # The rail prints a bare LIVE rather than the "● LIVE" badge: this is a numeric
+            # column, and a glyph in it reads as noise (the badge form is in the details).
+            if [[ "${R_LIVE[$i]}" == "is_live" ]]; then
+                rail="LIVE"
             else
-                printf '  %s. %s\n' "$n" "$disp"
+                short_dur "${R_DUR[$i]}"
+                rail="$SHORT_DUR"
+            fi
+            disp_w "$rail"
+            rail_w=$DISP_W
+            # "> 10. " / "  10. " is 4 cells plus the digits; 2 more keep the longest title
+            # off the rail. Truncating to that is what gives the rail room BY CONSTRUCTION —
+            # the jump below only repairs measurement drift, it does not license overflow.
+            row_w=$(( nav_cols - 4 - ${#n} - 2 - rail_w ))
+            ((row_w < 12)) && row_w=12
+            truncate_disp "${R_TITLE[$i]}" "$row_w"
+            disp="$TRUNC_TEXT"
+            # The rail is placed with CHA (\033[<n>G, cursor horizontal absolute), NOT with
+            # computed padding. Padding emits `room - DISP_W` spaces, so the column lands
+            # wherever OUR measurement says it should — and our width rule over-counts by
+            # design (a non-ASCII character is two cells unless measured otherwise), so a
+            # title of mathematical-bold letters (2 measured, 1 drawn) parks its duration
+            # ~5 columns left of the row above it. Ragged, on the one column that exists to
+            # be scanned. CHA ignores what came before and lands on the same cell every
+            # time. Columns are 1-based, so a right-flush field of rail_w cells starts at
+            # nav_cols - rail_w + 1. If a title ever rendered WIDER than measured, the jump
+            # moves backwards and cleanly overwrites the title tail instead of pushing the
+            # rail into a wrap — the failure mode we want, and one the width layer's
+            # over-counting rule already refuses to produce.
+            if ((i == selected)); then
+                printf '%s> %s. %s\033[%dG%s%s\n' \
+                    "$C_YELLOW" "$n" "$disp" $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
+            else
+                printf '  %s. %s%s\033[%dG%s%s\n' \
+                    "$n" "$disp" "$C_DIM" $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
             fi
         done
     fi
@@ -1080,6 +1280,10 @@ display_list_menu() {
         fi
         printf '%s%s%s\n' "$C_BOLD" "$dots" "$C_RESET"
     fi
+
+    # Details for the selected row. Below the pagination dots: the dots belong to the list,
+    # this is a separate section under it.
+    ((show_details)) && print_details "$nav_cols" "$selected"
 
     # Live filter input caret
     if ((FILTER_MODE)); then
@@ -1249,7 +1453,7 @@ display_menu() {
 # ── PLAY delegate (Asynchronous / Non-blocking) ─────────────────────────────────────────
 play_selected() {
     ((NUM_ENTRIES > 0)) || return 0
-    local url="${urls[$selected]}" disp="${options[$selected]}"
+    local url="${urls[$selected]}"
     local out id pid
 
     stop_current_playback
@@ -1260,8 +1464,12 @@ play_selected() {
     # it is the core's private state layout, and hardcoding "$TMPDIR/yt-cli-$(id -u)/mpv-
     # $id.sock" here duplicated it in a second script that would break silently if the core
     # ever moved its state dir. DESIGN-yt.md §9.3.
-    IFS=$'\t' read -r id pid sock < <(
-        printf '%s' "$out" | jq -r '[.id // "", .pid // "", .sock // ""] | @tsv' 2>/dev/null
+    # US, not tab, for the same reason build_all_rows uses it: all three fields default to
+    # "" here, and a run of tabs collapses, so a player that reported no pid would have had
+    # its socket path read into `pid` — and then the guard below would reject a play that
+    # actually started.
+    IFS="$US" read -r id pid sock < <(
+        printf '%s' "$out" | jq -r '[.id // "", .pid // "", .sock // ""] | join("\u001f")' 2>/dev/null
     ) || true
 
     [[ -n "$id" && -n "$sock" ]] || return 1
@@ -1273,19 +1481,26 @@ play_selected() {
     CURRENT_PLAY_SOCK="$sock"
     CURRENT_PLAY_PAUSED=0
 
-    # Parse metadata from display line using parameter expansion
-    local title rest dur views chan
-    title="${disp%% $GL_SEP *}"
-    rest="${disp#* $GL_SEP }"
-    dur="${rest%% $GL_SEP *}"
-    rest="${rest#* $GL_SEP }"
-    views="${rest%% $GL_SEP *}"
-    chan="${rest#* $GL_SEP }"
-
-    CURRENT_PLAY_TITLE="${title:-Unknown}"
-    CURRENT_PLAY_DURATION="${dur:-Unknown}"
-    CURRENT_PLAY_CHANNEL="${chan:-Unknown}"
-    if [[ "$dur" == "$GL_LIVE" ]]; then CURRENT_PLAY_IS_LIVE=1; else CURRENT_PLAY_IS_LIVE=0; fi
+    # Metadata straight out of the row arrays. This used to re-parse the composed display
+    # string by splitting on " $GL_SEP " — which mis-split any title that itself contained
+    # that separator, and had to be kept in step with the compose step at the other end of
+    # the file. Liveness now comes from the row's own live_status field rather than from
+    # recognising a rendered badge.
+    CURRENT_PLAY_TITLE="${R_TITLE[$selected]:-Unknown}"
+    CURRENT_PLAY_CHANNEL="${R_CHAN[$selected]:-Unknown}"
+    if [[ "${R_LIVE[$selected]}" == "is_live" ]]; then
+        CURRENT_PLAY_IS_LIVE=1
+        CURRENT_PLAY_DURATION="$GL_LIVE"
+    else
+        CURRENT_PLAY_IS_LIVE=0
+        # short_dur here too, not the envelope's `11h:53m:45s`: the banner sits three lines
+        # above the same video's row and details line, and two spellings of one duration in
+        # one screen read as two different numbers. It also matches the form fetch_play_times
+        # replaces it with once mpv answers (fmt_sec), so the readout does not change shape
+        # a second after playback starts.
+        short_dur "${R_DUR[$selected]}"
+        CURRENT_PLAY_DURATION="$SHORT_DUR"
+    fi
     CURRENT_PLAY_STARTED=$(date +%s 2>/dev/null || echo 0)
 }
 
@@ -1367,7 +1582,7 @@ cycle_sort() {
 
 # ── FILTER action (key: /) — LIVE incremental narrow ─────────────────────────────────────
 apply_filter() {
-    local q="$1" url disp tok ok matched="" tokens=()
+    local q="$1" url title dur views chan live hay tok ok matched="" tokens=()
     selected=0
     page_index=1
     if [[ -z "${q//[[:space:]]/}" ]]; then
@@ -1378,13 +1593,26 @@ apply_filter() {
     FILTER_LABEL="$q"
     read -ra tokens <<<"$q"
     shopt -s nocasematch
-    while IFS=$'\t' read -r url disp; do
+    while IFS="$US" read -r url title dur views chan live; do
         [[ -n "$url" ]] || continue
+        # The haystack is SYNTHESIZED here, not carried as a seventh field: the row already
+        # has the pieces, it is never printed, and a stored key would be one more thing to
+        # keep in step with the renderer. It holds BOTH duration forms on purpose — the
+        # envelope's `11h:53m:45s` for parity with what the filter always matched, and
+        # short_dur's `11:53:45` because that is the form the rail actually shows, and a
+        # filter that will not match what is on the screen is a filter that looks broken.
+        # The literal LIVE is what keeps typing `live` working now that no row carries a
+        # rendered "● LIVE" string to match against.
+        short_dur "$dur"
+        hay="$title $chan $dur $SHORT_DUR $views"
+        [[ "$live" == "is_live" ]] && hay+=" LIVE"
         ok=1
         for tok in ${tokens[@]+"${tokens[@]}"}; do
-            if [[ "$disp" != *"$tok"* ]]; then ok=0; break; fi
+            if [[ "$hay" != *"$tok"* ]]; then ok=0; break; fi
         done
-        ((ok)) && matched+="${url}"$'\t'"${disp}"$'\n'
+        # Re-emitted unchanged, so ALL_ROWS stays the one source and a filter never
+        # degrades a row.
+        ((ok)) && matched+="${url}${US}${title}${US}${dur}${US}${views}${US}${chan}${US}${live}"$'\n'
     done <<<"$ALL_ROWS"
     shopt -u nocasematch
     load_rows "$matched"

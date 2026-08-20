@@ -728,21 +728,25 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
         │  no query on argv → prompt "❯ Search YouTube: " (empty/Ctrl-D cancels, exit 0)
         ▼
    SEARCH  fetch_json:  json = yt-search -j -n "$RESULT_N" "${SEARCH_ARGS[@]}" -- "lofi"
-        │  the ONLY search path — the initial fetch, `s` new-search, and `S` more-results
+        │  the ONLY search path — the initial fetch, `n` new-search, and `m` more-results
         │  all use it, then the same build_all_rows → load_rows, so they can never drift
         ▼
-   ALL_ROWS  jq: .results[] → [ url, "title · dur · views · channel" ] | @tsv
-        │  ` · `-joined cells; a live stream shows "● LIVE" in place of its zero duration.
-        │  f1=url (hidden)  f2=display.  NO leading number — the menu numbers rows by
-        │  visible position, which stays correct after a filter re-orders them.
+   ALL_ROWS  jq: .results[] → [url, title, duration_fmt, view_count, channel, live_status]
+        │  SIX RAW FIELDS, no rendered display string: the row draws title + duration
+        │  rail, print_details draws the rest, apply_filter synthesizes its own haystack.
+        │  Joined by US (0x1f), NOT tab — `IFS=$'\t' read` collapses runs of tabs, and a
+        │  live row's empty duration_fmt would shift every field after it.
+        │  NO leading number — the menu numbers rows by visible position, which stays
+        │  correct after a filter re-orders them.
         ▼
-   load_rows → urls[] / options[] / NUM_ENTRIES / NUM_PAGES
+   load_rows → urls[] · R_TITLE/R_DUR/R_VIEWS/R_CHAN/R_LIVE · NUM_ENTRIES / NUM_PAGES
         ▼
     ┌─ SELF-RENDERED MENU LOOP (yt-tui draws every line, reads every key; plain ─────┐
     │  text + ANSI — 3-view switchable cycling: List ↔ Mode A (Card) ↔ Mode B (Mini))│
     │  display_menu:                                                                 │
-    │    List View:     title · status · live Now-Playing mini banner · results ·    │
-    │                   pagination dots · live filter input                          │
+    │    List View:     title · status · live Now-Playing mini banner · result rows  │
+    │                   (title + right-rail duration) · pagination dots · details    │
+    │                   section for the SELECTED row · live filter input             │
     │    Mode A (Card): full-screen rail-bounded card with metadata, progress bar &  │
     │                   interactive controls                                         │
     │    Mode B (Mini): ultra-minimalist 3-line mini-player with live progress bar   │
@@ -795,7 +799,8 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     `percent-pos` is ~99.98% from the first second and a progress bar is pinned full —
     measured on a 24/7 radio: `time-pos=77390 duration=77403 percent-pos=99.98` (a VOD at
     the same age reads 0.03%). The card and mini player therefore key off the row's own
-    `live_status` (which `build_all_rows` already renders as `GL_LIVE`), show
+    `live_status` (carried raw in `R_LIVE`; `play_selected` is what turns it into the
+    `GL_LIVE` badge on `CURRENT_PLAY_DURATION`), show
     `Tuned: MM:SS · ● LIVE` — wall-clock since *this* listener attached, which mpv cannot
     provide — and draw no bar. `CURRENT_PLAY_IS_LIVE`/`CURRENT_PLAY_STARTED` carry it;
     both reset on stop.
@@ -955,9 +960,69 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     `title · duration · views · channel` row takes two or three lines, so ten entries filled
     21 lines and scrolled the header, the status row, the Now-Playing banner and the entire
     navigation block off the top — every hint the layout had just packed, spent on rows that
-    then scrolled away. Each row is elided to `cols - 4 - <digits>`, the width its `> 10. ` /
-    `  10. ` prefix leaves. The title row (a long query used to wrap) and the filter caret's
-    copy are elided the same way, so the whole view is measurable line-for-line.
+    then scrolled away. Each row's TITLE is elided to what its `> 10. ` / `  10. ` prefix,
+    a two-cell gap and the duration rail leave (`cols - 4 - <digits> - 2 - rail`). The title
+    row (a long query used to wrap) and the filter caret's copy are elided the same way, so
+    the whole view is measurable line-for-line.
+  - **A row is a title and a duration; everything else is a section below it.** One physical
+    line per row was necessary but not sufficient: the row was still
+    `title · duration · views · channel` composed into ONE string and elided from the right,
+    so the elision ate the metadata FIRST and at 62 columns a row was a chopped title with
+    nothing beside it — the whole truncation budget spent on the three fields that got cut.
+    Now the row carries the title and a right-rail duration, and the full title, channel,
+    view count and video id live in a **details section** under the pagination dots, for the
+    selected row only. The rail prints a bare `LIVE` where the details line prints
+    `● LIVE · live now`: a numeric column wants no status glyph in it, and in a prose line
+    the same glyph reads as a badge. Both use `short_dur`, so the envelope's zero-padded
+    `06h:10m:58s` never reaches the screen — and neither does a row disagree with its own
+    details block, since both render from the same fields rather than from each other.
+  - **The rail is placed with an absolute column jump, not computed padding.** Right-aligning
+    by padding emits `room - DISP_W` spaces, which lands the column wherever OUR measurement
+    says — and the width rule over-counts *by design*. A title of mathematical-bold letters
+    (`𝗖𝗛𝗜𝗟𝗟`: 2 cells measured, 1 drawn) parked its duration ~10 columns left of the row
+    above it: ragged, on the one column that exists to be scanned. `\033[<n>G` (ECMA-48 CHA)
+    moves the cursor to column *n* regardless of what was printed before it, so the rail
+    lands on the same cell on every row even when a title mismeasures. Columns are 1-based,
+    so a right-flush field of `rail_w` cells starts at `cols - rail_w + 1`. The title is
+    still truncated to leave the rail room *by construction* — the jump repairs measurement
+    drift, it does not license overflow — and in the theoretical case of a title rendering
+    WIDER than measured, CHA moves backwards and cleanly overwrites the title's tail instead
+    of pushing the rail into a wrap, which is the failure direction we want. It is a cursor
+    move, not text: it never enters `disp_w` and does not disturb `\033[K` handling.
+  - **The details section is variable-height chrome, measured BEFORE the rows are drawn.**
+    Recovering the FULL title is the reason it exists — the one field a row can never show
+    whole — so it is wrapped, not elided, and takes the height it needs: rail + however many
+    lines the title wraps to + one metadata line. That makes it chrome whose height depends
+    on the *selection*, and chrome measured after the rows costs the header instead of a row.
+    `print_details` therefore honours `DETAIL_MEASURE` exactly the way `print_hints` honours
+    `HINT_MEASURE`, reporting `DETAIL_LINES` without drawing (which needed a `WRAP_MEASURE`
+    mode on `wrap_print`, funnelled through one `wrap_emit` so the counter cannot drift from
+    the printer). The ordering is what keeps it non-circular: clamp `selected` (needs no page
+    geometry) → measure the block for it → derive `PAGE_SIZE` → derive `page` from `selected`.
+    Because the page follows the selection, the row the block describes is always on screen,
+    so the page can never move the selection out from under the measurement — nothing to
+    settle over multiple frames. `PAGE_SIZE` therefore changes by one as the selection
+    crosses a one-line/three-line title; that is the accepted cost of an uncapped title, and
+    the reflow already recomputes it every redraw. On a terminal too short to pay for both,
+    the block goes and the rows stay — the same trade the navigation hints make.
+  - **Six raw fields per row, US-separated — never a rendered string, and never tab.** The
+    details section needs channel, views, liveness and an id per row, so a row stopped being
+    one display string. `IFS=$'\t' read` **collapses runs of tabs** (tab is an IFS
+    *whitespace* character), so one empty field silently shifts every field after it — and a
+    live row's `duration_fmt` IS empty, which is exactly how a prototype came to read a
+    channel name as a view count. ASCII US (0x1f) is not IFS whitespace, so empty fields
+    survive; `clean`/`oneline` collapse whitespace in the two free-text fields so no field can
+    contain a newline and split one record into two. The video id is derived from the url
+    rather than carried as a seventh field. `play_selected` reads the arrays directly, which
+    also retired its old habit of re-parsing the composed display string by splitting on
+    ` · ` — a title containing that separator mis-split. The same tab trap was latent in the
+    `yt-play -d -j` envelope parse (`id`/`pid`/`sock`, all defaulting to `""`, `@tsv`-joined:
+    a player reporting no pid put its socket path in `pid` and the guard then rejected a play
+    that had actually started); it reads US now too.
+  - **An absent view count is not zero views.** The envelope reports `view_count: null` when
+    the count was not published (every live row, some uploads). `// 0` turned that into
+    "0 views", stating a number we do not have; the field is emitted empty and the details
+    line omits the segment.
   - **How many rows fit is MEASURED, not guessed (the reflow).** `PAGE_CAP = LINES_N - 8`
     hardcoded the chrome at 8 lines, but the chrome is variable-height *by construction*:
     `print_hints` packs to the terminal width, so the status and navigation blocks take 1–4
@@ -972,7 +1037,16 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     once at startup and never revisited). The pagination-dots row is only charged when there
     is more than one page, checked against the no-dots size first so the reservation cannot be
     circular; one line is reserved for the cursor's resting row, because filling the last line
-    and emitting its newline scrolls the screen by one and costs the header again.
+    and emitting its newline scrolls the screen by one and costs the header again. The details
+    section is charged the same way, from its own measure pass, in the order above.
+    The hint block's own fit test has to reserve that pagination row too: the lines after the
+    block are the blank line, one result row, the blank line after the rows, the cursor's
+    resting row **and** the page indicator whenever the list paginates at all — the test only
+    bites on a short terminal, and on a short terminal more than one entry always means more
+    than one page. Measured without it (true of the shipped version as well): a 62×10 terminal
+    kept the block, printed 7 chrome lines, one row, a blank and `page 1/17`, and put eleven
+    lines into ten — the header off the top, which is the failure this reflow exists to
+    prevent.
   - **Across a repage the SELECTION is the anchor, not the page number.** The user is looking
     at a row. Deriving `page` from `selected` keeps that row on screen; clamping the selection
     into the old page number teleports it — measured: resizing 24→12 rows dropped the page
@@ -1016,7 +1090,15 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
   reverse-video bar. Community-standard match semantics: case-insensitive
   (`shopt -s nocasematch`, scoped), space-separated **AND** tokens, empty query restores all.
   Tokens are quoted in the glob (`*"$tok"*`) so a user's `*`/`[`/`?` match literally — no
-  injection. Only the display field is matched; the hidden url rides along. `n` (new search)
+  injection. The haystack is **synthesized per row per keystroke**, not stored as a seventh
+  field: the row already has the pieces, the string is never printed, and a stored key would
+  be one more thing to keep in step with the renderer. It holds title, channel, view count
+  and BOTH duration forms — the envelope's `11h:53m:45s` for parity with what the filter
+  always matched, and `short_dur`'s `11:53:45` because that is the form the rail shows, and a
+  filter that will not match what is on the screen is a filter that looks broken. It also
+  holds the literal word `LIVE` for a live row, which is what keeps typing `live` working now
+  that no row carries a rendered `● LIVE` string to match against. Matched rows are re-emitted
+  unchanged, so `ALL_ROWS` stays the single source and a filter can never degrade a row. `n` (new search)
   stays Enter-submit — it hits the network — so the two prompts diverge on purpose (in-page
   filter is live; a remote search submits).
 - **Chrome: pagination + cursor.** Pagination dots (`●○○`, current filled) render ONLY when
@@ -1024,10 +1106,11 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
   in ASCII mode or past a readable dot cap. The terminal cursor is hidden while the menu is
   drawn (so no stray block parks below the footer) and shown only for the bottom filter input,
   typed prompts, and playback; a `trap … EXIT` restores it on quit / error / Ctrl-C.
-- **URL plumbing:** jq `@tsv` escapes any tab/newline in a title, so the hidden
-  url/display field boundary never breaks; `load_rows` splits back into parallel
-  `urls[]`/`options[]`, so a pick is a direct array index — never re-parsing a
-  rendered line.
+- **URL plumbing:** the url is field 1 of the US-separated record and `load_rows` splits it
+  back into `urls[]` alongside the five `R_*` field arrays, so a pick is a direct array index
+  — never re-parsing a rendered line. Titles cannot break the field boundary because `clean`
+  collapses whitespace (so no tabs or newlines survive) and the separator is a control
+  character no title carries.
 - **Refuse-don't-hang:** requires a TTY on **both** stdin and stdout or dies, so an
   agent/pipe invocation exits cleanly instead of blocking on key input. `-h` works
   without a TTY.
@@ -1236,6 +1319,11 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
    Interactive  : yt-tui   (fetch_json → build_all_rows → load_rows → menu loop:
                   display_menu · read_nav_input · move_selection · play_selected ·
                   new_search [read_query_input, Esc cancels] · filter_live → apply_filter)
+     Width layer: char_w/disp_w/truncate_disp/cluster_back, cw_range/init_cell_tables
+     Chrome     : layout_cols, print_hints (HINT_MEASURE), wrap_print/wrap_emit
+                  (WRAP_MEASURE), print_details (DETAIL_MEASURE), card_divider,
+                  repeat_glyph, render_prog_bar
+     Formatters : fmt_sec (clock), short_dur (duration_fmt → 6:10:58), commas
 ```
 
 **Provenance.** The suite descends from an all-in-one `yt-search-n-play.sh`: its
@@ -1389,6 +1477,83 @@ first; gate deletions by grep so no dangling reference survives.
                                              for tight loops (human-driven adjust is fine)
 ```
 
+### 25.1 Open defect register — `yt-tui` hardening pass
+
+Audited against `shell-scripts/yt-tui`, **not yet fixed**: this is a register of known
+defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
+because the findings are statements about *this* design's seams, and each one is only
+actionable next to the section it sits in. Three were reproduced empirically on the
+machine's own bash 3.2.57 before being written down; the rest were read off the code.
+
+**Reproduced, not inferred:**
+
+- Space → pause → unpause exits the script with status 1 (`set -e` kills it on the second
+  toggle).
+- `play_selected` returning 1 from a case arm exits the script with status 1 — no output,
+  no cleanup message.
+- `read -rsn1` on bash 3.2 delivers one **byte**: 你 arrives as `e4 bd a0`, three keys.
+
+**The `set -e` family — user-facing crashes, fix first.** All three are the same trap
+(§28): a non-zero status reaching `set -e` from a place that reads like an expression, not
+a command.
+
+| ID | Site | Mechanism | Direction |
+|----|------|-----------|-----------|
+| F1 | `toggle_pause` | `((CURRENT_PLAY_PAUSED = 1 - CURRENT_PLAY_PAUSED))` — pause (0→1) is status 0, **unpause (1→0) is status 1**, and a bare `((…))` statement aborts. The file documents this exact trap twice elsewhere (`char_w`, the banner's `b_fixed`) and missed this site. | assignment form |
+| F2 | `play_selected`, both call sites (main loop + `filter_live`) | returns 1 when `yt-play -d -j` fails or the envelope lacks `id`/`sock`. A function returning non-zero from a case arm is **not** exempt from `set -e`. Because `stop_current_playback` already ran, a failed Enter = previous track stopped **and** the whole TUI gone, silently (stderr is `/dev/null`'d). | guard both call sites; show the envelope's `reason` (§14 taxonomy) in the same "press any key" style as the `n`/`m`/`o` failures; keep `return 1` as the contract |
+| F17 | `send_mpv_ipc` | `[[ -n sock && -S sock ]] \|\| return 1` — if the socket *file* vanishes while the player lives (e.g. the core reaps after a concurrent stop), this returns 1 as the **last** command of `toggle_pause` / `seek_relative` / `adjust_volume`, so the function returns 1 → case arm → abort. Masked today only because F1 dies first. | `return 0`: fire-and-forget is already this function's contract, its failure already silent |
+
+Audited clear in the same pass: every other case-arm function returns 0 on all paths
+(`move_selection`, `cycle_mode`, `cycle_sort`, `new_search`, `more_results`, `filter_live`,
+`stop_current_playback`, `apply_filter`); `mpv_get_prop` ends in `|| true` and is only ever
+used in command substitution.
+
+**Call-stack boundary — yt-tui reaching past a seam it already has.**
+
+| ID | Sev | Finding |
+|----|-----|---------|
+| F3 | high | **A dead player leaves a stale banner forever.** `send_mpv_ipc` swallows every failure, `mpv_get_prop` returns empty on a dead socket, and nothing re-checks the player: a track that ends (or an mpv crash) leaves the list banner showing the old title, the card showing `--:--` against a stale title, and Space flipping a local paused flag with no IPC peer. The core already defines liveness as "process group alive" (§9.3 `reap_dead_players`), and the `-d` envelope's `.pid` is the **wrapper's** pid, which blocks on mpv — so wrapper alive ⇔ still playing, and `kill -0` on it is the same truth for one builtin and no fork. One poll per loop iteration (per keypress in list view, per 1s tick in card/mini) clears the state into the empty views that already exist. |
+| F5 | high | **Volume over the raw socket escapes the 0–100 contract.** `9`/`0` send `add volume ±5` straight to mpv, bypassing the core's `--set-volume` validation; mpv's own ceiling is 130, so holding `0` reaches a value the rest of the suite's vocabulary says cannot exist (§9.3). Read-modify-set with a clamp costs one extra ~10ms round trip per keypress — a key handler, not the redraw path. |
+| F6 | med | **`nc` is never `require_cmd`'d** — only `jq` is, though the entire IPC surface (pause, seek, volume, every time readout) depends on it. The start-up contract already refuses to run without its tools. |
+| F9 | med | **The filter's `?)` catch-all swallows Tab into the query.** Swallowing `q`/`s`/`9`/`0`/`l` mid-filter is deliberate modality ("type to narrow, Esc clears") and stays; Tab is a control character that can never be part of a query, so it needs its own no-op arm. `?` also cannot match a multibyte character, which is F10. |
+| F10 | med | **CJK typed into the filter or the new-search prompt arrives byte-split** — see §28. Both readers need one shared UTF-8 assembly helper off the lead byte, with the continuation reads on a timeout so a lone lead byte cannot stall the once-a-second card/mini tick. Backspace then has to be verified to strip a *character*, not a byte. |
+
+**Shape — duplication and unfinished rules.**
+
+| ID | Sev | Finding |
+|----|-----|---------|
+| F7 | med | The "no results / error / press any key" block is copy-pasted in `new_search`, `more_results` and `cycle_sort`, **and has already drifted in wording** — the standard signal that it wants to be one function. Each caller restores its own mutated variable before calling, as today. |
+| F8 | low | `read_query_input` returns 2 on Esc and 1 on EOF; its only caller treats both as cancel. The distinction is dead — collapse to 0/1 as part of the F10 rewrite. |
+| F11 | low | **The one-language-per-run rule stops at the list hints.** `Playing`/`Paused`, `NOW PLAYING FOCUS`, `MINI PLAYER`, and the card's `Title:`/`Channel:`/`Time:`/`Tuned:`/`Mode:`/`Status:` are hardcoded English inside a bilingual chrome (§11 — help text and errors stay English *by design*; these are chrome). They want `S_*` entries in both branches of `set_ui_lang`. **This cannot be a pure string swap:** the card's one-line time/status row pads its label with `%-8s`, which is 8 *characters*, so a 3-character CJK label ("时间:") renders 11 cells while the fit estimate assumes 8 — the row would under-estimate and wrap mid-line. The estimate has to measure what is actually printed, and English values must reproduce today's numbers exactly. |
+| F12 | trivial | Duplicate comment line in `print_hints` — the "one call (the status row wants its fields dim…)" sentence appears twice. |
+
+**Low pile.**
+
+| ID | Finding |
+|----|---------|
+| F13 | `fetch_play_times` makes **three** `nc \| jq` round trips per second on the card/mini redraw path (3 forks + 3 sockets per tick), against a codebase whose stated ethos is no forks on a redraw (`repeat_glyph`, `disp_w`). mpv answers one reply per request line, in order, so one connection carrying three `get_property` lines and one `jq -s` pass does it. **The trap:** keep a slot per reply (`map(.data)[]`, never `// empty`) — dropping an early `null` (`time-pos` before playback starts) shifts duration into the position slot. The existing call-site null guards already handle the nulls. |
+| F14 | `m` (more results) resets to page 1 although it **appends** — rows 1..N are unchanged, so the old page and selection stay valid and should be restored (the reflow clamps them if the page count changed). Deliberately **not** applied to `o`: re-sorted rows make the old index point at a different track, so that reset is correct and wants a comment saying so. |
+| F15 | The mini player sizes its progress bar with `${#total_time}`, but `total_time` can be `● LIVE` — non-ASCII, so the byte length under-counts under `YT_AMBIG_WIDE=1` and the bar runs a cell past the right edge. `disp_w` is the rule everywhere else (§11). |
+| F16 | `--volume` / `-m` / `-M` are not validated locally though `is_uint` exists and `-n`/`-p`/`-s`/`-f`/`--color` all are. |
+
+**Accepted, not defects** (recorded so they are not re-litigated): the filter swallowing
+`q`/`s`/`9`/`0`/`l` is intentional modality; a failed play in filter mode consuming one
+keystroke on "press any key" matches the `n`/`m`/`o` failure behavior.
+
+**Order.** The three `set -e` aborts first — everything else reviews on top of a stable
+base. Then the input layer as one change (F9 + F10 + F8, four sites, one shared helper),
+then the playback boundary (F3, F5), then shape/i18n (F7, F11, F12), then the low pile
+(F13–F16, F6). Each step ends `bash -n` clean, re-runs the two `set -e` repros, and the
+interactive smoke pass in §27.
+
+**Closed by the list-view rail/details work:** the original audit also carried F4 — play
+metadata re-derived by re-splitting the *display* string, which only parsed correctly
+because `clean` collapses whitespace, and which threw away the `views` field it parsed
+(proof the split was never a contract). `play_selected` now reads the row's own fields
+(§11), and the tab-collapse hazard the fix had to dodge is why the record separator is US
+rather than tab. The same audit noted this document's §11 diagram naming `s`/`S` for
+new-search/more-results instead of `n`/`m`; also corrected.
+
 ## 26. Non-goals / known constraints
 
 - Detached `ascii`/`viz` (no terminal to render into) — rejected at parse time (§9.2);
@@ -1470,6 +1635,25 @@ first; gate deletions by grep so no dangling reference survives.
                 music keeps playing across `n` (new search) and `/` (live filter);
                 Enter on another row switches track without a gap;
                 full chrome draws (title w/ ♫ accent · status · hints · '>'-caret selected row · ●○○ pages · bottom filter input);
+                List rows: the duration rail ends in the SAME column on every row of a
+                page — asserted on a fixture carrying a mathematical-bold title (drawn
+                narrower than measured, the row that ragged a padding-computed rail), a
+                fullwidth title, a CJK title and a live row; geometry matrix
+                40×10 62×8 40×20 50×14 62×12 62×24 80×24 100×30 120×40 plus a width
+                sweep at 40/45/52/62/80/100/120 — header on line 1, no line over the
+                pane width, and the details block DROPPED (not overflowed) at 62×8/62×10
+                Details section: walking ↓ across titles that wrap to 1, 2 and 3 lines
+                keeps the header on line 1 and every line within the pane — the row
+                count is EXPECTED to change, what is asserted is that the reflow pays
+                for the taller block out of the rows (10 → 8 at 62×24); a live row shows
+                "● LIVE · live now", a null-view-count row omits the views segment
+                WRAP_MEASURE parity: measured == printed lines over 10 widths × 5 texts
+                (ascii, long-wrapping, CJK, one unbreakable word, mathematical bold)
+                Filter parity: a token matching a title, a channel, the envelope
+                duration (11h:53), the DISPLAYED duration (11:53) and LIVE
+                Resize 62×24 → 12 → 10 → 8 → 24 → 14 (with a redraw keystroke, since the
+                list-view read has no timeout) keeps the selection anchored on the same
+                row and repages every time
                 ↑/↓ nav + ←/→ page (assert page count w/ -p); n/m/o → re-fetch;
                 v → PLAY_MODE flip (local, no re-fetch; status/hint update on redraw);
                 / → LIVE filter (type narrows per-keystroke; multi-term AND; mixed-case;
@@ -1497,9 +1681,21 @@ Rules for anyone editing these scripts:
                           ("unbound variable"). Use one of the two portable forms:
                             ((${#arr[@]})) && cmd "${arr[@]}"          (guard, as in core)
                             cmd ${arr[@]+"${arr[@]}"}                  (inline, as in yt-tui)
+   Arithmetic + set -e:   a bare ((expr)) is a COMMAND, and its exit status is 1 when
+                          the expression evaluates to 0. Under set -e that aborts the
+                          script. So never write ((x = 1 - x)) or ((n += w)) as a
+                          statement — use x=$((1 - x)) / n=$((n + w)). ((x)) as a TEST
+                          (in `if`, `&&`, `||`) is fine: there the status is the point.
+   read -rsn1 = one BYTE: not one character, on 3.2. A CJK character typed at a prompt
+                          arrives as 2-3 separate "keys" (verified: 你 → e4 bd a0), so
+                          any reader that accumulates keypresses into text has to
+                          reassemble the UTF-8 sequence from its lead byte. Byte-range
+                          comparisons for that need LC_ALL=C: [[ ]] in a UTF-8 locale
+                          collates by codepoint, which misorders raw bytes.
    Verify:                run the empty-argument paths under /bin/bash explicitly —
                           this class is a runtime bash-version behavior, so `bash -n`
                           and shellcheck do NOT catch it; only executing on 3.2 does.
+                          Same for the two rules above: both are runtime behaviors.
 ```
 
 If a future feature genuinely needs bash 4+, the honest move is to assert
