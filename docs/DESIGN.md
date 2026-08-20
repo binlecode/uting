@@ -770,6 +770,15 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     where the old fixed-42 bar measured 46 cells at 0%, 44 at 50% and 47 at 100%, making
     the line jitter on every refresh. `repeat_glyph` builds the runs because
     `printf 'x%.0s' $(seq 1 0)` still prints one cell (printf always walks its format once).
+  - **A live stream has no position, so it gets no position readout.** mpv reports
+    `time-pos` on the *broadcast's* timeline with `duration` = the live edge, so
+    `percent-pos` is ~99.98% from the first second and a progress bar is pinned full —
+    measured on a 24/7 radio: `time-pos=77390 duration=77403 percent-pos=99.98` (a VOD at
+    the same age reads 0.03%). The card and mini player therefore key off the row's own
+    `live_status` (which `build_all_rows` already renders as `GL_LIVE`), show
+    `Tuned: MM:SS · ● LIVE` — wall-clock since *this* listener attached, which mpv cannot
+    provide — and draw no bar. `CURRENT_PLAY_IS_LIVE`/`CURRENT_PLAY_STARTED` carry it;
+    both reset on stop.
   - **Terminal size comes from `stty size </dev/tty`, not `$(tput cols)`.** Inside command
     substitution ncurses can miss the window-size ioctl and answer with terminfo's default
     80x24 — measured: a 60-column pane reported 80, so the card drew 80-wide rails and every
@@ -1223,6 +1232,9 @@ first; gate deletions by grep so no dangling reference survives.
                 blank (not a stale rail), and the mini player's bar ends at the same
                 right edge as its wrapped title; YT_ASCII=1 renders [#---] at the same
                 width
+                Live stream: card/mini show "Tuned: MM:SS · ● LIVE" with the counter
+                ticking and NO bar (never mpv's ~99.98% percent-pos); a VOD in the same
+                build still shows "00:05 / 02:03:54 (0%)" + a rail-flush bar
                 9/0 volume; ] seek; q → exits and reaps ONLY its own player;
                 music keeps playing across `n` (new search) and `/` (live filter);
                 Enter on another row switches track without a gap;

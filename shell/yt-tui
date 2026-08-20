@@ -206,6 +206,14 @@ CURRENT_PLAY_DURATION=""
 CURRENT_PLAY_MODE=""
 CURRENT_PLAY_SOCK=""
 CURRENT_PLAY_PAUSED=0
+# A live stream has no meaningful position: mpv reports time-pos on the whole
+# broadcast-so-far timeline with duration = the live edge, so percent-pos sits at
+# ~99.98% from the first second and the progress bar is pinned full. Track liveness
+# (from the row's own live_status, which build_all_rows already renders as GL_LIVE) and
+# show elapsed listening time instead of a fake position. Measured on a 24/7 radio:
+# time-pos=77390 duration=77403 percent-pos=99.98.
+CURRENT_PLAY_IS_LIVE=0
+CURRENT_PLAY_STARTED=0     # epoch seconds when WE attached, for the elapsed readout
 
 # Cursor helpers
 # Terminal size. NOT `$(tput cols)`: inside command substitution ncurses can miss the
@@ -256,6 +264,17 @@ repeat_glyph() {
         ((n--))
     done
     printf '%s' "$out"
+}
+
+# Elapsed wall-clock since we attached to a stream, as HH:MM:SS / MM:SS. Used for live
+# streams, where mpv's own time-pos is a position on the broadcast timeline (hours in) and
+# says nothing about how long this listener has been tuned in.
+elapsed_since_play() {
+    ((CURRENT_PLAY_STARTED > 0)) || { printf '%s' "--:--"; return; }
+    local now
+    now=$(date +%s 2>/dev/null || echo 0)
+    ((now >= CURRENT_PLAY_STARTED)) || { printf '%s' "--:--"; return; }
+    fmt_sec $((now - CURRENT_PLAY_STARTED))
 }
 
 # Progress bar sized to the caller's layout. $2 is the FULL cell width the bar may occupy,
@@ -398,6 +417,8 @@ stop_current_playback() {
         CURRENT_PLAY_DURATION=""
         CURRENT_PLAY_MODE=""
         CURRENT_PLAY_PAUSED=0
+        CURRENT_PLAY_IS_LIVE=0
+        CURRENT_PLAY_STARTED=0
     fi
 }
 
@@ -595,7 +616,7 @@ display_now_playing_card() {
             if [[ -n "$raw_dur" && "$raw_dur" != "null" ]]; then
                 total_time=$(fmt_sec "$raw_dur")
             fi
-            if [[ -n "$raw_pct" && "$raw_pct" != "null" ]]; then
+            if [[ -n "$raw_pct" && "$raw_pct" != "null" ]] && ((! CURRENT_PLAY_IS_LIVE)); then
                 local pct_int=${raw_pct%.*}
                 pct_str=" (${pct_int}%)"
                 # The bar is indented like the rest of the card body (4 cells) and ends
@@ -604,14 +625,28 @@ display_now_playing_card() {
             fi
         fi
 
+        # Live: mpv's position/percent describe the broadcast, not this listen — show how
+        # long we have been tuned in and draw no bar (it would be pinned at 100%).
+        if ((CURRENT_PLAY_IS_LIVE)); then
+            cur_time=$(elapsed_since_play)
+            total_time="$GL_LIVE"
+            pct_str=""
+            bar_str=""
+        fi
+
         local text_w=$((cols - 15))
         ((text_w < 25)) && text_w=25
 
         printf '%s%s%s\033[K\n' "$C_DIM" "$div" "$C_RESET"
         wrap_print "$CURRENT_PLAY_TITLE" "$text_w" "  ${C_BOLD}▶ Title:${C_RESET}     " "               "
         wrap_print "$CURRENT_PLAY_CHANNEL" "$text_w" "    ${C_DIM}Channel:${C_RESET}   " "               "
-        printf '    %sTime:%s      %s / %s%s    %sMode:%s %s    %sStatus:%s %s%s%s\033[K\n' \
-            "$C_DIM" "$C_RESET" "$cur_time" "$total_time" "$pct_str" \
+        local time_label="Time:" time_sep="/"
+        if ((CURRENT_PLAY_IS_LIVE)); then
+            time_label="Tuned:"
+            time_sep="·"
+        fi
+        printf '    %s%-8s%s   %s %s %s%s    %sMode:%s %s    %sStatus:%s %s%s%s\033[K\n' \
+            "$C_DIM" "$time_label" "$C_RESET" "$cur_time" "$time_sep" "$total_time" "$pct_str" \
             "$C_DIM" "$C_RESET" "$CURRENT_PLAY_MODE" \
             "$C_DIM" "$C_RESET" "$p_color" "$p_status" "$C_RESET"
         if [[ -n "$bar_str" ]]; then
@@ -668,10 +703,18 @@ display_mini_player() {
             if [[ -n "$raw_dur" && "$raw_dur" != "null" ]]; then
                 total_time=$(fmt_sec "$raw_dur")
             fi
-            if [[ -n "$raw_pct" && "$raw_pct" != "null" ]]; then
+            if [[ -n "$raw_pct" && "$raw_pct" != "null" ]] && ((! CURRENT_PLAY_IS_LIVE)); then
                 bar_pct=${raw_pct%.*}
                 pct_str=" (${bar_pct}%)"
             fi
+        fi
+
+        # Live: elapsed listening time, no position/percent, no bar (see the card).
+        if ((CURRENT_PLAY_IS_LIVE)); then
+            cur_time=$(elapsed_since_play)
+            total_time="$GL_LIVE"
+            pct_str=""
+            bar_pct=""
         fi
 
         # The bar shares its line with the time readout, so it gets whatever the readout
@@ -685,7 +728,9 @@ display_mini_player() {
         fi
 
         wrap_print "$CURRENT_PLAY_TITLE" "$text_w" "  ${p_color}${p_icon}${C_RESET} ${C_BOLD}" "    ${C_BOLD}"
-        printf '  %s%s / %s%s%s  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$cur_time" "$total_time" "$pct_str" "$C_RESET" "$C_YELLOW" "$bar_str" "$C_RESET"
+        local mini_sep="/"
+        ((CURRENT_PLAY_IS_LIVE)) && mini_sep="·"
+        printf '  %s%s %s %s%s%s  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$cur_time" "$mini_sep" "$total_time" "$pct_str" "$C_RESET" "$C_YELLOW" "$bar_str" "$C_RESET"
         printf '  %s[Tab / Esc] 列表选单  [Space] 暂停  [←/→] 5s快进退  [9/0] 音量  [s] 停止  [q] 退出%s\033[K\n' "$C_DIM" "$C_RESET"
     fi
     printf '\033[J'
@@ -738,6 +783,8 @@ play_selected() {
     CURRENT_PLAY_TITLE="${title:-Unknown}"
     CURRENT_PLAY_DURATION="${dur:-Unknown}"
     CURRENT_PLAY_CHANNEL="${chan:-Unknown}"
+    if [[ "$dur" == "$GL_LIVE" ]]; then CURRENT_PLAY_IS_LIVE=1; else CURRENT_PLAY_IS_LIVE=0; fi
+    CURRENT_PLAY_STARTED=$(date +%s 2>/dev/null || echo 0)
 }
 
 # ── MODE action (key: v) ────────────────────────────────────────────────────────────────
