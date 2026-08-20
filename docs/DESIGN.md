@@ -790,8 +790,15 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     languages at once. `init_ui_strings` resolves every label ONCE into globals — bash 3.2
     has no associative arrays, and a per-draw lookup would fork or re-branch on every
     redraw — choosing from `YT_LANG=en|zh`, else a `zh*` locale, else English (which also
-    covers cron/CI, where `LANG` is unset). Wrapped-row indents are measured with `disp_w`,
-    not `${#var}`: "导航:" is 3 characters but 5 cells.
+    covers cron/CI, where `LANG` is unset). That is only the STARTING language: `set_ui_lang`
+    is split from the initial choice so the **`l` key** re-fills the table live, from any
+    view, without touching playback. Wrapped-row indents are measured with `disp_w`, not
+    `${#var}`: "导航:" is 3 characters but 5 cells.
+  - **`disp_w` counts every non-ASCII cell as two**, which is exact for CJK (East-Asian
+    Wide) and deliberately conservative for the East-Asian-Ambiguous glyphs the chrome uses
+    (`● ○ ▶ ❯ ♫ · ↑ →`), which a terminal renders in ONE cell. So a row containing them is
+    packed a cell or two early — never over the edge. A real `wcwidth` table in bash 3.2
+    would buy back that cell and is not worth its weight.
   - **All chrome rows are laid out to the measured width, not written as fixed strings.**
     `disp_w` measures PLAIN text (a non-ASCII cell counts as two — the labels are CJK, so
     they run out of room sooner than their character count suggests) and returns through a
@@ -876,8 +883,8 @@ Narrow gates over the core; the full allow/reject surface is the table in §13.
   need a terminal (§9.2).
   Keys: arrows nav/page · Enter non-blocking play · `Tab`/`p` cycle the three views ·
   `Esc` back to list · `Space` pause · `[`/`]` seek ∓10s · `9`/`0` volume · `s` stop ·
-  `v` cycle mode (audio→video→fast) · `n` new search · `m` more results · `o` sort ·
-  `/` filter · `q` quit.
+  `v` cycle mode (audio→video→fast) · `l` switch chrome language (en↔zh, any view) ·
+  `n` new search · `m` more results · `o` sort · `/` filter · `q` quit.
 
 ## 13. Wrapper gating model
 
@@ -1265,8 +1272,11 @@ first; gate deletions by grep so no dangling reference survives.
                 width in all three views (max measured = the rails/bar themselves) —
                 nav + controls + mini hints + empty-state repack, the card's
                 Time/Mode/Status row splits, the banner elides its title
-                YT_ASCII=1: a rendered pane contains no non-ASCII beyond the CJK label
-                text (>, ||, *, Up/Dn, Lt/Rt, Enter, -, ..., ->, [#---], |)
+                YT_ASCII=1: a rendered pane contains no non-ASCII beyond the label text
+                (>, ||, *, Up/Dn, Lt/Rt, Enter, -, ..., ->, [#---], |)
+                Language: LANG=zh_CN starts Chinese, LANG=en_US starts English, YT_LANG
+                overrides both, YT_LANG=fr dies; the `l` key flips the chrome in the
+                list AND card/mini views with playback uninterrupted
                 9/0 volume; ] seek; q → exits and reaps ONLY its own player;
                 music keeps playing across `n` (new search) and `/` (live filter);
                 Enter on another row switches track without a gap;

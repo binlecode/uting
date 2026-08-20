@@ -63,6 +63,7 @@ Keys (List View):
   9 / 0    volume down / up (via IPC)
   [ / ]    seek backward / forward 10s (via IPC; works in every view)
   v        cycle playback mode: audio → video → fast (applies to next play)
+  l        switch chrome language (en <-> zh), any view
   n        new search (fetch a different query without interrupting music)
   m        more results (re-fetch current query, +25 to count)
   o        rotate sort field / order (relevance → view_count → duration), re-fetch
@@ -186,23 +187,15 @@ init_colors
 # ONCE into globals rather than looked up per draw — bash 3.2 has no associative arrays,
 # and a lookup function would fork or re-branch on every redraw.
 UI_LANG=""
-init_ui_strings() {
-    case "${YT_LANG:-}" in
-    en | zh) UI_LANG="$YT_LANG" ;;
-    "")
-        case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in
-        zh* | *_zh* ) UI_LANG="zh" ;;
-        *) UI_LANG="en" ;;
-        esac
-        ;;
-    *) die "YT_LANG must be en or zh (got '$YT_LANG')" ;;
-    esac
-
+# set_ui_lang <en|zh> — fill the table. Kept separate from the initial choice below so the
+# `l` key can re-resolve it live without re-reading the environment.
+set_ui_lang() {
+    UI_LANG=$1
     if [[ "$UI_LANG" == "zh" ]]; then
         S_NAV="导航:"
         S_SELECT="选择"; S_PAGE="翻页"; S_PLAY="播放"; S_VIEW="视图"; S_MODE="模式"
         S_SEARCH="搜索"; S_MORE="更多"; S_SORT="排序"; S_FILTER="过滤"
-        S_STOP="停止"; S_QUIT="退出"
+        S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"
         S_FOCUS="专注卡片"; S_PAUSE="暂停"; S_VOL="音量"
         S_BACK_LIST="返回列表选单"; S_PAUSE_RESUME="暂停 / 继续"; S_SEEK5="快退 / 快进 5s"
         S_VOL_ADJUST="调节音量"; S_STOP_PLAY="停止播放"
@@ -212,13 +205,32 @@ init_ui_strings() {
         S_NAV="Navigation:"
         S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_VIEW="view"; S_MODE="mode"
         S_SEARCH="search"; S_MORE="more"; S_SORT="sort"; S_FILTER="filter"
-        S_STOP="stop"; S_QUIT="quit"
+        S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"
         S_FOCUS="focus card"; S_PAUSE="pause"; S_VOL="volume"
         S_BACK_LIST="back to list"; S_PAUSE_RESUME="pause / resume"; S_SEEK5="seek -/+ 5s"
         S_VOL_ADJUST="volume"; S_STOP_PLAY="stop playback"
         S_LIST_MENU="list menu"; S_SEEK5_SHORT="seek 5s"
         S_NOTHING="(nothing playing)"; S_BACK_SEARCH="back to results"; S_PLAY_SEL="play selection"
     fi
+}
+
+# Toggle the chrome language in place (key: l). The card and mini player redraw on their
+# 1s tick; the list view redraws when the menu loop comes back around.
+cycle_ui_lang() {
+    if [[ "$UI_LANG" == "zh" ]]; then set_ui_lang en; else set_ui_lang zh; fi
+}
+
+init_ui_strings() {
+    case "${YT_LANG:-}" in
+    en | zh) set_ui_lang "$YT_LANG" ;;
+    "")
+        case "${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}" in
+        zh* | *_zh*) set_ui_lang zh ;;
+        *) set_ui_lang en ;;
+        esac
+        ;;
+    *) die "YT_LANG must be en or zh (got '$YT_LANG')" ;;
+    esac
 }
 init_ui_strings
 
@@ -714,7 +726,8 @@ display_list_menu() {
     nav_pad=$(printf '%*s' $((DISP_W + 1)) '')
     print_hints "$nav_cols" "$S_NAV " "$nav_pad" \
         "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY" "Tab	$S_VIEW" "v	$S_MODE" \
-        "n	$S_SEARCH" "m	$S_MORE" "o	$S_SORT" "/	$S_FILTER" "s	$S_STOP" "q	$S_QUIT"
+        "n	$S_SEARCH" "m	$S_MORE" "o	$S_SORT" "/	$S_FILTER" "l	$S_LANGKEY" \
+        "s	$S_STOP" "q	$S_QUIT"
     printf '\n'
 
     # Result rows
@@ -1251,6 +1264,7 @@ while true; do
         "[D" | "OD" | "["*D | "O"*D) seek_relative -5 ;;   # left arrow → seek -5s
         "[A" | "OA" | "["*A | "O"*A) adjust_volume 5 ;;    # up arrow → volume +5
         "[B" | "OB" | "["*B | "O"*B) adjust_volume -5 ;;   # down arrow → volume -5
+        l | L) cycle_ui_lang ;;
         q | Q) printf 'Quitting%s\n' "$GL_ELL"; exit 0 ;;
         *) ;;
         esac
@@ -1267,6 +1281,7 @@ while true; do
     m | M) more_results ;;    # more results
     o | O) cycle_sort ;;      # rotate sort
     v | V) cycle_mode ;;      # rotate playback mode
+    l | L) cycle_ui_lang ;;   # toggle chrome language (en <-> zh)
     "/") filter_live ;;       # LIVE incremental filter
     q | Q) printf 'Quitting%s\n' "$GL_ELL"; exit 0 ;;
     ESC) ;;
