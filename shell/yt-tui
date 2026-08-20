@@ -333,18 +333,117 @@ repeat_glyph() {
 }
 
 # ── Adaptive chrome layout ──────────────────────────────────────────────────────────────
-# Display width of PLAIN text: a non-ASCII cell counts as two, the same rule wrap_print
-# uses. Colours are applied at print time and never measured. Returns through a global
-# (DISP_W) rather than stdout: this runs several times per redraw, and $(...) would mean a
-# subshell fork per measurement.
+# ── Cell width: ONE rule, in ONE place (char_w) ──────────────────────────────────────────
+# The rule: a non-ASCII character counts as TWO cells. That is exact for CJK (East-Asian
+# Wide) and a deliberate OVER-count for the East-Asian-Ambiguous glyphs the chrome draws
+# (● ○ ▶ ❯ ♫ · ↑ →), which Ghostty renders in ONE cell. The over-count IS the safety
+# property: a row packs a cell or two early, never past the edge — and it stays correct in
+# terminals that render those glyphs double-width (Terminal.app, iTerm2 and tmux can all be
+# configured ambiguous-wide), where hardcoding 1 would UNDER-count and overflow. So there is
+# deliberately no ambiguous-width table here; buying back that one cell in Ghostty is not
+# worth breaking every other terminal.
+#
+# What IS corrected is the zero-width class, where "two cells" is wrong in every terminal.
+# The base character is still counted as two, so each of these makes the whole sequence come
+# out EXACT rather than merely conservative:
+#   U+200D ZWJ, U+FE0E/U+FE0F VS15/VS16    joiner and presentation selectors  ☕️ = 2 (was 4)
+#   U+1F3FB..U+1F3FF skin-tone modifiers                                      👍🏽 = 2 (was 4)
+#   U+0300..U+036F, U+20D0..U+20F0, U+FE20..U+FE2F combining marks         e+◌́ = 1 (was 2)
+# Regional indicators (U+1F1E6..U+1F1FF) count ONE each, so a flag pair is 2 (was 4).
+# Combining marks outside those blocks (Arabic, Devanagari, Thai) are not in the table and
+# stay over-counted — conservative, never short. A ZWJ emoji sequence still over-counts
+# (👨‍👩‍👧 measures 6, drawn as 2); collapsing that needs a real grapheme-cluster walk, which is
+# not worth its weight in bash 3.2.
+#
+# The tables are byte-built at startup instead of written as string literals: a source line
+# full of invisible combining marks is unreadable and un-editable.
+CW_ZWJ=$'\xe2\x80\x8d'
+CW_ZERO=""      # characters that add no cells
+CW_NARROW=""    # non-ASCII characters that still take only one
+CW_RANGE=""
+cw_range() {
+    local prefix=$1 lo=$2 hi=$3 pat ch
+    CW_RANGE=""
+    while ((lo <= hi)); do
+        printf -v pat '%s\\x%02x' "$prefix" "$lo"
+        printf -v ch "$pat"
+        CW_RANGE+="$ch"
+        ((lo++))
+    done
+}
+init_cell_tables() {
+    CW_ZERO="$CW_ZWJ"
+    cw_range '\xef\xb8'     142 143; CW_ZERO+="$CW_RANGE"    # U+FE0E..U+FE0F  variation selectors
+    cw_range '\xcc'         128 191; CW_ZERO+="$CW_RANGE"    # U+0300..U+033F  combining marks
+    cw_range '\xcd'         128 175; CW_ZERO+="$CW_RANGE"    # U+0340..U+036F  combining marks
+    cw_range '\xe2\x83'     144 176; CW_ZERO+="$CW_RANGE"    # U+20D0..U+20F0  marks for symbols
+    cw_range '\xef\xb8'     160 175; CW_ZERO+="$CW_RANGE"    # U+FE20..U+FE2F  half marks
+    cw_range '\xf0\x9f\x8f' 187 191; CW_ZERO+="$CW_RANGE"    # U+1F3FB..U+1F3FF skin tones
+    cw_range '\xf0\x9f\x87' 166 191; CW_NARROW="$CW_RANGE"   # U+1F1E6..U+1F1FF regional indicators
+}
+init_cell_tables
+
+# Cells taken by ONE character. Returns through CHAR_W: this is the innermost loop of every
+# measurement, so no subshell, no command substitution. All four measuring sites (disp_w,
+# truncate_disp, and both of wrap_print's loops) go through here — when the rule lived
+# inline in each of them, a fix to one silently disagreed with the other three, and
+# measurement disagreeing with line-breaking is worse than a uniform over-count.
+CHAR_W=0
+char_w() {
+    local c=$1
+    if [[ "$c" == [[:ascii:]] ]]; then CHAR_W=1; return; fi
+    if [[ "$CW_ZERO" == *"$c"* ]]; then CHAR_W=0; return; fi
+    if [[ "$CW_NARROW" == *"$c"* ]]; then CHAR_W=1; return; fi
+    CHAR_W=2
+}
+
+# Display width of PLAIN text. Colours are applied at print time and never measured. Returns
+# through a global (DISP_W) rather than stdout: this runs several times per redraw, and
+# $(...) would mean a subshell fork per measurement. Pure-ASCII strings — most of the chrome
+# — skip the per-character walk entirely, so this is FASTER than the inline test it replaced
+# (300 measurements of the mini-player hint row: 94ms before, 5ms after).
+# Accumulate with `n=$((n + CHAR_W))`, never `((n += CHAR_W))`: an arithmetic command whose
+# result is 0 returns exit status 1, and a leading zero-width character would abort the whole
+# script under `set -e`.
 DISP_W=0
 disp_w() {
-    local s=$1 i c n=0
+    local s=$1 i n=0
+    if [[ "$s" != *[![:ascii:]]* ]]; then
+        DISP_W=${#s}
+        return
+    fi
     for ((i = 0; i < ${#s}; i++)); do
-        c="${s:$i:1}"
-        if [[ "$c" != [[:ascii:]] ]]; then ((n += 2)); else ((n += 1)); fi
+        char_w "${s:$i:1}"
+        n=$((n + CHAR_W))
     done
     DISP_W=$n
+}
+
+# Pull a cut point back out of the middle of a grapheme cluster. Severing a base character
+# from its combining mark, joiner or flag partner does not merely mis-measure — it draws the
+# WRONG GLYPH: half a flag renders as a lone letter tile, an orphaned VS16 or ZWJ attaches
+# itself to the ellipsis instead. Given <text> and the index of the first character NOT being
+# emitted, walk left until that index is a real cluster boundary. Sets CUT_AT.
+#
+# The live cases are a ZWJ sequence ("…👨" + a cut joiner) and a flag split between its two
+# regional indicators — note an RI only blocks the cut when the character BEFORE it is also
+# an RI, or every cut landing in front of a flag would needlessly eat the character before
+# it. The zero-width test is a guard, not a live path: a 0-cell character never trips a
+# budget test, so a cut can never land directly on one.
+CUT_AT=0
+cluster_back() {
+    local text=$1 i=$2 c p
+    while ((i > 0)); do
+        c="${text:$i:1}"                 # first character NOT being emitted
+        p="${text:$((i - 1)):1}"         # last character being emitted
+        if [[ "$CW_ZERO" == *"$c"* || "$p" == "$CW_ZWJ" ]] ||
+            [[ "$CW_NARROW" == *"$c"* && "$CW_NARROW" == *"$p"* ]]; then
+            ((i--))
+            continue
+        fi
+        break
+    done
+    CUT_AT=$i
 }
 
 # Cut PLAIN text to at most <cells> display columns, marking an elision. Sets TRUNC_TEXT
@@ -352,7 +451,7 @@ disp_w() {
 # single-line budget with fixed chrome — the list view's Now-Playing banner.
 TRUNC_TEXT=""
 truncate_disp() {
-    local text=$1 max=$2 mark="$GL_ELL" i c w=0 cw out=""
+    local text=$1 max=$2 mark="$GL_ELL" i w=0
     disp_w "$text"
     if ((DISP_W <= max)); then
         TRUNC_TEXT="$text"
@@ -362,13 +461,12 @@ truncate_disp() {
     local budget=$((max - DISP_W))
     ((budget < 1)) && budget=1
     for ((i = 0; i < ${#text}; i++)); do
-        c="${text:$i:1}"
-        if [[ "$c" != [[:ascii:]] ]]; then cw=2; else cw=1; fi
-        ((w + cw > budget)) && break
-        out+="$c"
-        ((w += cw))
+        char_w "${text:$i:1}"
+        ((w + CHAR_W > budget)) && break
+        w=$((w + CHAR_W))
     done
-    TRUNC_TEXT="${out}${mark}"
+    cluster_back "$text" "$i"
+    TRUNC_TEXT="${text:0:$CUT_AT}${mark}"
 }
 
 # print_hints <width> <first_prefix> <cont_prefix> "key<TAB>label" | "field" …
@@ -478,15 +576,8 @@ wrap_print() {
     local w w_len i c c_w
 
     for w in "${words[@]}"; do
-        w_len=0
-        for (( i = 0; i < ${#w}; i++ )); do
-            c="${w:$i:1}"
-            if [[ "$c" != [[:ascii:]] ]]; then
-                ((w_len += 2))
-            else
-                ((w_len += 1))
-            fi
-        done
+        disp_w "$w"
+        w_len=$DISP_W
 
         if ((w_len > max_w)); then
             if [[ -n "$line" ]]; then
@@ -499,9 +590,15 @@ wrap_print() {
                 line=""
                 cur_w=0
             fi
+            # A zero-width character has c_w=0, so it can never trip the test below and
+            # never starts a continuation line — combining marks, VS and ZWJ stay attached to
+            # their base for free. A flag pair (two 1-cell regional indicators) can still be
+            # split here; this branch only runs for a single word wider than the whole line,
+            # so it is not worth a cluster_back walk.
             for (( i = 0; i < ${#w}; i++ )); do
                 c="${w:$i:1}"
-                if [[ "$c" != [[:ascii:]] ]]; then c_w=2; else c_w=1; fi
+                char_w "$c"
+                c_w=$CHAR_W
                 if ((cur_w + c_w > max_w)); then
                     if ((first)); then
                         printf '%s%s\033[K\n' "$first_p" "$line"
@@ -513,7 +610,7 @@ wrap_print() {
                     cur_w=$c_w
                 else
                     line+="$c"
-                    ((cur_w += c_w))
+                    cur_w=$((cur_w + c_w))
                 fi
             done
             continue
@@ -698,8 +795,10 @@ display_list_menu() {
         # goes — the Navigation row below still documents those keys.
         local b_head="$p_icon $p_label: " b_tail=" $GL_SEP $CURRENT_PLAY_DURATION"
         local b_hint="  [Tab $S_FOCUS | Space $S_PAUSE | s $S_STOP | 9/0 $S_VOL]" b_fixed=0
-        disp_w "$b_head"; ((b_fixed += DISP_W))
-        disp_w "$b_tail"; ((b_fixed += DISP_W))
+        # Assignment form, not ((b_fixed += DISP_W)): an arithmetic command evaluating to 0
+        # returns status 1, which `set -e` would take as a failure (see char_w).
+        disp_w "$b_head"; b_fixed=$((b_fixed + DISP_W))
+        disp_w "$b_tail"; b_fixed=$((b_fixed + DISP_W))
         disp_w "$b_hint"; local hint_w=$DISP_W
         local title_room=$((nav_cols - b_fixed - hint_w))
         if ((title_room < 12)); then

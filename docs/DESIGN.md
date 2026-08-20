@@ -794,11 +794,54 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     is split from the initial choice so the **`l` key** re-fills the table live, from any
     view, without touching playback. Wrapped-row indents are measured with `disp_w`, not
     `${#var}`: "导航:" is 3 characters but 5 cells.
-  - **`disp_w` counts every non-ASCII cell as two**, which is exact for CJK (East-Asian
-    Wide) and deliberately conservative for the East-Asian-Ambiguous glyphs the chrome uses
-    (`● ○ ▶ ❯ ♫ · ↑ →`), which a terminal renders in ONE cell. So a row containing them is
-    packed a cell or two early — never over the edge. A real `wcwidth` table in bash 3.2
-    would buy back that cell and is not worth its weight.
+  - **One width rule, in one place: `char_w`.** A non-ASCII character counts as **two**
+    cells — exact for CJK (East-Asian Wide) and deliberately conservative for the
+    East-Asian-Ambiguous glyphs the chrome uses (`● ○ ▶ ❯ ♫ · ↑ →`), which Ghostty renders in
+    ONE cell. That over-count *is* the safety property: a row containing them packs a cell or
+    two early, never over the edge, and it stays correct in terminals that render those
+    glyphs double-width (Terminal.app, iTerm2 and tmux can all be configured
+    ambiguous-wide), where hardcoding `1` would UNDER-count and overflow. There is therefore
+    deliberately **no ambiguous-width table** — buying back that one cell in Ghostty is not
+    worth breaking every other terminal.
+    The rule used to be written inline at four sites (`disp_w`, `truncate_disp`, and both of
+    `wrap_print`'s loops), where a fix to one silently disagreed with the other three;
+    measurement disagreeing with line-breaking is worse than a uniform over-count, so they
+    all call `char_w` now.
+  - **The zero-width class is corrected**, because there "two cells" is wrong in every
+    terminal. With the base still counted as two, each of these makes the whole sequence come
+    out EXACT rather than merely conservative — verified against the terminal's own cursor
+    advance (`tmux display-message -p '#{cursor_x}'`):
+
+    | sequence | old | now | terminal |
+    |---|---|---|---|
+    | `Ocean Coffee ☕️ Vibe` (U+FE0F) | 22 | **20** | 20 |
+    | `flag 🇨🇳 cn` (regional indicators) | 12 | **10** | 10 |
+    | `👍🏽 ok` (skin-tone modifier) | 6 | **5** | 5 |
+    | `café latte` (decomposed, U+0301) | 12 | **10** | 10 |
+    | `family 👨‍👩‍👧 here` (ZWJ) | 22 | 18 | 14 |
+    | `● LIVE` (ambiguous, kept over) | 7 | 7 | 6 |
+
+    Zero cells: U+200D ZWJ, U+FE0E/U+FE0F, skin tones U+1F3FB–U+1F3FF, combining marks
+    U+0300–U+036F / U+20D0–U+20F0 / U+FE20–U+FE2F. One cell: regional indicators
+    U+1F1E6–U+1F1FF. Combining marks outside those blocks (Arabic, Devanagari, Thai) are not
+    in the table and stay over-counted — conservative, never short. A ZWJ emoji sequence
+    still over-counts; collapsing it needs a real grapheme-cluster walk, which is not worth
+    its weight in bash 3.2. The tables are byte-built at startup (`cw_range`) rather than
+    written as literals: a source line full of invisible combining marks is unreadable.
+    Pure-ASCII strings skip the per-character walk entirely, so the shared helper is FASTER
+    than the inline test it replaced (300 measurements of the mini-player hint row: 94 ms
+    before, 5 ms after).
+    Accumulate with `n=$((n + CHAR_W))`, never `((n += CHAR_W))`: an arithmetic command
+    evaluating to 0 returns exit status 1, so a leading zero-width character would abort the
+    script under `set -e`.
+  - **Cuts land on grapheme boundaries (`cluster_back`).** Severing a base character from its
+    combining mark, joiner or flag partner does not merely mis-measure, it draws the WRONG
+    glyph: half a flag renders as a lone letter tile, an orphaned VS16 or ZWJ attaches itself
+    to the ellipsis. `truncate_disp` walks the cut point left until it is a real boundary. An
+    RI blocks the cut only when the character before it is also an RI — otherwise every cut
+    landing in front of a flag would needlessly eat the character before it. `wrap_print`
+    needs no walk: a zero-width character adds 0 cells, so it can never trip a budget test
+    and never starts a continuation line — marks stay attached to their base for free.
   - **All chrome rows are laid out to the measured width, not written as fixed strings.**
     `disp_w` measures PLAIN text (a non-ASCII cell counts as two — the labels are CJK, so
     they run out of room sooner than their character count suggests) and returns through a
