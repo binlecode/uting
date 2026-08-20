@@ -75,6 +75,11 @@ One line each; full rationale lives in the referenced section.
   D9  Detached handle = a monotonic mktemp token, NOT the pid: the socket path is
       known before launch and it is immune to pid reuse; pid kept only for
       liveness. Runtime control (--set-volume) rides mpv's per-instance IPC. (§9.3)
+  D10 NO EMOJI in the TUI. Every glyph it draws is text-presentation ("non-graphical"),
+      and titles are stripped of emoji before display. This is not decoration: it is what
+      makes the width tables exact instead of merely conservative, because a
+      text-presentation glyph cannot carry a U+FE0F and become two cells behind the
+      table's back. 17 glyphs, closed inventory.                              (§21)
 ```
 
 ## 4. Command topology & file layout
@@ -810,18 +815,91 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     view, without touching playback. Wrapped-row indents are measured with `disp_w`, not
     `${#var}`: "导航:" is 3 characters but 5 cells.
   - **One width rule, in one place: `char_w`.** A non-ASCII character counts as **two**
-    cells — exact for CJK (East-Asian Wide) and deliberately conservative for the
-    East-Asian-Ambiguous glyphs the chrome uses (`● ○ ▶ ❯ ♫ · ↑ →`), which Ghostty renders in
-    ONE cell. That over-count *is* the safety property: a row containing them packs a cell or
-    two early, never over the edge, and it stays correct in terminals that render those
-    glyphs double-width (Terminal.app, iTerm2 and tmux can all be configured
-    ambiguous-wide), where hardcoding `1` would UNDER-count and overflow. There is therefore
-    deliberately **no ambiguous-width table** — buying back that one cell in Ghostty is not
-    worth breaking every other terminal.
+    cells — exact for CJK (East-Asian Wide), conservative for everything else. That default
+    direction *is* the safety property: over-counting packs a row a cell or two early and can
+    never run off the edge, while under-counting overflows. So two is the fallback, and only
+    characters **measured** to be otherwise get a table.
     The rule used to be written inline at four sites (`disp_w`, `truncate_disp`, and both of
     `wrap_print`'s loops), where a fix to one silently disagreed with the other three;
     measurement disagreeing with line-breaking is worse than a uniform over-count, so they
     all call `char_w` now.
+  - **The chrome's own glyphs are tabled at their true one cell**, which is what makes the
+    layout exact rather than merely safe. This is only sound because the suite's glyph
+    inventory is deliberately **non-graphical** — text presentation, no emoji anywhere in
+    `yt` / `yt-search` / `yt-play` / `yt-tui` — so none of these characters can carry a
+    U+FE0F and become a 2-cell emoji glyph behind the table's back. All 17 measured at one
+    cell (`tmux display-message -p '#{cursor_x}'`):
+
+    **The closed inventory (D10)** — every glyph the chrome can draw, generated from the
+    `GL_*` declarations plus the bar and divider, with the class read off the UCD
+    (`unicodedata.east_asian_width`) rather than guessed. A scan of every non-comment line
+    finds no other non-ASCII character but the Chinese label text, so the list is complete,
+    not curated.
+
+    **Neutral EAW — one cell in every terminal, unconditionally (4)**
+
+    | glyph | cp | declared as | name |
+    |---|---|---|---|
+    | `↵` | U+21B5 | `GL_ENTER` | Downwards Arrow With Corner Leftwards |
+    | `♫` | U+266B | `GL_NOTE` | Beamed Eighth Notes |
+    | `❚` | U+275A | `GL_PAUSE` (drawn `❚❚`) | Heavy Vertical Bar |
+    | `❯` | U+276F | `GL_CARET` | Heavy Right-Pointing Angle Quotation Mark Ornament |
+
+    **Ambiguous EAW — one cell by default, two only under `YT_AMBIG_WIDE=1` (13)**
+
+    | glyph | cp | declared as | name |
+    |---|---|---|---|
+    | `·` | U+00B7 | `GL_SEP` | Middle Dot |
+    | `—` | U+2014 | `GL_DASH` | Em Dash |
+    | `•` | U+2022 | `GL_BULLET` | Bullet |
+    | `…` | U+2026 | `GL_ELL` | Horizontal Ellipsis |
+    | `←` | U+2190 | `GL_AH` | Leftwards Arrow |
+    | `↑` | U+2191 | `GL_AV` | Upwards Arrow |
+    | `→` | U+2192 | `GL_AH`, `GL_ARROW` | Rightwards Arrow |
+    | `↓` | U+2193 | `GL_AV` | Downwards Arrow |
+    | `─` | U+2500 | bar track, card divider | Box Drawings Light Horizontal |
+    | `━` | U+2501 | bar fill | Box Drawings Heavy Horizontal |
+    | `▶` | U+25B6 | `GL_PLAY` | Black Right-Pointing Triangle |
+    | `○` | U+25CB | `GL_DOT_OFF` | White Circle |
+    | `●` | U+25CF | `GL_DOT`, `GL_LIVE`, bar head | Black Circle |
+
+    The Ambiguous 13 are the **entire** configuration-dependent surface: the only characters
+    whose cell count a terminal setting can move, and the only ones `YT_AMBIG_WIDE` touches.
+    The Neutral 4 are one cell by definition of their class, so no setting reaches them.
+    `♫` U+266B belongs there and not with the arrows — it is Neutral, so it stays one cell
+    even under `YT_AMBIG_WIDE`.
+
+    Everything the TUI draws is therefore in one of four buckets: ASCII (1 cell), these 17
+    (tabled), CJK label text (2, exact), or untabled and conservatively over-counted.
+    `YT_ASCII=1` (auto-on for a non-UTF-8 locale) replaces all 17 with ASCII equivalents, so
+    the inventory has exactly two states and no font-dependent middle ground — which is why
+    every drawn glyph must have a `GL_*` name. Page dots were the last hardcoded literals
+    (`●` / `○` inline, with `○` having no name at all); they now go through
+    `GL_DOT` / `GL_DOT_OFF`.
+
+    One cell is the **default** in every terminal in use here: Ghostty
+    (`grapheme-width-method = unicode`), and Terminal.app / iTerm2 / tmux, where "treat
+    ambiguous-width as double-width" is an opt-in that ships off. `YT_AMBIG_WIDE=1` restores
+    the conservative 2 for the Ambiguous row only — Neutral glyphs are one cell regardless.
+    It is an explicit knob rather than a locale guess, because the locale says nothing:
+    Ghostty under `zh_CN.UTF-8` still renders these one cell. `render_prog_bar` had already
+    baked in this assumption — it promises a string of exactly `total` cells built from
+    `━ ─ ●`, which only holds at one cell each. Measured effect at 60 columns with the
+    Chinese chrome: the navigation row fits one more item on its first line
+    (`导航: … v 模式  n 搜索` = 58 cells measured, 58 actual) instead of wrapping it.
+  - **What the exactness rests on, precisely.** The tabled glyphs are one cell only in TEXT
+    presentation: measured in the same terminal, `▶` is 1 cell but `▶️` (U+25B6 U+FE0F) is 2,
+    and the table would call it 1. So the load-bearing part of `build_all_rows`'s `clean`
+    is not its emoji block ranges — it is stripping U+FE00–FE0F and U+200D, which is what
+    guarantees nothing reaching a measurement is in emoji presentation. Anything that
+    survives `clean` is text presentation, hence either tabled correctly or (being
+    untabled) over-counted, so the no-overflow property holds for arbitrary YouTube titles
+    without the filter having to enumerate every emoji codepoint. If that stripping is ever
+    relaxed, the table needs a base+VS16 rule first: a base followed by U+FE0F is 2 cells,
+    whatever the table says. Failure directions are asymmetric and this is the only unsafe
+    one — adding a glyph to `GL_*` and forgetting the width table just falls back to 2
+    (over-count, safe); putting a character in a width table without measuring it is what
+    overflows.
   - **The zero-width class is corrected**, because there "two cells" is wrong in every
     terminal. With the base still counted as two, each of these makes the whole sequence come
     out EXACT rather than merely conservative — verified against the terminal's own cursor
@@ -834,7 +912,8 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     | `👍🏽 ok` (skin-tone modifier) | 6 | **5** | 5 |
     | `café latte` (decomposed, U+0301) | 12 | **10** | 10 |
     | `family 👨‍👩‍👧 here` (ZWJ) | 22 | 18 | 14 |
-    | `● LIVE` (ambiguous, kept over) | 7 | 7 | 6 |
+    | `● LIVE` (chrome, Ambiguous) | 7 | **6** | 6 |
+    | `▶ ❚❚ ❯ ♫ ·` (chrome) | 16 | **10** | 10 |
 
     Zero cells: U+200D ZWJ, U+FE0E/U+FE0F, skin tones U+1F3FB–U+1F3FF, combining marks
     U+0300–U+036F / U+20D0–U+20F0 / U+FE20–U+FE2F. One cell: regional indicators
@@ -871,6 +950,58 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     whatever the fixed parts leave, dropping its inline hint block before it would squeeze
     the title below 12 cells. Result: every chrome line fits at 46 columns, where the old
     fixed strings wrapped mid-item from ~72 down.
+  - **EVERY row in the list view is one physical line, result rows included.** They were the
+    last rows printed unmeasured, and the ones that mattered most: at 62 columns a
+    `title · duration · views · channel` row takes two or three lines, so ten entries filled
+    21 lines and scrolled the header, the status row, the Now-Playing banner and the entire
+    navigation block off the top — every hint the layout had just packed, spent on rows that
+    then scrolled away. Each row is elided to `cols - 4 - <digits>`, the width its `> 10. ` /
+    `  10. ` prefix leaves. The title row (a long query used to wrap) and the filter caret's
+    copy are elided the same way, so the whole view is measurable line-for-line.
+  - **How many rows fit is MEASURED, not guessed (the reflow).** `PAGE_CAP = LINES_N - 8`
+    hardcoded the chrome at 8 lines, but the chrome is variable-height *by construction*:
+    `print_hints` packs to the terminal width, so the status and navigation blocks take 1–4
+    lines depending on width and chrome language. The constant is only right at ≳72 columns in
+    English. Measured with the real script in tmux: at 40×20 the chrome is 11 lines, so ten
+    one-line rows plus the footer came to 21 lines in a 20-line terminal and scrolled the
+    header off — the same failure one-line rows were meant to end, arriving from the other
+    side. 50×14 and 62×12 broke the same way. `display_list_menu` now counts the chrome as it
+    prints it (`print_hints` reports `HINT_LINES`), then derives `PAGE_SIZE` from what is
+    left, recomputes `NUM_PAGES`, and clamps the page — **every redraw**, so a resize or an
+    `l` language switch repages instead of overflowing (`PAGE_SIZE` was previously computed
+    once at startup and never revisited). The pagination-dots row is only charged when there
+    is more than one page, checked against the no-dots size first so the reservation cannot be
+    circular; one line is reserved for the cursor's resting row, because filling the last line
+    and emitting its newline scrolls the screen by one and costs the header again.
+  - **Across a repage the SELECTION is the anchor, not the page number.** The user is looking
+    at a row. Deriving `page` from `selected` keeps that row on screen; clamping the selection
+    into the old page number teleports it — measured: resizing 24→12 rows dropped the page
+    from 10 entries to 2 and snapped the selection from row 15 back to row 4.
+  - **A terminal too short for the hint block gets its rows instead.** `HINT_MEASURE=1` runs
+    `print_hints`' identical packing and reports the height without drawing, so the list view
+    can ask "how tall would this be?" before committing the space. Below ~12 rows the
+    navigation block is 4 lines of a 10-line screen and would push the header off no matter how
+    the rows are repaged, so it goes and the results stay — the same trade the Now-Playing
+    banner already makes with its inline hints, and the card view still documents the keys.
+    Verified at 40×10 and 62×8. Sub-40-column terminals remain out of scope by design (the
+    `layout_cols` floor); at 35 columns the hint block wraps mid-item as documented.
+  - **`truncate_disp` never exceeds the max it is given.** Clamping the leftover budget up to
+    1 broke the one promise the function makes: at `max=1` it emitted a character *and* the
+    ellipsis, two cells. When the budget cannot hold the mark, the mark goes. No caller
+    reaches that today (all clamp to >= 8) — it is the guard on the contract.
+  - **One clamp, one fetch, one rail.** `layout_cols [max]` is the single width clamp (floor
+    40, optional cap — the player cards pass 80 so their rails do not stretch across an
+    ultrawide window, the list passes nothing and uses the full width for its rows; passing
+    the cap as an argument is what makes that asymmetry visible instead of looking like a
+    lost line). `fetch_play_times` is the single `time-pos` / `duration` / `percent-pos`
+    fetch behind `PT_CUR` / `PT_TOTAL` / `PT_PCT`, including the live special case: both
+    player views had inlined the same three `nc | jq` pipelines and had already drifted, and
+    the live path used to fetch three round-trips per second only to discard them. The card's
+    divider rail is built by `repeat_glyph` and cached on `(width, glyph mode)` instead of
+    `printf '─%.0s' $(seq 1 "$cols")` — a fork, plus precisely the idiom `repeat_glyph` exists
+    to replace, run twice so the Unicode rail could be thrown away in ASCII mode.
+    `repeat_glyph` and `render_prog_bar` now return through globals (`GLYPH_RUN`, `PROG_BAR`)
+    like the rest of the width layer, so a redraw costs no subshell for them.
   - Pressing `Tab` cycles views; pressing `Esc` in Card/Mini view instantly returns to List View.
 - **PROCESS CLEANUP GUARANTEE.** An `EXIT INT TERM HUP` trap ensures any background player
   spawned during the `yt-tui` session is automatically and cleanly stopped upon quit (`q`).

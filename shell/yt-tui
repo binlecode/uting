@@ -88,6 +88,9 @@ Environment:
                    Shared with the rest of the suite. Legacy alias: YT_TUI_ASCII.
   YT_LANG=en|zh    Language of the menu chrome. Default: zh under a zh* locale,
                    English otherwise (help text and errors are always English).
+  YT_AMBIG_WIDE=1  Measure East-Asian-Ambiguous glyphs (· — • … arrows ─ ━ ○ ● ▶) as
+                   TWO cells. Only needed if your terminal is set to treat ambiguous
+                   width as double-width; every terminal ships with that option off.
 EOF
 }
 
@@ -245,7 +248,7 @@ init_ui_strings
 GL_NOTE="♫"; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
 # Everything else the chrome draws. These used to be hardcoded, so YT_ASCII=1 still left
 # ▶ / ❚❚ / ● and the arrow hints as tofu on a font that can't draw them.
-GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_DOT="●"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="↵"
+GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_DOT="●"; GL_DOT_OFF="○"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="↵"
 GL_BULLET="•"; GL_ELL="…"; GL_ARROW="→"; GL_DASH="—"
 init_glyphs() {
     # One switch for the whole suite: YT_ASCII, with YT_TUI_ASCII kept as a legacy alias
@@ -261,7 +264,7 @@ init_glyphs() {
     esac
     if ((ASCII_GLYPHS)); then
         GL_NOTE=""; GL_LIVE="LIVE"; GL_SEP="|"; GL_CARET=">"
-        GL_PLAY=">"; GL_PAUSE="||"; GL_DOT="*"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
+        GL_PLAY=">"; GL_PAUSE="||"; GL_DOT="*"; GL_DOT_OFF="o"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
         GL_BULLET="-"; GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
     fi
 }
@@ -314,6 +317,13 @@ send_mpv_ipc() {
     printf '%s\n' "$cmd" | nc -U -w1 "$CURRENT_PLAY_SOCK" >/dev/null 2>&1 || true
 }
 
+# The read side of the same socket: one property, on stdout, empty on any failure. Callers
+# check the socket once and then ask for several properties (see fetch_play_times).
+mpv_get_prop() {
+    printf '{"command":["get_property","%s"]}\n' "$1" |
+        nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null | jq -r '.data // empty' 2>/dev/null || true
+}
+
 fmt_sec() {
     local s=${1%.*}
     [[ "$s" =~ ^[0-9]+$ ]] || { echo "--:--"; return; }
@@ -330,25 +340,78 @@ fmt_sec() {
 # Repeat a single-cell glyph n times (n may be 0). NOT `printf 'x%.0s' $(seq 1 $n)`:
 # printf always walks its format at least once, so with zero arguments that idiom emits
 # one stray cell — which is what made the bar 46 cells wide at 0% and 47 at 100%.
+# Returns through GLYPH_RUN, the same no-fork discipline as the width layer below: every
+# caller sits on the once-a-second redraw path, where $(...) is a subshell per call.
+GLYPH_RUN=""
 repeat_glyph() {
     local glyph=$1 n=$2 out=""
     while ((n > 0)); do
         out+="$glyph"
         ((n--))
     done
-    printf '%s' "$out"
+    GLYPH_RUN="$out"
+}
+
+# The width every view lays out against: the real terminal width, floored at 40 (below that
+# nothing fits, and clamping beats drawing garbage) and optionally capped at <max>. Sets
+# LAYOUT_COLS. All three views carried this clamp trio inline. The cap is deliberately not
+# uniform — the two player cards pass 80 so their rails do not stretch across an ultrawide
+# window, the list view passes nothing and uses the full width for its rows — and passing it
+# as an argument is what makes that asymmetry visible instead of looking like a lost line.
+LAYOUT_COLS=0
+layout_cols() {
+    local max=${1:-0}
+    term_size
+    LAYOUT_COLS=$TERM_COLS
+    ((max > 0 && LAYOUT_COLS > max)) && LAYOUT_COLS=$max
+    ((LAYOUT_COLS < 40)) && LAYOUT_COLS=40
+    return 0
+}
+
+# Divider rail for the player cards, cached on (width, glyph mode): it is redrawn every
+# second and only changes when the terminal is resized or the glyph mode flips. Sets
+# DIV_STR. This was `printf '─%.0s' $(seq 1 "$cols")` — a fork plus precisely the idiom
+# repeat_glyph exists to replace — run twice, once to build the Unicode rail and again to
+# throw it away in ASCII mode.
+DIV_STR=""
+DIV_KEY=""
+card_divider() {
+    local cols=$1 glyph='─' key
+    ((ASCII_GLYPHS)) && glyph='-'
+    key="$cols/$glyph"
+    if [[ "$key" != "$DIV_KEY" ]]; then
+        repeat_glyph "$glyph" "$cols"
+        DIV_STR="$GLYPH_RUN"
+        DIV_KEY="$key"
+    fi
+    return 0
 }
 
 # ── Adaptive chrome layout ──────────────────────────────────────────────────────────────
 # ── Cell width: ONE rule, in ONE place (char_w) ──────────────────────────────────────────
-# The rule: a non-ASCII character counts as TWO cells. That is exact for CJK (East-Asian
-# Wide) and a deliberate OVER-count for the East-Asian-Ambiguous glyphs the chrome draws
-# (● ○ ▶ ❯ ♫ · ↑ →), which Ghostty renders in ONE cell. The over-count IS the safety
-# property: a row packs a cell or two early, never past the edge — and it stays correct in
-# terminals that render those glyphs double-width (Terminal.app, iTerm2 and tmux can all be
-# configured ambiguous-wide), where hardcoding 1 would UNDER-count and overflow. So there is
-# deliberately no ambiguous-width table here; buying back that one cell in Ghostty is not
-# worth breaking every other terminal.
+# The rule: a non-ASCII character counts as TWO cells — exact for CJK (East-Asian Wide) and
+# conservative for everything else, which is the safety property. Over-counting packs a row
+# a cell or two early and can never run off the edge; under-counting overflows. So the
+# default stays two, and only characters MEASURED to be otherwise are tabled below.
+#
+# The chrome's own glyphs are one such table, and they are safe to table because the suite's
+# glyph inventory is deliberately all text-presentation — "non-graphical". There is no emoji
+# anywhere in yt / yt-search / yt-play / yt-tui, so none of these characters can carry a
+# U+FE0F and silently become a 2-cell emoji glyph behind the table's back. All 17 measured
+# at ONE cell (tmux over Ghostty, `tmux display-message -p '#{cursor_x}'`):
+#   Neutral EAW    ↵ ♫ ❚ ❯                      one cell in EVERY terminal
+#   Ambiguous EAW  · — • … ← ↑ → ↓ ─ ━ ○ ● ▶    one cell unless a terminal is explicitly
+#                                               configured ambiguous-wide
+# The split is read off the UCD (unicodedata.east_asian_width), not guessed: ♫ U+266B is
+# Neutral, so it stays one cell even under YT_AMBIG_WIDE.
+# One cell is the DEFAULT everywhere in use here: Ghostty (grapheme-width-method = unicode),
+# and Terminal.app / iTerm2 / tmux, where "treat ambiguous-width as double-width" is an
+# opt-in that ships off. YT_AMBIG_WIDE=1 restores the conservative 2 for the Ambiguous row
+# if that option is ON. It is an explicit knob and not a locale guess, because the locale
+# says nothing: Ghostty under a zh_CN locale still renders these one cell.
+# Note the bar already assumed this — render_prog_bar promises a string of exactly <total>
+# cells built from ━ ─ ●, which only holds at one cell each.
+# The table applies wherever these characters occur, titles included, not only to chrome.
 #
 # What IS corrected is the zero-width class, where "two cells" is wrong in every terminal.
 # The base character is still counted as two, so each of these makes the whole sequence come
@@ -366,7 +429,9 @@ repeat_glyph() {
 # full of invisible combining marks is unreadable and un-editable.
 CW_ZWJ=$'\xe2\x80\x8d'
 CW_ZERO=""      # characters that add no cells
-CW_NARROW=""    # non-ASCII characters that still take only one
+CW_NARROW=""    # non-ASCII characters that still take only one, in any terminal
+CW_AMBIG='·—•…←↑→↓─━○●▶'    # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
+CW_AMBIG_W=1
 CW_RANGE=""
 cw_range() {
     local prefix=$1 lo=$2 hi=$3 pat ch
@@ -386,7 +451,11 @@ init_cell_tables() {
     cw_range '\xe2\x83'     144 176; CW_ZERO+="$CW_RANGE"    # U+20D0..U+20F0  marks for symbols
     cw_range '\xef\xb8'     160 175; CW_ZERO+="$CW_RANGE"    # U+FE20..U+FE2F  half marks
     cw_range '\xf0\x9f\x8f' 187 191; CW_ZERO+="$CW_RANGE"    # U+1F3FB..U+1F3FF skin tones
-    cw_range '\xf0\x9f\x87' 166 191; CW_NARROW="$CW_RANGE"   # U+1F1E6..U+1F1FF regional indicators
+    cw_range '\xf0\x9f\x87' 166 191                          # U+1F1E6..U+1F1FF regional indicators
+    CW_NARROW="↵♫❚❯$CW_RANGE"                                # U+21B5 U+266B U+275A U+276F: Neutral EAW
+    case "${YT_AMBIG_WIDE:-}" in
+    1 | true | yes | on) CW_AMBIG_W=2 ;;
+    esac
 }
 init_cell_tables
 
@@ -401,6 +470,7 @@ char_w() {
     if [[ "$c" == [[:ascii:]] ]]; then CHAR_W=1; return; fi
     if [[ "$CW_ZERO" == *"$c"* ]]; then CHAR_W=0; return; fi
     if [[ "$CW_NARROW" == *"$c"* ]]; then CHAR_W=1; return; fi
+    if [[ "$CW_AMBIG" == *"$c"* ]]; then CHAR_W=$CW_AMBIG_W; return; fi
     CHAR_W=2
 }
 
@@ -466,7 +536,18 @@ truncate_disp() {
     fi
     disp_w "$mark"
     local budget=$((max - DISP_W))
-    ((budget < 1)) && budget=1
+    # The one promise this function makes is "at most <max> cells". Clamping the budget up
+    # to 1 broke it: at max=1 it emitted a character AND the mark, two cells. When the
+    # budget cannot hold the mark, the mark goes. No caller reaches this today (they all
+    # clamp their budget to >= 8) — it is the guard on the function's only contract.
+    if ((budget < 1)); then
+        mark=""
+        budget=$max
+    fi
+    if ((budget < 1)); then
+        TRUNC_TEXT=""
+        return
+    fi
     for ((i = 0; i < ${#text}; i++)); do
         char_w "${text:$i:1}"
         ((w + CHAR_W > budget)) && break
@@ -483,10 +564,19 @@ truncate_disp() {
 # sooner still because the labels are CJK, i.e. double-width. Every emitted line carries
 # \033[K for the in-place card/mini renders. HINT_KEY_COLOR overrides the key colour for
 # one call (the status row wants its fields dim, not key-yellow).
+# one call (the status row wants its fields dim, not key-yellow). HINT_LINES reports how many
+# lines were emitted: this block is variable-height by design, and the list view has to know
+# its real height to decide how many result rows fit (see the reflow in display_list_menu).
+# HINT_MEASURE=1 runs the identical packing and reports HINT_LINES without drawing anything,
+# so a caller can ask "how tall would this block be?" before committing the space to it. Same
+# code path deliberately: a separate estimator would be free to disagree with the printer.
 HINT_KEY_COLOR=""
+HINT_LINES=0
+HINT_MEASURE=0
 print_hints() {
     local width=$1 first_p=$2 cont_p=$3
     shift 3
+    HINT_LINES=0
     local item key label out="" out_w=0 iw ind_w first=1
     local kc=${HINT_KEY_COLOR:-$C_YELLOW}
     disp_w "$first_p"
@@ -504,13 +594,14 @@ print_hints() {
         fi
         if [[ -n "$out" ]] && ((out_w + 2 + iw > width)); then
             if ((first)); then
-                printf '%s%s%s%s\033[K\n' "$C_BOLD" "$first_p" "$C_RESET" "$out"
+                ((HINT_MEASURE)) || printf '%s%s%s%s\033[K\n' "$C_BOLD" "$first_p" "$C_RESET" "$out"
                 first=0
                 disp_w "$cont_p"
                 ind_w=$DISP_W
             else
-                printf '%s%s\033[K\n' "$cont_p" "$out"
+                ((HINT_MEASURE)) || printf '%s%s\033[K\n' "$cont_p" "$out"
             fi
+            HINT_LINES=$((HINT_LINES + 1))
             out=""
             out_w=$ind_w
         fi
@@ -527,10 +618,11 @@ print_hints() {
     done
     if [[ -n "$out" ]]; then
         if ((first)); then
-            printf '%s%s%s%s\033[K\n' "$C_BOLD" "$first_p" "$C_RESET" "$out"
+            ((HINT_MEASURE)) || printf '%s%s%s%s\033[K\n' "$C_BOLD" "$first_p" "$C_RESET" "$out"
         else
-            printf '%s%s\033[K\n' "$cont_p" "$out"
+            ((HINT_MEASURE)) || printf '%s%s\033[K\n' "$cont_p" "$out"
         fi
+        HINT_LINES=$((HINT_LINES + 1))
     fi
 }
 
@@ -545,15 +637,47 @@ elapsed_since_play() {
     fmt_sec $((now - CURRENT_PLAY_STARTED))
 }
 
+# Position / duration / percent for the attached mpv, fetched in ONE place: sets PT_CUR,
+# PT_TOTAL and PT_PCT (PT_PCT empty means "draw no bar"). Both player views inlined the same
+# three nc|jq pipelines and had already drifted — the card built its percent string and bar
+# inline, the mini deferred the bar to a later block. The live special case belongs here too:
+# "mpv's clock describes the broadcast, not this listen" is a fact about the fetch, not about
+# a view, and returning early also spares three IPC round-trips per second that the live path
+# only fetched to discard.
+PT_CUR=""
+PT_TOTAL=""
+PT_PCT=""
+fetch_play_times() {
+    PT_CUR="--:--"
+    PT_TOTAL="$CURRENT_PLAY_DURATION"
+    PT_PCT=""
+    if ((CURRENT_PLAY_IS_LIVE)); then
+        PT_CUR=$(elapsed_since_play)
+        PT_TOTAL="$GL_LIVE"
+        return 0
+    fi
+    [[ -n "$CURRENT_PLAY_SOCK" && -S "$CURRENT_PLAY_SOCK" ]] || return 0
+    local raw_pos raw_dur raw_pct
+    raw_pos=$(mpv_get_prop time-pos)
+    raw_dur=$(mpv_get_prop duration)
+    raw_pct=$(mpv_get_prop percent-pos)
+    [[ -n "$raw_pos" && "$raw_pos" != "null" ]] && PT_CUR=$(fmt_sec "$raw_pos")
+    [[ -n "$raw_dur" && "$raw_dur" != "null" ]] && PT_TOTAL=$(fmt_sec "$raw_dur")
+    [[ -n "$raw_pct" && "$raw_pct" != "null" ]] && PT_PCT=${raw_pct%.*}
+    return 0
+}
+
 # Progress bar sized to the caller's layout. $2 is the FULL cell width the bar may occupy,
 # brackets included, so a caller can line its right edge up with the card's divider rails
 # (or the mini player's content edge) instead of the old hardcoded 44 columns that ignored
 # the terminal width entirely. The rendered string is ALWAYS exactly that many cells —
 # the head glyph is part of the track, and `filled` is capped at width-1 so it stays so at
 # 100%; a bar whose length changed with position made the whole line jitter every second.
+PROG_BAR=""
 render_prog_bar() {
     local pct=${1%.*} total=${2:-44}
-    [[ "$pct" =~ ^[0-9]+$ ]] || { echo ""; return; }
+    PROG_BAR=""
+    [[ "$pct" =~ ^[0-9]+$ ]] || return 0
     ((pct > 100)) && pct=100
     ((pct < 0)) && pct=0
     ((total < 10)) && total=10
@@ -569,9 +693,9 @@ render_prog_bar() {
         fill='='
         rest='-'
     fi
-    f_str=$(repeat_glyph "$fill" "$filled")
-    e_str=$(repeat_glyph "$rest" "$empty")
-    printf '[%s%s%s]\n' "$f_str" "$head" "$e_str"
+    repeat_glyph "$fill" "$filled"; f_str=$GLYPH_RUN
+    repeat_glyph "$rest" "$empty"; e_str=$GLYPH_RUN
+    PROG_BAR="[${f_str}${head}${e_str}]"
 }
 
 wrap_print() {
@@ -695,7 +819,9 @@ cleanup_on_exit() {
 }
 trap cleanup_on_exit EXIT INT TERM HUP
 
-# Page size: default 10, capped to terminal height
+# Page size: default 10, provisionally capped to terminal height so the FIRST load_rows has a
+# NUM_PAGES to work with. It is only provisional: display_list_menu reflows PAGE_SIZE against
+# the chrome it actually measured, every redraw (see the reflow block there).
 term_size; LINES_N=$TERM_LINES
 PAGE_SIZE=$PAGE_OPT
 PAGE_CAP=$(( LINES_N - 8 ))
@@ -764,16 +890,23 @@ load_rows() {
 
 # Mode B: List View + Mini-Player Banner
 display_list_menu() {
-    local page=$1 start end i n disp status_extra p dots
-    # One width read per redraw, shared by the banner (title elision) and the packed
-    # navigation hints below.
-    local nav_cols
-    term_size
-    nav_cols=$TERM_COLS
-    ((nav_cols < 40)) && nav_cols=40
+    local page=$1 start end i n disp status_extra p dots row_w
+    # One size read per redraw, shared by the banner (title elision), the result rows and the
+    # packed navigation hints below. No width cap: unlike the player cards, the list wants the
+    # whole width for its rows. LINES_N is refreshed here too — it is what the reflow below
+    # divides up, so a resize has to reach it.
+    local nav_cols chrome_h=0
+    layout_cols
+    nav_cols=$LAYOUT_COLS
+    LINES_N=$TERM_LINES
     clear
-    # Title
-    printf '%s%s%syt-tui%s  query=%s\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "'$QUERY_LABEL'"
+    # Title. Elided like every other row: a long query used to wrap and push the whole layout
+    # down a line.
+    local t_head="${GL_NOTE:+$GL_NOTE }yt-tui  query="
+    disp_w "$t_head"
+    truncate_disp "'$QUERY_LABEL'" $((nav_cols - DISP_W))
+    printf '%s%s%syt-tui%s  query=%s\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "$TRUNC_TEXT"
+    chrome_h=$((chrome_h + 1))
     
     # Status line
     if [[ "$PLAY_MODE" == "audio" ]]; then status_extra="audio-only"; else status_extra="video-enabled"; fi
@@ -788,6 +921,7 @@ display_list_menu() {
     HINT_KEY_COLOR="$C_DIM"
     print_hints "$nav_cols" "" "" "${st_items[@]}"
     HINT_KEY_COLOR=""
+    chrome_h=$((chrome_h + HINT_LINES))
     
     # Persistent Mini-Player Banner (when background playback is active)
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
@@ -822,6 +956,7 @@ display_list_menu() {
     else
         printf '\n'
     fi
+    chrome_h=$((chrome_h + 1))    # the banner row, or the blank line standing in for it
 
     # Key navigation hints, packed to the terminal width (they used to be one fixed
     # string that ran off the edge and wrapped mid-item on a narrow terminal).
@@ -829,22 +964,99 @@ display_list_menu() {
     # label ("导航:" = 3 chars, 5 cells) would under-indent the wrapped rows.
     disp_w "$S_NAV"
     local nav_pad
-    nav_pad=$(printf '%*s' $((DISP_W + 1)) '')
-    print_hints "$nav_cols" "$S_NAV " "$nav_pad" \
-        "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY" "Tab	$S_VIEW" "v	$S_MODE" \
-        "n	$S_SEARCH" "m	$S_MORE" "o	$S_SORT" "/	$S_FILTER" "l	$S_LANGKEY" \
+    printf -v nav_pad '%*s' $((DISP_W + 1)) ''
+    local nav_items=(
+        "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY" "Tab	$S_VIEW" "v	$S_MODE"
+        "n	$S_SEARCH" "m	$S_MORE" "o	$S_SORT" "/	$S_FILTER" "l	$S_LANGKEY"
         "s	$S_STOP" "q	$S_QUIT"
+    )
+    # Measure the block before committing the space: on a very short terminal it is 4 lines of
+    # a 10-line screen, and printing it would push the header off the top no matter how the
+    # rows are repaged. Then the keys go and the results stay — the same trade the Now-Playing
+    # banner makes with its own inline hints, and the card view still documents the keys.
+    HINT_MEASURE=1
+    print_hints "$nav_cols" "$S_NAV " "$nav_pad" "${nav_items[@]}"
+    HINT_MEASURE=0
+    local nav_h=$HINT_LINES
+    # 4 = the blank line after the block, the footer, one result row, the cursor's resting row
+    if ((LINES_N - chrome_h - nav_h >= 4)); then
+        print_hints "$nav_cols" "$S_NAV " "$nav_pad" "${nav_items[@]}"
+        chrome_h=$((chrome_h + nav_h))
+    fi
     printf '\n'
+    chrome_h=$((chrome_h + 1))
+
+    # ── Reflow: how many rows fit is MEASURED, not guessed ──────────────────────────────
+    # This replaced `PAGE_CAP = LINES_N - 8`, which hardcoded the chrome at 8 lines. The
+    # chrome is variable-height by construction: print_hints packs to the terminal width, so
+    # the status and navigation blocks take 1-4 lines depending on width and chrome language.
+    # The constant is only right at ~72+ columns in English; at 40x20 the real chrome is 11
+    # lines, so ten one-line rows plus the footer came to 21 lines in a 20-line terminal and
+    # scrolled the header and status row off the top — the same failure one-line rows were
+    # meant to end, arriving from the other side. Recomputed every redraw, so a resize or a
+    # language switch repages instead of overflowing.
+    local avail psize filter_h=1
+    if ((FILTER_MODE)); then
+        disp_w "> $FILTER_LABEL"
+        filter_h=$((filter_h + 1 + (DISP_W + nav_cols - 1) / nav_cols))
+    fi
+    # -1 for the cursor's resting row: filling the last line and emitting its newline scrolls
+    # the screen up by one, which would cost the header again.
+    avail=$((LINES_N - chrome_h - filter_h - 1))
+    psize=$PAGE_OPT
+    ((psize > avail)) && psize=$avail
+    # The pagination dots only cost a line when there IS more than one page. Checking against
+    # the no-dots size first is what keeps that from being circular: if everything fits on one
+    # page without the dots row, growing the page cannot introduce a second page.
+    if ((NUM_ENTRIES > psize)); then
+        ((psize > avail - 1)) && psize=$((avail - 1))
+    fi
+    ((psize < 1)) && psize=1
+    if ((psize != PAGE_SIZE)); then
+        PAGE_SIZE=$psize
+        NUM_PAGES=$(( (NUM_ENTRIES + PAGE_SIZE - 1) / PAGE_SIZE ))
+        ((NUM_PAGES > 0)) || NUM_PAGES=1
+        # Across a repage the SELECTION is the anchor, not the page number: the user is
+        # looking at a row. Deriving the page from `selected` keeps that row on screen —
+        # clamping the selection into the old page number instead teleports it (measured:
+        # resizing 24 -> 12 rows dropped the page from 10 entries to 2, and the selection on
+        # row 15 snapped back to row 4, page 2's new window).
+        ((selected < 0)) && selected=0
+        page=$(( selected / PAGE_SIZE + 1 ))
+    fi
+    # Repaging can leave the caller's page/selection outside the new bounds, so clamp both
+    # here and hand `page_index` back — the renderer owns the page geometry now, and the menu
+    # loop reads it back on the next iteration.
+    ((page > NUM_PAGES)) && page=$NUM_PAGES
+    ((page < 1)) && page=1
+    page_index=$page
+    start=$(( (page - 1) * PAGE_SIZE ))
+    end=$(( start + PAGE_SIZE - 1 ))
+    if ((NUM_ENTRIES > 0)); then
+        ((selected < start)) && selected=$start
+        ((selected > end)) && selected=$end
+        ((selected > NUM_ENTRIES - 1)) && selected=$((NUM_ENTRIES - 1))
+        ((selected < 0)) && selected=0
+    fi
 
     # Result rows
     if ((NUM_ENTRIES == 0)); then
-        printf '%s(no matches %s press / to change filter, or n for new search)%s\n' "$C_DIM" "$GL_DASH" "$C_RESET"
+        truncate_disp "(no matches $GL_DASH press / to change filter, or n for new search)" "$nav_cols"
+        printf '%s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
     else
-        start=$(( (page - 1) * PAGE_SIZE ))
-        end=$(( start + PAGE_SIZE - 1 ))
         for (( i = start; i <= end && i < NUM_ENTRIES; i++ )); do
             n=$(( i + 1 ))
-            disp="${options[$i]}"
+            # These were the last rows in the UI printed unmeasured, and the ones that
+            # mattered most: the reflow above hands out exactly one line per entry. At 62
+            # columns a title-plus-metadata row took two or three, so ten entries filled 21
+            # lines and scrolled the header, the status row, the Now-Playing banner and the
+            # entire navigation block off the top — all of print_hints' layout work spent on
+            # rows that then scrolled away. Elide to what the prefix leaves: "> 10. " /
+            # "  10. " is 4 cells plus the digits.
+            row_w=$(( nav_cols - 4 - ${#n} ))
+            ((row_w < 12)) && row_w=12
+            truncate_disp "${options[$i]}" "$row_w"
+            disp="$TRUNC_TEXT"
             if ((i == selected)); then
                 printf '%s> %s. %s%s\n' "$C_YELLOW" "$n" "$disp" "$C_RESET"
             else
@@ -859,7 +1071,9 @@ display_list_menu() {
         if ((ASCII_GLYPHS == 0 && NUM_PAGES <= 12)); then
             dots=""
             for (( p = 1; p <= NUM_PAGES; p++ )); do
-                if ((p == page)); then dots+="●"; else dots+="○"; fi
+                # Through the glyph table, not literals: hardcoded ● ○ here were the last
+                # two glyphs YT_ASCII could not reach, and ○ had no GL_ name at all.
+                if ((p == page)); then dots+="$GL_DOT"; else dots+="$GL_DOT_OFF"; fi
             done
         else
             dots="page $page/$NUM_PAGES"
@@ -869,7 +1083,10 @@ display_list_menu() {
 
     # Live filter input caret
     if ((FILTER_MODE)); then
-        printf '%sfilter%s %s(type to narrow, Enter plays, Esc clears)%s\n' "$C_BOLD" "$C_RESET" "$C_DIM" "$C_RESET"
+        # Elided to one line like every other chrome row: this copy is 48 cells and wrapped
+        # at 40 columns, costing a line the reflow above had already handed to a result row.
+        truncate_disp "filter (type to narrow, Enter plays, Esc clears)" "$nav_cols"
+        printf '%s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
         printf '%s>%s %s' "$C_YELLOW" "$C_RESET" "$FILTER_LABEL"
         cursor_show
     else
@@ -891,15 +1108,11 @@ display_now_playing_card() {
         p_color="$C_YELLOW"
     fi
 
-    local cols
-    term_size; cols=$TERM_COLS
-    ((cols > 80)) && cols=80
-    ((cols < 40)) && cols=40
-    local div
-    div=$(printf '─%.0s' $(seq 1 "$cols"))
-    if ((ASCII_GLYPHS)); then
-        div=$(printf -- '-%.0s' $(seq 1 "$cols"))
-    fi
+    local cols div
+    layout_cols 80
+    cols=$LAYOUT_COLS
+    card_divider "$cols"
+    div="$DIV_STR"
 
     if [[ -z "$CURRENT_PLAY_ID" ]]; then
         printf '%s%s%s\033[K\n' "$C_DIM" "$div" "$C_RESET"
@@ -910,35 +1123,18 @@ display_now_playing_card() {
             "[Tab]/[Esc]	$S_BACK_SEARCH" "[Enter]	$S_PLAY_SEL"
         printf '%s%s%s\033[K\n' "$C_DIM" "$div" "$C_RESET"
     else
-        local cur_time="--:--" total_time="${CURRENT_PLAY_DURATION}" pct_str="" bar_str=""
-        if [[ -n "$CURRENT_PLAY_SOCK" && -S "$CURRENT_PLAY_SOCK" ]]; then
-            local raw_pos raw_dur raw_pct
-            raw_pos=$(echo '{"command":["get_property","time-pos"]}' | nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null | jq -r '.data // empty' 2>/dev/null || true)
-            raw_dur=$(echo '{"command":["get_property","duration"]}' | nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null | jq -r '.data // empty' 2>/dev/null || true)
-            raw_pct=$(echo '{"command":["get_property","percent-pos"]}' | nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null | jq -r '.data // empty' 2>/dev/null || true)
-
-            if [[ -n "$raw_pos" && "$raw_pos" != "null" ]]; then
-                cur_time=$(fmt_sec "$raw_pos")
-            fi
-            if [[ -n "$raw_dur" && "$raw_dur" != "null" ]]; then
-                total_time=$(fmt_sec "$raw_dur")
-            fi
-            if [[ -n "$raw_pct" && "$raw_pct" != "null" ]] && ((! CURRENT_PLAY_IS_LIVE)); then
-                local pct_int=${raw_pct%.*}
-                pct_str=" (${pct_int}%)"
-                # The bar is indented like the rest of the card body (4 cells) and ends
-                # flush with the divider rails, which are `cols` wide from column 0.
-                bar_str=$(render_prog_bar "$pct_int" $((cols - 4)))
-            fi
-        fi
-
-        # Live: mpv's position/percent describe the broadcast, not this listen — show how
-        # long we have been tuned in and draw no bar (it would be pinned at 100%).
-        if ((CURRENT_PLAY_IS_LIVE)); then
-            cur_time=$(elapsed_since_play)
-            total_time="$GL_LIVE"
-            pct_str=""
-            bar_str=""
+        # fetch_play_times owns the IPC and the live special case (elapsed listening time,
+        # no percent, no bar — mpv's own position would be pinned at 100%).
+        local pct_str="" bar_str="" cur_time total_time
+        fetch_play_times
+        cur_time="$PT_CUR"
+        total_time="$PT_TOTAL"
+        if [[ -n "$PT_PCT" ]]; then
+            pct_str=" (${PT_PCT}%)"
+            # The bar is indented like the rest of the card body (4 cells) and ends
+            # flush with the divider rails, which are `cols` wide from column 0.
+            render_prog_bar "$PT_PCT" $((cols - 4))
+            bar_str="$PROG_BAR"
         fi
 
         local text_w=$((cols - 15))
@@ -994,9 +1190,8 @@ display_mini_player() {
         "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "$GL_BULLET" "$C_BOLD" "$C_RESET"
 
     local cols
-    term_size; cols=$TERM_COLS
-    ((cols > 80)) && cols=80
-    ((cols < 40)) && cols=40
+    layout_cols 80
+    cols=$LAYOUT_COLS
 
     if [[ -z "$CURRENT_PLAY_ID" ]]; then
         printf '  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$S_NOTHING" "$C_RESET"
@@ -1014,41 +1209,22 @@ display_mini_player() {
         local text_w=$((cols - 6))
         ((text_w < 30)) && text_w=30
 
-        local cur_time="--:--" total_time="${CURRENT_PLAY_DURATION}" pct_str="" bar_str="" bar_pct=""
-        if [[ -n "$CURRENT_PLAY_SOCK" && -S "$CURRENT_PLAY_SOCK" ]]; then
-            local raw_pos raw_dur raw_pct
-            raw_pos=$(echo '{"command":["get_property","time-pos"]}' | nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null | jq -r '.data // empty' 2>/dev/null || true)
-            raw_dur=$(echo '{"command":["get_property","duration"]}' | nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null | jq -r '.data // empty' 2>/dev/null || true)
-            raw_pct=$(echo '{"command":["get_property","percent-pos"]}' | nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null | jq -r '.data // empty' 2>/dev/null || true)
-
-            if [[ -n "$raw_pos" && "$raw_pos" != "null" ]]; then
-                cur_time=$(fmt_sec "$raw_pos")
-            fi
-            if [[ -n "$raw_dur" && "$raw_dur" != "null" ]]; then
-                total_time=$(fmt_sec "$raw_dur")
-            fi
-            if [[ -n "$raw_pct" && "$raw_pct" != "null" ]] && ((! CURRENT_PLAY_IS_LIVE)); then
-                bar_pct=${raw_pct%.*}
-                pct_str=" (${bar_pct}%)"
-            fi
-        fi
-
-        # Live: elapsed listening time, no position/percent, no bar (see the card).
-        if ((CURRENT_PLAY_IS_LIVE)); then
-            cur_time=$(elapsed_since_play)
-            total_time="$GL_LIVE"
-            pct_str=""
-            bar_pct=""
-        fi
+        # Same single fetch as the card, live special case included.
+        local pct_str="" bar_str="" cur_time total_time
+        fetch_play_times
+        cur_time="$PT_CUR"
+        total_time="$PT_TOTAL"
+        [[ -n "$PT_PCT" ]] && pct_str=" (${PT_PCT}%)"
 
         # The bar shares its line with the time readout, so it gets whatever the readout
         # leaves and ends at the same right edge as the wrapped title above (cols). All the
         # prefix cells are ASCII, so ${#var} is their display width: 2 indent + "cur / tot"
         # + " (NN%)" + 2 separating spaces.
-        if [[ -n "$bar_pct" ]]; then
+        if [[ -n "$PT_PCT" ]]; then
             local bar_total=$((cols - (2 + ${#cur_time} + 3 + ${#total_time} + ${#pct_str} + 2)))
             ((bar_total < 12)) && bar_total=12
-            bar_str=$(render_prog_bar "$bar_pct" "$bar_total")
+            render_prog_bar "$PT_PCT" "$bar_total"
+            bar_str="$PROG_BAR"
         fi
 
         wrap_print "$CURRENT_PLAY_TITLE" "$text_w" "  ${p_color}${p_icon}${C_RESET} ${C_BOLD}" "    ${C_BOLD}"
