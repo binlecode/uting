@@ -16,11 +16,18 @@ set -euo pipefail
 # empty-array expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). §28.
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# Locate the sibling verbs. They sit next to this file in both layouts: as symlinks in a
-# bin/ dir, or as the real wrappers in shell-scripts/. Fall back to PATH.
+# Locate the sibling verbs: next to this file when run from shell-scripts/ (or from a bin/
+# that happens to symlink them too), else by the same relative hop the wrappers themselves
+# use to reach the core. That hop is what makes this work when bin/ carries ONLY the short
+# names — invoked as bin/ytt, SCRIPT_DIR is the bin/ dir and bin/yt-search does not exist,
+# but bin/../../shell-scripts does, because the kernel resolves `..` through the bin symlink
+# into env-config. PATH stays as the last resort.
 if [[ -x "$SCRIPT_DIR/yt-search" && -x "$SCRIPT_DIR/yt-play" ]]; then
     YT_SEARCH="$SCRIPT_DIR/yt-search"
     YT_PLAY="$SCRIPT_DIR/yt-play"
+elif [[ -x "$SCRIPT_DIR/../../shell-scripts/yt-search" && -x "$SCRIPT_DIR/../../shell-scripts/yt-play" ]]; then
+    YT_SEARCH="$SCRIPT_DIR/../../shell-scripts/yt-search"
+    YT_PLAY="$SCRIPT_DIR/../../shell-scripts/yt-play"
 elif command -v yt-search >/dev/null 2>&1 && command -v yt-play >/dev/null 2>&1; then
     YT_SEARCH=$(command -v yt-search)
     YT_PLAY=$(command -v yt-play)

@@ -54,9 +54,11 @@ while costing portability. Conclusion: own the glue, depend only on primitives.
 One line each; full rationale lives in the referenced section.
 
 ```
-  D0  Names: yt, yt-search, yt-play, yt-tui — self-descriptive; the short forms
-      yts/ytp/ytt exist only as extra bin/ symlinks onto those same scripts (typing
-      aliases), never as the canonical name a doc, help text, or error message uses.
+  D0  Names: yt, yt-search, yt-play, yt-tui — self-descriptive, and still the
+      canonical name every doc, help text and error message uses. On PATH, though,
+      bin/ carries ONLY the short forms yts/ytp/ytt: three symlinks for three
+      scripts, where six meant two names for every command. The long names remain
+      the identity of the scripts, not entries in bin/.  (§4)
       "tui" not "ui": it is precisely a full-screen *terminal* UI.
   D1  The core (yt) is NON-INTERACTIVE. An agent-facing engine that can prompt can
       also hang; removing the capability makes the failure mode impossible.   (§6)
@@ -85,10 +87,11 @@ is the interactive human surface — pure orchestration with **zero** search/pla
 ```
                           PATH entries (per OS)
         macos/bin/                               linux/bin/
-        ├── yt-search · yts                      ├── yt-search · yts
-        ├── yt-play   · ytp                      ├── yt-play   · ytp
-        └── yt-tui    · ytt                      └── yt-tui    · ytt
+        ├── yts  → yt-search                     ├── yts  → yt-search
+        ├── ytp  → yt-play                       ├── ytp  → yt-play
+        └── ytt  → yt-tui                        └── ytt  → yt-tui
               (symlinks → ../../shell-scripts/…)
+              ONE name per command: the long names are NOT in bin/
 
         shell-scripts/
           yt          CORE engine (all search/play/resolve/lifecycle logic); not
@@ -108,6 +111,18 @@ is the interactive human surface — pure orchestration with **zero** search/pla
 **Why symlinks, not copies:** `macos/bin` and `linux/bin` hold only symlinks with zero
 OS-specific logic (OS branching lives in the core via `uname -s`). One physical copy,
 so platforms can't drift.
+
+**Why only the SHORT names are on PATH:** `bin/` used to carry both spellings of all
+three commands — six symlinks onto three scripts — so every command answered to two
+names and each doc, allowlist and habit had to pick one. The short forms won because
+they are what actually gets typed; the long names stay the canonical *identity* of the
+scripts (help text, errors, this doc) without also being PATH entries. Consequence:
+`yt-tui` can no longer find its verbs as siblings in `bin/`, so it falls back to the
+same `../../shell-scripts/` hop the wrappers use to reach the core — invoked as
+`bin/ytt`, `bin/../../shell-scripts/yt-search` resolves because the kernel walks `..`
+through the `bin` symlink into env-config. Anything that called `yt-search`/`yt-play`
+by name through PATH (agent tool definitions, Claude Code Bash allowlist entries) must
+use `yts`/`ytp`, or an absolute path into `shell-scripts/`.
 
 **Why real wrappers, not `$0`-dispatch in one script:** a real, short wrapper makes each
 tool *physically* what it claims — `yt-search`'s help is short because the script is
