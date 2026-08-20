@@ -54,7 +54,9 @@ while costing portability. Conclusion: own the glue, depend only on primitives.
 One line each; full rationale lives in the referenced section.
 
 ```
-  D0  Names: yt, yt-search, yt-play, yt-tui — self-descriptive, never yts/ytp.
+  D0  Names: yt, yt-search, yt-play, yt-tui — self-descriptive; the short forms
+      yts/ytp/ytt exist only as extra bin/ symlinks onto those same scripts (typing
+      aliases), never as the canonical name a doc, help text, or error message uses.
       "tui" not "ui": it is precisely a full-screen *terminal* UI.
   D1  The core (yt) is NON-INTERACTIVE. An agent-facing engine that can prompt can
       also hang; removing the capability makes the failure mode impossible.   (§6)
@@ -140,11 +142,13 @@ in a UI.**
 | Primitive | Role | Why foundational (not a client) | Seam (single swap point) |
 |---|---|---|---|
 | **yt-dlp** | extraction / search | de-facto standard; every client uses it | `fetch_results`, `resolve_stream_url`, `resolve_info`, `probe_media_fetchable`, `detach_title_updater` (~5 sites) |
-| **mpv** | playback | general scriptable player; alt = vlc/ffplay | `run_mpv()` (single) |
+| **mpv** | playback | general scriptable player; alt = vlc/ffplay | `run_mpv()` (single play seam) + `mpv_supports_vo()` capability probe |
 | jq | JSON shaping | universal JSON tool | pervasive (search/JSON emit, lifecycle, `yt-tui` rows) |
 
 Only **mpv** sits behind a single function (`run_mpv` — all five `play_*_url` modes route
-through it), so swapping it (mpv→vlc) is a truly localized edit. **yt-dlp** is invoked at
+through it), so swapping it (mpv→vlc) is a nearly localized edit; two mpv-specific details
+sit outside it by necessity — `mpv_supports_vo()` asks mpv what terminal VOs it has, and
+`play_viz_url` passes mpv's `--lavfi-complex` showwaves filter through `run_mpv`. **yt-dlp** is invoked at
 the ~5 sites above rather than one seam — but it is the extraction standard every client
 depends on, so replacing it isn't a realistic goal; the value is that each site is a
 plain `yt-dlp …` array, not buried in a third-party client. **jq** is pervasive. The
@@ -175,9 +179,12 @@ in-list filter uses no primitive at all (§11).
    │ yt  (core)                                                         │
    │  (a) long-opt NORMALIZATION loop                                   │
    │      --json→-j  --json-full→-J  --detach→-d  --color/--volume→vars │
-   │      --status/--stop/--get-url/--info/--set-volume → ACTION/flags   │
+   │      --status/--stop/--get-url/--info/--set-volume → set_action     │
+   │      `--` → END OF OPTIONS: rest copied verbatim (getopts stops too)│
    │  (b) getopts  ":n:m:M:s:f:S:dljJh"  → NUM_RESULTS, MODE, …         │
-   │  (c) VALIDATION  ints, enums (sort, color), -M>-m, ascii VO       │
+   │  (c) VALIDATION  ints, enums (sort, color), -M>-m, ascii VO,       │
+   │      one action only, --id/--all only w/ lifecycle, -d not w/ an    │
+   │      action, -d not w/ ascii|viz                                    │
    │  (d) IS_URL? + action/URL guards + empty-query (D3) guard          │
    │  (e) ROUTING (first match wins):                                   │
    │        empty query & not URL & no action → die (D3)                │
@@ -198,6 +205,19 @@ in-list filter uses no primitive at all (§11).
 **Non-interactive core (D1/D2/D3).** The core never prompts. The empty-query guard runs
 *before* the yt-dlp/mpv dependency check so the message is about the missing input, not
 a missing player.
+
+**`--` is honoured by the core, not merely consumed by the wrappers.** The normalization
+loop stops at `--` and copies everything after it verbatim (including the `--` itself, so
+`getopts` stops there too — verified on bash 3.2). Both wrappers *forward* `--` ahead of
+the positional. Without this the loop kept scanning past `--` and a query that merely
+LOOKED like a long flag became an action: `yt-search -- --status` listed players instead of
+searching for that text, and a query starting with a single dash was eaten by `getopts`.
+
+**One action per call.** `set_action` records which flag claimed the call and rejects a
+second, different one (`--status --stop` → "conflicting actions"), where the old
+last-flag-wins parse silently discarded the first. `--id`/`--all` are rejected outside
+`--stop`/`--set-volume`, and `-d` is rejected alongside any action — all three used to be
+accepted and ignored.
 
 **Why a normalization loop before getopts:** bash `getopts` only understands single
 letters. The loop maps the long options that DO have a short form to it
@@ -224,11 +244,14 @@ beginning with `-` is safe.
   ┌─────────────────────────────────────────────────────────────┐
   │ fetch_results()                                              │
   │  yt-dlp "ytsearch<N>:<QUERY>"                                │
-  │     --match-filter "duration > MIN [and duration < MAX]"     │
+  │     [--match-filter "duration > MIN [and duration < MAX]"]   │  ← only if asked
   │     [--cookies-from-browser <B>] --flat-playlist             │
   │     --dump-single-json -f ba --skip-download --quiet …       │
-  │        │  .entries → jq sort_by(duration|view_count)|reverse │
-  │        ▼  per entry: + {duration_fmt: convert_seconds(dur)}  │
+  │     stderr → captured; non-zero rc ⇒ error envelope + exit   │
+  │        │                                                     │
+  │        ▼  ONE jq program (JQ_PRELUDE + shaping):             │
+  │           bounds select → + {duration_fmt: dur|fmt_dur}      │
+  │           → sort_by(duration|view_count)|reverse             │
   │  FILTERED_JSON  (array; internal shape — NEVER changed)      │
   └───────────────┬───────────────────────┬──────────────────────┘
       OUTPUT=list │            OUTPUT=json │ json_full
@@ -241,6 +264,33 @@ beginning with `-` is safe.
 `print_list()` reads the **`FILTERED_JSON` variable**, not the emitted `-j` stream.
 Projection happens only at the emit point, so the JSON contract can change without
 touching that consumer. (Schemas → §14.)
+
+**One jq program, not a per-entry loop.** Shaping used to run a bash `while read` loop that
+forked jq twice per entry, and `print_list` forked jq five times per row — 175 processes
+for `-n 25`, measured ~40× slower than the single program that replaced them, with
+`duration_fmt` re-derived in `print_list` even though `FILTERED_JSON` already carried it.
+
+**Duration formatting lives in ONE place: the `JQ_PRELUDE` jq function** (`fmt_dur`), reused
+by search shaping and `--info`. It is jq rather than bash because every consumer is already
+shaping JSON with jq, so a bash implementation existed only to be forked once per row. The
+bash `convert_seconds` it replaced is gone. An unknown duration now yields **`null`**, not a
+fake `00h:00m:00s`, and each surface decides how to render that: `print_list` prints `LIVE`
+for a live stream / `--` otherwise (it used to leak a raw `null views` into human output),
+and `yt-tui` shows `● LIVE`.
+
+**Duration bounds (`-m`/`-M`) are enforced CLIENT-SIDE, in that same jq pass.**
+`--match-filter` is only a cheap server-side pre-filter, and is sent **only when a bound was
+actually requested** (the old always-on `duration > 0` filtered nothing). Reason: with
+`--flat-playlist` yt-dlp marks entries "incomplete", so a filter on a field a flat entry
+does not carry — a live stream has no duration — cannot decide and KEEPS the entry. Verified:
+`-m 999999` used to still return a live result; now `-m`/`-M` exclude unknown-duration
+entries as the flag implies.
+
+**Search has an error contract like every other surface.** A yt-dlp failure used to abort on
+`set -e` with raw stderr even under `-j`, handing an agent a jq parse error. `fetch_results`
+captures stderr, classifies it with the shared `classify_playback_error` taxonomy, and emits
+`{status:"error", query, count:0, results:[], reason}` for `-j`/`-J` (prose: the captured
+stderr plus a `die`). Exit is 2+ — never 1, which §15 reserves for usage/validation.
 
 ## 8. Playback subsystem
 
@@ -281,8 +331,15 @@ The fix keeps the on-window OSD/OSC and terminal progress bar stable via two par
 The split is what makes this safe: mpv prints the useful `--term-osd-bar`/`AV:` status on
 **stdout** and the noise on **stderr**, so filtering stderr never touches the progress bar.
 Process substitution (not a pipe) leaves `$?` as mpv's own exit code, so `q` (130) and real
-failures still propagate. The filter drops only non-error lines, so the `-j` error taxonomy
-is unaffected — the classifier still sees `403`/unavailable/etc., and the JSON status line
+failures still propagate.
+
+**The filter runs only when a human is watching this terminal** — i.e. not under `-j` and
+not in a detached child. Two reasons. It buys nothing there: `play_url_json` captures
+stdout+stderr into a temp file that is never displayed, and a detached child writes to its
+log. And it costs correctness: the process substitution is not waited on, so
+`play_url_json` — which reads that temp file the instant mpv exits — could miss a
+late-flushed error line and classify a real 403 as `unknown`. The filter drops only
+non-error lines, so on the prose path the `-j` error taxonomy is unaffected — the classifier still sees `403`/unavailable/etc., and the JSON status line
 (emitted on real stdout) is never routed through the filter. `audio` mode avoids vertical menu
 displacement (`--no-video` + suppressed tags), keeping `yt-tui`'s menu intact while mpv's in-place
 status bar (`A: ...`) updates directly below it; `ascii` uses `--really-quiet`.
@@ -382,13 +439,15 @@ group. `pgid` is invariant under reparenting, so it always reaches every descend
 
 ```
    detach_play():
+      ensure_state_dir()              # 0700 STATE_DIR + players/ (socket = a control channel)
       id = new_player_id()            # mktemp token; socket path known before launch
       set -m                          # monitor mode: backgrounded job = pgroup leader
-      YT_IPC_SOCK=mpv-<id>.sock nohup bash SELF -f MODE URL > mpv-<id>.log 2>&1 &  # pgid == pid ($!)
+      YT_IPC_SOCK=mpv-<id>.sock YT_DETACHED=1 \
+        nohup bash SELF -f MODE [--volume N] [-S SORT] -- URL > mpv-<id>.log 2>&1 &  # pgid == pid ($!)
       set +m ; disown
       players/<id>.json ← {id,pid,url,mode,format,started_at,log,sock,title:null,volume}
       rm PLAYERS_DIR/<id>              # drop bare mktemp token; state lives in <id>.json
-      detach_title_updater(id,pid,url) &  # async backfill; returns instantly (see below)
+      detach_title_updater(id,pid,url) >/dev/null 2>&1 &   # async backfill; fds MUST be closed
 
    ┌─ process group  pgid = 57678  (player <id>) ───────────┐
    │  57678  bash yt -f audio URL   (leader)                │
@@ -399,6 +458,23 @@ group. `pgid` is invariant under reparenting, so it always reaches every descend
    stop_group(pgid):  kill -INT -pgid ; wait (pgrep -g); escalate kill -KILL -pgid
    group_alive(pgid): pgrep -g pgid has ≥1 member
 ```
+
+**`YT_DETACHED=1` (why the child must know it is detached).** A detached player has no
+terminal, so nobody ever reads mpv's status line — but mpv kept writing it into
+`mpv-<id>.log`: ~2.4 MB/h measured on a 24/7 stream, i.e. unbounded growth in `$TMPDIR` for
+exactly the long-lived players `-d` exists for. The child's `run_mpv` therefore appends
+`--no-term-osd-bar --msg-level=all=error` (after the mode options, so they win) and skips
+the stderr noise filter. Measured after: 59-byte log, zero growth over 12s, and a real
+failure still recorded (`[ytdl_hook] ERROR: …`). `-S` is forwarded to the child like
+`--volume` — it used to be silently dropped on the detached path — and the URL is passed
+after `--`.
+
+**The title updater's fds must be redirected (`>/dev/null 2>&1 &`).** A background job
+inherits the shell's stdout, and a caller that *captures* our output — `out=$(yt-play -d -j
+…)`, exactly what `yt-tui` does — blocks until every writer closes that pipe, not just until
+we exit. Without the redirect the updater held the pipe for its whole ~3s yt-dlp round trip,
+so the "instant" detach measured **1.67s captured vs 0.04s uncaptured**, reintroducing the
+very latency the async backfill exists to remove. Measured after the fix: **0.03s captured**.
 
 ### 9.2 State machine (multi-player)
 
@@ -440,8 +516,17 @@ nothing on a pid mismatch; the empty temp is dropped). Best-effort: any fetch fa
 `title:null`, which every caller tolerates. This is the LLM-first counterpart to rejecting
 `--url-only` — add the grounding handle, but never on the hot path.
 
-Detached is **audio only** — a detached process has no controlling terminal, so
-video/ascii/viz have nowhere to render. (Schemas → §14.)
+**`-d` rejects `-f ascii|viz`.** A detached process has no controlling terminal, so the
+terminal-rendering modes have nowhere to draw; the guard is now enforced at parse time
+(`die`) instead of silently starting a player that scribbles escape sequences into its log.
+`audio` is the norm; `video`/`fast` are accepted because their mpv window is a GUI surface
+that does not need this terminal. `yt-tui` validates `-f` against the same list.
+
+**The `-d -j` envelope carries `sock` and `log`.** They are already in the state file, and
+without them in the envelope a client had to RECONSTRUCT the socket path from the core's
+private state layout — which `yt-tui` did, hardcoding
+`$TMPDIR/yt-cli-$(id -u)/mpv-<id>.sock` in a second script that would have broken silently
+if the core moved its state dir (§9.3). (Schemas → §14.)
 
 ### 9.3 Runtime IPC control (`--set-volume`)
 
@@ -491,14 +576,32 @@ patches carried before the lock existed. `detach_title_updater` *additionally* p
 (it patches only while the file's `.pid` still equals its own pid), so a `--stop` during
 the fetch window wins and its reap is never clobbered by a late title write.
 
+**The IPC socket is a PUBLIC part of the `-d` contract (and `volume` is read live).**
+`yt-tui` drives pause / seek / volume / progress straight over the socket rather than
+forking a verb per keypress: its Now-Playing views refresh once a second and would
+otherwise need three `yt-play` → `yt` process chains per tick. That is a deliberate
+exception to D8, so the socket path is *handed to the client* in the `-d -j` envelope
+(`sock`) instead of being reconstructed from the state-dir layout, and this document — not
+an implementation detail — is where the JSON-RPC channel is sanctioned. Consequence for
+`--status`: the state file's `volume` only knows about launch `--volume` and `--set-volume`,
+so a client moving volume over the socket would make it lie. `--status` therefore reports
+**live** volume, read off the socket by `live_volume()` (one round trip, ~10ms measured —
+`head` closes the pipe so `nc` never reaches its `-w1` timeout), falling back to the
+recorded value. It is soft-gated on `nc`, keeping `--status`'s jq-only dependency (§15).
+Verified: two `0` presses in `yt-tui` moved a player launched at `--volume 0` to `10`, and
+`--status` reported `10` (it used to report `0` forever).
+
 **Handle = a monotonic token, not the pid (D9).** `new_player_id` mints the handle via
 `basename "$(mktemp "$PLAYERS_DIR/XXXXXX")"` — atomic and collision-free. This solves
 two problems at once: (1) the socket must be **named at launch** via `YT_IPC_SOCK`, but
 the child's pid isn't known until `$!` *after* launch — the token breaks that
-chicken-and-egg; and (2) it is immune to **pid reuse** (a dead `<id>.json` plus an
-unrelated process reclaiming that pid can't false-positive liveness, because liveness is
-checked against the pid stored *inside* `<id>.json`, and the file is reaped the moment
-its group is gone). `mktemp` leaves a **bare** `<id>` file to reserve the id; after
+chicken-and-egg; and (2) it makes pid reuse a *narrow residual risk* rather than a live hazard: liveness is
+checked against the pid stored inside `<id>.json` and the file is reaped the moment its
+group is gone, so the window is only "a reaped-but-not-yet-scanned record whose pid has
+already been recycled *by a process-group leader*". It is not full immunity — `group_alive`
+is still `pgrep -g <stored pid>` — and in that window a `--stop` would signal an unrelated
+group. Closing it properly needs a second invariant (process start time, or probing the
+player's own socket); it is accepted, not solved. `mktemp` leaves a **bare** `<id>` file to reserve the id; after
 `<id>.json` is written that bare token is `rm`'d — the `*.json` reap glob would never
 touch it, so it would otherwise leak one file per launch.
 
@@ -575,7 +678,9 @@ Reason it exists: without it an agent that wants to know *what* a video is (desc
 chapters, uploader, date, like count) has to leave the ecosystem and drop to raw
 `yt-dlp --dump-json` — the same escape-hatch failure the JSON search surface removed.
 LLM-first, not human ergonomics (contrast the rejected `--url-only`, which strips
-grounding signal): `--info` *adds* the grounding an agent reasons over.
+grounding signal): `--info` *adds* the grounding an agent reasons over. `duration_fmt` comes
+from the shared `JQ_PRELUDE` `fmt_dur` (§7), so `--info` and search cannot drift on the
+format — and it is `null`, not `"00h:00m:00s"`, when the duration is unknown.
 
 ```
    resolve_info(url):
@@ -622,7 +727,8 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     │                   interactive controls                                         │
     │    Mode B (Mini): ultra-minimalist 3-line mini-player with live progress bar   │
     │  read_nav_input: one keypress; decodes ESC-[/O arrow sequences                 │
-    │    ↑/↓  move selection (paginate at edges)      ←/→  page / seek               │
+    │    ↑/↓  move selection (paginate at edges)      ←/→  page (list) / seek 5s (card)│
+    │    [ / ] seek ∓10s from ANY view                ↑/↓  volume (card/mini)         │
     │    Enter → play_selected:   yt-play -d -j -f MODE -- url  (NON-BLOCKING)       │
     │    Tab/p → toggle view:     List View ──► Mode A (Card) ──► Mode B (Mini) ──►  │
     │    Space → toggle pause:    sends IPC cycle pause over UNIX socket             │
@@ -637,7 +743,9 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **PLAY is asynchronous & non-blocking via `yt-play -d -j`.** Playback launches in an
+- **PLAY is asynchronous & non-blocking via `yt-play -d -j`.** `play_selected` reads
+  `id`/`pid`/**`sock`** out of that envelope in one `jq` pass and never rebuilds the socket
+  path itself (§9.3). Playback launches in an
   independent, detached process group so `yt-tui` retains full terminal control. Audio
   streams uninterrupted while users browse results, change pages, or initiate a new search
   (`n`). A single `Enter` on any track cleanly stops the previous player and starts the
@@ -648,7 +756,27 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     adaptive divider rails, live `playtime / total time (pct%)`, and dynamic visual progress bar.
   - **Mode B (Minimalist Mini-Player)**: Ultra-clean 3-line player with progress bar for zero visual noise.
   - **Anti-Flicker in-place rendering**: Real-time 1s timer refreshes time and progress bars smoothly
-    via `\033[H` (cursor home) without full-screen blanking or flashing.
+    via `\033[H` (cursor home) without full-screen blanking or flashing. Because nothing is
+    blanked, **every row a frame emits must carry `\033[K`** — blank spacer rows included.
+    The card grows by two rows the moment the progress bar appears (mpv has no `time-pos`
+    for the first second or so), and an uncleared spacer kept displaying the divider rail
+    the previous, shorter frame had drawn on that line.
+  - **The progress bar is sized to the layout, not hardcoded.** `render_prog_bar pct total`
+    takes the FULL cell width it may occupy (brackets included): the card passes
+    `cols - 4`, so the bar keeps the body indent and ends flush with the divider rails,
+    and the mini player passes whatever its time readout leaves on the line, ending at the
+    same right edge as the wrapped title. The rendered string is *always* exactly that
+    many cells — the head glyph is part of the track and `filled` is capped at `width-1`,
+    where the old fixed-42 bar measured 46 cells at 0%, 44 at 50% and 47 at 100%, making
+    the line jitter on every refresh. `repeat_glyph` builds the runs because
+    `printf 'x%.0s' $(seq 1 0)` still prints one cell (printf always walks its format once).
+  - **Terminal size comes from `stty size </dev/tty`, not `$(tput cols)`.** Inside command
+    substitution ncurses can miss the window-size ioctl and answer with terminfo's default
+    80x24 — measured: a 60-column pane reported 80, so the card drew 80-wide rails and every
+    line (rails, title, bar) wrapped. `term_size()` reads the real ioctl through the TTY this
+    UI already requires, with `tput` and then 80x24 as fallbacks. (`yt`'s `viz` mode sizes
+    its showwaves filter the same way.) Two fixed-text rows — the card's `Time/Mode/Status`
+    line and the CJK `Controls` block — still overflow below ~72 columns; unadapted.
   - Pressing `Tab` cycles views; pressing `Esc` in Card/Mini view instantly returns to List View.
 - **PROCESS CLEANUP GUARANTEE.** An `EXIT INT TERM HUP` trap ensures any background player
   spawned during the `yt-tui` session is automatically and cleanly stopped upon quit (`q`).
@@ -691,6 +819,9 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
 - **Flags:** `-n -m -M -s -S -l -j -J -f -d` + long `--json --json-full --detach
   --status --stop --get-url --info --set-volume --id --all --color --volume` (color is
   `--color` only — no `-c` short form; `-S` is the format-sort override — no `-F`).
+  `--` ends option parsing: everything after it is the query/URL, verbatim (§6). At most
+  one action per call; `--id`/`--all` belong to `--stop`/`--set-volume`; `-d` combines with
+  neither an action nor `-f ascii|viz`.
 - **Behavior:**
   ```
    yt <url>            play (prose)         yt -j <url>    playback status JSON
@@ -706,14 +837,18 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
 Narrow gates over the core; the full allow/reject surface is the table in §13.
 
 ### 12.4 `yt-tui` — interactive terminal UI
-- Surface: `yt-tui [-n N] [-m S] [-M S] [-s field] [-f MODE] [--volume N] [-p ROWS]
-  [--color auto|always|never] [query]` — search-shaping flags forwarded to `yt-search`;
+- Surface: `yt-tui [-n N] [-m S] [-M S] [-s field] [-f audio|video|fast] [--volume N]
+  [-p ROWS] [--color auto|always|never] [query]` — search-shaping flags forwarded to `yt-search`;
   `-f`/`--volume` playback settings forwarded to `yt-play` on every play; `-p`
   rows/page; rejects all else. `--volume` is launch-time only (no live cycle key,
   unlike `-f`'s `v` — see §26). Query optional (prompts if
   absent). Requires a TTY on both stdin and stdout, `jq`, and the sibling verbs.
-  Keys: arrows nav/page · Enter blocking play · `v` cycle mode (audio→video→fast) ·
-  `n` new search · `m` more results · `o` sort · `/` filter · `q` quit.
+  `-f` is validated against `audio|video|fast`: playback is detached, and `ascii`/`viz`
+  need a terminal (§9.2).
+  Keys: arrows nav/page · Enter non-blocking play · `Tab`/`p` cycle the three views ·
+  `Esc` back to list · `Space` pause · `[`/`]` seek ∓10s · `9`/`0` volume · `s` stop ·
+  `v` cycle mode (audio→video→fast) · `n` new search · `m` more results · `o` sort ·
+  `/` filter · `q` quit.
 
 ## 13. Wrapper gating model
 
@@ -733,6 +868,7 @@ a cross-flag — this is what makes the two contracts non-overlapping.
    positional: a QUERY (reject URLs)         positional: a URL
    default: inject -l if no -l/-j/-J         URL required unless
                                              --status/--stop/--set-volume
+   both: emit `<flags> -- <positional>`  (the `--` is FORWARDED, not just consumed)
 ```
 
 The core implements the *full* set; the wrapper only restricts which subset each verb
@@ -762,6 +898,10 @@ Search envelope (`yt-search -j` / `yt -j "query"`):
 ```
 `-j` = the 8 fields above (high-signal, ~4× smaller than the raw ~23-field yt-dlp
 entry). `-J`/`--json-full` = same envelope, `results` holds every raw field.
+`duration` and `duration_fmt` are **`null` together** when the duration is unknown (a live
+stream); `view_count` can be `null` too. On failure the envelope is instead
+`{status:"error", query, count:0, results:[], reason}` with the same `reason` enum as
+playback, and the exit code is 2+ (§7/§15).
 
 Playback status (`yt-play -j <url>`):
 ```json
@@ -773,10 +913,13 @@ stopped_by_user | unknown | null(ok)`.
 
 Lifecycle / resolve:
 ```
+   -d       : {status:"started", id, pid, url, mode, started_at, title:null, sock, log}
+              sock/log are handed over so a client never rebuilds the state-dir layout
    --status : {status:"players", players:[{id,pid,url,mode,volume,title,started_at}…]}
               empty array when nothing playing (still exit 0); one entry per live player
               title is null for the first ~3s after a detach, then the async updater fills it
-              volume is null unless --volume was passed at that player's launch
+              volume is read LIVE off the player's socket (§9.3), falling back to the
+              recorded launch/--set-volume value; null only if neither is available
    --set-volume : {status:"ok", id, volume}          (live-adjusted via mpv IPC socket)
                 | {status:"not_playing"}             (no target; exit 4)
                 | {status:"ambiguous", reason:"multiple_players", players:[{id,pid,title,url}…]}  (exit 4)
@@ -795,8 +938,10 @@ Lifecycle / resolve:
 ```
    0    success; also --status/--stop (always); 130 normalized (SIGINT; clean q already exits 0)
    1    usage/validation error (die), wrapper flag-gating rejection, resolve failure
-        (prose), empty-query (D3), yt-tui non-TTY refusal
-   2+   propagated yt-dlp / mpv failure (playback, resolve -j)
+        (prose), empty-query (D3), yt-tui non-TTY refusal, conflicting actions,
+        --id/--all outside a lifecycle verb, -d with an action or with -f ascii|viz
+   2+   propagated yt-dlp / mpv failure (playback, resolve -j, SEARCH failure — search
+        reports 2 even when yt-dlp exits 1, so a tool failure is never confused with 1)
    4    --set-volume / --stop: did not take effect — no such player, no player,
         ambiguous target, or mpv IPC failure. The -j status/reason says which.
         Distinct from 1 (usage) and 2+ (propagated player failure). --stop treats
@@ -805,9 +950,10 @@ Lifecycle / resolve:
    TTY  : yt-tui requires BOTH stdin and stdout (§11); the core never needs a TTY —
           it errors on empty input rather than prompting (D1/D3).
    deps : core needs yt-dlp jq mpv before search/play/geturl; --status/--stop need
-          only jq, --set-volume needs jq+nc (nc gated lazily so a bare search never
-          demands it), and --info needs only yt-dlp+jq (all checked before the mpv
-          gate). yt-tui needs only jq and the verbs. curl is an OPTIONAL soft dep for
+          only jq (--status uses nc opportunistically for live volume and degrades to
+          the recorded value without it), --set-volume needs jq+nc (nc gated lazily so a
+          bare search never demands it), and --info needs only yt-dlp+jq (all checked
+          before the mpv gate). yt-tui needs only jq and the verbs. curl is an OPTIONAL soft dep for
           the play-time client probe (§8.2). BSD `nc -U` is stock on macOS; the Linux
           netcat `-U` gap is a known, documented limitation (§26 / script comment).
 ```
@@ -823,7 +969,11 @@ kept out of flags to keep each verb's flag surface narrow.
    Env (set once):    YT_COOKIE_BROWSER   (default chrome = login on; "none" = anon-only)
                       YT_AUDIO_FORMAT (ba)  YT_VIDEO_FORMAT (bv*+ba/b)
                       YT_VIDEO_FORMAT_FAST  YT_ASCII_VO (tct)  YT_MPV_INPUT_CONF
-                      YT_TUI_ASCII (1 = ASCII glyph fallbacks; auto-on for non-UTF-8 locale)
+                      YT_ASCII (1 = ASCII glyph fallbacks; auto-on for a non-UTF-8 locale;
+                        read by BOTH the core and yt-tui — legacy alias YT_TUI_ASCII)
+   Internal (set by the core for its own detached child, not a user knob):
+                      YT_IPC_SOCK (per-player mpv IPC socket)  YT_DETACHED (=1: no
+                      terminal, so quiet mpv + no stderr filter)
    (color is the --color flag, NOT an env var — the scripts hardcode COLOR_MODE=auto
     at startup and only --color changes it, so a COLOR_MODE env value is never read.)
 ```
@@ -838,14 +988,14 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
 ```
    Core (shell-scripts/yt)
      Setup/util : usage, die, is_non_negative_int, validate_enum,
-                  require_cmd/require_deps, mpv_supports_vo, convert_seconds,
-                  normalize_playback_mode
+                  require_cmd/require_deps, mpv_supports_vo, normalize_playback_mode,
+                  set_action, JQ_PRELUDE (jq p2/fmt_dur — the one duration formatter)
      Search     : fetch_results, print_list, emit_search_json
-     Playback   : run_mpv, warn_audio_only_mode, play_{audio,video,fast,ascii,viz}_url,
+     Playback   : run_mpv, play_{audio,video,fast,ascii,viz}_url,
                   play_mode_url, have_probe_tools, probe_media_fetchable,
                   play_url_with_probe, play_url_directly,
                   play_url_json, classify_playback_error, format_for_mode
-     Lifecycle  : group_alive, stop_group,
+     Lifecycle  : group_alive, stop_group, ensure_state_dir, live_volume,
                   player_state/player_sock/player_log/player_lock_dir,
                   lock_player_state/unlock_player_state, new_player_id, detach_play,
                   detach_title_updater, reap_dead_players, resolve_target,
@@ -984,9 +1134,23 @@ first; gate deletions by grep so no dangling reference survives.
    Empty arg array under set -u (bash 3.2)   guard array expansion before use
    Peer connects to a player's IPC socket    STATE_DIR/players 0700; macOS $TMPDIR is
                                              already per-user (Linux /tmp fallback pinned)
-   pid reuse false-positives a dead player   handle is a monotonic id token, not the pid;
-                                             liveness checks the pid stored IN <id>.json,
-                                             which is reaped the moment its group is gone
+   pid reuse false-positives a dead player   NARROWED, not closed: handle is a monotonic
+                                             token, liveness checks the pid stored IN
+                                             <id>.json, and the record is reaped as soon as
+                                             its group is gone — but group_alive is still
+                                             pgrep -g, so a recycled pid leading a group
+                                             inside that window would look live (§9.3)
+   Captured -d stdout blocks on a bg job     detach_title_updater's fds redirected to
+                                             /dev/null (a command substitution waits for
+                                             every writer of the pipe, not just for us)
+   Detached mpv status line fills the disk   YT_DETACHED → --no-term-osd-bar
+                                             --msg-level=all=error in the child (§9.1)
+   Search failure hands an agent no shape    captured stderr → classify_playback_error →
+                                             {status:"error",…,reason} envelope (§7)
+   Query that looks like a flag becomes an   `--` ends option parsing in the CORE and is
+   action                                    forwarded by both wrappers (§6)
+   Client moves volume behind --status'      --status reads volume live off the socket,
+   back                                      recorded value only as fallback (§9.3)
    Concurrent title-backfill + set-volume  per-id mkdir lock (lock_player_state)
    clobber the same <id>.json              serializes the two temp+mv patches (§9.3)
    Stale socket after SIGKILL'd mpv          [[ -S sock ]] test → ipc_failed, never hangs
@@ -996,12 +1160,10 @@ first; gate deletions by grep so no dangling reference survives.
 
 ## 26. Non-goals / known constraints
 
-- Detached video/ascii/viz (no terminal to render into) — audio only by design.
+- Detached `ascii`/`viz` (no terminal to render into) — rejected at parse time (§9.2);
+  `audio` is the norm and `video`/`fast` open their own GUI window.
 - Blocking playback (`yt-play <url>` / `-j`) returns only when playback ends; use
   `--detach`+`--status`/`--stop` or `--get-url` for non-blocking agent flows.
-- Per-item jq spawning in `fetch_results`/`print_list` is O(results) processes, and
-  `print_list` recomputes `duration_fmt` rather than reading the stored field — both
-  run once per search behind a network call, imperceptible; left unoptimized.
 - `yt-tui` rows are one jq pass over the cached results per search — fine for small N;
   not intended for thousands of results.
 - No MCP wrapper (§1). No third-party YouTube client dependency (§2).
@@ -1011,11 +1173,14 @@ first; gate deletions by grep so no dangling reference survives.
   `nc -U` is gated lazily so a bare search never pays for it (§15). `--volume N` remains
   the launch-time STARTING volume; `--set-volume` adjusts it live thereafter.
   Deliberately still OUT of scope:
-    - Live volume for FOREGROUND / `yt-tui` playback — those have a real TTY, so mpv's
-      own volume keys already work; no IPC needed.
-    - `--pause` / `--seek` / mute and other runtime properties — the same per-instance
-      socket would carry them (`set_property`/`cycle`), but the wrapper's contract is
-      kept narrow; add only when actually needed.
+    - Live volume for FOREGROUND playback — it has a real TTY, so mpv's own volume keys
+      already work; no IPC needed. (`yt-tui` is no longer foreground: it plays detached
+      and adjusts volume over the socket, which `--status` then reports live.)
+    - `--pause` / `--seek` / mute and other runtime properties as *verbs* — the same
+      per-instance socket carries them today, and `yt-tui` uses it directly (a verb per
+      keypress would mean a process chain per 1s refresh tick). The socket is therefore a
+      documented part of the `-d` contract (§9.3) and is handed to clients in the `-d -j`
+      envelope; a verb is added only when a caller genuinely cannot speak to the socket.
     - Linux `nc -U` portability — macOS-primary tool; BSD `nc -U` is stock, GNU netcat
       variants differ (`ncat -U` works; `netcat-traditional` has no Unix-socket support).
       Accepted as a known gap, noted in a script comment rather than solved now.
@@ -1025,7 +1190,14 @@ first; gate deletions by grep so no dangling reference survives.
 ```
    Syntax     : bash -n on core + all three wrappers/glue (+ repo-wide shell check)
    Search     : yt-search -j → 8-field envelope + count; -J → full; default list;
-                flag-after-query ordering; empty-query error
+                flag-after-query ordering; empty-query error; zero-result query →
+                count:0; a live entry renders "LIVE"/"n/a views" (never a raw null);
+                -m 999999 excludes unknown-duration (live) entries; yt-dlp failure →
+                {status:"error",…,reason:"network"} under -j, exit 2 (prose: stderr + die)
+   Argv       : `yt -l -- --status` SEARCHES for that text (does not list players);
+                same via `yt-search -- --status`; --status --stop → conflicting actions;
+                --status --id X / --all --status → rejected; -d --stop → rejected;
+                -d -f ascii|viz → rejected
    Core       : yt "q" → list (D2); yt (no args) → D3 error; yt <url> prose play;
                 yt -j "q" → envelope; -p rejected; invalid --color rejected
    Gating     : yt-search rejects -f/--detach/URL; yt-play rejects -n/-s/bare-query
@@ -1036,7 +1208,25 @@ first; gate deletions by grep so no dangling reference survives.
                 player changes) → ambiguous --set-volume w/o --id (exit 4) →
                 --stop --id one → --stop --all → --status(empty); assert ZERO orphan
                 mpv after stop; players/ holds only <id>.json (no bare token leak)
-   yt-tui     : (tmux PTY) full chrome draws (title w/ ♫ accent · status · hints · '>'-caret selected row · ●○○ pages · bottom filter input);
+                Detach latency: `out=$(yt-play -d -j -- URL)` returns in ~0.03s (the
+                title updater must not hold the captured pipe) and --status shows the
+                title a few seconds later; -d -j envelope carries sock+log
+                Detached log: mpv-<id>.log stays ~59 bytes with ZERO growth while
+                playing, and still records a real ytdl_hook ERROR
+                Live volume: yt-tui 9/0 on a --volume 0 player → --status reports the
+                moved value (not the stale launch value)
+   yt-tui     : (tmux PTY) Enter → background play + banner; Tab → card (live
+                time/progress via the envelope's sock) → Tab → mini → Esc → list;
+                Widths (measured in display cells, CJK-aware): at 100/72/60 cols the
+                card's rails and progress bar are equal and flush (80/72/60), the bar
+                holds that exact width at 0/1/50/99/100%, the spacer row above it is
+                blank (not a stale rail), and the mini player's bar ends at the same
+                right edge as its wrapped title; YT_ASCII=1 renders [#---] at the same
+                width
+                9/0 volume; ] seek; q → exits and reaps ONLY its own player;
+                music keeps playing across `n` (new search) and `/` (live filter);
+                Enter on another row switches track without a gap;
+                full chrome draws (title w/ ♫ accent · status · hints · '>'-caret selected row · ●○○ pages · bottom filter input);
                 ↑/↓ nav + ←/→ page (assert page count w/ -p); n/m/o → re-fetch;
                 v → PLAY_MODE flip (local, no re-fetch; status/hint update on redraw);
                 / → LIVE filter (type narrows per-keystroke; multi-term AND; mixed-case;
