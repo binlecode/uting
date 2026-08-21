@@ -2164,6 +2164,17 @@ CHAR_IN=""
 utf8_complete() {
     CHAR_IN="$1"
     local extra=0 b
+    # EMPTY returns before the lead-byte tests, because `*""*` matches EVERY pattern — an
+    # empty $1 was classified as a 2-byte lead and then sat in the `read -t 1` below waiting
+    # for a continuation byte that cannot arrive. And empty is exactly what the Enter key
+    # reads as: `read` strips its \n delimiter, and ICRNL turns Return into \n even in the
+    # non-canonical mode `read -n1` sets up, so `read -rsn1` returns "" (which is why the
+    # case arms downstream all list "" alongside $'\n' and $'\r'). Cost: a full second of
+    # dead screen after EVERY Enter — measured at 1015 ms between the startup prompt's Enter
+    # and its `Searching` line, where the same run with an argv query showed 20 ms — plus the
+    # same second before every play_selected, plus a SWALLOWED keystroke whenever the user
+    # did press something inside that second (it was appended to CHAR_IN and read as one key).
+    [[ -n "$1" ]] || return 0
     if   [[ "$CW_LEAD2" == *"$1"* ]]; then extra=1
     elif [[ "$CW_LEAD3" == *"$1"* ]]; then extra=2
     elif [[ "$CW_LEAD4" == *"$1"* ]]; then extra=3
