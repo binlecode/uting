@@ -36,7 +36,7 @@ orchestration lives in code we own; the external primitives do only universal,
 non-YouTube heavy lifting, each isolated behind a single seam (§5).
 
 ```
-   Human surface     ──►  yt-tui             (interactive: self-rendered menu + blocking play)
+   Human surface     ──►  yt-tui             (interactive: self-rendered menu, detached play)
    LLM/agent surface ──►  yt-search, yt-play (headless: structured JSON, gated verbs)
    Internal engine   ──►  yt (core)          (search / play / resolve / lifecycle; not on PATH)
    Primitives        ──►  yt-dlp · mpv       (foundational, swappable behind seams)
@@ -1334,7 +1334,8 @@ Narrow gates over the core; the full allow/reject surface is the table in §13.
   Keys: arrows nav/page · Enter non-blocking play · `Tab`/`p` toggle the two views ·
   `Esc` back to list · `Space` pause · `[`/`]` seek ∓10s · `9`/`0` volume · `s` stop ·
   `v` cycle mode (audio→video→fast) · `l` switch chrome language (en↔zh, any view) ·
-  `n` new search · `m` more results · `o` sort · `/` filter · `q` quit.
+  `t` cycle palette family (any view) · `n` new search · `m` more results · `o` sort ·
+  `/` filter · `q` quit.
 
 ## 13. Wrapper gating model
 
@@ -1365,8 +1366,8 @@ guarantees URL → core `-j` = PLAYBACK status.
 **Why yt-tui composes the verbs, never the core (D8).** The same guarantee is what the
 TUI relies on. `fetch_json` parses the search envelope, and only `yt-search`'s URL
 rejection makes "core `-j` = search envelope" unconditional — a URL pasted into the
-TUI's `s` prompt would otherwise route to `play_url_json`: a *blocking playback* while
-the TUI waits for search JSON. Calling the core directly would force that URL guard up
+TUI's `n` (new search) prompt would otherwise route to `play_url_json`: a *blocking
+playback* while the TUI waits for search JSON. Calling the core directly would force that URL guard up
 into the UI — the wrong direction per §4's governing principle. Two side benefits, at
 zero cost (the wrappers `exec` into the core): the human surface exercises the exact
 agent contracts daily, so a broken verb contract is caught by human use before an agent
@@ -1510,20 +1511,39 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
    Interactive  : yt-tui   (fetch_json → build_all_rows → load_rows → menu loop:
                   display_menu · read_nav_input · move_selection · play_selected ·
                   new_search [read_query_input, Esc cancels] · filter_live → apply_filter)
+     Views      : display_list_menu (rows + banner + reflow),
+                  display_now_playing_card, display_menu (dispatch, DCS frame hold)
      Width layer: char_w/disp_w/truncate_disp/cluster_back, cw_range/init_cell_tables
      Chrome     : layout_cols, print_hints (HINT_MEASURE), wrap_print/wrap_emit
                   (WRAP_MEASURE), print_details (DETAIL_MEASURE), card_divider,
                   repeat_glyph, render_prog_bar
+     Input      : read_nav_input/read_query_input, utf8_complete + init_lead_tables
+                  (one key per CHARACTER), tty_echo_off/tty_echo_restore,
+                  cursor_hide/cursor_show
+     Player     : send_mpv_ipc, fetch_play_times (one connection for pos/dur/pct),
+                  toggle_pause, seek_relative, adjust_volume, stop_current_playback,
+                  check_player_alive, clear_play_state, elapsed_since_play,
+                  cleanup_on_exit
+     Chrome i18n/
+     theme      : set_ui_lang/cycle_ui_lang (the S_* table), init_theme/init_colors/
+                  detect_bg/init_colorterm/cycle_theme, init_glyphs, init_sync
+     Failures   : report_fetch_failure, play_failed_notice, press_any_key
      Formatters : fmt_sec (clock), short_dur (duration_fmt → 6:10:58), commas
 ```
+
+Not every helper is listed — `print_usage`, `die`, `is_uint` and the other one-line guards
+are omitted on purpose. Every *subsystem* is, which is the point of the map: a function this
+file discusses by behaviour should be findable by name from here.
 
 **Provenance.** The suite descends from an all-in-one `yt-search-n-play.sh`: its
 non-interactive core moved into `yt` behind the verbs, and its self-rendered TUI
 (menu chrome, `display_menu`, `read_nav_input`, `read_query_input`, arrow-key paging,
 blocking-play semantics) was re-homed in `yt-tui` — same menu, now delegating to the
-verbs. Where yt-tui behavior looks arbitrary (no `clear` before play, no stdin flush,
-rows printed untruncated and left to wrap), it is deliberate parity with that original;
-the `/` filter is the one net-new addition.
+verbs. Little of that original's *playback* behaviour survives: play is detached now, so
+"no `clear` before play" and "no stdin flush after playback" describe a foreground mpv the
+TUI no longer runs, and rows are measured and elided rather than left to wrap. What did
+survive is the menu's shape and its key map; the `/` filter, the two-view toggle and the
+whole width layer are net-new.
 
 ---
 
@@ -1532,10 +1552,15 @@ the `/` filter is the one net-new addition.
 ## 18. Human — interactive browse & play
 
 ```
-   $ yt-tui "lofi hip hop" -n 40 [-f video] [-p 15]
-     → self-rendered menu (§11): ↑/↓ nav · ←/→ page · Enter blocking play
-       (mpv progress bar; q returns to the menu) · v cycle mode (audio→video→fast) ·
-       n new search · m more results · o sort · / filter · q quit
+   $ yt-tui "lofi hip hop" -n 40 [-f video] [-p 15] [--theme nord]
+     → self-rendered menu (§11), TWO views toggled with Tab/p:
+       List  : ↑/↓ nav · ←/→ page · Enter play (DETACHED, non-blocking — the menu keeps
+               its terminal and the music keeps playing across n / m / o / filter) ·
+               / filter (live narrow) · n new search · m more results · o sort ·
+               v cycle mode (audio→video→fast, applies to the next Enter)
+       Card  : ←/→ seek ∓5s · ↑/↓ volume · Esc back to the list
+       Both  : Space pause/resume · s stop · 9/0 volume · [ / ] seek ∓10s ·
+               l chrome language (en↔zh) · t palette family · q quit (reaps its player)
 ```
 
 ## 19. Agent — search, then play
@@ -1730,10 +1755,11 @@ the i18n pass below.
 
 **Withdrawn — F15 was not a defect.** It read the (since-deleted) mini player's
 `${#total_time}` bar sizing as
-an ambiguous-width bug on the grounds that `total_time` can be `● LIVE`. It cannot: the live
-branch of `fetch_play_times` returns early with `PT_PCT=""`, and `bar_total` is only computed
-inside `if [[ -n "$PT_PCT" ]]`, where every part of the prefix is ASCII (`fmt_sec` /
-`SHORT_DUR`). The `·` separator on that line is likewise live-only, i.e. bar-free. What was
+an ambiguous-width bug on the grounds that `total_time` can be `● LIVE`. It could not: the
+live branch of `fetch_play_times` returns early with `PT_PCT=""`, and that view's `bar_total`
+was only computed inside `if [[ -n "$PT_PCT" ]]`, where every part of the prefix is ASCII
+(`fmt_sec` / `SHORT_DUR`). Neither the variable nor the view exists now — the card sizes its
+bar from `cols - 4`, never from `${#var}`. The `·` separator on that line is likewise live-only, i.e. bar-free. What was
 wrong there was only the comment, which stated the conclusion ("all the prefix cells are
 ASCII") without the early-return that makes it true; it now names that early return. No
 arithmetic changed.
@@ -1806,7 +1832,8 @@ trip, ~3 s per card redraw" figure came from a hand-written socket peer that
 **never closes**. Real mpv does close once the client half-closes, so `nc` returns at once and
 the *old* code cost **0.026 s** for `fetch_play_times` and **0.016 s** for a single property —
 measured against a live mpv socket, and confirmed in tmux, where the pre-fix build ticked the
-card's `Time:` line 6 times in 6 one-second samples, exactly like the fixed one. The second
+card's time readout 6 times in 6 one-second samples, exactly like the fixed one (that row
+carried a `Time:` label at the time; the i18n and views-cleanup passes since removed it). The second
 was never charged to a healthy player. What the probe actually modelled is a **wedged** peer
 that stops closing; that is the case the old code paid `-w1` for, per call.
 
@@ -2030,15 +2057,15 @@ end-to-end tmux assertions — see §27):
   they are shape, not defects — but two of them shrank open findings. F11 stopped being a
   layout problem and became a two-string swap (there is no `%-8s` left to pad in bytes), and
   the F7 duplication the mini player embodied is gone rather than documented.
-- **A harness lesson, again from a false failure.** Broadening the row regex to accept the new
-  marker shape (`^ *(\d+\.|>) `) made four filter-mode assertions fail: the filter's own caret
-  line is `> <query>` at column 0, so the loosened pattern matched it as a result row and then
-  reported it had no duration rail. Requiring the indent (`^ +`) separates them, and the
-  distinction is real rather than incidental — a result row's marker sits *inside* the index
-  field, the caret's does not. Same family as the two batch-E lessons: the assertion has to
-  name the thing it means, not a string the thing happens to contain. (The one pre-existing
-  failure that survives, `f_short` at 62x12, reproduces identically on the previous commit:
-  the filter caret pushes the header off a 12-row pane. Not this pass's.)
+- **A harness lesson, again from a false failure.** Broadening the row regex to accept a
+  marker where the number used to be (`^ *(\d+\.|>) `) made four filter-mode assertions fail:
+  the filter's own caret line is `> <query>` at column 0, so the loosened pattern matched it as
+  a result row and then reported it had no duration rail. The lesson outlived the shape it was
+  learned on — the marker revert put the number back on every row, so the rigs now match
+  `^(> |  ) *[0-9]+\. `, which excludes the caret for a better reason: a result row always has
+  a number and the caret never does. Either way the point is the same as the two batch-E
+  lessons: the assertion has to name the thing it means, not a string the thing happens to
+  contain.
 
 **Closed by the list-view rail/details work:** the original audit also carried F4 — play
 metadata re-derived by re-splitting the *display* string, which only parsed correctly
@@ -2194,9 +2221,11 @@ the part of a rig worth keeping.
                 v → PLAY_MODE flip (local, no re-fetch; status/hint update on redraw);
                 / → LIVE filter (type narrows per-keystroke; multi-term AND; mixed-case;
                     ↑↓ move within filtered; backspace widens; Esc clears + exits);
-                -c never → no ANSI; Enter → blocking play, q → menu redraws
-                (rc 130 → 0; other rc → "press any key"); no stdin flush after
-                playback (§11); non-TTY (piped stdin or stdout) → dies cleanly
+                -c never → no ANSI; Enter → DETACHED play: the envelope's id/pid/sock
+                land in CURRENT_PLAY_*, the banner appears on the next redraw and the
+                menu never blocks; Enter on another row switches track without a gap;
+                a launch that fails prints the core's own last stderr line and waits on
+                "press any key"; non-TTY (piped stdin or stdout) → dies cleanly
 ```
 
 ## 28. Portability contract — bash 3.2
