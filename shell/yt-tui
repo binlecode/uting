@@ -370,7 +370,26 @@ init_theme
 # and a lookup function would fork or re-branch on every redraw.
 UI_LANG=""
 # set_ui_lang <en|zh> — fill the table. Kept separate from the initial choice below so the
-# `l` key can re-resolve it live without re-reading the environment.
+# `l` key can re-resolve it live without re-reading the environment. NOTHING drawn as chrome
+# may be a literal at its print site. The last holdouts were the play state (S_PLAYING /
+# S_PAUSED, drawn twice — the list banner's label and the card's status), the card's own
+# header, and every TRANSIENT line: the startup prompt, the n prompt, searching, the m/o
+# action echoes, the no-matches copy, the filter banner, press-any-key and Quitting. The
+# transient ones lasted longest because they print into the scroll area and the next redraw
+# wipes them — they are in no captured frame, so no frame check could see them.
+# The table cannot reference GL_* : this runs during option parsing, init_glyphs does not run
+# until after it, and a glyph in a label would abort under `set -u` on the first call. That is
+# why a sentence with a glyph in the MIDDLE (the no-matches copy, whose dash is GL_DASH) is
+# two entries composed at the print site, rather than one entry with the dash baked in — a
+# literal em dash would survive YT_ASCII=1, which is the whole point of the glyph table.
+# What stays English on purpose: help text, error sentences (`Play failed:`, `no results`,
+# `search failed`) and the `k=v` field labels of the header/status rows.
+# S_MORE_ACT/S_SORT_ACT repeat S_MORE/S_SORT's zh value on purpose: the hint row spells the
+# keys in lower case ("more", "sort") and the action heading in Title case ("More", "Sort"),
+# a distinction English has and Chinese does not — one entry per SITE, not per word, keeps the
+# en output unchanged. The m echo's count phrase is the ONE deliberate change to English:
+# "for 50 results" became "· 50 results" so a single printf format serves both word orders
+# (zh wants "，共 50 条"), instead of putting a per-language format string in the table.
 set_ui_lang() {
     UI_LANG=$1
     if [[ "$UI_LANG" == "zh" ]]; then
@@ -381,6 +400,13 @@ set_ui_lang() {
         S_FOCUS="专注卡片"; S_PAUSE="暂停"; S_VOL="音量"
         S_BACK_LIST="返回列表选单"; S_PAUSE_RESUME="暂停 / 继续"; S_SEEK5="快退 / 快进 5s"
         S_VOL_ADJUST="调节音量"; S_STOP_PLAY="停止播放"
+        S_PLAYING="播放中"; S_PAUSED="已暂停"; S_CARD_HEAD="专注卡片"
+        S_PROMPT_SEARCH="搜索 YouTube:"; S_NEW_SEARCH="新搜索（Esc 或留空取消）"
+        S_SEARCHING="搜索中"; S_REFETCH="重新获取"; S_RESULTS_N="条"
+        S_ANY_KEY="按任意键继续"; S_QUITTING="正在退出"
+        S_MORE_ACT="更多"; S_SORT_ACT="排序"
+        S_NO_MATCH="(无匹配"; S_NO_MATCH_KEYS="按 / 改过滤，或 n 重新搜索)"
+        S_FILTER_HINT="过滤（输入即筛选，Enter 播放，Esc 清除）"
         S_NOTHING="(暂无正在播放的音频)"; S_BACK_SEARCH="返回搜索列表"; S_PLAY_SEL="播放选中歌曲"
     else
         S_NAV="Navigation:"
@@ -390,6 +416,13 @@ set_ui_lang() {
         S_FOCUS="focus card"; S_PAUSE="pause"; S_VOL="volume"
         S_BACK_LIST="back to list"; S_PAUSE_RESUME="pause / resume"; S_SEEK5="seek -/+ 5s"
         S_VOL_ADJUST="volume"; S_STOP_PLAY="stop playback"
+        S_PLAYING="Playing"; S_PAUSED="Paused"; S_CARD_HEAD="NOW PLAYING FOCUS"
+        S_PROMPT_SEARCH="Search YouTube:"; S_NEW_SEARCH="New search (Esc or empty to cancel)"
+        S_SEARCHING="searching"; S_REFETCH="re-fetching"; S_RESULTS_N="results"
+        S_ANY_KEY="Press any key"; S_QUITTING="Quitting"
+        S_MORE_ACT="More"; S_SORT_ACT="Sort"
+        S_NO_MATCH="(no matches"; S_NO_MATCH_KEYS="press / to change filter, or n for new search)"
+        S_FILTER_HINT="filter (type to narrow, Enter plays, Esc clears)"
         S_NOTHING="(nothing playing)"; S_BACK_SEARCH="back to results"; S_PLAY_SEL="play selection"
     fi
 }
@@ -1280,7 +1313,7 @@ PAGE_CAP=$(( LINES_N - 8 ))
 
 # Interactive: with no query on command line, prompt for one. Empty / Ctrl-D cancels.
 if ((${#query[@]} == 0)); then
-    printf '%s Search YouTube: ' "$GL_CARET" >&2
+    printf '%s %s ' "$GL_CARET" "$S_PROMPT_SEARCH" >&2
     IFS= read -r _q || { printf '\n' >&2; exit 0; }
     [[ -n "${_q//[[:space:]]/}" ]] || { echo "yt-tui: no query entered" >&2; exit 0; }
     query=("$_q")
@@ -1439,10 +1472,10 @@ display_list_menu() {
 
     # Persistent Now-Playing banner (when background playback is active)
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
-        local p_icon="$GL_PLAY" p_label="Playing" p_color="$C_GREEN"
+        local p_icon="$GL_PLAY" p_label="$S_PLAYING" p_color="$C_GREEN"
         if ((CURRENT_PLAY_PAUSED)); then
             p_icon="$GL_PAUSE"
-            p_label="Paused"
+            p_label="$S_PAUSED"
             p_color=""      # retired yellow → default fg, same as the card's paused state
         fi
         # Pure status line: shares ONE line with a variable-length title, so measure the
@@ -1570,7 +1603,7 @@ display_list_menu() {
 
     # Result rows
     if ((NUM_ENTRIES == 0)); then
-        truncate_disp "(no matches $GL_DASH press / to change filter, or n for new search)" "$nav_cols"
+        truncate_disp "$S_NO_MATCH $GL_DASH $S_NO_MATCH_KEYS" "$nav_cols"
         printf '%s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
     else
         # ONE right-aligned index field for every row: "$n." on an unselected row, ">" on the
@@ -1660,7 +1693,7 @@ display_list_menu() {
     if ((FILTER_MODE)); then
         # Elided to one line like every other chrome row: this copy is 48 cells and wrapped
         # at 40 columns, costing a line the reflow above had already handed to a result row.
-        truncate_disp "filter (type to narrow, Enter plays, Esc clears)" "$nav_cols"
+        truncate_disp "$S_FILTER_HINT" "$nav_cols"
         printf '%s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
         printf '%s>%s %s' "$C_MARK" "$C_RESET" "$FILTER_LABEL"
         cursor_show
@@ -1674,12 +1707,15 @@ display_now_playing_card() {
     cursor_hide
     # Reposition cursor to top-left without blanking the screen (eliminates flicker)
     printf '\033[H'
-    printf '%s%s%s%s%s  %s  %sNOW PLAYING FOCUS%s\033[K\n\033[K\n' \
-        "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$GL_BULLET" "$C_BOLD" "$C_RESET"
+    printf '%s%s%s%s%s  %s  %s%s%s\033[K\n\033[K\n' \
+        "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$GL_BULLET" \
+        "$C_BOLD" "$S_CARD_HEAD" "$C_RESET"
 
-    local p_status="$GL_DOT Playing" p_color="$C_GREEN"
+    # The header names the view the same way the key hint that reaches it does (S_FOCUS,
+    # "focus card" / "专注卡片") — one view, one name, in both languages.
+    local p_status="$GL_DOT $S_PLAYING" p_color="$C_GREEN"
     if ((CURRENT_PLAY_PAUSED)); then
-        p_status="$GL_PAUSE Paused"
+        p_status="$GL_PAUSE $S_PAUSED"
         p_color="$C_YELLOW"
     fi
 
@@ -1789,7 +1825,7 @@ display_menu() {
 # until the next redraw, and the next redraw is one keypress away — so the pause is not a
 # courtesy, it is the only thing that makes the message readable at all.
 press_any_key() {
-    printf 'Press any key%s' "$GL_ELL"
+    printf '%s%s' "$S_ANY_KEY" "$GL_ELL"
     IFS= read -rsn1 _ || true
 }
 
@@ -1913,12 +1949,12 @@ report_fetch_failure() {
 # ── SEARCH action (key: n) ──────────────────────────────────────────────────────────────
 new_search() {
     local q prev="$QUERY_LABEL" rc=0
-    printf '\n%s%s New search%s (Esc or empty to cancel): ' "$C_BOLD" "$GL_CARET" "$C_RESET"
+    printf '\n%s%s %s%s: ' "$C_BOLD" "$GL_CARET" "$S_NEW_SEARCH" "$C_RESET"
     read_query_input || return 0
     q="$QUERY_INPUT"
     [[ -n "${q//[[:space:]]/}" ]] || return 0
     QUERY_LABEL="$q"
-    printf 'searching%s\n' "$GL_ELL"
+    printf '%s%s\n' "$S_SEARCHING" "$GL_ELL"
     fetch_json || rc=$?
     if ((rc != 0)); then
         QUERY_LABEL="$prev"
@@ -1932,7 +1968,9 @@ new_search() {
 more_results() {
     local prev="$RESULT_N" rc=0 page="$page_index" sel="$selected"
     RESULT_N=$(( RESULT_N + 25 ))
-    printf '\n%sMore%s %s re-fetching "%s" for %s results%s\n' "$C_BOLD" "$C_RESET" "$GL_DASH" "$QUERY_LABEL" "$RESULT_N" "$GL_ELL"
+    printf '\n%s%s%s %s %s "%s" %s %s %s%s\n' \
+        "$C_BOLD" "$S_MORE_ACT" "$C_RESET" "$GL_DASH" "$S_REFETCH" "$QUERY_LABEL" \
+        "$GL_SEP" "$RESULT_N" "$S_RESULTS_N" "$GL_ELL"
     fetch_json || rc=$?
     if ((rc != 0)); then
         RESULT_N="$prev"
@@ -1960,7 +1998,9 @@ cycle_sort() {
         [[ "${SORT_CYCLE[$i]}" == "$SORT_FIELD" ]] && { cur=$i; break; }
     done
     SORT_FIELD="${SORT_CYCLE[$(( (cur + 1) % n ))]}"
-    printf '\n%sSort%s %s %s %s re-fetching "%s"%s\n' "$C_BOLD" "$C_RESET" "$GL_ARROW" "$SORT_FIELD" "$GL_DASH" "$QUERY_LABEL" "$GL_ELL"
+    printf '\n%s%s%s %s %s %s %s "%s"%s\n' \
+        "$C_BOLD" "$S_SORT_ACT" "$C_RESET" "$GL_ARROW" "$SORT_FIELD" "$GL_DASH" \
+        "$S_REFETCH" "$QUERY_LABEL" "$GL_ELL"
     fetch_json || rc=$?
     if ((rc != 0)); then
         SORT_FIELD="$prev"
@@ -2246,7 +2286,7 @@ while true; do
         "[B" | "OB" | "["*B | "O"*B) adjust_volume -5 ;;   # down arrow → volume -5
         l | L) cycle_ui_lang ;;
         t | T) cycle_theme ;;   # cycle palette family live
-        q | Q) printf 'Quitting%s\n' "$GL_ELL"; exit 0 ;;
+        q | Q) printf '%s%s\n' "$S_QUITTING" "$GL_ELL"; exit 0 ;;
         *) ;;
         esac
         continue
@@ -2265,7 +2305,7 @@ while true; do
     l | L) cycle_ui_lang ;;   # toggle chrome language (en <-> zh)
     t | T) cycle_theme ;;     # cycle palette family live
     "/") filter_live ;;       # LIVE incremental filter
-    q | Q) printf 'Quitting%s\n' "$GL_ELL"; exit 0 ;;
+    q | Q) printf '%s%s\n' "$S_QUITTING" "$GL_ELL"; exit 0 ;;
     ESC) ;;
     *) ;;
     esac

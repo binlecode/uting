@@ -862,6 +862,31 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     is split from the initial choice so the **`l` key** re-fills the table live, from any
     view, without touching playback. Wrapped-row indents are measured with `disp_w`, not
     `${#var}`: "导航:" is 3 characters but 5 cells.
+
+    **The rule is now exhaustive: nothing drawn as chrome is a literal at its print site.**
+    It was not, for two passes — the hint rows went through the table while the play state
+    (`Playing`/`Paused`, drawn twice: the list banner's label and the card's status), the card
+    header, and every *transient* line (the startup prompt, the `n` prompt, `searching…`, the
+    `m`/`o` action echoes, the no-matches copy, the filter banner, `Press any key…`,
+    `Quitting…`) stayed English inside a Chinese frame. They were easy to miss precisely
+    because they are transient: they print into the scroll area and the next redraw wipes
+    them, so they never appear in a captured frame. Three constraints shaped the fix:
+    - **The table cannot reference `GL_*`.** `set_ui_lang` runs during option parsing;
+      `init_glyphs` runs after it, so a glyph inside a label aborts under `set -u` on the
+      first call. A sentence with a glyph in the MIDDLE is therefore two entries composed at
+      the print site (`$S_NO_MATCH $GL_DASH $S_NO_MATCH_KEYS`) — baking a literal em dash in
+      would survive `YT_ASCII=1`, which is the one thing the glyph table exists to prevent.
+    - **One entry per SITE, not per word.** `S_MORE_ACT`/`S_SORT_ACT` repeat `S_MORE`/`S_SORT`'s
+      Chinese value on purpose: the hint row spells the keys lower case and the action heading
+      Title case, a distinction English has and Chinese does not. Sharing one entry would have
+      changed the English output to close a Chinese gap.
+    - **Word order that survives translation.** The `m` echo's count phrase moved from
+      `for 50 results` to `· 50 results` so ONE fixed `printf` format serves both languages
+      (Chinese wants "，共 50 条"); a per-language format string would have put the layout
+      back inside the table. This is the pass's only deliberate change to English output.
+
+    What stays English **by design**: help text, error sentences (`Play failed:`, `no results`,
+    `search failed`) and the `k=v` field labels of the header/status rows.
   - **The chrome speaks ONE theme per run — and it is the terminal's theme, not ours.**
     The default palette (`minimal`) is ANSI 16 indexed codes only; deliberately no
     RGB or 256-color (grep gate: the only escapes the minimal/mono paths can emit
@@ -1622,8 +1647,8 @@ first; gate deletions by grep so no dangling reference survives.
 
 Audited against `shell-scripts/yt-tui`. **Batch 1 (the one-line edits), batch A (the cheap
 correctness/UX edits), batch B (the IPC layer), batch C (the liveness poll), batch D (the
-failure reporters), batch E (the input layer) and the views-cleanup pass are fixed; only the
-i18n pass is not** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
+failure reporters), batch E (the input layer), the views-cleanup pass and the i18n pass are
+ALL fixed — the register is empty** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
 because the findings are statements about *this* design's seams, and each one is only
 actionable next to the section it sits in. The open rows below have since been re-audited
 against the code and re-measured on the machine's own bash 3.2.57. **Seven of them asserted
@@ -1671,11 +1696,8 @@ used in command substitution.
 closed. Both members shipped — the liveness poll (F3, batch C) and the input layer's byte-split
 readers (F10 + F9, batch E).
 
-**Shape — duplication and unfinished rules.** One left.
-
-| ID | Sev | Finding |
-|----|-----|---------|
-| F11 | low | **The one-language-per-run rule stops at the list hints.** `Playing`/`Paused` and `NOW PLAYING FOCUS` are hardcoded English inside a bilingual chrome (§11 — help text and errors stay English *by design*; these are chrome). They want `S_*` entries in both branches of `set_ui_lang`. **This is now a pure string swap**, and it was not before: the card used to carry `Title:`/`Channel:`/`Time:`/`Tuned:`/`Mode:`/`Status:` in a `%-8s` field, and bash 3.2's `%-8s` pads to eight **bytes**, not eight characters, so "时间:" (7 bytes) rendered **6** cells where the fit estimate assumed 8 — an *over*-estimate, with a `${#label}` correction erring the other way; the card's `wrap_print` calls also hardcoded a 15-space continuation to sit under a 15-cell first prefix, which a shorter CJK label drifts. The views-cleanup pass deleted every one of those labels (§11), so no pad and no label-derived prefix remain to get wrong. What is left: two strings, plus `MINI PLAYER` which went with the view. |
+**Shape — duplication and unfinished rules.** None left; F11 was the last row and closed with
+the i18n pass below.
 
 **Withdrawn — F15 was not a defect.** It read the (since-deleted) mini player's
 `${#total_time}` bar sizing as
@@ -1707,8 +1729,10 @@ lists below.)
 
 Each step ends `bash -n` clean, re-runs the `set -e` repros (the third one drives the IPC
 readers against a live peer, a stale socket and no socket), and the interactive smoke pass in
-§27. Patch bodies and the three open questions live in the working sketch pad
-`macos/docs/TODO-yt-tui-fixes.md`, which is deleted when this register empties.
+§27. Patch bodies and open questions lived in a working sketch pad,
+`macos/docs/TODO-yt-tui-fixes.md`, which was deleted when this register emptied — as its own
+rule said it would be. Everything the sketch pad was tracking is either in a closed list below
+or, where it was a design decision rather than a defect, folded into §11.
 
 **Closed by the batch-1 pass** (one edit, `bash -n` clean, both `set -e` repros green):
 
@@ -1884,6 +1908,40 @@ new tmux rigs; the premise was measured before a line was written, `tmp/e-probe.
   `read_nav_input`'s ESC continuation read swallow it as the sequence's second byte. Wait for
   the filter's own prompt to go.
 
+**Closed by the i18n pass — F11, and the three quarters of it the register never wrote down**
+(`bash -n` clean, no new `shellcheck` findings — same 15 as HEAD, occurrence for occurrence;
+every earlier suite still green; two new rigs, 14 + 19 assertions):
+
+- **F11 as filed** was `Playing`/`Paused` and `NOW PLAYING FOCUS`: three strings, `S_PLAYING` /
+  `S_PAUSED` / `S_CARD_HEAD`, drawn at four sites (the state appears in both the list banner
+  and the card). Both sites already MEASURE what they print — the banner elides its title
+  against `disp_w`'d fixed parts, the card's meta row drops fields against a measured
+  `tail_w` — so a translated string degrades the way the layout is designed to, and in fact
+  Chinese is *narrower* here (播放中 = 6 cells vs `Playing`'s 7), which only moves the card's
+  mode-drop threshold by one cell. The card header deliberately reuses the wording of the key
+  hint that reaches it (`S_FOCUS`, "focus card" / "专注卡片"): one view, one name.
+- **What the register had missed: nine more sites, all transient.** The startup prompt, the `n`
+  prompt, `searching…`, the `m` and `o` action echoes, the no-matches copy, the filter banner,
+  `Press any key…` and `Quitting…` (two call sites) were English literals too. They survived
+  three audits because they print into the SCROLL AREA and the next redraw wipes them — none
+  of them is in a captured frame, so every frame-diffing check the earlier passes ran was
+  blind to them. **The register was not wrong about F11; it was incomplete, and the incomplete
+  part was the part no rig could see.** Recorded because it generalises: an audit that reads
+  only what a redraw draws cannot see chrome that a redraw destroys.
+- **The rig had to change shape to catch them, twice.** A tmux poll of the `m`/`o` echoes
+  passes for the wrong reason — 更多 and 排序 are also in the Navigation hint row, so grepping
+  the pane finds the word without the sentence ever having been drawn. The echoes are asserted
+  at the FUNCTION level instead (`tmp/v-i18n-unit.sh` calls the real `more_results` /
+  `cycle_sort` / `new_search` / `press_any_key` with `fetch_json` stubbed, in both languages,
+  and asserts the whole line plus the absence of every English literal). The pane rig
+  (`tmp/v-i18n.sh`) keeps what only a pane can show: the startup prompt before any redraw, the
+  `l` flip mid-session, the forced-failure tail, and `YT_ASCII=1` + zh, where the no-matches
+  copy has to come out with the ASCII dash — the reason that sentence is two table entries
+  composed at the print site rather than one entry with the dash baked in.
+- Design consequences are in §11 (the exhaustive-table rule, the three constraints, and the
+  one deliberate English change: `for 50 results` → `· 50 results`, so a single `printf`
+  format serves both word orders).
+
 **Closed by the views-cleanup pass** (`bash -n` clean, no new `shellcheck` findings, the
 batch-C/D/E suites still green, and three new rigs: 25 card assertions, 9 list captures, 19
 end-to-end tmux assertions — see §27):
@@ -2005,6 +2063,15 @@ new-search/more-results instead of `n`/`m`; also corrected.
                 Language: LANG=zh_CN starts Chinese, LANG=en_US starts English, YT_LANG
                 overrides both, YT_LANG=fr dies; the `l` key flips the chrome in the
                 list AND card views with playback uninterrupted
+                i18n exhaustiveness (tmp/v-i18n-unit.sh, tmp/v-i18n.sh): the m/o/n/
+                press-any-key lines assert whole-sentence in en AND zh at the function
+                level, plus the absence of every English literal under zh (14); in a
+                real pane, the startup prompt before any redraw, the / filter banner,
+                the no-matches copy, the forced-failure tail, the `l` flip back to en,
+                the quit line, and YT_ASCII=1 + zh rendering the no-matches dash as
+                "-" (19). The card matrix (tmp/v-test.sh) runs its 40/60/80/120 x
+                en/zh x vod/paused/live/empty grid against the translated status and
+                header, and fails if the other language's string leaks (33)
                 9/0 volume; ] seek; q → exits and reaps ONLY its own player;
                 music keeps playing across `n` (new search) and `/` (live filter);
                 Enter on another row switches track without a gap;
