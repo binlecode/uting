@@ -742,21 +742,21 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
    load_rows → urls[] · R_TITLE/R_DUR/R_VIEWS/R_CHAN/R_LIVE · NUM_ENTRIES / NUM_PAGES
         ▼
     ┌─ SELF-RENDERED MENU LOOP (yt-tui draws every line, reads every key; plain ─────┐
-    │  text + ANSI — 3-view switchable cycling: List ↔ Mode A (Card) ↔ Mode B (Mini))│
+    │  text + ANSI — 2-view switchable cycling: List ↔ Now Playing card              │
     │  display_menu:                                                                 │
-    │    List View:     title · status · live Now-Playing mini banner · result rows  │
-    │                   (title + right-rail duration) · pagination dots · details    │
-    │                   section for the SELECTED row · live filter input. A dim rail  │
-    │                   sits under the Navigation block (chrome | content boundary,   │
-    │                   drawn with the block or not at all).                          │
-    │    Mode A (Card): full-screen rail-bounded card with metadata, progress bar &  │
+    │    List View:     title · status · live Now-Playing banner · result rows       │
+    │                   (fixed index field + title + right-rail duration) ·          │
+    │                   pagination dots · details section for the SELECTED row ·     │
+    │                   live filter input. A dim rail sits under the Navigation      │
+    │                   block (chrome | content boundary, drawn with it or not).     │
+    │    Card:          full-screen rail-bounded card, label-less body (title,       │
+    │                   channel, one dot-separated meta row), progress bar &         │
     │                   interactive controls                                         │
-    │    Mode B (Mini): ultra-minimalist 3-line mini-player with live progress bar   │
     │  read_nav_input: one keypress; decodes ESC-[/O arrow sequences                 │
     │    ↑/↓  move selection (paginate at edges)      ←/→  page (list) / seek 5s (card)│
-    │    [ / ] seek ∓10s from ANY view                ↑/↓  volume (card/mini)         │
+    │    [ / ] seek ∓10s from ANY view                ↑/↓  volume (card)             │
     │    Enter → play_selected:   yt-play -d -j -f MODE -- url  (NON-BLOCKING)       │
-    │    Tab/p → toggle view:     List View ──► Mode A (Card) ──► Mode B (Mini) ──►  │
+    │    Tab/p → toggle view:     List View ◄──► Now Playing card                    │
     │    Space → toggle pause:    sends IPC cycle pause over UNIX socket             │
     │    s     → stop playback:   yt-play --stop --id ID                             │
     │    9/0   → volume:          read-modify-set over socket IPC, clamped 0-100     │
@@ -778,15 +778,21 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
   streams uninterrupted while users browse results, change pages, or initiate a new search
   (`n`). A single `Enter` on any track cleanly stops the previous player and starts the
   new selection without latency.
-- **THREE SWITCHABLE VIEWS cycled with `Tab` (or `p`):**
+- **TWO SWITCHABLE VIEWS toggled with `Tab` (or `p`):**
   - **List View (Search & Browse)**: Interactive multi-row list with a top Now-Playing banner.
-  - **Mode A (Now Playing Focus Card)**: Clean distraction-free card with word-wrapped title within
+  - **Now Playing card**: Clean distraction-free card with word-wrapped title within
     adaptive divider rails, live `playtime / total time (pct%)`, and dynamic visual progress bar.
     The rails open the card (top) and close it (bottom) only — nothing separates the
-    progress bar from the controls, so the readout labels the bar above it and the
-    controls flow straight after it (the redundant rail between bar and Controls was
+    progress bar from the hints, so the readout labels the bar above it and the
+    hints flow straight after it (the redundant rail between bar and hints was
     removed in the theme pass).
-  - **Mode B (Minimalist Mini-Player)**: Ultra-clean 3-line player with progress bar for zero visual noise.
+  - **There was a third view, and deleting it was the point.** A "mini player" rendered the
+    same four facts as the card in three lines. Two renderers for one state is the F7 shape
+    (duplication that drifts): they had already disagreed about where the progress bar was
+    built, and every card change had to be made twice or knowingly skipped. `Tab` cycling
+    through three states also meant two presses to get back to the list from the card, on a
+    key whose whole job is "away and back". Nothing the mini did is unreachable now — it was
+    the card minus the rails.
   - **Anti-Flicker in-place rendering**: Real-time 1s timer refreshes time and progress bars smoothly
     via `\033[H` (cursor home) without full-screen blanking or flashing. Because nothing is
     blanked, **every row a frame emits must carry `\033[K`** — blank spacer rows included.
@@ -795,9 +801,8 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     the previous, shorter frame had drawn on that line.
   - **The progress bar is sized to the layout, not hardcoded.** `render_prog_bar pct total`
     takes the FULL cell width it may occupy (brackets included): the card passes
-    `cols - 4`, so the bar keeps the body indent and ends flush with the divider rails,
-    and the mini player passes whatever its time readout leaves on the line, ending at the
-    same right edge as the wrapped title. The rendered string is *always* exactly that
+    `cols - 4`, so the bar keeps the body indent and ends flush with the divider rails
+    rather than at a hardcoded width. The rendered string is *always* exactly that
     many cells — the head glyph is part of the track and `filled` is capped at `width-1`,
     where the old fixed-42 bar measured 46 cells at 0%, 44 at 50% and 47 at 100%, making
     the line jitter on every refresh. `repeat_glyph` builds the runs because
@@ -806,11 +811,11 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     `time-pos` on the *broadcast's* timeline with `duration` = the live edge, so
     `percent-pos` is ~99.98% from the first second and a progress bar is pinned full —
     measured on a 24/7 radio: `time-pos=77390 duration=77403 percent-pos=99.98` (a VOD at
-    the same age reads 0.03%). The card and mini player therefore key off the row's own
+    the same age reads 0.03%). The card therefore keys off the row's own
     `live_status` (carried raw in `R_LIVE`; `play_selected` is what turns it into the
-    `GL_LIVE` badge on `CURRENT_PLAY_DURATION`), show
-    `Tuned: MM:SS · ● LIVE` — wall-clock since *this* listener attached, which mpv cannot
-    provide — and draw no bar. `CURRENT_PLAY_IS_LIVE`/`CURRENT_PLAY_STARTED` carry it;
+    `GL_LIVE` badge on `CURRENT_PLAY_DURATION`), shows
+    `MM:SS · ● LIVE` in place of the position pair — wall-clock since *this* listener
+    attached, which mpv cannot provide — and draws no bar. `CURRENT_PLAY_IS_LIVE`/`CURRENT_PLAY_STARTED` carry it;
     both reset on stop.
   - **The client learns of the player's death by asking, once per loop turn.** A detached
     player owns its own lifecycle: nothing calls back into `yt-tui` when a track ends or mpv
@@ -924,7 +929,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     finds no other non-ASCII character but the Chinese label text, so the list is complete,
     not curated.
 
-    **One deliberate exception: the brand wordmark (`YT_BRAND=1`).** The three view
+    **One deliberate exception: the brand wordmark (`YT_BRAND=1`).** Both view
     headers render `𝗬 𝗧  𝗧 𝗨 𝗜` (mathematical sans-serif bold, U+1D5D4 block) when
     opted in. It lives OUTSIDE the closed inventory on purpose: the UCD class is Neutral
     (one cell "in principle"), but real terminal fonts render this block via fallback
@@ -1021,7 +1026,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     its weight in bash 3.2. The tables are byte-built at startup (`cw_range`) rather than
     written as literals: a source line full of invisible combining marks is unreadable.
     Pure-ASCII strings skip the per-character walk entirely, so the shared helper is FASTER
-    than the inline test it replaced (300 measurements of the mini-player hint row: 94 ms
+    than the inline test it replaced (300 measurements of a packed hint row: 94 ms
     before, 5 ms after).
     Accumulate with `n=$((n + CHAR_W))`, never `((n += CHAR_W))`: an arithmetic command
     evaluating to 0 returns exit status 1, so a leading zero-width character would abort the
@@ -1041,10 +1046,10 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     `print_hints` packs `key<TAB>label` items (or bare fields) into as few lines as fit,
     with a first/continuation prefix; `truncate_disp` elides a variable-length value that
     shares a one-line budget with fixed chrome. Applied to the navigation row, the card's
-    `Controls` block, the mini player's hint row, the empty-state copy, and the list's
+    hint block, the empty-state copy, and the list's
     status row (whose `min=`/`max=` now appear only when set — at their `0s` default they
-    were pure width). The card's `Time / Mode / Status` row measures its three segments and
-    splits onto two lines when they do not fit, and the Now-Playing banner gives the title
+    were pure width). The card's meta row measures itself and DROPS fields rather than
+    wrapping (see the label-less card below), and the Now-Playing banner gives the title
     whatever the fixed parts leave, dropping its inline hint block before it would squeeze
     the title below 12 cells. Result: every chrome line fits at 46 columns, where the old
     fixed strings wrapped mid-item from ~72 down.
@@ -1053,8 +1058,8 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     `title · duration · views · channel` row takes two or three lines, so ten entries filled
     21 lines and scrolled the header, the status row, the Now-Playing banner and the entire
     navigation block off the top — every hint the layout had just packed, spent on rows that
-    then scrolled away. Each row's TITLE is elided to what its `> 10. ` / `  10. ` prefix,
-    a two-cell gap and the duration rail leave (`cols - 4 - <digits> - 2 - rail`). The title
+    then scrolled away. Each row's TITLE is elided to what its index field, a two-cell gap
+    and the duration rail leave (`cols - iw - 1 - 2 - rail`). The title
     row (a long query used to wrap) and the filter caret's copy are elided the same way, so
     the whole view is measurable line-for-line.
   - **A row is a title and a duration; everything else is a section below it.** One physical
@@ -1069,6 +1074,32 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     the same glyph reads as a badge. Both use `short_dur`, so the envelope's zero-padded
     `06h:10m:58s` never reaches the screen — and neither does a row disagree with its own
     details block, since both render from the same fields rather than from each other.
+  - **The index is ONE fixed-width column, and the selection marker lives inside it.**
+    The prefixes were per-row literals — `> 1. ` when selected, `  1. ` when not — so their
+    width was `4 + <digits>` and a page that reached two digits started every 1-digit title
+    one cell left of the rows around it. Ragged, in the one column the eye scans *down*.
+    Now one field, `iw = ${#NUM_ENTRIES} + 3` cells (2 indent + digits of the largest index +
+    1 for the dot) plus a single separating space, holds `$n.` right-aligned — or, on the
+    selected row, `>` right-aligned in the same field, so the marker hugs the title exactly
+    where the number would have ended. The width comes from `NUM_ENTRIES`, not from the page,
+    so it does not move as you page; and because it is one number, `row_w` and the CHA rail
+    jump both read it instead of re-deriving the prefix. The selected row drops its number on
+    purpose: an index is only ever typed for a row you are *not* on.
+  - **The card's body carries no labels.** `Title:` / `Channel:` / `Time:` / `Mode:` /
+    `Status:` (and the hint block's `Controls:`) are gone; typography carries the same
+    structure — bold title, dim channel, one dim meta row `3:21 / 9:27 (37%) · audio ·
+    ● Playing` joined by `GL_SEP`, with the status keeping its colour. Three things fall out
+    of that. The title gets ~11 more cells before it wraps, because `text_w` is now
+    `cols - 4` (the deepest body indent) instead of `cols - 15` (indent + an 8-cell label
+    field + a 3-cell gap). The one-line/two-line branch is deleted: the labels and their
+    gaps were ~30 cells of the row's width, and without them it fits at every width the card
+    supports — where it still would not, the guard DROPS the mode segment and then elides
+    the time, never wraps, and never drops the status (the readout the card exists for).
+    And the F11 translation problem shrinks to a string swap: `%-8s` pads to eight *bytes*
+    on bash 3.2, so a CJK label rendered a different width than the fit estimate assumed —
+    with no labels there is no pad to get wrong. The title also loses its `▶`: play state
+    lives in the meta row's coloured status, and two indicators for one fact is the same
+    duplication in miniature.
   - **The rail is placed with an absolute column jump, not computed padding.** Right-aligning
     by padding emits `room - DISP_W` spaces, which lands the column wherever OUR measurement
     says — and the width rule over-counts *by design*. A title of mathematical-bold letters
@@ -1169,7 +1200,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     to replace, run twice so the Unicode rail could be thrown away in ASCII mode.
     `repeat_glyph` and `render_prog_bar` now return through globals (`GLYPH_RUN`, `PROG_BAR`)
     like the rest of the width layer, so a redraw costs no subshell for them.
-  - Pressing `Tab` cycles views; pressing `Esc` in Card/Mini view instantly returns to List View.
+  - Pressing `Tab` toggles the two views; pressing `Esc` in the card instantly returns to List View.
 - **PROCESS CLEANUP GUARANTEE.** An `EXIT INT TERM HUP` trap ensures any background player
   spawned during the `yt-tui` session is automatically and cleanly stopped upon quit (`q`).
 - **FILTER is a LIVE pure-bash narrow** of the fetched rows — no network, no re-fetch, no
@@ -1246,7 +1277,7 @@ Narrow gates over the core; the full allow/reject surface is the table in §13.
   absent). Requires a TTY on both stdin and stdout, `jq`, and the sibling verbs.
   `-f` is validated against `audio|video|fast`: playback is detached, and `ascii`/`viz`
   need a terminal (§9.2).
-  Keys: arrows nav/page · Enter non-blocking play · `Tab`/`p` cycle the three views ·
+  Keys: arrows nav/page · Enter non-blocking play · `Tab`/`p` toggle the two views ·
   `Esc` back to list · `Space` pause · `[`/`]` seek ∓10s · `9`/`0` volume · `s` stop ·
   `v` cycle mode (audio→video→fast) · `l` switch chrome language (en↔zh, any view) ·
   `n` new search · `m` more results · `o` sort · `/` filter · `q` quit.
@@ -1591,7 +1622,8 @@ first; gate deletions by grep so no dangling reference survives.
 
 Audited against `shell-scripts/yt-tui`. **Batch 1 (the one-line edits), batch A (the cheap
 correctness/UX edits), batch B (the IPC layer), batch C (the liveness poll), batch D (the
-failure reporters) and batch E (the input layer) are fixed; only the i18n pass is not** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
+failure reporters), batch E (the input layer) and the views-cleanup pass are fixed; only the
+i18n pass is not** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
 because the findings are statements about *this* design's seams, and each one is only
 actionable next to the section it sits in. The open rows below have since been re-audited
 against the code and re-measured on the machine's own bash 3.2.57. **Seven of them asserted
@@ -1643,9 +1675,10 @@ readers (F10 + F9, batch E).
 
 | ID | Sev | Finding |
 |----|-----|---------|
-| F11 | low | **The one-language-per-run rule stops at the list hints.** `Playing`/`Paused`, `NOW PLAYING FOCUS`, `MINI PLAYER`, and the card's `Title:`/`Channel:`/`Time:`/`Tuned:`/`Mode:`/`Status:` are hardcoded English inside a bilingual chrome (§11 — help text and errors stay English *by design*; these are chrome). They want `S_*` entries in both branches of `set_ui_lang`. **This cannot be a pure string swap**, for two reasons, and the first was recorded backwards here: bash 3.2's `%-8s` pads to eight **bytes**, not eight characters, so "时间:" (7 bytes) renders **6** cells where the fit estimate assumes 8 — an *over*-estimate, and a `${#label}` correction would err the other way. Drop `%-8s` for a translated label and emit a `disp_w`-measured pad, so the printed width and the estimate are the same number by construction. Second, the card's `wrap_print` calls hardcode a 15-space continuation to sit under a 15-cell first prefix; a shorter CJK label drifts it. Derive both prefixes from the label. English values must reproduce today's numbers exactly. |
+| F11 | low | **The one-language-per-run rule stops at the list hints.** `Playing`/`Paused` and `NOW PLAYING FOCUS` are hardcoded English inside a bilingual chrome (§11 — help text and errors stay English *by design*; these are chrome). They want `S_*` entries in both branches of `set_ui_lang`. **This is now a pure string swap**, and it was not before: the card used to carry `Title:`/`Channel:`/`Time:`/`Tuned:`/`Mode:`/`Status:` in a `%-8s` field, and bash 3.2's `%-8s` pads to eight **bytes**, not eight characters, so "时间:" (7 bytes) rendered **6** cells where the fit estimate assumed 8 — an *over*-estimate, with a `${#label}` correction erring the other way; the card's `wrap_print` calls also hardcoded a 15-space continuation to sit under a 15-cell first prefix, which a shorter CJK label drifts. The views-cleanup pass deleted every one of those labels (§11), so no pad and no label-derived prefix remain to get wrong. What is left: two strings, plus `MINI PLAYER` which went with the view. |
 
-**Withdrawn — F15 was not a defect.** It read the mini player's `${#total_time}` bar sizing as
+**Withdrawn — F15 was not a defect.** It read the (since-deleted) mini player's
+`${#total_time}` bar sizing as
 an ambiguous-width bug on the grounds that `total_time` can be `● LIVE`. It cannot: the live
 branch of `fetch_play_times` returns early with `PT_PCT=""`, and `bar_total` is only computed
 inside `if [[ -n "$PT_PCT" ]]`, where every part of the prefix is ASCII (`fmt_sec` /
@@ -1767,7 +1800,8 @@ tmux pane driving real yt-dlp + detached mpv):
   two definitions and one of them was wrong. `tmp/f3-tmux.sh` is the end-to-end rig.
 - Also in this pass, the last crumb of the withdrawn **F15**: the mini player's bar-sizing
   comment now names the live early-return that makes `${#var}` safe there, instead of only
-  stating the conclusion. No arithmetic changed.
+  stating the conclusion. No arithmetic changed. (That view was deleted in the
+  views-cleanup pass; the card's bar was never sized from `${#var}`.)
 
 **Closed by the batch-D pass — the failure reporters** (`bash -n` clean, no new `shellcheck`
 findings, the `set -e` repros and the batch-C tests still green, and a fixture-stub tmux rig
@@ -1850,6 +1884,25 @@ new tmux rigs; the premise was measured before a line was written, `tmp/e-probe.
   `read_nav_input`'s ESC continuation read swallow it as the sequence's second byte. Wait for
   the filter's own prompt to go.
 
+**Closed by the views-cleanup pass** (`bash -n` clean, no new `shellcheck` findings, the
+batch-C/D/E suites still green, and three new rigs: 25 card assertions, 9 list captures, 19
+end-to-end tmux assertions — see §27):
+
+- The **third view is deleted** and the **card's labels with it**; the list's index became one
+  fixed-width column. All three are §11 decisions, recorded there rather than here because
+  they are shape, not defects — but two of them shrank open findings. F11 stopped being a
+  layout problem and became a two-string swap (there is no `%-8s` left to pad in bytes), and
+  the F7 duplication the mini player embodied is gone rather than documented.
+- **A harness lesson, again from a false failure.** Broadening the row regex to accept the new
+  marker shape (`^ *(\d+\.|>) `) made four filter-mode assertions fail: the filter's own caret
+  line is `> <query>` at column 0, so the loosened pattern matched it as a result row and then
+  reported it had no duration rail. Requiring the indent (`^ +`) separates them, and the
+  distinction is real rather than incidental — a result row's marker sits *inside* the index
+  field, the caret's does not. Same family as the two batch-E lessons: the assertion has to
+  name the thing it means, not a string the thing happens to contain. (The one pre-existing
+  failure that survives, `f_short` at 62x12, reproduces identically on the previous commit:
+  the filter caret pushes the header off a 12-row pane. Not this pass's.)
+
 **Closed by the list-view rail/details work:** the original audit also carried F4 — play
 metadata re-derived by re-splitting the *display* string, which only parsed correctly
 because `clean` collapses whitespace, and which threw away the `views` field it parsed
@@ -1917,8 +1970,8 @@ new-search/more-results instead of `n`/`m`; also corrected.
                 moved value (not the stale launch value); from 98, three 0 presses stop
                 at 100 and never reach mpv's own 130 ceiling
    yt-tui     : (tmux PTY) Enter → background play + banner; Tab → card (live
-                time/progress via the envelope's sock) → Tab → mini → Esc → list;
-                IPC: against real mpv the card's Time: line shows a new reading on
+                time/progress via the envelope's sock) → Tab → list; Esc → list;
+                IPC: against real mpv the card's meta row shows a new reading on
                 every one-second sample (6/6 on a VOD row — the LIVE branch returns
                 before any IPC and proves nothing here), fetch_play_times costs
                 ~0.017s (one connection, not three), and `pgrep nc` leaves none
@@ -1930,21 +1983,28 @@ new-search/more-results instead of `n`/`m`; also corrected.
                 Widths (measured in display cells, CJK-aware): at 100/72/60 cols the
                 card's rails and progress bar are equal and flush (80/72/60), the bar
                 holds that exact width at 0/1/50/99/100%, the spacer row above it is
-                blank (not a stale rail), and the mini player's bar ends at the same
-                right edge as its wrapped title; YT_ASCII=1 renders [#---] at the same
+                blank (not a stale rail); YT_ASCII=1 renders [#---] at the same
                 width
-                Live stream: card/mini show "Tuned: MM:SS · ● LIVE" with the counter
-                ticking and NO bar (never mpv's ~99.98% percent-pos); a VOD in the same
-                build still shows "00:05 / 02:03:54 (0%)" + a rail-flush bar
+                Live stream: the card shows "MM:SS · ● LIVE · audio · ● Playing" with
+                the counter ticking and NO bar (never mpv's ~99.98% percent-pos); a VOD
+                in the same build shows "3:21 / 9:27 (37%) · audio · ● Playing" + a
+                rail-flush bar
+                Views cleanup (tmp/v-test.sh, tmp/v-list.sh, tmp/v-tmux.sh): the card
+                renders NO label text at 40/60/80/120 cols x en/zh x vod/live/empty
+                (25 assertions), always ONE meta row, dropping "· mode" at 40 rather
+                than wrapping; list titles start on the SAME column across 1-, 2- and
+                3-digit indexes and selected/unselected rows with the rail still
+                right-flush (9 captures); Tab/p/Esc reach only two views and the card
+                still repaints on its 1 s tick (19 assertions)
                 Narrow terminals: at 100/72/60/46 columns EVERY chrome line fits the
-                width in all three views (max measured = the rails/bar themselves) —
-                nav + controls + mini hints + empty-state repack, the card's
-                Time/Mode/Status row splits, the banner elides its title
+                width in both views (max measured = the rails/bar themselves) —
+                nav + hints + empty-state repack, the card's meta row drops fields,
+                the banner elides its title
                 YT_ASCII=1: a rendered pane contains no non-ASCII beyond the label text
                 (>, ||, *, Up/Dn, Lt/Rt, Enter, -, ..., ->, [#---], |)
                 Language: LANG=zh_CN starts Chinese, LANG=en_US starts English, YT_LANG
                 overrides both, YT_LANG=fr dies; the `l` key flips the chrome in the
-                list AND card/mini views with playback uninterrupted
+                list AND card views with playback uninterrupted
                 9/0 volume; ] seek; q → exits and reaps ONLY its own player;
                 music keeps playing across `n` (new search) and `/` (live filter);
                 Enter on another row switches track without a gap;

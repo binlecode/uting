@@ -8,9 +8,9 @@
 #   filter (narrow rows)   → pure bash, no external tool
 #
 # yt-tui renders its OWN menu with dual switchable views:
-#   Mode B (List View)           → interactive result list + live Now-Playing mini banner
-#   Mode A (Now Playing Focus)   → dedicated full-screen Now-Playing metadata & control card
-# Toggle between Mode A and Mode B with [Tab] at any time without stopping audio.
+#   List View          → interactive result list + live Now-Playing status banner
+#   Now Playing card   → dedicated full-screen Now-Playing metadata & control card
+# Toggle between the two with [Tab] at any time without stopping audio.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features (no ${v,,}, no mapfile); guard
 # empty-array expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). §28.
@@ -68,8 +68,8 @@ Menu options:
 Keys (List View):
   ↑/↓      move selection              ←/→  change page
   Enter    play / switch track (non-blocking background playback)
-  Tab / p  cycle view: List → Now Playing card → mini player → List
-  Esc      (in card / mini player) back to List View
+  Tab / p  toggle view: List <-> Now Playing card
+  Esc      (in the card) back to List View
   Space    pause / resume playback
   s        stop playback
   9 / 0    volume down / up (via IPC)
@@ -84,9 +84,9 @@ Keys (List View):
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
   q        quit (stops background playback on exit)
 
-Keys (Now Playing card / mini player):
+Keys (Now Playing card):
   ←/→      seek backward / forward 5s   ↑/↓  volume down / up
-  Tab      next view                    Esc  back to List View
+  Tab      back to List View            Esc  back to List View
   Space    pause / resume               s    stop playback     q  quit
 
 Environment:
@@ -381,7 +381,6 @@ set_ui_lang() {
         S_FOCUS="专注卡片"; S_PAUSE="暂停"; S_VOL="音量"
         S_BACK_LIST="返回列表选单"; S_PAUSE_RESUME="暂停 / 继续"; S_SEEK5="快退 / 快进 5s"
         S_VOL_ADJUST="调节音量"; S_STOP_PLAY="停止播放"
-        S_LIST_MENU="列表选单"; S_SEEK5_SHORT="5s快进退"
         S_NOTHING="(暂无正在播放的音频)"; S_BACK_SEARCH="返回搜索列表"; S_PLAY_SEL="播放选中歌曲"
     else
         S_NAV="Navigation:"
@@ -391,13 +390,12 @@ set_ui_lang() {
         S_FOCUS="focus card"; S_PAUSE="pause"; S_VOL="volume"
         S_BACK_LIST="back to list"; S_PAUSE_RESUME="pause / resume"; S_SEEK5="seek -/+ 5s"
         S_VOL_ADJUST="volume"; S_STOP_PLAY="stop playback"
-        S_LIST_MENU="list menu"; S_SEEK5_SHORT="seek 5s"
         S_NOTHING="(nothing playing)"; S_BACK_SEARCH="back to results"; S_PLAY_SEL="play selection"
     fi
 }
 
-# Toggle the chrome language in place (key: l). The card and mini player redraw on their
-# 1s tick; the list view redraws when the menu loop comes back around.
+# Toggle the chrome language in place (key: l). The card redraws on its 1s tick; the list
+# view redraws when the menu loop comes back around.
 cycle_ui_lang() {
     if [[ "$UI_LANG" == "zh" ]]; then set_ui_lang en; else set_ui_lang zh; fi
 }
@@ -473,7 +471,7 @@ init_glyphs
 US=$'\x1f'
 
 # ── Playback & View State Model ─────────────────────────────────────────────────────────
-TUI_VIEW_MODE="list"       # "list" (Search List) | "card" (Mode A: Focus Card) | "mini" (Mode B: Mini Player)
+TUI_VIEW_MODE="list"       # "list" (Search List) | "card" (Now Playing Focus Card)
 
 CURRENT_PLAY_ID=""
 CURRENT_PLAY_PID=""
@@ -790,7 +788,7 @@ char_w() {
 # through a global (DISP_W) rather than stdout: this runs several times per redraw, and
 # $(...) would mean a subshell fork per measurement. Pure-ASCII strings — most of the chrome
 # — skip the per-character walk entirely, so this is FASTER than the inline test it replaced
-# (300 measurements of the mini-player hint row: 94ms before, 5ms after).
+# (300 measurements of a packed hint row: 94ms before, 5ms after).
 # Accumulate with `n=$((n + CHAR_W))`, never `((n += CHAR_W))`: an arithmetic command whose
 # result is 0 returns exit status 1, and a leading zero-width character would abort the whole
 # script under `set -e`.
@@ -874,7 +872,7 @@ truncate_disp() {
 # TAB is a plain field (no label). The chrome used to print each view's hints as ONE fixed
 # string, which simply ran off the right edge and wrapped mid-item below ~72 columns —
 # sooner still because the labels are CJK, i.e. double-width. Every emitted line carries
-# \033[K for the in-place card/mini renders. HINT_KEY_COLOR overrides the key style for
+# \033[K for the in-place card renders. HINT_KEY_COLOR overrides the key style for
 # one call (the status row wants its fields dim, not key-bold). HINT_LINES reports how many
 # lines were emitted: this block is variable-height by design, and the list view has to know
 # its real height to decide how many result rows fit (see the reflow in display_list_menu).
@@ -949,9 +947,9 @@ elapsed_since_play() {
 }
 
 # Position / duration / percent for the attached mpv, fetched in ONE place: sets PT_CUR,
-# PT_TOTAL and PT_PCT (PT_PCT empty means "draw no bar"). Both player views inlined the same
-# three nc|jq pipelines and had already drifted — the card built its percent string and bar
-# inline, the mini deferred the bar to a later block. The live special case belongs here too:
+# PT_TOTAL and PT_PCT (PT_PCT empty means "draw no bar"). It was inlined per view back when
+# there were two player views, and the copies had already drifted — one built its percent
+# string and bar inline, the other deferred the bar. The live special case belongs here too:
 # "mpv's clock describes the broadcast, not this listen" is a fact about the fetch, not about
 # a view, and returning early also spares three IPC round-trips per second that the live path
 # only fetched to discard.
@@ -997,10 +995,10 @@ fetch_play_times() {
 
 # Progress bar sized to the caller's layout. $2 is the FULL cell width the bar may occupy,
 # brackets included, so a caller can line its right edge up with the card's divider rails
-# (or the mini player's content edge) instead of the old hardcoded 44 columns that ignored
-# the terminal width entirely. The rendered string is ALWAYS exactly that many cells —
-# the head glyph is part of the track, and `filled` is capped at width-1 so it stays so at
-# 100%; a bar whose length changed with position made the whole line jitter every second.
+# instead of the old hardcoded 44 columns that ignored the terminal width entirely. The
+# rendered string is ALWAYS exactly that many cells — the head glyph is part of the track,
+# and `filled` is capped at width-1 so it stays so at 100%; a bar whose length changed with
+# position made the whole line jitter every second.
 PROG_BAR=""
 render_prog_bar() {
     local pct=${1%.*} total=${2:-44}
@@ -1365,9 +1363,9 @@ load_rows() {
 
 # ── VIEW RENDERERS ──────────────────────────────────────────────────────────────────────
 
-# Mode B: List View + Mini-Player Banner
+# List View: result rows + Now-Playing status banner
 display_list_menu() {
-    local page=$1 start end i n disp status_extra p dots row_w rail rail_w
+    local page=$1 start end i n disp status_extra p dots row_w rail rail_w iw
     # One size read per redraw, shared by the banner (title elision), the result rows and the
     # packed navigation hints below. No width cap: unlike the player cards, the list wants the
     # whole width for its rows. LINES_N is refreshed here too — it is what the reflow below
@@ -1439,13 +1437,13 @@ display_list_menu() {
     local nav_ok=0
     if ((LINES_N - chrome_h - 1 - nav_h - 1 >= nav_need)); then nav_ok=1; fi
 
-    # Persistent Mini-Player Banner (when background playback is active)
+    # Persistent Now-Playing banner (when background playback is active)
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
         local p_icon="$GL_PLAY" p_label="Playing" p_color="$C_GREEN"
         if ((CURRENT_PLAY_PAUSED)); then
             p_icon="$GL_PAUSE"
             p_label="Paused"
-            p_color=""      # retired yellow → default fg, same as the card/mini paused state
+            p_color=""      # retired yellow → default fg, same as the card's paused state
         fi
         # Pure status line: shares ONE line with a variable-length title, so measure the
         # fixed parts and give the title what is left (elided). The key tail appears only
@@ -1575,6 +1573,13 @@ display_list_menu() {
         truncate_disp "(no matches $GL_DASH press / to change filter, or n for new search)" "$nav_cols"
         printf '%s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
     else
+        # ONE right-aligned index field for every row: "$n." on an unselected row, ">" on the
+        # selected one, both flushed to the same right edge with a single space before the
+        # title. The old prefixes ("> 1. " / "  1. ") were per-row literals, so a page that
+        # reached 2 digits shifted every 1-digit title one cell left of the rows around it —
+        # ragged in the one column the eye scans down. Width: 2 indent + digits of the largest
+        # index + 1 for the dot.
+        iw=$(( ${#NUM_ENTRIES} + 3 ))
         for (( i = start; i <= end && i < NUM_ENTRIES; i++ )); do
             n=$(( i + 1 ))
             # A row is a TITLE and a duration rail — nothing else. It used to be
@@ -1592,10 +1597,11 @@ display_list_menu() {
             fi
             disp_w "$rail"
             rail_w=$DISP_W
-            # "> 10. " / "  10. " is 4 cells plus the digits; 2 more keep the longest title
-            # off the rail. Truncating to that is what gives the rail room BY CONSTRUCTION —
-            # the jump below only repairs measurement drift, it does not license overflow.
-            row_w=$(( nav_cols - 4 - ${#n} - 2 - rail_w ))
+            # The index field is iw cells plus one separating space; 2 more keep the longest
+            # title off the rail. Truncating to that is what gives the rail room BY
+            # CONSTRUCTION — the jump below only repairs measurement drift, it does not
+            # license overflow.
+            row_w=$(( nav_cols - iw - 1 - 2 - rail_w ))
             ((row_w < 12)) && row_w=12
             truncate_disp "${R_TITLE[$i]}" "$row_w"
             disp="$TRUNC_TEXT"
@@ -1612,14 +1618,16 @@ display_list_menu() {
             # rail into a wrap — the failure mode we want, and one the width layer's
             # over-counting rule already refuses to produce.
             if ((i == selected)); then
-                # Marker + number in C_MARK (accent), title in bold, rail back to its own
-                # dim — the selected line no longer inherits one hue end-to-end.
-                printf '%s> %s. %s%s%s\033[%dG%s%s%s\n' \
-                    "$C_MARK" "$n" "$C_BOLD" "$disp" "$C_RESET" \
+                # Marker in C_MARK (accent), title in bold, rail back to its own dim — the
+                # selected line no longer inherits one hue end-to-end. The number is gone on
+                # this row: ">" says "here" in the column the number would occupy, and the
+                # index is only ever typed for a row you are NOT on.
+                printf '%s%*s%s %s%s%s\033[%dG%s%s%s\n' \
+                    "$C_MARK" "$iw" ">" "$C_RESET" "$C_BOLD" "$disp" "$C_RESET" \
                     $((nav_cols - rail_w + 1)) "$C_DIM" "$rail" "$C_RESET"
             else
-                printf '  %s. %s%s\033[%dG%s%s\n' \
-                    "$n" "$disp" "$C_DIM" $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
+                printf '%*s %s%s\033[%dG%s%s\n' \
+                    "$iw" "$n." "$disp" "$C_DIM" $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
             fi
         done
     fi
@@ -1661,7 +1669,7 @@ display_list_menu() {
     fi
 }
 
-# Mode A: Dedicated Now Playing Focus Card (Flicker-Free In-Place Render)
+# Now Playing Focus Card (Flicker-Free In-Place Render)
 display_now_playing_card() {
     cursor_hide
     # Reposition cursor to top-left without blanking the screen (eliminates flicker)
@@ -1704,108 +1712,63 @@ display_now_playing_card() {
             bar_str="$PROG_BAR"
         fi
 
-        local text_w=$((cols - 15))
+        # No labels anywhere in the body: typography carries the structure that "Title:" /
+        # "Channel:" / "Time:" used to spell out — bold title, dim channel, dim meta row. The
+        # play state lives in the meta row's coloured status, so the title drops its play
+        # glyph too: one state indicator, not two. text_w is cols minus the deepest body
+        # indent (4), the only prefix left now that the 8-cell label field and its 3-cell gap
+        # are gone — which is also why the title gets ~11 more cells before it wraps.
+        local text_w=$((cols - 4))
         ((text_w < 25)) && text_w=25
 
         printf '%s%s%s\033[K\n' "$C_DIM" "$div" "$C_RESET"
-        wrap_print "$CURRENT_PLAY_TITLE" "$text_w" "  ${C_BOLD}${GL_PLAY} Title:${C_RESET}     " "               "
-        wrap_print "$CURRENT_PLAY_CHANNEL" "$text_w" "    ${C_DIM}Channel:${C_RESET}   " "               "
-        local time_label="Time:" time_sep="/"
+        wrap_print "$CURRENT_PLAY_TITLE" "$text_w" "  ${C_BOLD}" "  "
+        wrap_print "$CURRENT_PLAY_CHANNEL" "$text_w" "    ${C_DIM}" "    "
+        # One meta row, fields joined by the suite's separator: "3:21 / 9:27 (37%) · audio ·
+        # ● Playing" (live: elapsed · ● LIVE · …, no percent). The labelled version needed a
+        # one-line/two-line branch because 4 labels and their gaps cost ~30 cells; without
+        # them the row fits at every width the card supports, and the guard below degrades by
+        # DROPPING fields (mode first, then eliding the time) rather than wrapping mid-field.
+        # The status is never dropped — it is the readout the card exists for.
+        local seg_time meta tw
         if ((CURRENT_PLAY_IS_LIVE)); then
-            time_label="Tuned:"
-            time_sep="$GL_SEP"
-        fi
-        # One line when it fits, two when it does not: this row is the widest fixed text in
-        # the card (~72 cells with a CJK-free status) and used to wrap mid-word below that.
-        # 15 = 4 indent + 8 label field + 3 gap; the segments are measured, not guessed.
-        local seg_time="$cur_time $time_sep $total_time$pct_str" need=15
-        disp_w "$seg_time"; ((need += DISP_W))
-        disp_w "Mode: $CURRENT_PLAY_MODE"; ((need += 4 + DISP_W))
-        disp_w "Status: $p_status"; ((need += 4 + DISP_W))
-        if ((need <= cols)); then
-            printf '    %s%-8s%s   %s    %sMode:%s %s    %sStatus:%s %s%s%s\033[K\n' \
-                "$C_DIM" "$time_label" "$C_RESET" "$seg_time" \
-                "$C_DIM" "$C_RESET" "$CURRENT_PLAY_MODE" \
-                "$C_DIM" "$C_RESET" "$p_color" "$p_status" "$C_RESET"
+            seg_time="$cur_time $GL_SEP $total_time"
         else
-            printf '    %s%-8s%s   %s\033[K\n' "$C_DIM" "$time_label" "$C_RESET" "$seg_time"
-            printf '    %sMode:%s %s    %sStatus:%s %s%s%s\033[K\n' \
-                "$C_DIM" "$C_RESET" "$CURRENT_PLAY_MODE" \
-                "$C_DIM" "$C_RESET" "$p_color" "$p_status" "$C_RESET"
+            seg_time="$cur_time / $total_time$pct_str"
         fi
+        meta="$seg_time $GL_SEP $CURRENT_PLAY_MODE"
+        # 4 = body indent. Assignment form, not ((x += DISP_W)) — an arithmetic command
+        # evaluating to 0 returns status 1, which set -e would take as a failure (see char_w).
+        disp_w " $GL_SEP $p_status"
+        local tail_w=$((DISP_W + 4))
+        disp_w "$meta"
+        if ((DISP_W + tail_w > cols)); then
+            meta="$seg_time"
+            disp_w "$meta"
+            if ((DISP_W + tail_w > cols)); then
+                tw=$((cols - tail_w))
+                ((tw < 8)) && tw=8
+                truncate_disp "$meta" "$tw"
+                meta="$TRUNC_TEXT"
+            fi
+        fi
+        printf '    %s%s %s %s%s%s%s\033[K\n' \
+            "$C_DIM" "$meta" "$GL_SEP" "$C_RESET" "$p_color" "$p_status" "$C_RESET"
         if [[ -n "$bar_str" ]]; then
             # \033[K on the spacer row too: the card grows by two rows the moment the
             # bar appears (mpv has no time-pos for the first second or so), so an
             # uncleared spacer kept showing the divider rail the previous frame drew there.
             printf '\033[K\n    %s%s%s\033[K\n' "$C_CYAN" "$bar_str" "$C_RESET"
         fi
-        # No rail between the bar and Controls: the readout sits directly above the bar
-        # it labels, and the controls flow straight after it — the mini player already
-        # renders this way, and the bottom rail below Controls closes the card.
-        print_hints "$cols" "  Controls:   " "              " \
+        # No rail between the bar and the hints: the readout sits directly above the bar it
+        # labels, and the hints flow straight after it, bare-indented like the empty state —
+        # the bottom rail closes the card.
+        print_hints "$cols" "  " "  " \
             "[Tab/Esc]	$S_BACK_LIST" "[Space]	$S_PAUSE_RESUME" "[$GL_AH]	$S_SEEK5" \
             "[9/0]	$S_VOL_ADJUST" "[s]	$S_STOP_PLAY" "[q]	$S_QUIT"
         printf '%s%s%s\033[K\n' "$C_DIM" "$div" "$C_RESET"
     fi
     # Clean up any leftover lines below
-    printf '\033[J'
-}
-
-# Mode B: Dedicated Minimalist Mini-Player (Flicker-Free In-Place Render)
-display_mini_player() {
-    cursor_hide
-    printf '\033[H'
-    printf '%s%s%s%s%s  %s  %sMINI PLAYER%s\033[K\n\033[K\n' \
-        "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$GL_BULLET" "$C_BOLD" "$C_RESET"
-
-    local cols
-    layout_cols 80
-    cols=$LAYOUT_COLS
-
-    if [[ -z "$CURRENT_PLAY_ID" ]]; then
-        printf '  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$S_NOTHING" "$C_RESET"
-        # 60 CJK cells of copy: pack it like the hint rows so it cannot run off a narrow
-        # terminal (the empty state is the one place a full sentence is drawn).
-        print_hints "$cols" "  " "  " \
-            "[Tab]/[Esc]	$S_BACK_SEARCH" "[Enter]	$S_PLAY_SEL"
-    else
-        local p_icon="$GL_PLAY" p_color="$C_GREEN"
-        if ((CURRENT_PLAY_PAUSED)); then
-            p_icon="$GL_PAUSE"
-            p_color="$C_YELLOW"
-        fi
-
-        local text_w=$((cols - 6))
-        ((text_w < 30)) && text_w=30
-
-        # Same single fetch as the card, live special case included.
-        local pct_str="" bar_str="" cur_time total_time
-        fetch_play_times
-        cur_time="$PT_CUR"
-        total_time="$PT_TOTAL"
-        [[ -n "$PT_PCT" ]] && pct_str=" (${PT_PCT}%)"
-
-        # The bar shares its line with the time readout, so it gets whatever the readout
-        # leaves and ends at the same right edge as the wrapped title above (cols). ${#var}
-        # is their display width because this block only runs when PT_PCT is non-empty, and
-        # fetch_play_times returns early with PT_PCT="" on the live branch — so the prefix
-        # can never hold GL_LIVE's "●" and is all ASCII (fmt_sec / SHORT_DUR):
-        # 2 indent + "cur / tot" + " (NN%)" + 2 separating spaces.
-        if [[ -n "$PT_PCT" ]]; then
-            local bar_total=$((cols - (2 + ${#cur_time} + 3 + ${#total_time} + ${#pct_str} + 2)))
-            ((bar_total < 12)) && bar_total=12
-            render_prog_bar "$PT_PCT" "$bar_total"
-            bar_str="$PROG_BAR"
-        fi
-
-        wrap_print "$CURRENT_PLAY_TITLE" "$text_w" "  ${p_color}${p_icon}${C_RESET} ${C_BOLD}" "    ${C_BOLD}"
-        local mini_sep="/"
-        ((CURRENT_PLAY_IS_LIVE)) && mini_sep="$GL_SEP"
-        printf '  %s%s %s %s%s%s  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$cur_time" "$mini_sep" "$total_time" "$pct_str" "$C_RESET" "$C_CYAN" "$bar_str" "$C_RESET"
-        print_hints "$cols" "  " "  " \
-            "[Tab/Esc]	$S_LIST_MENU" "[Space]	$S_PAUSE" "[$GL_AH]	$S_SEEK5_SHORT" \
-            "[9/0]	$S_VOL" "[s]	$S_STOP" "[q]	$S_QUIT"
-    fi
     printf '\033[J'
 }
 
@@ -1816,7 +1779,6 @@ display_menu() {
     if ((SYNC_ON)); then printf '\033P=1q'; fi
     case "$TUI_VIEW_MODE" in
     card) display_now_playing_card ;;
-    mini) display_mini_player ;;
     *) display_list_menu "$1" ;;
     esac
     if ((SYNC_ON)); then printf '\033P=2q'; fi
@@ -2132,7 +2094,7 @@ read_nav_input() {
     READ_NAV_KEY=""
     local input="" next="" seq=""
     local -a t_opt=()
-    if [[ "$TUI_VIEW_MODE" == "card" || "$TUI_VIEW_MODE" == "mini" ]]; then
+    if [[ "$TUI_VIEW_MODE" == "card" ]]; then
         t_opt=(-t 1)
     fi
     if ! IFS= read -rsn1 ${t_opt[@]+"${t_opt[@]}"} input; then
@@ -2254,13 +2216,11 @@ while true; do
     if ! read_nav_input; then continue; fi
 
     # Universal View Toggle (Tab or p)
-    # Cycles: list (Search List) ──► card (Mode A: Focus Card) ──► mini (Mode B: Mini Player) ──► list
+    # Toggles: list (Search List) ◄──► card (Now Playing Focus Card)
     if [[ "$READ_NAV_KEY" == $'\t' || "$READ_NAV_KEY" == "p" || "$READ_NAV_KEY" == "P" ]]; then
         clear
         case "$TUI_VIEW_MODE" in
         list) TUI_VIEW_MODE="card" ;;
-        card) TUI_VIEW_MODE="mini" ;;
-        mini) TUI_VIEW_MODE="list" ;;
         *) TUI_VIEW_MODE="list" ;;
         esac
         continue
@@ -2276,8 +2236,8 @@ while true; do
     "]") seek_relative 10; continue ;;
     esac
 
-    # Mode A (Card) & Mode B (Mini Player) specific handlers
-    if [[ "$TUI_VIEW_MODE" == "card" || "$TUI_VIEW_MODE" == "mini" ]]; then
+    # Now Playing card specific handlers
+    if [[ "$TUI_VIEW_MODE" == "card" ]]; then
         case "$READ_NAV_KEY" in
         ESC) clear; TUI_VIEW_MODE="list" ;;
         "[C" | "OC" | "["*C | "O"*C) seek_relative 5 ;;    # right arrow → seek +5s
