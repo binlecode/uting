@@ -1716,12 +1716,12 @@ false-positive the shipped `check_player_alive`'s `kill -0`, exactly as §25 rec
 core's own `group_alive` — narrowed by the monotonic id, not closed, and not worth a second
 mechanism in the client.
 
-**Order — by ROI, not by severity.** One batch left.
+**Order — by ROI, not by severity.** None left. F11 — the cosmetic i18n pass — was ranked last
+because it was the largest edit and the only purely cosmetic one; by the time its turn came the
+views-cleanup pass had deleted the label layout that made it large, and it shipped as a string
+swap plus the nine transient sites the register had never listed.
 
-1. **F11** — the cosmetic i18n pass, with its byte-padding layout fix. The largest edit in the
-   pass and the only purely cosmetic one, which is why it goes last.
-
-(Five batches stood in front of it and have shipped: the cheap correctness/UX edits — F18,
+(Five batches stood in front of it and shipped first: the cheap correctness/UX edits — F18,
 F14, F16 — the IPC layer — F19, F13, F5, which the re-audit had promoted from last to first
 once a round trip turned out to cost a second rather than the borrowed ~10 ms — the liveness
 poll, F3, the failure reporters, F2b + F7, and the input layer, F10 + F8 + F9. See the closed
