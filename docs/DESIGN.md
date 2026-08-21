@@ -1773,7 +1773,7 @@ against a live peer, a stale socket, a vanished socket and no socket at all; the
 pane driving the real backends — yt-dlp search, detached mpv):
 
 **Correction first, because F19 was filed on a false measurement.** The "~1.02 s per round
-trip, ~3 s per card redraw" figure came from `tmp/ipc-timing-probe.py`, a socket peer that
+trip, ~3 s per card redraw" figure came from a hand-written socket peer that
 **never closes**. Real mpv does close once the client half-closes, so `nc` returns at once and
 the *old* code cost **0.026 s** for `fetch_play_times` and **0.016 s** for a single property —
 measured against a live mpv socket, and confirmed in tmux, where the pre-fix build ticked the
@@ -1817,11 +1817,12 @@ tmux pane driving real yt-dlp + detached mpv):
   keypress (the read blocks — accepted, and now asserted rather than assumed) and then goes,
   and with `/` open one filter keystroke clears the banner *without leaving filter mode*,
   which is the half a single-call-site fix would have missed. A live player, an empty pid and
-  an id-less state are all left untouched. The unit test (`tmp/f3-test.sh`) extracts the real
-  function bodies with `tmp/extract-fn.sh` and also asserts that `clear_play_state` covers
-  **every** declared `CURRENT_PLAY_*` global — which is how the pre-existing gap it folds in
-  was found: `stop_current_playback` had never cleared `CURRENT_PLAY_URL`, so "cleared" had
-  two definitions and one of them was wrong. `tmp/f3-tmux.sh` is the end-to-end rig.
+  an id-less state are all left untouched. The unit test extracts the real function bodies
+  (an `awk` pass over the script, so it cannot drift from a copy) and also asserts that
+  `clear_play_state` covers **every** declared `CURRENT_PLAY_*` global — which is how the
+  pre-existing gap it folds in was found: `stop_current_playback` had never cleared
+  `CURRENT_PLAY_URL`, so "cleared" had two definitions and one of them was wrong. A tmux pane
+  rig covers the end-to-end path.
 - Also in this pass, the last crumb of the withdrawn **F15**: the mini player's bar-sizing
   comment now names the live early-return that makes `${#var}` safe there, instead of only
   stating the conclusion. No arithmetic changed. (That view was deleted in the
@@ -1854,17 +1855,17 @@ with 23 assertions, run three times for flake):
   `-f ascii` through the detached path and watch the core refuse. F16 (batch A) validates `-f`
   against `MODE_CYCLE` at startup, so `ascii` now dies in argument parsing and never reaches
   `play_selected`: one shipped fix closed the door the next one wanted to test through. The
-  reason path is observable only from a stub, so `tmp/dbin` carries fixture stand-ins for
-  `yt-search`/`yt-play` behind a `yt-tui` symlink — `SCRIPT_DIR` resolves the siblings, which is
+  reason path is observable only from a stub, so the rig carries fixture stand-ins for
+  `yt-search`/`yt-play` in a directory behind a `yt-tui` symlink — `SCRIPT_DIR` resolves the siblings, which is
   what makes stub injection possible at all — each failure selected by a marker file so the
-  TUI's own startup fetch still succeeds and the failure lands on a keypress. `tmp/d-test.sh` is
-  the rig. Its `want` assertions poll rather than sleep: the reporters print below a
+  TUI's own startup fetch still succeeds and the failure lands on a keypress. Its `want`
+  assertions poll rather than sleep: the reporters print below a
   full-height frame, so the pane scrolls and the header is briefly off-screen until the next
   `display_menu` lands — a fixed sleep there was measurably flaky.
 
 **Closed by the batch-E pass — the input layer** (`bash -n` clean, no new `shellcheck`
 findings, every earlier rig still green, plus a unit test over the real function bodies and two
-new tmux rigs; the premise was measured before a line was written, `tmp/e-probe.sh`):
+new tmux rigs; the premise was measured before a line was written):
 
 - **F10** — `utf8_complete` finishes a character off its lead byte and both readers go through
   it, so a CJK character typed at the filter or the new-search prompt is one key instead of two
@@ -1895,8 +1896,8 @@ new tmux rigs; the premise was measured before a line was written, `tmp/e-probe.
   across the line on the same burst — it was simply invisible while every multi-byte key was
   mojibake anyway. A UI that draws its own input has no use for the driver's echo, so `stty
   -echo` now covers the whole session and is restored through the same trap as the cursor
-  (`tmp/e-echo-test.sh` asserts the restore on both exit paths, because a yt-tui that exits
-  without putting `echo` back leaves the user typing blind in their shell).
+  (a two-path rig asserts the restore after `q` AND after a signal, because a yt-tui that
+  exits without putting `echo` back leaves the user typing blind in their shell).
 - **A harness lesson, recorded because it produced a false failure first.** The signal-path test
   reported the tty left at `-echo` when nothing was wrong: the harness blocked in `sleep`, a
   CHILD process, and bash defers a trap until the current command finishes. The TUI blocks in
@@ -1907,6 +1908,26 @@ new tmux rigs; the premise was measured before a line was written, `tmp/e-probe.
   the menu is drawn *during* filtering too — and sending the next key too early let
   `read_nav_input`'s ESC continuation read swallow it as the sequence's second byte. Wait for
   the filter's own prompt to go.
+- **The third lesson, found much later and the worst of the three: the echo rig had been
+  passing for the wrong reason, and burning a core to do it.** Its blocking loop was
+  `while true; do IFS= read -rsn1 _ || true; done`, meant to block in `read` the way the TUI
+  does (the first lesson above). It never blocked. The caller starts it as a background job of
+  a NON-INTERACTIVE shell, so bash redirects its stdin from `/dev/null` and every read returns
+  EOF at once; `|| true` swallowed that, and "block like the program" became a tight spin at
+  100% of a core. Worse, the spin OUTLIVED its pane: the rig installs the TUI's own
+  `trap … INT TERM HUP` set, and a bash trap handler *returns to the loop* rather than exiting,
+  so `SIGTERM` — the very signal the test sends — restored the tty and carried on spinning. One
+  orphan leaked per run; seven were found alive, up to 1h21m each, at 8.5 load on 16 cores.
+  And the test's own `kill -TERM` step passed only BECAUSE of the leak: it looks the harness up
+  with `ps` first, and only a spinning process is there to find. Three rules come out of it:
+  read the **terminal**, not stdin, when the claim is "blocks like the TUI"; never `|| true` a
+  read whose failure is the interesting case (a failed read means the tty is gone, which is a
+  reason to *leave*); and a signal trap in a harness must re-raise (`trap - $sig; kill -s $sig
+  $$`) so the caller observes a real signal death instead of a survivor. The generalisation is
+  the uncomfortable one: **a green assertion is not evidence the mechanism ran.** Both earlier
+  lessons were about a rig measuring the wrong thing; this one is about a rig measuring nothing
+  and reporting success, which no amount of re-reading the assertion would have caught — it
+  took looking at what the machine was actually doing.
 
 **Closed by the i18n pass — F11, and the three quarters of it the register never wrote down**
 (`bash -n` clean, no new `shellcheck` findings — same 15 as HEAD, occurrence for occurrence;
@@ -1931,10 +1952,10 @@ every earlier suite still green; two new rigs, 14 + 19 assertions):
 - **The rig had to change shape to catch them, twice.** A tmux poll of the `m`/`o` echoes
   passes for the wrong reason — 更多 and 排序 are also in the Navigation hint row, so grepping
   the pane finds the word without the sentence ever having been drawn. The echoes are asserted
-  at the FUNCTION level instead (`tmp/v-i18n-unit.sh` calls the real `more_results` /
-  `cycle_sort` / `new_search` / `press_any_key` with `fetch_json` stubbed, in both languages,
-  and asserts the whole line plus the absence of every English literal). The pane rig
-  (`tmp/v-i18n.sh`) keeps what only a pane can show: the startup prompt before any redraw, the
+  at the FUNCTION level instead: a rig calls the real `more_results` / `cycle_sort` /
+  `new_search` / `press_any_key` with `fetch_json` stubbed, in both languages, and asserts the
+  whole line plus the absence of every English literal. The pane rig keeps what only a pane
+  can show: the startup prompt before any redraw, the
   `l` flip mid-session, the forced-failure tail, and `YT_ASCII=1` + zh, where the no-matches
   copy has to come out with the ASCII dash — the reason that sentence is two table entries
   composed at the print site rather than one entry with the dash baked in.
@@ -1998,6 +2019,15 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 ## 27. Verification matrix
 
+**No rig is named by path here, on purpose.** Every harness this suite has been verified with
+is a throwaway under a `tmp/` the repo does not track (`.gitignore`: `**/tmp/`), so a cited
+path is a promise the checkout cannot keep — it resolves on exactly one machine, until that
+machine's scratch directory is cleaned. What is durable is the *shape* of each check, and that
+is what the entries below record: what was driven, how it was observed, and the count of
+assertions that survived. A rig is cheap to rebuild from its description and expensive to trust
+when the file it names is gone; §25.1's harness lessons are here for the same reason — they are
+the part of a rig worth keeping.
+
 ```
    Syntax     : bash -n on core + all three wrappers/glue (+ repo-wide shell check)
    Search     : yt-search -j → 8-field envelope + count; -J → full; default list;
@@ -2047,7 +2077,7 @@ new-search/more-results instead of `n`/`m`; also corrected.
                 the counter ticking and NO bar (never mpv's ~99.98% percent-pos); a VOD
                 in the same build shows "3:21 / 9:27 (37%) · audio · ● Playing" + a
                 rail-flush bar
-                Views cleanup (tmp/v-test.sh, tmp/v-list.sh, tmp/v-tmux.sh): the card
+                Views cleanup (card matrix + index captures + view-cycle pane): the card
                 renders NO label text at 40/60/80/120 cols x en/zh x vod/live/empty
                 (25 assertions), always ONE meta row, dropping "· mode" at 40 rather
                 than wrapping; list titles start on the SAME column across 1-, 2- and
@@ -2063,13 +2093,13 @@ new-search/more-results instead of `n`/`m`; also corrected.
                 Language: LANG=zh_CN starts Chinese, LANG=en_US starts English, YT_LANG
                 overrides both, YT_LANG=fr dies; the `l` key flips the chrome in the
                 list AND card views with playback uninterrupted
-                i18n exhaustiveness (tmp/v-i18n-unit.sh, tmp/v-i18n.sh): the m/o/n/
+                i18n exhaustiveness (function-level rig + pane rig): the m/o/n/
                 press-any-key lines assert whole-sentence in en AND zh at the function
                 level, plus the absence of every English literal under zh (14); in a
                 real pane, the startup prompt before any redraw, the / filter banner,
                 the no-matches copy, the forced-failure tail, the `l` flip back to en,
                 the quit line, and YT_ASCII=1 + zh rendering the no-matches dash as
-                "-" (19). The card matrix (tmp/v-test.sh) runs its 40/60/80/120 x
+                "-" (19). The card matrix runs its 40/60/80/120 x
                 en/zh x vod/paused/live/empty grid against the translated status and
                 header, and fails if the other language's string leaks (33)
                 9/0 volume; ] seek; q → exits and reaps ONLY its own player;
@@ -2141,7 +2171,7 @@ Rules for anyone editing these scripts:
                               cannot set a global.
                           Build the classes once with cw_range '' <lo> <hi> and test with
                           [[ "$CLASS" == *"$byte"* ]] — verified byte-exact on 3.2.57 even
-                          though the haystack is invalid UTF-8 (tmp/e-probe.sh).
+                          though the haystack is invalid UTF-8.
    read -s is per-read:   it turns the terminal driver's echo off for the duration of ONE
                           read and restores it after. Between reads the driver echoes
                           whatever is still QUEUED, which any burst (a paste, a fast
