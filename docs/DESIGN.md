@@ -1205,6 +1205,26 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     kept the block, printed 7 chrome lines, one row, a blank and `page 1/17`, and put eleven
     lines into ten — the header off the top, which is the failure this reflow exists to
     prevent.
+  - **When the budget cannot pay for a row, the FOOTER gives lines back.** Every other block
+    in the reflow can drop itself — the navigation hints do, the details section does. The rows
+    cannot: a list with no rows is not a list, so `psize` has a hard floor of 1. That floor
+    used to win against a budget of zero and the frame came out one line too tall, which
+    scrolls the header off — the failure the reflow exists to prevent, arriving from
+    underneath, and it survived the whole hardening pass as a "pre-existing" rig failure.
+    Measured at 62×12 with `/` open: chrome 8 + spacer 1 + filter hint 1 + caret 1 + dots 1 +
+    one row = 13 lines in a 12-row pane, and the title row went. So the footer is no longer one
+    number: the spacer, the filter's instruction line, the caret and the pagination row are
+    charged separately, and when the budget cannot cover the rows the list owes, they are
+    reclaimed in value order — the spacer carries nothing, the filter hint teaches a mode the
+    caret below it already demonstrates, the pagination row is real state and goes last, and
+    the caret is never dropped because it echoes what the user is typing. At 62×12 that buys
+    back exactly the two lines needed: header, one row, the dots and the caret all survive.
+    Only when there is nothing left to drop does the floor overflow, and there the overflow is
+    honest — no arrangement of that terminal shows a header, a row and a caret at once.
+    The reclamation loop's "does the list owe a dots row" test is `NUM_ENTRIES > 1`, not the
+    `> psize` test the dots are charged with afterwards: the loop only runs in the regime where
+    `psize` lands on 1, where the two agree. It is not a second opinion about the footer, it is
+    the same opinion evaluated early enough to spend.
   - **Across a repage the SELECTION is the anchor, not the page number.** The user is looking
     at a row. Deriving `page` from `selected` keeps that row on screen; clamping the selection
     into the old page number teleports it — measured: resizing 24→12 rows dropped the page
@@ -1938,6 +1958,35 @@ new tmux rigs; the premise was measured before a line was written):
   and reporting success, which no amount of re-reading the assertion would have caught — it
   took looking at what the machine was actually doing.
 
+**Closed by the reflow floor fix — the "pre-existing" rig failure** (`bash -n` clean, no
+`shellcheck` delta, every suite green, and the list rig is finally 22/22 instead of 21/1):
+
+- **The defect.** `psize`'s floor of 1 beat a row budget of 0 and the frame came out one line
+  too tall, scrolling the header off at 62×12 with `/` open (and at 46×14 and 40×14). The fix
+  is in §11: the footer is charged as four separately droppable parts and gives lines back in
+  value order when the rows cannot be paid for.
+- **The methodology lesson, which is the expensive part.** That failure was on screen for the
+  whole hardening pass. Every batch from C onward ran the list rig, saw `21 passed, 1 failed`,
+  confirmed the failure reproduced on the previous commit, wrote "pre-existing, not this
+  pass's" and moved on — five times. Each of those statements was *true*, and together they
+  were a way of never looking. **"Reproduces on HEAD" answers "did I break it", which is not
+  the same question as "is it broken".** A suite that is allowed to sit at one failure teaches
+  everyone reading it that one failure is the baseline; the number to defend is zero, and the
+  cheapest moment to defend it is the first time it moves.
+- **Two assertions in the input-layer rig could never fail, and pruning them was part of the
+  same sweep.** `no "ï¿½"` ("no replacement characters on screen") searched for U+FFFD's UTF-8
+  bytes read back as Latin-1 — six bytes that cannot occur in a UTF-8 pane however badly the
+  reader mangles input. Correcting the needle to a real U+FFFD did not save it: the list view
+  echoes nothing, so the pre-F10 build whose reader really did split characters leaves that
+  pane clean too. The mangling is only visible on a line that echoes what you type, which is
+  why the exact-prompt assertions are the ones that matter — measured on the pre-F10 build, the
+  `n` prompt reads `❯ New search (Esc or empty to cancel): 咖啡??啡?啡啡???`. The second
+  removal was a `want "New search"` sitting one line above that exact check: strictly weaker,
+  same instant, and it passed on the broken build, since the mangled line contains "New
+  search" too. Same family as the echo-rig lesson below — **a green assertion is not evidence
+  the mechanism ran** — with the sharper corollary that a *weak* assertion beside a strong one
+  is not free: it is the one that will be believed when the strong one is edited away.
+
 **Closed by the i18n pass — F11, and the three quarters of it the register never wrote down**
 (`bash -n` clean, no new `shellcheck` findings — same 15 as HEAD, occurrence for occurrence;
 every earlier suite still green; two new rigs, 14 + 19 assertions):
@@ -2086,6 +2135,12 @@ the part of a rig worth keeping.
                 the counter ticking and NO bar (never mpv's ~99.98% percent-pos); a VOD
                 in the same build shows "3:21 / 9:27 (37%) · audio · ● Playing" + a
                 rail-flush bar
+                Short terminals, the reflow's floor: 62x{10,11,12,13,14,16,20,24} and
+                46x/40x{12,14,16,20}, each with and without `/` open — the header stays
+                on line 1, at least one result row is drawn, and in filter mode the caret
+                survives (24 captures). The same matrix on the pre-fix build fails three
+                of them (62x12, 46x14, 40x14, all with the filter open), which is the
+                assertion earning its place
                 Views cleanup (card matrix + index captures + view-cycle pane): the card
                 renders NO label text at 40/60/80/120 cols x en/zh x vod/live/empty
                 (25 assertions), always ONE meta row, dropping "· mode" at 40 rather

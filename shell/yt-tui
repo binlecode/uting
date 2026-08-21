@@ -1529,11 +1529,17 @@ display_list_menu() {
     # scrolled the header and status row off the top — the same failure one-line rows were
     # meant to end, arriving from the other side. Recomputed every redraw, so a resize or a
     # language switch repages instead of overflowing.
-    local avail psize filter_h=1
+    # The footer below the rows, as separately droppable parts rather than one number: the
+    # spacer, the filter's instruction line, the wrapped caret, and the pagination row. Which
+    # of them survive is decided by the budget a few lines down — the caret and the pagination
+    # row carry state, the other two do not.
+    local avail psize row_gap=1 filter_hint=0 caret_h=0 dots_ok=1 foot_h
     if ((FILTER_MODE)); then
+        filter_hint=1
         disp_w "> $FILTER_LABEL"
-        filter_h=$((filter_h + 1 + (DISP_W + nav_cols - 1) / nav_cols))
+        caret_h=$(( (DISP_W + nav_cols - 1) / nav_cols ))
     fi
+    foot_h=$(( row_gap + filter_hint + caret_h ))
     # ── The details block is CHROME, and variable-height chrome at that ─────────────────
     # Its height is however far the selected title wraps, so it has to be charged against
     # the row budget before a single row is printed — measure it after the rows and a long
@@ -1556,7 +1562,7 @@ display_list_menu() {
         # A terminal too short to pay for both drops the block and keeps the rows — the same
         # trade the navigation hints make above, and the reason "no cap on the title" is safe:
         # 2 = one result row and the pagination row it would otherwise have eaten.
-        if ((LINES_N - chrome_h - filter_h - 1 - detail_h >= 2)); then
+        if ((LINES_N - chrome_h - foot_h - 1 - detail_h >= 2)); then
             show_details=1
         else
             detail_h=0
@@ -1564,7 +1570,38 @@ display_list_menu() {
     fi
     # -1 for the cursor's resting row: filling the last line and emitting its newline scrolls
     # the screen up by one, which would cost the header again.
-    avail=$((LINES_N - chrome_h - filter_h - detail_h - 1))
+    avail=$((LINES_N - chrome_h - foot_h - detail_h - 1))
+    # ── The floor conflict: a budget of zero rows against a `psize` floor of one ────────
+    # Every other block here can drop itself when the terminal is too short — the navigation
+    # hints do, the details block does. The ROWS cannot: a list with no rows is not a list, so
+    # `psize` has a hard floor of 1 further down. That floor used to win against a budget of
+    # zero and the frame came out one line too tall, which scrolls the header off the top —
+    # the exact failure the reflow exists to prevent, arriving from underneath. Measured at
+    # 62x12 with `/` open: chrome 8 + spacer 1 + hint 1 + caret 1 + dots 1 + one row = 13
+    # lines in a 12-row pane, and the title row went.
+    #
+    # So when the budget cannot pay for the rows the list owes, reclaim from the footer in
+    # value order — the spacer carries nothing, the filter hint teaches a mode the caret below
+    # it already shows, the pagination row is real state and goes last, and the caret itself is
+    # never dropped (it echoes what the user is typing). Only when there is nothing left to
+    # drop does the floor overflow, and then it is honest: no arrangement of that terminal
+    # shows a header, a row and a caret at once.
+    #
+    # `dots_owed` is `NUM_ENTRIES > 1` rather than the `> psize` test the dots are charged
+    # with below, because this loop only ever runs in the regime where psize lands on 1 —
+    # where the two tests agree. It is not a second opinion about the footer, it is the same
+    # opinion evaluated early enough to spend.
+    local dots_owed=0
+    ((NUM_ENTRIES > 1)) && dots_owed=1
+    while ((avail < 1 + dots_owed * dots_ok)); do
+        if ((row_gap)); then row_gap=0
+        elif ((filter_hint)); then filter_hint=0
+        elif ((dots_ok)); then dots_ok=0
+        else break
+        fi
+        foot_h=$(( row_gap + filter_hint + caret_h ))
+        avail=$((LINES_N - chrome_h - foot_h - detail_h - 1))
+    done
     psize=$PAGE_OPT
     ((psize > avail)) && psize=$avail
     # The pagination dots only cost a line when there IS more than one page. Checking against
@@ -1669,10 +1706,11 @@ display_list_menu() {
             fi
         done
     fi
-    printf '\n'
+    # Spacer, unless the reflow above spent it on a result row.
+    ((row_gap)) && printf '\n'
 
     # Footer: pagination
-    if ((NUM_PAGES > 1)); then
+    if ((NUM_PAGES > 1 && dots_ok)); then
         if ((ASCII_GLYPHS == 0 && NUM_PAGES <= 12)); then
             dots=""
             for (( p = 1; p <= NUM_PAGES; p++ )); do
@@ -1698,8 +1736,12 @@ display_list_menu() {
     if ((FILTER_MODE)); then
         # Elided to one line like every other chrome row: this copy is 48 cells and wrapped
         # at 40 columns, costing a line the reflow above had already handed to a result row.
-        truncate_disp "$S_FILTER_HINT" "$nav_cols"
-        printf '%s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+        # Dropped entirely when the terminal cannot afford both it and a row — the caret under
+        # it is the part that cannot be dropped.
+        if ((filter_hint)); then
+            truncate_disp "$S_FILTER_HINT" "$nav_cols"
+            printf '%s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+        fi
         printf '%s>%s %s' "$C_MARK" "$C_RESET" "$FILTER_LABEL"
         cursor_show
     else
