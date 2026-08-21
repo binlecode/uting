@@ -1575,8 +1575,8 @@ first; gate deletions by grep so no dangling reference survives.
 ### 25.1 Open defect register — `yt-tui` hardening pass
 
 Audited against `shell-scripts/yt-tui`. **Batch 1 (the one-line edits), batch A (the cheap
-correctness/UX edits), batch B (the IPC layer) and batch C (the liveness poll) are fixed; the
-rest is not** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
+correctness/UX edits), batch B (the IPC layer), batch C (the liveness poll) and batch D (the
+failure reporters) are fixed; the rest is not** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
 because the findings are statements about *this* design's seams, and each one is only
 actionable next to the section it sits in. The open rows below have since been re-audited
 against the code and re-measured on the machine's own bash 3.2.57. **Seven of them asserted
@@ -1604,14 +1604,14 @@ program, and only the real player settled it.
 
 **The `set -e` family — fixed.** All three were the same trap (§28): a non-zero status
 reaching `set -e` from a place that reads like an expression, not a command. See the closed
-list at the end of this section. What remains of F2 is the *reporting* half — `play_selected`
-still returns 1 silently, so a failed Enter is now a survivable no-op with no message. The
-message should be shown in the same "press any key" style as the `n`/`m`/`o` failures, which
-is why it is batched with F7. **Correction:** it cannot come from the envelope's `reason`.
-The §14 taxonomy belongs to the *blocking* play path; for a synchronous `-d` failure the core
-`die`s with prose on **stderr** and emits nothing on stdout (verified: `yt-play -d -j -f ascii
--- <url>` → rc 1, empty stdout). yt-tui must capture that stderr, the way `fetch_json`
-already does for search.
+list at the end of this section. F2's *reporting* half — a failed Enter that was a
+survivable no-op with no message — shipped in batch D, in the same "press any key" style as
+the `n`/`m`/`o` failures, which is why it was batched with F7. **Correction, kept because a fix
+was very nearly built on it:** the reason cannot come from the envelope's `reason`. The §14
+taxonomy belongs to the *blocking* play path; for a synchronous `-d` failure the core `die`s
+with prose on **stderr** and emits nothing on stdout (verified: `yt-play -d -j -f ascii --
+<url>` → rc 1, empty stdout). yt-tui captures that stderr, the way `fetch_json` already does
+for search.
 
 Audited clear in the same pass: every other case-arm function returns 0 on all paths
 (`move_selection`, `cycle_mode`, `cycle_sort`, `new_search`, `more_results`, `filter_live`,
@@ -1629,7 +1629,6 @@ used in command substitution.
 
 | ID | Sev | Finding |
 |----|-----|---------|
-| F7 | med | The "no results / error / press any key" block is copy-pasted in `new_search`, `more_results` and `cycle_sort`, **and has already drifted in wording** — the standard signal that it wants to be one function. Each caller restores its own mutated variable before calling, as today. |
 | F8 | low | `read_query_input` returns 2 on Esc and 1 on EOF; its only caller treats both as cancel. The distinction is dead — collapse to 0/1 as part of the F10 rewrite. |
 | F11 | low | **The one-language-per-run rule stops at the list hints.** `Playing`/`Paused`, `NOW PLAYING FOCUS`, `MINI PLAYER`, and the card's `Title:`/`Channel:`/`Time:`/`Tuned:`/`Mode:`/`Status:` are hardcoded English inside a bilingual chrome (§11 — help text and errors stay English *by design*; these are chrome). They want `S_*` entries in both branches of `set_ui_lang`. **This cannot be a pure string swap**, for two reasons, and the first was recorded backwards here: bash 3.2's `%-8s` pads to eight **bytes**, not eight characters, so "时间:" (7 bytes) renders **6** cells where the fit estimate assumes 8 — an *over*-estimate, and a `${#label}` correction would err the other way. Drop `%-8s` for a translated label and emit a `disp_w`-measured pad, so the printed width and the estimate are the same number by construction. Second, the card's `wrap_print` calls hardcode a 15-space continuation to sit under a 15-cell first prefix; a shorter CJK label drifts it. Derive both prefixes from the label. English values must reproduce today's numbers exactly. |
 
@@ -1652,17 +1651,15 @@ mechanism in the client.
 **Order — by ROI, not by severity.** The batching below is deliberate: the largest edit in the
 pass (F11) is the only purely cosmetic one.
 
-1. **F2's other half + F7** — one shared "message, then press any key" path for a failed play
-   and for the three re-fetch failures, with the play reason read off the core's **stderr**.
-2. **The input layer** — F10 + F8 + F9's `?)`→`*)` widening, one shared UTF-8 helper across
+1. **The input layer** — F10 + F8 + F9's `?)`→`*)` widening, one shared UTF-8 helper across
    four sites. Highest effort, and it touches every keypress, so it does not sit in front of
    the cheap batches.
-3. **F11** — the cosmetic i18n pass, with its byte-padding layout fix.
+2. **F11** — the cosmetic i18n pass, with its byte-padding layout fix.
 
-(Three batches stood in front of these and have shipped: the cheap correctness/UX edits —
-F18, F14, F16 — the IPC layer — F19, F13, F5, which the re-audit had promoted from last to
-first once a round trip turned out to cost a second rather than the borrowed ~10 ms — and the
-liveness poll, F3. See the closed lists below.)
+(Four batches stood in front of these and have shipped: the cheap correctness/UX edits — F18,
+F14, F16 — the IPC layer — F19, F13, F5, which the re-audit had promoted from last to first
+once a round trip turned out to cost a second rather than the borrowed ~10 ms — the liveness
+poll, F3, and the failure reporters, F2b + F7. See the closed lists below.)
 
 Each step ends `bash -n` clean, re-runs the `set -e` repros (the third one drives the IPC
 readers against a live peer, a stale socket and no socket), and the interactive smoke pass in
@@ -1676,8 +1673,8 @@ readers against a live peer, a stale socket and no socket), and the interactive 
 - **F17** — `send_mpv_ipc` returns 0, not 1, when the socket file is gone: it is the last
   command of `toggle_pause`/`seek_relative`/`adjust_volume`, and fire-and-forget was already
   its contract (the `nc` failure below it was always swallowed).
-- **F2, crash half** — both Enter arms are now `play_selected || true`. A failed play is a
-  survivable no-op; the message is still owed (see F2/F7 above).
+- **F2, crash half** — both Enter arms are now `play_selected || true`. A failed play became a
+  survivable no-op; batch D gave that no-op something to say (F2b, below).
 
 **Closed by the batch-A pass** (`bash -n` clean, both `set -e` repros green, each finding
 re-verified in a real pty against the pre-edit file — the abort reproduces there and does not
@@ -1760,6 +1757,41 @@ tmux pane driving real yt-dlp + detached mpv):
 - Also in this pass, the last crumb of the withdrawn **F15**: the mini player's bar-sizing
   comment now names the live early-return that makes `${#var}` safe there, instead of only
   stating the conclusion. No arithmetic changed.
+
+**Closed by the batch-D pass — the failure reporters** (`bash -n` clean, no new `shellcheck`
+findings, the `set -e` repros and the batch-C tests still green, and a fixture-stub tmux rig
+with 23 assertions, run three times for flake):
+
+- **F7** — `report_fetch_failure rc [query]` replaces three copies of "no results / the error /
+  press any key" in `new_search`, `more_results` and `cycle_sort`. The copies had already
+  drifted — `m` and `o` said "no results" where `n` said `no results for "…"` — which is the
+  usual signal that a block wants to be a function. Each caller still restores its own mutated
+  global *before* reporting, so the query is passed in as an argument rather than read off
+  `QUERY_LABEL`, which by then is back to the one that still works. Verified per key: the
+  message, then the state (label, `RESULT_N`, `SORT_FIELD`) intact behind it.
+- **F2b** — a failed Enter now says why. `play_selected` keeps the core's stderr in a temp file
+  the way `fetch_json` keeps the search's, and reports its **last line** with the core's own
+  `Error: ` prefix stripped (`die` can print context above the reason). Empty stderr degrades to
+  "playback failed"; `rc` 0 with an envelope carrying no id or sock reports "malformed launch
+  envelope" instead of dropping the keypress. The `|| true` at both call sites stays — that is
+  the F2a guard, and this only gives it something to say.
+- Both end in one shared `press_any_key`. That pause is the whole mechanism: a message printed
+  into the scroll area lives exactly until the next redraw, and the next redraw is one keypress
+  away.
+- Not colored. The plan called for `C_YELLOW` on the play reason; the theme pass retired that
+  variable (it is `''` in every theme), and the `n`/`m`/`o` failures it sits beside print plain,
+  so a sixth read of a retired global would have bought nothing.
+- **Correction — the plan's own repro for F2b was already unreachable.** It said to force
+  `-f ascii` through the detached path and watch the core refuse. F16 (batch A) validates `-f`
+  against `MODE_CYCLE` at startup, so `ascii` now dies in argument parsing and never reaches
+  `play_selected`: one shipped fix closed the door the next one wanted to test through. The
+  reason path is observable only from a stub, so `tmp/dbin` carries fixture stand-ins for
+  `yt-search`/`yt-play` behind a `yt-tui` symlink — `SCRIPT_DIR` resolves the siblings, which is
+  what makes stub injection possible at all — each failure selected by a marker file so the
+  TUI's own startup fetch still succeeds and the failure lands on a keypress. `tmp/d-test.sh` is
+  the rig. Its `want` assertions poll rather than sleep: the reporters print below a
+  full-height frame, so the pane scrolls and the header is briefly off-screen until the next
+  `display_menu` lands — a fixed sleep there was measurably flaky.
 
 **Closed by the list-view rail/details work:** the original audit also carried F4 — play
 metadata re-derived by re-splitting the *display* string, which only parsed correctly
