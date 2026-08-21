@@ -812,6 +812,21 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     `Tuned: MM:SS · ● LIVE` — wall-clock since *this* listener attached, which mpv cannot
     provide — and draw no bar. `CURRENT_PLAY_IS_LIVE`/`CURRENT_PLAY_STARTED` carry it;
     both reset on stop.
+  - **The client learns of the player's death by asking, once per loop turn.** A detached
+    player owns its own lifecycle: nothing calls back into `yt-tui` when a track ends or mpv
+    crashes, and the IPC layer is deliberately quiet about it (`send_mpv_ipc` swallows every
+    failure, `mpv_get_prop` answers empty on a dead socket) so a lost player cannot kill the
+    UI. Quiet is not the same as noticed — so `check_player_alive` runs at the top of the main
+    loop *and* at the top of `filter_live`'s own key loop (that loop never returns to the main
+    loop while `/` is open), and clears the whole `CURRENT_PLAY_*` block through
+    `clear_play_state` the moment the player is gone. The test is `kill -0` on the envelope's
+    pid, which is the **bash wrapper's**: the wrapper blocks on mpv, so "wrapper alive" is
+    exactly "still playing", and this is the same truth the core reaps on (§9.3, process group
+    alive) reached from the client side for one builtin and no fork — cheap enough for the
+    card's 1 s tick. An **empty** pid means "unknown", not "dead" (`play_selected` requires
+    only id and sock), so it leaves the chrome alone. Pid reuse can false-positive it, exactly
+    as §25 records for the core's own `group_alive`. The clear is silent: the empty states
+    already say it, and in list view it lands on the next keypress because that read blocks.
   - **Terminal size comes from `stty size </dev/tty`, not `$(tput cols)`.** Inside command
     substitution ncurses can miss the window-size ioctl and answer with terminfo's default
     80x24 — measured: a 60-column pane reported 80, so the card drew 80-wide rails and every
@@ -1560,7 +1575,8 @@ first; gate deletions by grep so no dangling reference survives.
 ### 25.1 Open defect register — `yt-tui` hardening pass
 
 Audited against `shell-scripts/yt-tui`. **Batch 1 (the one-line edits), batch A (the cheap
-correctness/UX edits) and batch B (the IPC layer) are fixed; the rest is not** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
+correctness/UX edits), batch B (the IPC layer) and batch C (the liveness poll) are fixed; the
+rest is not** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
 because the findings are statements about *this* design's seams, and each one is only
 actionable next to the section it sits in. The open rows below have since been re-audited
 against the code and re-measured on the machine's own bash 3.2.57. **Seven of them asserted
@@ -1606,7 +1622,6 @@ used in command substitution.
 
 | ID | Sev | Finding |
 |----|-----|---------|
-| F3 | high | **A dead player leaves a stale banner forever.** `send_mpv_ipc` swallows every failure, `mpv_get_prop` returns empty on a dead socket, and nothing re-checks the player: a track that ends (or an mpv crash) leaves the list banner showing the old title, the card showing `--:--` against a stale title, and Space flipping a local paused flag with no IPC peer. The core already defines liveness as "process group alive" (§9.3 `reap_dead_players`), and the `-d` envelope's `.pid` is the **wrapper's** pid, which blocks on mpv — so wrapper alive ⇔ still playing, and `kill -0` on it is the same truth for one builtin and no fork. Two call sites, not one: the main loop *and* `filter_live`'s own key loop, which never returns to the main loop while `/` is open. An **empty** pid must mean "unknown, assume alive" — `play_selected` requires only id and sock, so clearing on an absent pid would blank a healthy player's chrome. |
 | F9 | med | **The filter's `?)` catch-all cannot match a multibyte character** — the Tab half is fixed (its own no-op arm); widening `?)` to `*)` belongs with F10, which is what makes the widening safe. Swallowing `q`/`s`/`9`/`0`/`l` mid-filter stays: deliberate modality ("type to narrow, Esc clears"). |
 | F10 | med | **CJK typed into the filter or the new-search prompt arrives byte-split** — see §28. Both readers need one shared UTF-8 assembly helper off the lead byte, with the continuation reads on a timeout so a lone lead byte cannot stall the once-a-second card/mini tick. Backspace is confirmed to strip a whole character on 3.2, so no repair path is needed — but its `\b \b` erase is one cell and a CJK glyph occupies two. **Classify the lead byte by table membership, the way `char_w` does:** `LC_ALL=C [[ … ]]` is not valid bash (an assignment prefix needs a simple command; `[[` is a reserved word), so it silently answers under the wrong collation, and a `( LC_ALL=C … )` subshell would fork per keypress. |
 
@@ -1622,31 +1637,32 @@ used in command substitution.
 an ambiguous-width bug on the grounds that `total_time` can be `● LIVE`. It cannot: the live
 branch of `fetch_play_times` returns early with `PT_PCT=""`, and `bar_total` is only computed
 inside `if [[ -n "$PT_PCT" ]]`, where every part of the prefix is ASCII (`fmt_sec` /
-`SHORT_DUR`). The `·` separator on that line is likewise live-only, i.e. bar-free. What is
-wrong there is only the comment, which states the conclusion ("all the prefix cells are
-ASCII") without the early-return that makes it true.
+`SHORT_DUR`). The `·` separator on that line is likewise live-only, i.e. bar-free. What was
+wrong there was only the comment, which stated the conclusion ("all the prefix cells are
+ASCII") without the early-return that makes it true; it now names that early return. No
+arithmetic changed.
 
 **Accepted, not defects** (recorded so they are not re-litigated): the filter swallowing
 `q`/`s`/`9`/`0`/`l` is intentional modality; a failed play in filter mode consuming one
 keystroke on "press any key" matches the `n`/`m`/`o` failure behavior. Pid reuse can
-false-positive F3's `kill -0`, exactly as §25 records for the core's own `group_alive` —
-narrowed by the monotonic id, not closed, and not worth a second mechanism in the client.
+false-positive the shipped `check_player_alive`'s `kill -0`, exactly as §25 records for the
+core's own `group_alive` — narrowed by the monotonic id, not closed, and not worth a second
+mechanism in the client.
 
 **Order — by ROI, not by severity.** The batching below is deliberate: the largest edit in the
 pass (F11) is the only purely cosmetic one.
 
-1. **F3** — the liveness poll; the most visible defect that is not a crash.
-2. **F2's other half + F7** — one shared "message, then press any key" path for a failed play
+1. **F2's other half + F7** — one shared "message, then press any key" path for a failed play
    and for the three re-fetch failures, with the play reason read off the core's **stderr**.
-3. **The input layer** — F10 + F8 + F9's `?)`→`*)` widening, one shared UTF-8 helper across
+2. **The input layer** — F10 + F8 + F9's `?)`→`*)` widening, one shared UTF-8 helper across
    four sites. Highest effort, and it touches every keypress, so it does not sit in front of
    the cheap batches.
-4. **F11** — the cosmetic i18n pass, with its byte-padding layout fix.
+3. **F11** — the cosmetic i18n pass, with its byte-padding layout fix.
 
-(Two batches stood in front of these and have shipped: the cheap correctness/UX edits — F18,
-F14, F16 — and the IPC layer — F19, F13, F5, which the re-audit had promoted from last to
-first once a round trip turned out to cost a second rather than the borrowed ~10 ms. See the
-closed lists below.)
+(Three batches stood in front of these and have shipped: the cheap correctness/UX edits —
+F18, F14, F16 — the IPC layer — F19, F13, F5, which the re-audit had promoted from last to
+first once a round trip turned out to cost a second rather than the borrowed ~10 ms — and the
+liveness poll, F3. See the closed lists below.)
 
 Each step ends `bash -n` clean, re-runs the `set -e` repros (the third one drives the IPC
 readers against a live peer, a stale socket and no socket), and the interactive smoke pass in
@@ -1722,6 +1738,28 @@ So F19 stands as a real but much smaller change, and F5 is the defect of this ba
   `add` would have left it at 110. The extra round trip is what tied this to F19; at 0.016 s
   it was affordable either way, which is the one place the false measurement changed a
   decision rather than just a sentence.
+
+**Closed by the batch-C pass — the liveness poll** (`bash -n` clean, `shellcheck` clean of new
+findings, the three `set -e` repros green, a unit test over the real function bodies, and a real
+tmux pane driving real yt-dlp + detached mpv):
+
+- **F3** — a dead player no longer leaves its chrome behind. `check_player_alive` polls
+  `kill -0` on the envelope's wrapper pid at the top of the main loop **and** at the top of
+  `filter_live`'s key loop, and clears through the new `clear_play_state`; see §11 for why the
+  wrapper pid is the right thing to test and why an empty pid means "unknown, assume alive".
+  Verified in tmux against a player killed by its process group: the **card** empties inside
+  one 1 s tick with **no keypress at all**, the **list** banner survives until the next
+  keypress (the read blocks — accepted, and now asserted rather than assumed) and then goes,
+  and with `/` open one filter keystroke clears the banner *without leaving filter mode*,
+  which is the half a single-call-site fix would have missed. A live player, an empty pid and
+  an id-less state are all left untouched. The unit test (`tmp/f3-test.sh`) extracts the real
+  function bodies with `tmp/extract-fn.sh` and also asserts that `clear_play_state` covers
+  **every** declared `CURRENT_PLAY_*` global — which is how the pre-existing gap it folds in
+  was found: `stop_current_playback` had never cleared `CURRENT_PLAY_URL`, so "cleared" had
+  two definitions and one of them was wrong. `tmp/f3-tmux.sh` is the end-to-end rig.
+- Also in this pass, the last crumb of the withdrawn **F15**: the mini player's bar-sizing
+  comment now names the live early-return that makes `${#var}` safe there, instead of only
+  stating the conclusion. No arithmetic changed.
 
 **Closed by the list-view rail/details work:** the original audit also carried F4 — play
 metadata re-derived by re-splitting the *display* string, which only parsed correctly

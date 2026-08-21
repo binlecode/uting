@@ -1191,19 +1191,54 @@ adjust_volume() {
     send_mpv_ipc "[\"set_property\",\"volume\",$target]"
 }
 
+# One definition of "nothing is attached". Two paths reach it — the user pressing s and the
+# liveness poll finding a dead player — and when each cleared its own list they drifted: the
+# stop path never cleared CURRENT_PLAY_URL. Field order mirrors the declaration block above so
+# a missing one is visible in a diff.
+clear_play_state() {
+    CURRENT_PLAY_ID=""
+    CURRENT_PLAY_PID=""
+    CURRENT_PLAY_URL=""
+    CURRENT_PLAY_TITLE=""
+    CURRENT_PLAY_CHANNEL=""
+    CURRENT_PLAY_DURATION=""
+    CURRENT_PLAY_MODE=""
+    CURRENT_PLAY_SOCK=""
+    CURRENT_PLAY_PAUSED=0
+    CURRENT_PLAY_IS_LIVE=0
+    CURRENT_PLAY_STARTED=0
+}
+
+# The detached player owns its own lifecycle, so yt-tui only learns of its death by asking.
+# Nothing used to ask: send_mpv_ipc swallows every failure and mpv_get_prop answers empty on a
+# dead socket, so a track that ended (or an mpv crash) left the list banner showing its title
+# forever, the card showing --:-- against a stale title, and Space flipping a local paused flag
+# with no IPC peer on the far end.
+#
+# kill -0 is the same truth the core reaps on (§9.3 "process group alive"), reached from the
+# client side: the -d envelope's pid is the bash WRAPPER's, and the wrapper blocks on mpv, so
+# wrapper alive ⇔ still playing. One builtin, no fork — cheap enough for the card's 1 s tick.
+# Pid reuse can false-positive it, exactly as §25 records for the core's own group_alive;
+# narrowed by the monotonic id, not closed, and not worth a second mechanism in the client.
+check_player_alive() {
+    [[ -n "$CURRENT_PLAY_ID" ]] || return 0
+    # An empty pid is "unknown", not "dead": play_selected requires only id and sock to be
+    # non-empty, so clearing on an absent pid would blank a healthy player's chrome.
+    [[ -n "$CURRENT_PLAY_PID" ]] || return 0
+    # if-form, not `kill -0 … && return 0`: this file has shipped three set -e regressions
+    # already (§25.1), and an `if` is unambiguously safe where an AND-list is only safe by way
+    # of an exemption rule.
+    if kill -0 "$CURRENT_PLAY_PID" 2>/dev/null; then
+        return 0
+    fi
+    clear_play_state
+    return 0
+}
+
 stop_current_playback() {
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
         "$YT_PLAY" --stop --id "$CURRENT_PLAY_ID" -j >/dev/null 2>&1 || true
-        CURRENT_PLAY_ID=""
-        CURRENT_PLAY_PID=""
-        CURRENT_PLAY_SOCK=""
-        CURRENT_PLAY_TITLE=""
-        CURRENT_PLAY_CHANNEL=""
-        CURRENT_PLAY_DURATION=""
-        CURRENT_PLAY_MODE=""
-        CURRENT_PLAY_PAUSED=0
-        CURRENT_PLAY_IS_LIVE=0
-        CURRENT_PLAY_STARTED=0
+        clear_play_state
     fi
 }
 
@@ -1728,9 +1763,11 @@ display_mini_player() {
         [[ -n "$PT_PCT" ]] && pct_str=" (${PT_PCT}%)"
 
         # The bar shares its line with the time readout, so it gets whatever the readout
-        # leaves and ends at the same right edge as the wrapped title above (cols). All the
-        # prefix cells are ASCII, so ${#var} is their display width: 2 indent + "cur / tot"
-        # + " (NN%)" + 2 separating spaces.
+        # leaves and ends at the same right edge as the wrapped title above (cols). ${#var}
+        # is their display width because this block only runs when PT_PCT is non-empty, and
+        # fetch_play_times returns early with PT_PCT="" on the live branch — so the prefix
+        # can never hold GL_LIVE's "●" and is all ASCII (fmt_sec / SHORT_DUR):
+        # 2 indent + "cur / tot" + " (NN%)" + 2 separating spaces.
         if [[ -n "$PT_PCT" ]]; then
             local bar_total=$((cols - (2 + ${#cur_time} + 3 + ${#total_time} + ${#pct_str} + 2)))
             ((bar_total < 12)) && bar_total=12
@@ -1946,6 +1983,7 @@ filter_live() {
     FILTER_MODE=1
     apply_filter ""
     while true; do
+        check_player_alive   # this loop never returns to the main loop while / is open
         display_menu "$page_index"
         read_nav_input || continue
         case "$READ_NAV_KEY" in
@@ -2058,6 +2096,7 @@ apply_search_results
 
 # ── Menu loop ─────────────────────────────────────────────────────────────────────────
 while true; do
+    check_player_alive   # a player that ended or crashed must not keep its banner
     page_min=$(( (page_index - 1) * PAGE_SIZE ))
     page_max=$(( page_min + PAGE_SIZE - 1 ))
     if ((selected < page_min)); then selected=$page_min; fi
