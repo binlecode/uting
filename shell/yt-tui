@@ -58,6 +58,11 @@ Menu options:
               launch-time only, no live volume-cycle key)
   -p NUM    Rows per page (default: 10, capped to the terminal height)
   --color MODE  Color: auto | always | never (default: auto)
+  --theme NAME  Palette: minimal (default) | mono | catppuccin | tokyonight | nord
+                | gruvbox | onedark. Every theme = one signature accent + one status
+                green; mono = gray hierarchy only, no hue. Community themes emit
+                24-bit color when COLORTERM=truecolor, else ANSI-16 fallbacks.
+                Light/dark picks the theme's own light variant (see YT_BG below).
   -h        This help
 
 Keys (List View):
@@ -71,6 +76,8 @@ Keys (List View):
   [ / ]    seek backward / forward 10s (via IPC; works in every view)
   v        cycle playback mode: audio → video → fast (applies to next play)
   l        switch chrome language (en <-> zh), any view
+  t        cycle palette family live (minimal → catppuccin → tokyonight → nord →
+           gruvbox → onedark → mono), any view; no-op when colors are off
   n        new search (fetch a different query without interrupting music)
   m        more results (re-fetch current query, +25 to count)
   o        rotate sort field / order (relevance → view_count → duration), re-fetch
@@ -88,6 +95,16 @@ Environment:
                    Shared with the rest of the suite. Legacy alias: YT_TUI_ASCII.
   YT_LANG=en|zh    Language of the menu chrome. Default: zh under a zh* locale,
                    English otherwise (help text and errors are always English).
+  YT_THEME=minimal|mono|catppuccin|tokyonight|nord|gruvbox|onedark
+                   Palette family (same as --theme; default: minimal).
+  YT_BG=auto|light|dark  Background mode. auto: $COLORFGBG, then an OSC 11 terminal
+                   query, then dark. For minimal/mono, light swaps cyan for blue; for
+                   community themes it picks the theme's own light variant.
+  YT_SYNC=0|1|auto  Synchronized redraws (DCS 1q/2q; default auto: on, off under tmux).
+  YT_BRAND=1       Header wordmark in mathematical sans-serif bold ("𝗬 𝗧  𝗧 𝗨 𝗜").
+                   OPT-IN: your terminal font must cover the U+1D5D4 block, else tofu.
+                   ASCII mode (YT_ASCII=1) always wins.
+  NO_COLOR=1       Disables color in --color auto mode (an explicit --color wins).
   YT_AMBIG_WIDE=1  Measure East-Asian-Ambiguous glyphs (· — • … arrows ─ ━ ○ ● ▶) as
                    TWO cells. Only needed if your terminal is set to treat ambiguous
                    width as double-width; every terminal ships with that option off.
@@ -115,6 +132,11 @@ PLAY_MODE="audio"        # -f flag overrides. Runtime-mutable: v key rotates it 
 MODE_CYCLE=(audio video fast)  # order the v key steps through
 PLAY_VOLUME=""           # --volume flag overrides
 COLOR_MODE="auto"
+THEME="minimal"          # --theme / YT_THEME override: minimal | mono (palette family)
+BG_MODE="auto"           # YT_BG override: auto | light | dark (accent hue selection)
+BG="dark"
+[[ -n "${YT_THEME:-}" ]] && THEME="$YT_THEME"
+[[ -n "${YT_BG:-}" ]] && BG_MODE="$YT_BG"
 PAGE_OPT=10
 SORT_FIELD="relevance"   # -s flag overrides. Runtime-mutable: o key rotates it (cycle_sort).
 SORT_CYCLE=(relevance view_count duration)  # order the o key steps through
@@ -146,6 +168,10 @@ while (($#)); do
         [[ $# -ge 2 ]] || die "$1 requires a value"
         COLOR_MODE="$2"; shift 2 ;;
     --color=*) COLOR_MODE="${1#*=}"; shift ;;
+    --theme)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        THEME="$2"; shift 2 ;;
+    --theme=*) THEME="${1#*=}"; shift ;;
     --volume)
         [[ $# -ge 2 ]] || die "$1 requires a value"
         PLAY_VOLUME="$2"; shift 2 ;;
@@ -154,7 +180,7 @@ while (($#)); do
         shift
         while (($#)); do query+=("$1"); shift; done
         break ;;
-    -*) die "unknown flag '$1' (yt-tui flags: -n -m -M -s -f -p --color --volume); run 'yt-tui -h'" ;;
+    -*) die "unknown flag '$1' (yt-tui flags: -n -m -M -s -f -p --color --theme --volume); run 'yt-tui -h'" ;;
     *) query+=("$1"); shift ;;
     esac
 done
@@ -167,27 +193,163 @@ case " ${SORT_CYCLE[*]} " in *" $SORT_FIELD "*) ;; *) die "-s must be one of: ${
 # up front instead of letting an Enter fail silently. Same list the v key cycles.
 case " ${MODE_CYCLE[*]} " in *" $PLAY_MODE "*) ;; *) die "-f must be one of: ${MODE_CYCLE[*]} (ascii/viz need a terminal, which detached playback has none of)" ;; esac
 case "$COLOR_MODE" in auto | always | never) ;; *) die "--color must be one of: auto, always, never" ;; esac
+case "$THEME" in minimal | mono | catppuccin | tokyonight | nord | gruvbox | onedark) ;; *) die "--theme must be one of: minimal, mono, catppuccin, tokyonight, nord, gruvbox, onedark" ;; esac
+case "$BG_MODE" in auto | light | dark) ;; *) die "YT_BG must be one of: auto, light, dark" ;; esac
 
-require_cmd jq
+# nc as well as jq: every transport key (pause, seek, volume) and every time readout goes
+# through `nc -U` on the player's socket, so a machine without it loses half the TUI at the
+# first keypress rather than at start-up.
+require_cmd jq nc
 # The self-rendered menu reads keys from stdin and draws to stdout, so BOTH must be a real
 # terminal; refuse cleanly rather than hang/garble when piped (e.g. an agent).
 { [[ -t 0 ]] && [[ -t 1 ]]; } || die "requires a terminal (interactive menu); use yt-search / yt-play headless"
 
-# ── Colors (init_colors): honour --color auto|always|never ──────────────────────────────
-C_RESET=''; C_BOLD=''; C_CYAN=''; C_YELLOW=''; C_DIM=''; C_GREEN=''
+# ── Theme & Colors (init_theme): palette family + light/dark + protocol knobs ───────────
+# Minimalist palette, terminal-native: minimal/mono use ANSI 16 indexed codes only, so the
+# chrome follows the user's terminal theme, never imposes its own. The community themes
+# (catppuccin/tokyonight/nord/gruvbox/onedark) emit 24-bit RGB only when the terminal
+# advertises COLORTERM=truecolor; otherwise they fall back to the nearest ANSI-16 index.
+# Every theme passes through the same minimalist filter: hierarchy by gray levels
+# (dim → normal → bold), hue is ONE accent (C_CYAN) plus ONE status hue (C_GREEN).
+# C_YELLOW is retired — it stays defined ("" in every theme) so the five sites that still
+# read it render default foreground; deleting it would be eight site edits for zero
+# behavior change. C_MARK is the selection/filter marker (bold + accent). Light/dark
+# (YT_BG=auto → $COLORFGBG → OSC 11 query → dark) picks the theme's own light variant
+# (mocha/latte, night/day, polar-night/snow-storm, gruvbox dark/light, onedark/one-light);
+# for minimal it swaps cyan for blue, readable on white.
+# --color auto honors NO_COLOR. YT_SYNC: synchronized redraws (DCS 1 q/2 q), on by default,
+# off under tmux (see display_menu).
+C_RESET=''; C_BOLD=''; C_CYAN=''; C_YELLOW=''; C_DIM=''; C_GREEN=''; C_MARK=''
+SYNC_ON=0
+COLORTERM_TC=0
+COLORS_ON=0             # set by init_colors; gates the live theme cycle (t key)
+# TrueColor support: kitty/ghostty/wezterm/alacritty/konsole advertise COLORTERM.
+# The community themes below emit 24-bit RGB ONLY then; otherwise they fall back to
+# the nearest ANSI-16 index, so the chrome stays correct on limited terminals.
+init_colorterm() {
+    case "${COLORTERM:-}" in
+    truecolor | 24bit) COLORTERM_TC=1 ;;
+    esac
+}
+set_theme() {
+    # Community themes (catppuccin/tokyonight/nord/gruvbox/onedark) pass through the
+    # same minimalist filter as minimal: ONE signature accent + ONE status green,
+    # gray hierarchy for everything else. Hexes are the official palettes; light/dark
+    # is the theme's own light variant (catppuccin mocha/latte, tokyonight night/day,
+    # nord polar-night/snow-storm, gruvbox dark/light, onedark/one-light).
+    local acc_r acc_g acc_b st_r st_g st_b a16
+    case "$THEME" in
+    minimal)
+        C_CYAN=$'\033[36m'; C_GREEN=$'\033[32m'; C_YELLOW=''
+        C_MARK=$'\033[1;36m'
+        if [[ "$BG" == light ]]; then
+            C_CYAN=$'\033[34m'; C_MARK=$'\033[1;34m'
+        fi
+        ;;
+    mono)
+        C_CYAN=''; C_GREEN=''; C_YELLOW=''; C_MARK=$'\033[1m'
+        ;;
+    catppuccin | tokyonight | nord | gruvbox | onedark)
+        C_YELLOW=''
+        case "$THEME:$BG" in
+        catppuccin:dark)  acc_r=203; acc_g=166; acc_b=247; st_r=166; st_g=227; st_b=161; a16=35 ;;
+        catppuccin:light) acc_r=136; acc_g=57;  acc_b=239; st_r=64;  st_g=160; st_b=43;  a16=35 ;;
+        tokyonight:dark)  acc_r=122; acc_g=162; acc_b=247; st_r=158; st_g=206; st_b=106; a16=34 ;;
+        tokyonight:light) acc_r=46;  acc_g=125; acc_b=233; st_r=88;  st_g=117; st_b=57;  a16=34 ;;
+        nord:dark)        acc_r=136; acc_g=192; acc_b=208; st_r=163; st_g=190; st_b=140; a16=36 ;;
+        nord:light)       acc_r=94;  acc_g=129; acc_b=172; st_r=163; st_g=190; st_b=140; a16=36 ;;
+        gruvbox:dark)     acc_r=214; acc_g=93;  acc_b=14;  st_r=152; st_g=151; st_b=26;  a16=33 ;;
+        gruvbox:light)    acc_r=175; acc_g=58;  acc_b=3;   st_r=121; st_g=116; st_b=14;  a16=31 ;;
+        onedark:dark)     acc_r=97;  acc_g=175; acc_b=239; st_r=152; st_g=195; st_b=121; a16=34 ;;
+        onedark:light)    acc_r=64;  acc_g=120; acc_b=242; st_r=80;  st_g=161; st_b=79;  a16=34 ;;
+        esac
+        if ((COLORTERM_TC)); then
+            printf -v C_CYAN '\033[38;2;%d;%d;%dm' "$acc_r" "$acc_g" "$acc_b"
+            printf -v C_MARK '\033[1;38;2;%d;%d;%dm' "$acc_r" "$acc_g" "$acc_b"
+            printf -v C_GREEN '\033[38;2;%d;%d;%dm' "$st_r" "$st_g" "$st_b"
+        else
+            C_CYAN=$'\033['"$a16"m
+            C_MARK=$'\033[1;'"$a16"m
+            C_GREEN=$'\033[32m'
+        fi
+        ;;
+    esac
+}
 init_colors() {
     local on=0
     case "$COLOR_MODE" in
-    auto) [[ -t 1 ]] && on=1 ;;
+    auto) [[ -t 1 && -z "${NO_COLOR:-}" ]] && on=1 ;;
     always) on=1 ;;
     never) on=0 ;;
     esac
+    COLORS_ON=0
     if ((on)); then
-        C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_CYAN=$'\033[36m'
-        C_YELLOW=$'\033[33m'; C_DIM=$'\033[2m'; C_GREEN=$'\033[32m'
+        COLORS_ON=1
+        C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
+        set_theme
     fi
 }
-init_colors
+init_sync() {
+    case "${YT_SYNC:-auto}" in
+    0 | off) SYNC_ON=0 ;;
+    1 | on) SYNC_ON=1 ;;
+    auto) [[ -z "${TMUX:-}" && "${TERM:-}" != dumb ]] && SYNC_ON=1 || SYNC_ON=0 ;;
+    *) die "YT_SYNC must be 0, 1 or auto (got '$YT_SYNC')" ;;
+    esac
+}
+detect_bg() {
+    local fgbg b resp="" rgb rr gg bb
+    case "$BG_MODE" in
+    light) BG=light; return ;;
+    dark) BG=dark; return ;;
+    auto) ;;
+    *) die "YT_BG must be one of: auto, light, dark (got '$BG_MODE')" ;;
+    esac
+    # $COLORFGBG is "fg;bg" (rxvt family): bg == 15 (white) → light. Non-numeric → no signal.
+    fgbg="${COLORFGBG:-}"
+    if [[ "$fgbg" == *";"* ]]; then
+        b="${fgbg##*;}"
+        if [[ "$b" =~ ^[0-9]+$ ]]; then
+            if ((b == 15)); then BG=light; else BG=dark; fi
+            return
+        fi
+    fi
+    # OSC 11 background query (kitty/ghostty/wezterm/iTerm2/xterm-family answer; tmux and
+    # dumb terminals don't — skip so auto costs no startup stall there). bash 3.2's read -t
+    # takes only WHOLE seconds, so one unanswered probe costs 1 s once at startup.
+    if [[ -z "${TMUX:-}" && "${TERM:-}" != dumb ]]; then
+        printf '\033]11;?\033\\'
+        # Assemble the reply byte-by-byte (3.2 has no read -d) until BEL or ST ends it.
+        while IFS= read -rsn1 -t 1 b; do
+            resp+="$b"
+            case "$resp" in
+            *$'\a'*) break ;;
+            *$'\033\\'*) break ;;
+            esac
+            if ((${#resp} > 64)); then break; fi
+        done
+        # kitty answers "rgb:1c1c/1c1c/1c1c" (16-bit); xterm "rgb:1c/1c/1c" (8-bit).
+        rgb="${resp#*rgb:}"; rgb="${rgb%%[$'\a'$'\033'\\]*}"
+        if [[ "$rgb" == *"/"* ]]; then
+            rr=""; gg=""; bb=""
+            IFS='/' read -r rr gg bb <<<"$rgb" || true
+            if [[ "$rr" =~ ^[0-9a-fA-F]{2,4}$ && "$gg" =~ ^[0-9a-fA-F]{2,4}$ && "$bb" =~ ^[0-9a-fA-F]{2,4}$ ]]; then
+                local r8=$((16#$rr)) g8=$((16#$gg)) b8=$((16#$bb))
+                if (( ${#rr} == 4 )); then r8=$((r8 / 257)); fi
+                if (( ${#gg} == 4 )); then g8=$((g8 / 257)); fi
+                if (( ${#bb} == 4 )); then b8=$((b8 / 257)); fi
+                if ((r8 + g8 + b8 > 384)); then BG=light; else BG=dark; fi  # mid-gray boundary
+            fi
+        fi
+    fi
+}
+init_theme() {
+    detect_bg
+    init_sync
+    init_colorterm
+    init_colors
+}
+init_theme
 
 # ── UI language (init_ui_strings): Chinese under a zh locale, English otherwise ─────────
 # The chrome's labels were Chinese literals while help text, errors and field labels are
@@ -230,6 +392,22 @@ cycle_ui_lang() {
     if [[ "$UI_LANG" == "zh" ]]; then set_ui_lang en; else set_ui_lang zh; fi
 }
 
+# Cycle the palette family in place (key: t). set_theme is a pure function of
+# (THEME, BG, COLORTERM_TC), so a live re-resolve is safe — the same function startup
+# used. Gated on COLORS_ON so --color never / NO_COLOR / non-TTY sessions cannot paint
+# the chrome mid-session. Order: minimal → catppuccin → tokyonight → nord → gruvbox →
+# onedark → mono → back.
+THEME_CYCLE=(minimal catppuccin tokyonight nord gruvbox onedark mono)
+cycle_theme() {
+    ((COLORS_ON)) || return 0
+    local i n=${#THEME_CYCLE[@]} cur=0
+    for (( i = 0; i < n; i++ )); do
+        [[ "${THEME_CYCLE[$i]}" == "$THEME" ]] && { cur=$i; break; }
+    done
+    THEME="${THEME_CYCLE[$(( (cur + 1) % n ))]}"
+    set_theme
+}
+
 init_ui_strings() {
     case "${YT_LANG:-}" in
     en | zh) set_ui_lang "$YT_LANG" ;;
@@ -267,6 +445,16 @@ init_glyphs() {
         GL_PLAY=">"; GL_PAUSE="||"; GL_DOT="*"; GL_DOT_OFF="o"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
         GL_BULLET="-"; GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
     fi
+    # Brand wordmark (YT_BRAND=1): the three view headers render "𝗬 𝗧  𝗧 𝗨 𝗜" in
+    # mathematical sans-serif bold (U+1D5D4 block). OPT-IN on purpose: terminal fonts
+    # vary, and a font without that block shows tofu — your call, your eyes. Width is
+    # whatever the font gives; char_w's conservative 2-cell overcount keeps the query
+    # elision safe in either case (over-count packs early, never overflows). ASCII mode
+    # always wins — a font that cannot draw ♫ cannot draw these either.
+    GL_BRAND="yt-tui"
+    case "${YT_BRAND:-}" in
+    1 | true | yes | on) ((ASCII_GLYPHS)) || GL_BRAND="𝗬 𝗧  𝗧 𝗨 𝗜" ;;
+    esac
 }
 init_glyphs
 
@@ -317,7 +505,11 @@ cursor_show() { tput cnorm 2>/dev/null || true; }
 # ── IPC & Playback Controls ─────────────────────────────────────────────────────────────
 send_mpv_ipc() {
     local cmd="$1"
-    [[ -n "$CURRENT_PLAY_SOCK" && -S "$CURRENT_PLAY_SOCK" ]] || return 1
+    # return 0, not 1, on a missing socket: fire-and-forget is this function's contract (the
+    # nc failure below is already swallowed), and it is the LAST command of toggle_pause /
+    # seek_relative / adjust_volume — a 1 here becomes the function's status, reaches the
+    # case arm, and set -e kills the TUI on a keypress whose effect is optional anyway.
+    [[ -n "$CURRENT_PLAY_SOCK" && -S "$CURRENT_PLAY_SOCK" ]] || return 0
     printf '%s\n' "$cmd" | nc -U -w1 "$CURRENT_PLAY_SOCK" >/dev/null 2>&1 || true
 }
 
@@ -609,9 +801,8 @@ truncate_disp() {
 # TAB is a plain field (no label). The chrome used to print each view's hints as ONE fixed
 # string, which simply ran off the right edge and wrapped mid-item below ~72 columns —
 # sooner still because the labels are CJK, i.e. double-width. Every emitted line carries
-# \033[K for the in-place card/mini renders. HINT_KEY_COLOR overrides the key colour for
-# one call (the status row wants its fields dim, not key-yellow).
-# one call (the status row wants its fields dim, not key-yellow). HINT_LINES reports how many
+# \033[K for the in-place card/mini renders. HINT_KEY_COLOR overrides the key style for
+# one call (the status row wants its fields dim, not key-bold). HINT_LINES reports how many
 # lines were emitted: this block is variable-height by design, and the list view has to know
 # its real height to decide how many result rows fit (see the reflow in display_list_menu).
 # HINT_MEASURE=1 runs the identical packing and reports HINT_LINES without drawing anything,
@@ -625,7 +816,7 @@ print_hints() {
     shift 3
     HINT_LINES=0
     local item key label out="" out_w=0 iw ind_w first=1
-    local kc=${HINT_KEY_COLOR:-$C_YELLOW}
+    local kc=${HINT_KEY_COLOR:-$C_BOLD}
     disp_w "$first_p"
     ind_w=$DISP_W
     out_w=$ind_w
@@ -894,7 +1085,11 @@ print_details() {
 
 toggle_pause() {
     [[ -n "$CURRENT_PLAY_ID" ]] || return 0
-    ((CURRENT_PLAY_PAUSED = 1 - CURRENT_PLAY_PAUSED))
+    # Assignment form, not ((CURRENT_PLAY_PAUSED = 1 - CURRENT_PLAY_PAUSED)): an arithmetic
+    # command evaluating to 0 returns status 1, so UNPAUSING (1 -> 0) aborted the whole
+    # script under set -e — the second Space press killed the TUI. Same trap as char_w and
+    # the banner's b_fixed, which already carry this note.
+    CURRENT_PLAY_PAUSED=$((1 - CURRENT_PLAY_PAUSED))
     send_mpv_ipc '{"command":["cycle","pause"]}'
 }
 
@@ -1040,10 +1235,10 @@ display_list_menu() {
     clear
     # Title. Elided like every other row: a long query used to wrap and push the whole layout
     # down a line.
-    local t_head="${GL_NOTE:+$GL_NOTE }yt-tui  query="
+    local t_head="${GL_NOTE:+$GL_NOTE }$GL_BRAND  query="
     disp_w "$t_head"
     truncate_disp "'$QUERY_LABEL'" $((nav_cols - DISP_W))
-    printf '%s%s%syt-tui%s  query=%s\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "$TRUNC_TEXT"
+    printf '%s%s%s%s%s  query=%s\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$TRUNC_TEXT"
     chrome_h=$((chrome_h + 1))
     
     # Status line
@@ -1061,45 +1256,14 @@ display_list_menu() {
     HINT_KEY_COLOR=""
     chrome_h=$((chrome_h + HINT_LINES))
     
-    # Persistent Mini-Player Banner (when background playback is active)
-    if [[ -n "$CURRENT_PLAY_ID" ]]; then
-        local p_icon="$GL_PLAY" p_label="Playing"
-        if ((CURRENT_PLAY_PAUSED)); then
-            p_icon="$GL_PAUSE"
-            p_label="Paused"
-        fi
-        # This banner shares ONE line with a variable-length title, so measure the fixed
-        # parts and give the title what is left (elided) instead of letting the line wrap
-        # and shove the result list down the screen. If even the hint block cannot fit, it
-        # goes — the Navigation row below still documents those keys.
-        local b_head="$p_icon $p_label: " b_tail=" $GL_SEP $CURRENT_PLAY_DURATION"
-        local b_hint="  [Tab $S_FOCUS | Space $S_PAUSE | s $S_STOP | 9/0 $S_VOL]" b_fixed=0
-        # Assignment form, not ((b_fixed += DISP_W)): an arithmetic command evaluating to 0
-        # returns status 1, which `set -e` would take as a failure (see char_w).
-        disp_w "$b_head"; b_fixed=$((b_fixed + DISP_W))
-        disp_w "$b_tail"; b_fixed=$((b_fixed + DISP_W))
-        disp_w "$b_hint"; local hint_w=$DISP_W
-        local title_room=$((nav_cols - b_fixed - hint_w))
-        if ((title_room < 12)); then
-            b_hint=""
-            title_room=$((nav_cols - b_fixed))
-        fi
-        ((title_room < 8)) && title_room=8
-        truncate_disp "$CURRENT_PLAY_TITLE" "$title_room"
-        printf '%s%s %s:%s %s%s%s%s%s%s%s%s%s\n' \
-            "$C_BOLD" "$p_icon" "$p_label" "$C_RESET" \
-            "$C_YELLOW" "$TRUNC_TEXT" "$C_RESET" \
-            "$C_DIM" "$b_tail" "$C_RESET" \
-            "$C_DIM" "$b_hint" "$C_RESET"
-    else
-        printf '\n'
-    fi
-    chrome_h=$((chrome_h + 1))    # the banner row, or the blank line standing in for it
-
-    # Key navigation hints, packed to the terminal width (they used to be one fixed
-    # string that ran off the edge and wrapped mid-item on a narrow terminal).
-    # Continuation indent measured in DISPLAY cells: ${#S_NAV} counts characters, so a CJK
-    # label ("导航:" = 3 chars, 5 cells) would under-indent the wrapped rows.
+    # Key navigation hints are measured BEFORE the banner: the banner's inline key tail
+    # and this block are ONE job, and two adjacent chrome lines must not both document
+    # keys. When this block prints (its gate below passes), the banner stays pure status
+    # — one key source per screen, and the playing title gains the tail's ~30 cells; when
+    # the gate drops this block on a short terminal, the banner's tail carries
+    # Tab/Space/s/9/0 instead. A rail sits UNDER the block (Option B): one boundary
+    # between the chrome band (status + banner + keys) and the result rows — the card's
+    # rail language. It prints only with the block: no Navigation, no rail.
     disp_w "$S_NAV"
     local nav_pad
     printf -v nav_pad '%*s' $((DISP_W + 1)) ''
@@ -1110,8 +1274,8 @@ display_list_menu() {
     )
     # Measure the block before committing the space: on a very short terminal it is 4 lines of
     # a 10-line screen, and printing it would push the header off the top no matter how the
-    # rows are repaged. Then the keys go and the results stay — the same trade the Now-Playing
-    # banner makes with its own inline hints, and the card view still documents the keys.
+    # rows are repaged. Then the keys go and the results stay — the card view still
+    # documents the keys.
     HINT_MEASURE=1
     print_hints "$nav_cols" "$S_NAV " "$nav_pad" "${nav_items[@]}"
     HINT_MEASURE=0
@@ -1126,9 +1290,57 @@ display_list_menu() {
     # top, which is the one thing this reflow exists to prevent.
     local nav_need=4
     ((NUM_ENTRIES > 1)) && nav_need=5
-    if ((LINES_N - chrome_h - nav_h >= nav_need)); then
+    # The banner row counts here whether it prints or stands as a blank (+1); the rail
+    # under the block counts too (+1) — it prints whenever the block does.
+    local nav_ok=0
+    if ((LINES_N - chrome_h - 1 - nav_h - 1 >= nav_need)); then nav_ok=1; fi
+
+    # Persistent Mini-Player Banner (when background playback is active)
+    if [[ -n "$CURRENT_PLAY_ID" ]]; then
+        local p_icon="$GL_PLAY" p_label="Playing" p_color="$C_GREEN"
+        if ((CURRENT_PLAY_PAUSED)); then
+            p_icon="$GL_PAUSE"
+            p_label="Paused"
+            p_color=""      # retired yellow → default fg, same as the card/mini paused state
+        fi
+        # Pure status line: shares ONE line with a variable-length title, so measure the
+        # fixed parts and give the title what is left (elided). The key tail appears only
+        # when the Navigation block above was dropped (short-terminal fallback).
+        local b_head="$p_icon $p_label: " b_tail=" $GL_SEP $CURRENT_PLAY_DURATION"
+        local b_hint="" b_fixed=0
+        if ((!nav_ok)); then
+            b_hint="  [Tab $S_FOCUS | Space $S_PAUSE | s $S_STOP | 9/0 $S_VOL]"
+        fi
+        # Assignment form, not ((b_fixed += DISP_W)): an arithmetic command evaluating to 0
+        # returns status 1, which `set -e` would take as a failure (see char_w).
+        disp_w "$b_head"; b_fixed=$((b_fixed + DISP_W))
+        disp_w "$b_tail"; b_fixed=$((b_fixed + DISP_W))
+        disp_w "$b_hint"; local hint_w=$DISP_W
+        local title_room=$((nav_cols - b_fixed - hint_w))
+        if ((title_room < 12)); then
+            b_hint=""
+            title_room=$((nav_cols - b_fixed))
+        fi
+        ((title_room < 8)) && title_room=8
+        truncate_disp "$CURRENT_PLAY_TITLE" "$title_room"
+        printf '%s%s %s:%s %s%s%s%s%s%s%s%s%s\n' \
+            "$p_color" "$p_icon" "$p_label" "$C_RESET" \
+            "$C_CYAN" "$TRUNC_TEXT" "$C_RESET" \
+            "$C_DIM" "$b_tail" "$C_RESET" \
+            "$C_DIM" "$b_hint" "$C_RESET"
+    else
+        printf '\n'
+    fi
+    chrome_h=$((chrome_h + 1))    # the banner row, or the blank line standing in for it
+
+    if ((nav_ok)); then
         print_hints "$nav_cols" "$S_NAV " "$nav_pad" "${nav_items[@]}"
         chrome_h=$((chrome_h + nav_h))
+        # Rail under the Navigation block: one boundary between the chrome band and the
+        # result rows (card_divider caches on width+glyph, like the card rails).
+        card_divider "$nav_cols"
+        printf '%s%s%s\n' "$C_DIM" "$DIV_STR" "$C_RESET"
+        chrome_h=$((chrome_h + 1))
     fi
     printf '\n'
     chrome_h=$((chrome_h + 1))
@@ -1256,8 +1468,11 @@ display_list_menu() {
             # rail into a wrap — the failure mode we want, and one the width layer's
             # over-counting rule already refuses to produce.
             if ((i == selected)); then
-                printf '%s> %s. %s\033[%dG%s%s\n' \
-                    "$C_YELLOW" "$n" "$disp" $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
+                # Marker + number in C_MARK (accent), title in bold, rail back to its own
+                # dim — the selected line no longer inherits one hue end-to-end.
+                printf '%s> %s. %s%s%s\033[%dG%s%s%s\n' \
+                    "$C_MARK" "$n" "$C_BOLD" "$disp" "$C_RESET" \
+                    $((nav_cols - rail_w + 1)) "$C_DIM" "$rail" "$C_RESET"
             else
                 printf '  %s. %s%s\033[%dG%s%s\n' \
                     "$n" "$disp" "$C_DIM" $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
@@ -1273,12 +1488,16 @@ display_list_menu() {
             for (( p = 1; p <= NUM_PAGES; p++ )); do
                 # Through the glyph table, not literals: hardcoded ● ○ here were the last
                 # two glyphs YT_ASCII could not reach, and ○ had no GL_ name at all.
-                if ((p == page)); then dots+="$GL_DOT"; else dots+="$GL_DOT_OFF"; fi
+                # Active page dot in accent (C_CYAN): the dots are state, not decoration.
+                # mono resolves C_CYAN to "" → bold active dot, exactly today's look.
+                if ((p == page)); then dots+="$C_BOLD$C_CYAN$GL_DOT$C_RESET"
+                else dots+="$C_BOLD$GL_DOT_OFF$C_RESET"; fi
             done
+            printf '%s%s\n' "$dots" "$C_RESET"
         else
             dots="page $page/$NUM_PAGES"
+            printf '%s%s%s\n' "$C_BOLD" "$dots" "$C_RESET"
         fi
-        printf '%s%s%s\n' "$C_BOLD" "$dots" "$C_RESET"
     fi
 
     # Details for the selected row. Below the pagination dots: the dots belong to the list,
@@ -1291,7 +1510,7 @@ display_list_menu() {
         # at 40 columns, costing a line the reflow above had already handed to a result row.
         truncate_disp "filter (type to narrow, Enter plays, Esc clears)" "$nav_cols"
         printf '%s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
-        printf '%s>%s %s' "$C_YELLOW" "$C_RESET" "$FILTER_LABEL"
+        printf '%s>%s %s' "$C_MARK" "$C_RESET" "$FILTER_LABEL"
         cursor_show
     else
         cursor_hide
@@ -1303,8 +1522,8 @@ display_now_playing_card() {
     cursor_hide
     # Reposition cursor to top-left without blanking the screen (eliminates flicker)
     printf '\033[H'
-    printf '%s%s%syt-tui%s  %s  %sNOW PLAYING FOCUS%s\033[K\n\033[K\n' \
-        "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "$GL_BULLET" "$C_BOLD" "$C_RESET"
+    printf '%s%s%s%s%s  %s  %sNOW PLAYING FOCUS%s\033[K\n\033[K\n' \
+        "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$GL_BULLET" "$C_BOLD" "$C_RESET"
 
     local p_status="$GL_DOT Playing" p_color="$C_GREEN"
     if ((CURRENT_PLAY_PAUSED)); then
@@ -1374,9 +1593,11 @@ display_now_playing_card() {
             # \033[K on the spacer row too: the card grows by two rows the moment the
             # bar appears (mpv has no time-pos for the first second or so), so an
             # uncleared spacer kept showing the divider rail the previous frame drew there.
-            printf '\033[K\n    %s%s%s\033[K\n' "$C_YELLOW" "$bar_str" "$C_RESET"
+            printf '\033[K\n    %s%s%s\033[K\n' "$C_CYAN" "$bar_str" "$C_RESET"
         fi
-        printf '%s%s%s\033[K\n' "$C_DIM" "$div" "$C_RESET"
+        # No rail between the bar and Controls: the readout sits directly above the bar
+        # it labels, and the controls flow straight after it — the mini player already
+        # renders this way, and the bottom rail below Controls closes the card.
         print_hints "$cols" "  Controls:   " "              " \
             "[Tab/Esc]	$S_BACK_LIST" "[Space]	$S_PAUSE_RESUME" "[$GL_AH]	$S_SEEK5" \
             "[9/0]	$S_VOL_ADJUST" "[s]	$S_STOP_PLAY" "[q]	$S_QUIT"
@@ -1390,8 +1611,8 @@ display_now_playing_card() {
 display_mini_player() {
     cursor_hide
     printf '\033[H'
-    printf '%s%s%syt-tui%s  %s  %sMINI PLAYER%s\033[K\n\033[K\n' \
-        "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$C_RESET" "$GL_BULLET" "$C_BOLD" "$C_RESET"
+    printf '%s%s%s%s%s  %s  %sMINI PLAYER%s\033[K\n\033[K\n' \
+        "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$GL_BULLET" "$C_BOLD" "$C_RESET"
 
     local cols
     layout_cols 80
@@ -1434,7 +1655,7 @@ display_mini_player() {
         wrap_print "$CURRENT_PLAY_TITLE" "$text_w" "  ${p_color}${p_icon}${C_RESET} ${C_BOLD}" "    ${C_BOLD}"
         local mini_sep="/"
         ((CURRENT_PLAY_IS_LIVE)) && mini_sep="$GL_SEP"
-        printf '  %s%s %s %s%s%s  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$cur_time" "$mini_sep" "$total_time" "$pct_str" "$C_RESET" "$C_YELLOW" "$bar_str" "$C_RESET"
+        printf '  %s%s %s %s%s%s  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$cur_time" "$mini_sep" "$total_time" "$pct_str" "$C_RESET" "$C_CYAN" "$bar_str" "$C_RESET"
         print_hints "$cols" "  " "  " \
             "[Tab/Esc]	$S_LIST_MENU" "[Space]	$S_PAUSE" "[$GL_AH]	$S_SEEK5_SHORT" \
             "[9/0]	$S_VOL" "[s]	$S_STOP" "[q]	$S_QUIT"
@@ -1443,11 +1664,16 @@ display_mini_player() {
 }
 
 display_menu() {
+    # Kitty-spec DCS 1 q / 2 q frame hold: the terminal shows the repaint only when DCS
+    # 2 q arrives, so a full-screen redraw cannot flash a half-rendered frame. Skipped
+    # under tmux by default (it buffers output and needs terminal-overrides passthrough).
+    if ((SYNC_ON)); then printf '\033P=1q'; fi
     case "$TUI_VIEW_MODE" in
     card) display_now_playing_card ;;
     mini) display_mini_player ;;
     *) display_list_menu "$1" ;;
     esac
+    if ((SYNC_ON)); then printf '\033P=2q'; fi
 }
 
 # ── PLAY delegate (Asynchronous / Non-blocking) ─────────────────────────────────────────
@@ -1626,12 +1852,13 @@ filter_live() {
         display_menu "$page_index"
         read_nav_input || continue
         case "$READ_NAV_KEY" in
-        "" | $'\n' | $'\r') play_selected ;;     # Enter → play highlighted match in background
+        "" | $'\n' | $'\r') play_selected || true ;;  # Enter → play highlighted match in background
         ESC) break ;;                            # Esc → leave filter mode
         "[A" | "OA" | "["*A | "O"*A | "[B" | "OB" | "["*B | "O"*B | \
         "[C" | "OC" | "["*C | "O"*C | "[D" | "OD" | "["*D | "O"*D)
             move_selection "$READ_NAV_KEY" ;;
         $'\x7f' | $'\b') query="${query%?}"; apply_filter "$query" ;;
+        $'\t') ;;   # Tab is a control character, never part of a query — ignore, not append
         ?) query="$query$READ_NAV_KEY"; apply_filter "$query" ;;
         *) ;;
         esac
@@ -1775,6 +2002,7 @@ while true; do
         "[A" | "OA" | "["*A | "O"*A) adjust_volume 5 ;;    # up arrow → volume +5
         "[B" | "OB" | "["*B | "O"*B) adjust_volume -5 ;;   # down arrow → volume -5
         l | L) cycle_ui_lang ;;
+        t | T) cycle_theme ;;   # cycle palette family live
         q | Q) printf 'Quitting%s\n' "$GL_ELL"; exit 0 ;;
         *) ;;
         esac
@@ -1786,12 +2014,13 @@ while true; do
     "[A" | "OA" | "["*A | "O"*A | "[B" | "OB" | "["*B | "O"*B | \
     "[C" | "OC" | "["*C | "O"*C | "[D" | "OD" | "["*D | "O"*D)
         move_selection "$READ_NAV_KEY" ;;
-    "" | $'\n' | $'\r') play_selected ;;      # Enter → start/switch track in background
+    "" | $'\n' | $'\r') play_selected || true ;;  # Enter → start/switch track in background
     n | N) new_search ;;      # new search (non-blocking: music continues)
     m | M) more_results ;;    # more results
     o | O) cycle_sort ;;      # rotate sort
     v | V) cycle_mode ;;      # rotate playback mode
     l | L) cycle_ui_lang ;;   # toggle chrome language (en <-> zh)
+    t | T) cycle_theme ;;     # cycle palette family live
     "/") filter_live ;;       # LIVE incremental filter
     q | Q) printf 'Quitting%s\n' "$GL_ELL"; exit 0 ;;
     ESC) ;;

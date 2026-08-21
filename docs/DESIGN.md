@@ -746,7 +746,9 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     │  display_menu:                                                                 │
     │    List View:     title · status · live Now-Playing mini banner · result rows  │
     │                   (title + right-rail duration) · pagination dots · details    │
-    │                   section for the SELECTED row · live filter input             │
+    │                   section for the SELECTED row · live filter input. A dim rail  │
+    │                   sits under the Navigation block (chrome | content boundary,   │
+    │                   drawn with the block or not at all).                          │
     │    Mode A (Card): full-screen rail-bounded card with metadata, progress bar &  │
     │                   interactive controls                                         │
     │    Mode B (Mini): ultra-minimalist 3-line mini-player with live progress bar   │
@@ -762,6 +764,8 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     │    n     → new_search:      read query → fetch_json → reload (music continues) │
     │    m     → more_results:    re-fetch CURRENT query, RESULT_N += 25 (else keep) │
     │    o     → cycle_sort:      rotate SORT_FIELD, re-fetch (relevance→views→dur)  │
+    │    t     → cycle_theme:     rotate palette family live (minimal→…→mono), any   │
+    │                             view; no-op when colors are off (COLORS_ON gate)   │
     │    /     → filter_live:     LIVE narrow — type to filter, Esc clears           │
     │    q     → exit 0           reaps background players cleanly on trap EXIT      │
     └────────────────────────────────────────────────────────────────────────────────┘
@@ -778,6 +782,10 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
   - **List View (Search & Browse)**: Interactive multi-row list with a top Now-Playing banner.
   - **Mode A (Now Playing Focus Card)**: Clean distraction-free card with word-wrapped title within
     adaptive divider rails, live `playtime / total time (pct%)`, and dynamic visual progress bar.
+    The rails open the card (top) and close it (bottom) only — nothing separates the
+    progress bar from the controls, so the readout labels the bar above it and the
+    controls flow straight after it (the redundant rail between bar and Controls was
+    removed in the theme pass).
   - **Mode B (Minimalist Mini-Player)**: Ultra-clean 3-line player with progress bar for zero visual noise.
   - **Anti-Flicker in-place rendering**: Real-time 1s timer refreshes time and progress bars smoothly
     via `\033[H` (cursor home) without full-screen blanking or flashing. Because nothing is
@@ -819,6 +827,51 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     is split from the initial choice so the **`l` key** re-fills the table live, from any
     view, without touching playback. Wrapped-row indents are measured with `disp_w`, not
     `${#var}`: "导航:" is 3 characters but 5 cells.
+  - **The chrome speaks ONE theme per run — and it is the terminal's theme, not ours.**
+    The default palette (`minimal`) is ANSI 16 indexed codes only; deliberately no
+    RGB or 256-color (grep gate: the only escapes the minimal/mono paths can emit
+    are 0/1/2/32/34/36 and 1;3x compounds), so by default yt-tui renders in
+    whatever scheme the user's terminal already has — One Dark, Catppuccin,
+    anything — instead of imposing a second palette inside it. The community
+    themes (`catppuccin | tokyonight | nord | gruvbox | onedark`) are a second
+    layer: they emit their SIGNATURE ACCENT in 24-bit RGB (38;2), but ONLY when
+    the terminal advertises `COLORTERM=truecolor` — otherwise they fall back to
+    the nearest ANSI-16 index, so the chrome is never garbage on a limited
+    terminal. Every theme, community included, passes through the same minimalist
+    filter: hierarchy by gray levels (dim → normal → bold), hue is ONE accent
+    (`C_CYAN`: headers, selection marker) plus ONE status hue (`C_GREEN`:
+    playing); the rest of a community palette (its yellow/red/purple/…) is
+    dropped on purpose. `C_YELLOW` is retired but stays defined as `""` — the five
+    sites that still read it render default foreground, because the theme is a
+    table of VALUES (`set_theme`) and the rendering sites are untouched; deleting
+    the variable would be eight site edits for zero behavior change. `C_MARK` is
+    the compound selection/filter style (bold + accent). `YT_THEME` picks the
+    family (`mono` = hue zero, bold/dim carry everything); `--theme` beats env,
+    and the **`t` key** cycles the family live from any view — the same `set_theme`
+    re-resolve startup uses, gated on `COLORS_ON` so a color-less session
+    (`--color never` / NO_COLOR / non-TTY) stays colorless.
+    Official hexes per theme (catppuccin mocha/latte mauve & green, tokyonight
+    night/day blue & green, nord frost8/frost1 & aurora14, gruvbox orange &
+    green, onedark/one-light blue & green).
+  - **Light and dark terminals get a readable accent.** `YT_BG=auto` chain: explicit
+    `YT_BG=light|dark` wins; else `$COLORFGBG` (rxvt family, bg==15); else an OSC 11
+    background query (`\033]11;?\033\`); else dark. For `minimal`/`mono`, light
+    swaps cyan for blue — yellow is unreadable on white, which is exactly why the
+    retired hue is retired; for community themes, light picks the theme's OWN light
+    variant (mocha→latte, night→day, polar-night→snow-storm, gruvbox light,
+    onedark→one-light). The probe is bash-3.2 shaped: `read -t` takes only WHOLE
+    seconds there, so one unanswered query costs 1 s once at startup, and it is
+    skipped under tmux / `TERM=dumb`, which cannot answer. The reply
+    (`rgb:RRRR/GGGG/BBBB` kitty 16-bit, `rgb:RR/GG/BB` xterm 8-bit, BEL or ST
+    terminated) is assembled byte-by-byte (no `read -d` on 3.2); RGB sum > 384
+    (mid-gray) is the light/dark boundary.
+  - **The protocol layer is polite.** `--color auto` honors `NO_COLOR` (explicit
+    `--color always|never` still wins). Downsampling is the `COLORTERM` gate: a
+    community theme is 24-bit only when the terminal advertises it, and ANSI-16
+    otherwise — the palette never guesses. Full-screen redraws are wrapped in the
+    Kitty synchronized-output pair (DCS `=1q` / `=2q`) so a repaint cannot flash a
+    half-rendered frame; `YT_SYNC=0|1` overrides, and it defaults off under tmux
+    (which buffers output and needs terminal-overrides passthrough anyway).
   - **One width rule, in one place: `char_w`.** A non-ASCII character counts as **two**
     cells — exact for CJK (East-Asian Wide), conservative for everything else. That default
     direction *is* the safety property: over-counting packs a row a cell or two early and can
@@ -840,6 +893,16 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     (`unicodedata.east_asian_width`) rather than guessed. A scan of every non-comment line
     finds no other non-ASCII character but the Chinese label text, so the list is complete,
     not curated.
+
+    **One deliberate exception: the brand wordmark (`YT_BRAND=1`).** The three view
+    headers render `𝗬 𝗧  𝗧 𝗨 𝗜` (mathematical sans-serif bold, U+1D5D4 block) when
+    opted in. It lives OUTSIDE the closed inventory on purpose: the UCD class is Neutral
+    (one cell "in principle"), but real terminal fonts render this block via fallback
+    fonts at whatever width they like — so it is NOT measured and NOT in the table, and
+    `char_w`'s conservative 2-cell default applies to it (over-count packs the query
+    elision a cell or two early; it can never overflow). It is opt-in precisely because
+    a font without the block shows tofu and only the user's eyes can judge that.
+    `YT_ASCII=1` wins over `YT_BRAND` — a font that cannot draw ♫ cannot draw these.
 
     **Neutral EAW — one cell in every terminal, unconditionally (4)**
 
@@ -1272,7 +1335,7 @@ Per-request choices are flags; set-once tuning is environment variables — deli
 kept out of flags to keep each verb's flag surface narrow.
 
 ```
-   Flags (per call):  -n -m -M -s -f -S -l -j -J -d --color
+   Flags (per call):  -n -m -M -s -f -S -l -j -J -d --color --theme
                       --detach --status --stop --get-url --info --set-volume --id --all --volume
    Env (set once):    YT_COOKIE_BROWSER   (default chrome = login on; "none" = anon-only)
                       YT_AUDIO_FORMAT (ba)  YT_VIDEO_FORMAT (bv*+ba/b)
@@ -1285,11 +1348,24 @@ kept out of flags to keep each verb's flag surface narrow.
                       YT_LANG (en|zh) = language of yt-tui's menu chrome; default zh
                         under a zh* locale, English otherwise. Help output, errors and
                         the card's field labels stay English in both.
+                      YT_THEME (minimal|mono|catppuccin|tokyonight|nord|gruvbox|
+                        onedark) = yt-tui palette family (§11: one accent + one status
+                        hue; community themes are 24-bit only under COLORTERM=truecolor).
+                        --theme beats env; the t key cycles it live at runtime.
+                      YT_BG (auto|light|dark) = background mode; auto chain:
+                        $COLORFGBG → OSC 11 query → dark. Light = the theme's own light
+                        variant (minimal swaps cyan for blue).
+                      YT_SYNC (0|1|auto) = synchronized redraws (DCS 1q/2q; auto: on,
+                        off under tmux).
+                      YT_BRAND (=1: header wordmark in math sans-serif bold, §11 glyph
+                        section; opt-in, ASCII mode wins).
+                      NO_COLOR (=1: --color auto renders plain; explicit --color wins).
    Internal (set by the core for its own detached child, not a user knob):
                       YT_IPC_SOCK (per-player mpv IPC socket)  YT_DETACHED (=1: no
                       terminal, so quiet mpv + no stderr filter)
-   (color is the --color flag, NOT an env var — the scripts hardcode COLOR_MODE=auto
-    at startup and only --color changes it, so a COLOR_MODE env value is never read.)
+   (color MODE is the --color flag, NOT an env var — the scripts hardcode
+    COLOR_MODE=auto at startup and only --color changes it, so a COLOR_MODE env
+    value is never read. Theme and background ARE env-read: YT_THEME / YT_BG.)
 ```
 
 Cookie handling: `YT_COOKIE_BROWSER` is presence-checked per platform (does the
