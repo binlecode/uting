@@ -1550,16 +1550,22 @@ first; gate deletions by grep so no dangling reference survives.
    clobber the same <id>.json              serializes the two temp+mv patches (§9.3)
    Stale socket after SIGKILL'd mpv          [[ -S sock ]] test → ipc_failed, never hangs
    nc waits full -w1 (mpv keeps socket open) request_id filter + head -1; ~≤1s/call, not
-                                             for tight loops (human-driven adjust is fine)
+                                             for tight loops (human-driven adjust is fine).
+                                             yt-tui's redraw path IS a tight loop and has no
+                                             head -1 — it pays the second (§25.1 F19)
 ```
 
 ### 25.1 Open defect register — `yt-tui` hardening pass
 
-Audited against `shell-scripts/yt-tui`, **not yet fixed**: this is a register of known
-defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
+Audited against `shell-scripts/yt-tui`. **Batch 1 (the one-line edits) and batch A (the cheap
+correctness/UX edits) are fixed; the rest is not** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
 because the findings are statements about *this* design's seams, and each one is only
-actionable next to the section it sits in. Three were reproduced empirically on the
-machine's own bash 3.2.57 before being written down; the rest were read off the code.
+actionable next to the section it sits in. The open rows below have since been re-audited
+against the code and re-measured on the machine's own bash 3.2.57. **Six of them asserted
+something false** — F2's reason source, F5's round-trip cost, F10's byte-ordering trick,
+F11's padding unit, F13's positional reply read, and the whole of F15 — so the corrections
+are recorded inline rather than quietly swapped: each of those was a premise a fix would
+have been built on.
 
 **Reproduced, not inferred:**
 
@@ -1568,16 +1574,22 @@ machine's own bash 3.2.57 before being written down; the rest were read off the 
 - `play_selected` returning 1 from a case arm exits the script with status 1 — no output,
   no cleanup message.
 - `read -rsn1` on bash 3.2 delivers one **byte**: 你 arrives as `e4 bd a0`, three keys.
+- `${q%?}` under a UTF-8 locale strips a whole **character** on 3.2 (你好 → `e4 bd a0`), so
+  the F10 backspace needs no byte-repair fallback.
+- One `nc -U -w1` round trip against a peer that keeps the socket open costs **~1.02 s**,
+  not the ~10 ms the core measures with `head -1` (F19).
+- `printf '%-8s'` pads to eight **bytes**, not eight characters (F11).
 
-**The `set -e` family — user-facing crashes, fix first.** All three are the same trap
-(§28): a non-zero status reaching `set -e` from a place that reads like an expression, not
-a command.
-
-| ID | Site | Mechanism | Direction |
-|----|------|-----------|-----------|
-| F1 | `toggle_pause` | `((CURRENT_PLAY_PAUSED = 1 - CURRENT_PLAY_PAUSED))` — pause (0→1) is status 0, **unpause (1→0) is status 1**, and a bare `((…))` statement aborts. The file documents this exact trap twice elsewhere (`char_w`, the banner's `b_fixed`) and missed this site. | assignment form |
-| F2 | `play_selected`, both call sites (main loop + `filter_live`) | returns 1 when `yt-play -d -j` fails or the envelope lacks `id`/`sock`. A function returning non-zero from a case arm is **not** exempt from `set -e`. Because `stop_current_playback` already ran, a failed Enter = previous track stopped **and** the whole TUI gone, silently (stderr is `/dev/null`'d). | guard both call sites; show the envelope's `reason` (§14 taxonomy) in the same "press any key" style as the `n`/`m`/`o` failures; keep `return 1` as the contract |
-| F17 | `send_mpv_ipc` | `[[ -n sock && -S sock ]] \|\| return 1` — if the socket *file* vanishes while the player lives (e.g. the core reaps after a concurrent stop), this returns 1 as the **last** command of `toggle_pause` / `seek_relative` / `adjust_volume`, so the function returns 1 → case arm → abort. Masked today only because F1 dies first. | `return 0`: fire-and-forget is already this function's contract, its failure already silent |
+**The `set -e` family — fixed.** All three were the same trap (§28): a non-zero status
+reaching `set -e` from a place that reads like an expression, not a command. See the closed
+list at the end of this section. What remains of F2 is the *reporting* half — `play_selected`
+still returns 1 silently, so a failed Enter is now a survivable no-op with no message. The
+message should be shown in the same "press any key" style as the `n`/`m`/`o` failures, which
+is why it is batched with F7. **Correction:** it cannot come from the envelope's `reason`.
+The §14 taxonomy belongs to the *blocking* play path; for a synchronous `-d` failure the core
+`die`s with prose on **stderr** and emits nothing on stdout (verified: `yt-play -d -j -f ascii
+-- <url>` → rc 1, empty stdout). yt-tui must capture that stderr, the way `fetch_json`
+already does for search.
 
 Audited clear in the same pass: every other case-arm function returns 0 on all paths
 (`move_selection`, `cycle_mode`, `cycle_sort`, `new_search`, `more_results`, `filter_live`,
@@ -1588,11 +1600,10 @@ used in command substitution.
 
 | ID | Sev | Finding |
 |----|-----|---------|
-| F3 | high | **A dead player leaves a stale banner forever.** `send_mpv_ipc` swallows every failure, `mpv_get_prop` returns empty on a dead socket, and nothing re-checks the player: a track that ends (or an mpv crash) leaves the list banner showing the old title, the card showing `--:--` against a stale title, and Space flipping a local paused flag with no IPC peer. The core already defines liveness as "process group alive" (§9.3 `reap_dead_players`), and the `-d` envelope's `.pid` is the **wrapper's** pid, which blocks on mpv — so wrapper alive ⇔ still playing, and `kill -0` on it is the same truth for one builtin and no fork. One poll per loop iteration (per keypress in list view, per 1s tick in card/mini) clears the state into the empty views that already exist. |
-| F5 | high | **Volume over the raw socket escapes the 0–100 contract.** `9`/`0` send `add volume ±5` straight to mpv, bypassing the core's `--set-volume` validation; mpv's own ceiling is 130, so holding `0` reaches a value the rest of the suite's vocabulary says cannot exist (§9.3). Read-modify-set with a clamp costs one extra ~10ms round trip per keypress — a key handler, not the redraw path. |
-| F6 | med | **`nc` is never `require_cmd`'d** — only `jq` is, though the entire IPC surface (pause, seek, volume, every time readout) depends on it. The start-up contract already refuses to run without its tools. |
-| F9 | med | **The filter's `?)` catch-all swallows Tab into the query.** Swallowing `q`/`s`/`9`/`0`/`l` mid-filter is deliberate modality ("type to narrow, Esc clears") and stays; Tab is a control character that can never be part of a query, so it needs its own no-op arm. `?` also cannot match a multibyte character, which is F10. |
-| F10 | med | **CJK typed into the filter or the new-search prompt arrives byte-split** — see §28. Both readers need one shared UTF-8 assembly helper off the lead byte, with the continuation reads on a timeout so a lone lead byte cannot stall the once-a-second card/mini tick. Backspace then has to be verified to strip a *character*, not a byte. |
+| F3 | high | **A dead player leaves a stale banner forever.** `send_mpv_ipc` swallows every failure, `mpv_get_prop` returns empty on a dead socket, and nothing re-checks the player: a track that ends (or an mpv crash) leaves the list banner showing the old title, the card showing `--:--` against a stale title, and Space flipping a local paused flag with no IPC peer. The core already defines liveness as "process group alive" (§9.3 `reap_dead_players`), and the `-d` envelope's `.pid` is the **wrapper's** pid, which blocks on mpv — so wrapper alive ⇔ still playing, and `kill -0` on it is the same truth for one builtin and no fork. Two call sites, not one: the main loop *and* `filter_live`'s own key loop, which never returns to the main loop while `/` is open. An **empty** pid must mean "unknown, assume alive" — `play_selected` requires only id and sock, so clearing on an absent pid would blank a healthy player's chrome. |
+| F5 | high | **Volume over the raw socket escapes the 0–100 contract.** `9`/`0` send `add volume ±5` straight to mpv, bypassing the core's `--set-volume` validation; mpv's own ceiling is 130, so holding `0` reaches a value the rest of the suite's vocabulary says cannot exist (§9.3). Read-modify-set with a clamp costs one extra round trip per keypress — which is **~1 s at today's `nc` shape**, not the ~10 ms first recorded here (that figure is the core's, and it only holds because `live_volume` pipes through `head -1`; see F19). F5 therefore lands *after* F19, never before it. |
+| F9 | med | **The filter's `?)` catch-all cannot match a multibyte character** — the Tab half is fixed (its own no-op arm); widening `?)` to `*)` belongs with F10, which is what makes the widening safe. Swallowing `q`/`s`/`9`/`0`/`l` mid-filter stays: deliberate modality ("type to narrow, Esc clears"). |
+| F10 | med | **CJK typed into the filter or the new-search prompt arrives byte-split** — see §28. Both readers need one shared UTF-8 assembly helper off the lead byte, with the continuation reads on a timeout so a lone lead byte cannot stall the once-a-second card/mini tick. Backspace is confirmed to strip a whole character on 3.2, so no repair path is needed — but its `\b \b` erase is one cell and a CJK glyph occupies two. **Classify the lead byte by table membership, the way `char_w` does:** `LC_ALL=C [[ … ]]` is not valid bash (an assignment prefix needs a simple command; `[[` is a reserved word), so it silently answers under the wrong collation, and a `( LC_ALL=C … )` subshell would fork per keypress. |
 
 **Shape — duplication and unfinished rules.**
 
@@ -1600,27 +1611,83 @@ used in command substitution.
 |----|-----|---------|
 | F7 | med | The "no results / error / press any key" block is copy-pasted in `new_search`, `more_results` and `cycle_sort`, **and has already drifted in wording** — the standard signal that it wants to be one function. Each caller restores its own mutated variable before calling, as today. |
 | F8 | low | `read_query_input` returns 2 on Esc and 1 on EOF; its only caller treats both as cancel. The distinction is dead — collapse to 0/1 as part of the F10 rewrite. |
-| F11 | low | **The one-language-per-run rule stops at the list hints.** `Playing`/`Paused`, `NOW PLAYING FOCUS`, `MINI PLAYER`, and the card's `Title:`/`Channel:`/`Time:`/`Tuned:`/`Mode:`/`Status:` are hardcoded English inside a bilingual chrome (§11 — help text and errors stay English *by design*; these are chrome). They want `S_*` entries in both branches of `set_ui_lang`. **This cannot be a pure string swap:** the card's one-line time/status row pads its label with `%-8s`, which is 8 *characters*, so a 3-character CJK label ("时间:") renders 11 cells while the fit estimate assumes 8 — the row would under-estimate and wrap mid-line. The estimate has to measure what is actually printed, and English values must reproduce today's numbers exactly. |
-| F12 | trivial | Duplicate comment line in `print_hints` — the "one call (the status row wants its fields dim…)" sentence appears twice. |
+| F11 | low | **The one-language-per-run rule stops at the list hints.** `Playing`/`Paused`, `NOW PLAYING FOCUS`, `MINI PLAYER`, and the card's `Title:`/`Channel:`/`Time:`/`Tuned:`/`Mode:`/`Status:` are hardcoded English inside a bilingual chrome (§11 — help text and errors stay English *by design*; these are chrome). They want `S_*` entries in both branches of `set_ui_lang`. **This cannot be a pure string swap**, for two reasons, and the first was recorded backwards here: bash 3.2's `%-8s` pads to eight **bytes**, not eight characters, so "时间:" (7 bytes) renders **6** cells where the fit estimate assumes 8 — an *over*-estimate, and a `${#label}` correction would err the other way. Drop `%-8s` for a translated label and emit a `disp_w`-measured pad, so the printed width and the estimate are the same number by construction. Second, the card's `wrap_print` calls hardcode a 15-space continuation to sit under a 15-cell first prefix; a shorter CJK label drifts it. Derive both prefixes from the label. English values must reproduce today's numbers exactly. |
 
-**Low pile.**
+**Found in the re-audit — the latency defect.**
 
-| ID | Finding |
-|----|---------|
-| F13 | `fetch_play_times` makes **three** `nc \| jq` round trips per second on the card/mini redraw path (3 forks + 3 sockets per tick), against a codebase whose stated ethos is no forks on a redraw (`repeat_glyph`, `disp_w`). mpv answers one reply per request line, in order, so one connection carrying three `get_property` lines and one `jq -s` pass does it. **The trap:** keep a slot per reply (`map(.data)[]`, never `// empty`) — dropping an early `null` (`time-pos` before playback starts) shifts duration into the position slot. The existing call-site null guards already handle the nulls. |
-| F14 | `m` (more results) resets to page 1 although it **appends** — rows 1..N are unchanged, so the old page and selection stay valid and should be restored (the reflow clamps them if the page count changed). Deliberately **not** applied to `o`: re-sorted rows make the old index point at a different track, so that reset is correct and wants a comment saying so. |
-| F15 | The mini player sizes its progress bar with `${#total_time}`, but `total_time` can be `● LIVE` — non-ASCII, so the byte length under-counts under `YT_AMBIG_WIDE=1` and the bar runs a cell past the right edge. `disp_w` is the rule everywhere else (§11). |
-| F16 | `--volume` / `-m` / `-M` are not validated locally though `is_uint` exists and `-n`/`-p`/`-s`/`-f`/`--color` all are. |
+| ID | Sev | Finding |
+|----|-----|---------|
+| F19 | high | **Every `nc -U -w1` in yt-tui waits the full second.** BSD `nc` never shuts down its write half at stdin EOF, and mpv keeps the connection open, so `nc` blocks in `read()` until the timeout. The core escapes this only because `live_volume` pipes through `head -1` — the "~10 ms measured" note there is about *that* shape. yt-tui has no `head` on either path, so `mpv_get_prop` and `send_mpv_ipc` each cost **~1.02 s** (measured against a socket peer that behaves like mpv). `fetch_play_times` makes three, so a card/mini redraw costs **~3 s** on a view whose tick claims to be one second, and every pause/seek/volume keypress blocks the UI for ~1 s. **Subsumes F13**, which filed the same code as "3 forks per tick, invisible perf". Fix: batch the three `get_property` calls onto one connection *and* read them through a process substitution, breaking on the last reply so the shell never waits for `nc` (measured ~0.01 s; the abandoned `nc` expires on its own). **Correlate on `request_id`**, not on line order — mpv multiplexes async events to every client (the lesson `do_set_volume` already carries); F13's `map(.data)[]` sketch would seat an event where a property belongs. `nc -N` is not available on macOS and `-w0` returns before any reply. |
+
+**Withdrawn — F15 was not a defect.** It read the mini player's `${#total_time}` bar sizing as
+an ambiguous-width bug on the grounds that `total_time` can be `● LIVE`. It cannot: the live
+branch of `fetch_play_times` returns early with `PT_PCT=""`, and `bar_total` is only computed
+inside `if [[ -n "$PT_PCT" ]]`, where every part of the prefix is ASCII (`fmt_sec` /
+`SHORT_DUR`). The `·` separator on that line is likewise live-only, i.e. bar-free. What is
+wrong there is only the comment, which states the conclusion ("all the prefix cells are
+ASCII") without the early-return that makes it true.
 
 **Accepted, not defects** (recorded so they are not re-litigated): the filter swallowing
 `q`/`s`/`9`/`0`/`l` is intentional modality; a failed play in filter mode consuming one
-keystroke on "press any key" matches the `n`/`m`/`o` failure behavior.
+keystroke on "press any key" matches the `n`/`m`/`o` failure behavior. Pid reuse can
+false-positive F3's `kill -0`, exactly as §25 records for the core's own `group_alive` —
+narrowed by the monotonic id, not closed, and not worth a second mechanism in the client.
 
-**Order.** The three `set -e` aborts first — everything else reviews on top of a stable
-base. Then the input layer as one change (F9 + F10 + F8, four sites, one shared helper),
-then the playback boundary (F3, F5), then shape/i18n (F7, F11, F12), then the low pile
-(F13–F16, F6). Each step ends `bash -n` clean, re-runs the two `set -e` repros, and the
-interactive smoke pass in §27.
+**Order — by ROI, not by severity.** The batching below is deliberate: the largest edit in the
+pass (F11) is the only purely cosmetic one. The re-audit moved the IPC work from last to
+second: F13 was ranked as invisible perf on a borrowed ~10 ms figure, and at ~1 s a round trip
+(F19) it is the defect the user actually feels.
+
+1. **The IPC layer** — F19 (subsuming F13), then F5 on top of it. F5 adds a round trip, so it
+   is unaffordable until F19 makes one cheap.
+2. **F3** — the liveness poll; the most visible defect that is not a crash.
+3. **F2's other half + F7** — one shared "message, then press any key" path for a failed play
+   and for the three re-fetch failures, with the play reason read off the core's **stderr**.
+4. **The input layer** — F10 + F8 + F9's `?)`→`*)` widening, one shared UTF-8 helper across
+   four sites. Highest effort, and it touches every keypress, so it does not sit in front of
+   the cheap batches.
+5. **F11** — the cosmetic i18n pass, with its byte-padding layout fix.
+
+(The cheap correctness/UX batch that stood in front of these — F18, F14, F16 — has shipped;
+see the closed list below.)
+
+Each step ends `bash -n` clean, re-runs the two `set -e` repros, and the interactive smoke
+pass in §27. Patch bodies and the three open questions live in the working sketch pad
+`macos/docs/TODO-yt-tui-fixes.md`, which is deleted when this register empties.
+
+**Closed by the batch-1 pass** (one edit, `bash -n` clean, both `set -e` repros green):
+
+- **F1** — `toggle_pause` now assigns (`CURRENT_PLAY_PAUSED=$((1 - …))`) instead of running a
+  bare `((x = 0))`, whose status-1 result killed the script on every *un*pause.
+- **F17** — `send_mpv_ipc` returns 0, not 1, when the socket file is gone: it is the last
+  command of `toggle_pause`/`seek_relative`/`adjust_volume`, and fire-and-forget was already
+  its contract (the `nc` failure below it was always swallowed).
+- **F2, crash half** — both Enter arms are now `play_selected || true`. A failed play is a
+  survivable no-op; the message is still owed (see F2/F7 above).
+
+**Closed by the batch-A pass** (`bash -n` clean, both `set -e` repros green, each finding
+re-verified in a real pty against the pre-edit file — the abort reproduces there and does not
+after):
+
+- **F18** — `wrap_print`'s word loop is now `${words[@]+"${words[@]}"}`, the guard §28 requires
+  and every other array expansion in the file already used. Reproduced first: an emoji-only
+  title cleans to `""` in `build_all_rows`, `read -ra words <<< ""` leaves `words` **unset**,
+  and moving the selection onto that row exited with `words[@]: unbound variable`. It now
+  renders the details rail and metadata line with an empty title.
+- **F14** — `more_results` saves `page_index`/`selected` and restores them after
+  `apply_search_results`. Measured on a 40-result page-2 selection: `m` used to snap back to
+  row 1, and now stays on the row the user was looking at. `cycle_sort` keeps the reset and
+  now carries the comment saying why.
+- **F16** — `-m`, `-M` and `--volume` are validated at startup in the core's own wording,
+  including the core's `-M > -m` cross-check. They were forwarded verbatim, so the core did
+  reject them — but only at the first fetch (as "search failed") or the first Enter (as a play
+  that silently never starts).
+- **F6** — `require_cmd jq nc`.
+- **F9, Tab half** — `$'\t')` no-op arm above the catch-all, so Tab no longer lands a literal
+  tab in the filter query.
+- **F12** — the duplicated `print_hints` sentence is gone. It had *drifted* by then: the theme
+  pass rewrote the first copy to "not key-bold" and left the second saying "not key-yellow",
+  which is the F7 argument in miniature.
 
 **Closed by the list-view rail/details work:** the original audit also carried F4 — play
 metadata re-derived by re-splitting the *display* string, which only parsed correctly
