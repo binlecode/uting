@@ -1099,17 +1099,26 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     the same glyph reads as a badge. Both use `short_dur`, so the envelope's zero-padded
     `06h:10m:58s` never reaches the screen — and neither does a row disagree with its own
     details block, since both render from the same fields rather than from each other.
-  - **The index is ONE fixed-width column, and the selection marker lives inside it.**
+  - **The index is a fixed-width column; the marker gets its own slot in front of it.**
     The prefixes were per-row literals — `> 1. ` when selected, `  1. ` when not — so their
     width was `4 + <digits>` and a page that reached two digits started every 1-digit title
     one cell left of the rows around it. Ragged, in the one column the eye scans *down*.
-    Now one field, `iw = ${#NUM_ENTRIES} + 3` cells (2 indent + digits of the largest index +
-    1 for the dot) plus a single separating space, holds `$n.` right-aligned — or, on the
-    selected row, `>` right-aligned in the same field, so the marker hugs the title exactly
-    where the number would have ended. The width comes from `NUM_ENTRIES`, not from the page,
-    so it does not move as you page; and because it is one number, `row_w` and the CHA rail
-    jump both read it instead of re-deriving the prefix. The selected row drops its number on
-    purpose: an index is only ever typed for a row you are *not* on.
+    Now the number is right-aligned in a fixed sub-field of `iw - 2` cells (digits of the
+    largest index + 1 for the dot), the marker slot in front of it is a constant 2 (`"> "`
+    where an unselected row leaves `"  "`), and one space separates the field from the title:
+    `iw + 1` cells of prefix on every row, `iw = ${#NUM_ENTRIES} + 3`. The width comes from
+    `NUM_ENTRIES`, not from the page, so it does not move as you page; and because it is one
+    number, `row_w` and the CHA rail jump both read it instead of re-deriving the prefix. On a
+    single-digit page the sub-field needs no padding, so the output is byte-identical to the
+    old literals — the field only shows itself once the total crosses into two digits, which
+    is exactly the case it exists for.
+
+    **Every row keeps its number, the selected one included.** A first cut replaced the
+    number with `>` on the selected row, reasoning that you only ever type an index for a row
+    you are *not* on. That reasoning is about the keyboard and the column is not: blanking the
+    number on the row under the cursor removes the one label that says *which* row that is,
+    which is the thing a reader looks for when they want to say where they are. Reverted; the
+    marker got its own slot instead, which is what the fixed sub-field made room for.
   - **The card's body carries no labels.** `Title:` / `Channel:` / `Time:` / `Mode:` /
     `Status:` (and the hint block's `Controls:`) are gone; typography carries the same
     structure — bold title, dim channel, one dim meta row `3:21 / 9:27 (37%) · audio ·
@@ -2082,7 +2091,8 @@ the part of a rig worth keeping.
                 (25 assertions), always ONE meta row, dropping "· mode" at 40 rather
                 than wrapping; list titles start on the SAME column across 1-, 2- and
                 3-digit indexes and selected/unselected rows with the rail still
-                right-flush (9 captures); Tab/p/Esc reach only two views and the card
+                right-flush, and the selected row shows BOTH its marker and its number
+                (9 captures); Tab/p/Esc reach only two views and the card
                 still repaints on its 1 s tick (19 assertions)
                 Narrow terminals: at 100/72/60/46 columns EVERY chrome line fits the
                 width in both views (max measured = the rails/bar themselves) —

@@ -1606,12 +1606,19 @@ display_list_menu() {
         truncate_disp "$S_NO_MATCH $GL_DASH $S_NO_MATCH_KEYS" "$nav_cols"
         printf '%s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
     else
-        # ONE right-aligned index field for every row: "$n." on an unselected row, ">" on the
-        # selected one, both flushed to the same right edge with a single space before the
-        # title. The old prefixes ("> 1. " / "  1. ") were per-row literals, so a page that
-        # reached 2 digits shifted every 1-digit title one cell left of the rows around it —
-        # ragged in the one column the eye scans down. Width: 2 indent + digits of the largest
-        # index + 1 for the dot.
+        # EVERY row carries its number, and the marker gets its own 2-cell slot in front of
+        # it — "> " where an unselected row leaves "  ". The number is not the selection's to
+        # take: it is what the user types to reach a row, and blanking it on the row under the
+        # cursor removes the one label that says which row that is.
+        #
+        # What the field fixes is alignment, not content. The prefixes used to be per-row
+        # literals ("> 1. " / "  1. "), so their width was 4 + <digits> and a page that
+        # reached two digits started every 1-digit title one cell left of the rows around it —
+        # ragged in the one column the eye scans down. Now the number is right-aligned in a
+        # fixed sub-field of iw - 2 cells (digits of the largest index + 1 for the dot), the
+        # marker slot is a constant 2, and one space separates the field from the title, so
+        # iw + 1 cells of prefix on every row whatever the page. Width comes from NUM_ENTRIES,
+        # not from the page, so it does not move as you page.
         iw=$(( ${#NUM_ENTRIES} + 3 ))
         for (( i = start; i <= end && i < NUM_ENTRIES; i++ )); do
             n=$(( i + 1 ))
@@ -1651,16 +1658,14 @@ display_list_menu() {
             # rail into a wrap — the failure mode we want, and one the width layer's
             # over-counting rule already refuses to produce.
             if ((i == selected)); then
-                # Marker in C_MARK (accent), title in bold, rail back to its own dim — the
-                # selected line no longer inherits one hue end-to-end. The number is gone on
-                # this row: ">" says "here" in the column the number would occupy, and the
-                # index is only ever typed for a row you are NOT on.
-                printf '%s%*s%s %s%s%s\033[%dG%s%s%s\n' \
-                    "$C_MARK" "$iw" ">" "$C_RESET" "$C_BOLD" "$disp" "$C_RESET" \
+                # Marker AND number in C_MARK (accent), title in bold, rail back to its own
+                # dim — the selected line no longer inherits one hue end-to-end.
+                printf '%s> %*s%s %s%s%s\033[%dG%s%s%s\n' \
+                    "$C_MARK" $((iw - 2)) "$n." "$C_RESET" "$C_BOLD" "$disp" "$C_RESET" \
                     $((nav_cols - rail_w + 1)) "$C_DIM" "$rail" "$C_RESET"
             else
-                printf '%*s %s%s\033[%dG%s%s\n' \
-                    "$iw" "$n." "$disp" "$C_DIM" $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
+                printf '  %*s %s%s\033[%dG%s%s\n' \
+                    $((iw - 2)) "$n." "$disp" "$C_DIM" $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
             fi
         done
     fi
