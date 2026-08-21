@@ -512,6 +512,28 @@ term_size() {
 cursor_hide() { tput civis 2>/dev/null || true; }
 cursor_show() { tput cnorm 2>/dev/null || true; }
 
+# The terminal driver's own echo is pure interference here: this UI draws every character the
+# user types itself (read_query_input echoes as it assembles, the filter redraws the whole
+# frame), and bash's `read -s` turns the driver's echo off only for the duration of ONE read.
+# Restoring it between reads makes the driver echo whatever is still QUEUED, which a burst
+# always leaves behind — measured, pasting 咖啡 (six bytes at once) at the new-search prompt:
+# the terminal received the last character twice, ours plus the driver's. Pre-batch-E, byte at
+# a time, the same burst sprayed U+FFFD replacement characters across the line; the reason it
+# was never filed is that every multi-byte key was mojibake anyway, so there was nothing legible
+# for the duplicate to spoil. Own it for the whole session and restore it exactly the way the
+# cursor is restored — on every exit path, through the same trap.
+TTY_ECHO_OFF=0
+tty_echo_off() {
+    stty -echo </dev/tty 2>/dev/null && TTY_ECHO_OFF=1
+    return 0
+}
+tty_echo_restore() {
+    ((TTY_ECHO_OFF)) || return 0
+    stty echo </dev/tty 2>/dev/null || true
+    TTY_ECHO_OFF=0
+    return 0
+}
+
 # ── IPC & Playback Controls ─────────────────────────────────────────────────────────────
 # Two rules for every reader below, and one number that is NOT what this file used to say.
 #
@@ -1244,6 +1266,7 @@ stop_current_playback() {
 
 cleanup_on_exit() {
     cursor_show
+    tty_echo_restore
     stop_current_playback
 }
 trap cleanup_on_exit EXIT INT TERM HUP
@@ -2039,12 +2062,68 @@ filter_live() {
             move_selection "$READ_NAV_KEY" ;;
         $'\x7f' | $'\b') query="${query%?}"; apply_filter "$query" ;;
         $'\t') ;;   # Tab is a control character, never part of a query — ignore, not append
-        ?) query="$query$READ_NAV_KEY"; apply_filter "$query" ;;
-        *) ;;
+        # An escape sequence the arms above did not claim (PageUp `[5~`, F1 `OP`, Home, a
+        # modified arrow `[1;5A`) is not text the user typed, and appending its bytes would put
+        # `[5~` in the query. The introducer alone IS text, though — a sequence always carries
+        # something after it — so this matches `[`/`O` followed by at least one more character
+        # and a bare `[` or `O` falls through to be appended, exactly as today.
+        "["?* | "O"?*) ;;
+        # Widened from `?)`, which matched a single BYTE and so could never match a whole CJK
+        # character now that utf8_complete assembles one (F9's other half; the widening is only
+        # safe because of that assembly, which is why the two shipped together).
+        *) query="$query$READ_NAV_KEY"; apply_filter "$query" ;;
         esac
     done
     FILTER_MODE=0
     apply_filter ""
+}
+
+# ── UTF-8 input assembly ────────────────────────────────────────────────────────────────
+# bash 3.2's `read -rsn1` delivers one BYTE, not one character (verified: 你 arrives as
+# e4 bd a0). Both readers below used to treat each byte as a key, so a CJK character typed at
+# the filter or the new-search prompt became 2-3 garbage keys — the filter matched nothing and
+# the prompt echoed mojibake.
+#
+# A UTF-8 lead byte announces how many continuation bytes follow, so one table lookup per
+# keypress is enough: C2-DF -> 1, E0-EF -> 2, F0-F4 -> 3. Built once with cw_range and tested
+# by MEMBERSHIP, the way char_w tests its cell tables — not by range comparison. Two idioms
+# that look like they would work do not: `LC_ALL=C [[ … ]]` is not valid bash (an assignment
+# prefix applies to a simple command, and [[ is a reserved word, so bash tries to run the raw
+# byte as a command name and the test silently answers under the wrong collation), and a
+# ( LC_ALL=C … ) subshell would fork on every keypress and could not set a global anyway.
+# Verified on this machine's 3.2.57 (tmp/e-probe.sh): cw_range with an EMPTY prefix does build
+# lone 0x80-0xFF bytes, and the membership test compares bytes even though the haystack is
+# invalid UTF-8 — every lead byte C2-F4 lands in exactly one class, and continuation bytes,
+# 0xC1, 0xF5-0xFF and ASCII land in none.
+CW_LEAD2=""; CW_LEAD3=""; CW_LEAD4=""
+init_lead_tables() {
+    cw_range '' 194 223; CW_LEAD2="$CW_RANGE"    # C2..DF -> 1 continuation byte
+    cw_range '' 224 239; CW_LEAD3="$CW_RANGE"    # E0..EF -> 2
+    cw_range '' 240 244; CW_LEAD4="$CW_RANGE"    # F0..F4 -> 3
+}
+init_lead_tables
+
+# Assemble one whole UTF-8 character from its lead byte in $1, through CHAR_IN. ASCII and any
+# byte that is not a lead byte pass through untouched — an invalid byte is one "character" here,
+# which is also how bash's own ${q%?} treats it, so backspace can still take it back off.
+# The continuation reads TIME OUT rather than blocking: a lone lead byte (a torn paste, a
+# terminal that drops bytes) must not wedge the card's once-a-second tick behind a read that
+# never completes. An incomplete sequence is passed through as-is for the same reason a discard
+# would be worse — it would eat a keypress silently, and the main loop's catch-all already
+# ignores anything it cannot use.
+CHAR_IN=""
+utf8_complete() {
+    CHAR_IN="$1"
+    local extra=0 b
+    if   [[ "$CW_LEAD2" == *"$1"* ]]; then extra=1
+    elif [[ "$CW_LEAD3" == *"$1"* ]]; then extra=2
+    elif [[ "$CW_LEAD4" == *"$1"* ]]; then extra=3
+    fi
+    while ((extra > 0)); do
+        IFS= read -rsn1 -t 1 b || break
+        CHAR_IN+="$b"
+        extra=$((extra - 1))
+    done
 }
 
 # ── Key Input Readers ───────────────────────────────────────────────────────────────────
@@ -2060,7 +2139,10 @@ read_nav_input() {
         return 1
     fi
     if [[ "$input" != $'\x1b' ]]; then
-        READ_NAV_KEY="$input"
+        # One byte is not one key: finish the character before handing it up. The ESC/arrow
+        # decoding below is untouched — those sequences are all ASCII.
+        utf8_complete "$input"
+        READ_NAV_KEY="$CHAR_IN"
         return 0
     fi
     if ! IFS= read -rsn1 -t 1 next; then
@@ -2083,15 +2165,31 @@ read_nav_input() {
 }
 
 read_query_input() {
-    local char="" query=""
+    local b="" query="" gone rest i
     cursor_show
     while true; do
-        IFS= read -rsn1 char || return 1
-        case "$char" in
+        IFS= read -rsn1 b || return 1
+        utf8_complete "$b"
+        case "$CHAR_IN" in
         "" | $'\n' | $'\r') printf '\n'; QUERY_INPUT="$query"; return 0 ;;
-        $'\x1b') printf '\n'; return 2 ;;
-        $'\x7f' | $'\b') [[ -n "$query" ]] && { query=${query%?}; printf '\b \b'; } ;;
-        *) query+="$char"; printf '%s' "$char" ;;
+        # One cancel code, not two. Esc used to return 2 and EOF 1, and the only caller
+        # (new_search) does `read_query_input || return 0` — both always meant cancel, so the
+        # distinction was dead weight that read like a promise.
+        $'\x1b') printf '\n'; return 1 ;;
+        $'\x7f' | $'\b')
+            if [[ -n "$query" ]]; then
+                # ${query%?} strips a whole CHARACTER on 3.2 under a UTF-8 locale (verified with
+                # 你好), so the query itself needs no byte repair. The ECHO does: `\b \b`
+                # erases exactly one cell and a CJK glyph occupies two, so measure what was
+                # removed and erase that many. A zero-width character erases nothing, which is
+                # also right — it drew nothing.
+                rest=${query%?}
+                gone=${query#"$rest"}
+                query="$rest"
+                disp_w "$gone"
+                for ((i = 0; i < DISP_W; i++)); do printf '\b \b'; done
+            fi ;;
+        *) query+="$CHAR_IN"; printf '%s' "$CHAR_IN" ;;
         esac
     done
 }
@@ -2138,6 +2236,10 @@ if ((rc != 0)); then
     die "${SEARCH_ERR:-search failed}"
 fi
 apply_search_results
+
+# From here on every keystroke belongs to the UI, so take the driver's echo out of the way.
+# After the trap is installed, never before: the restore has to be reachable from every exit.
+tty_echo_off
 
 # ── Menu loop ─────────────────────────────────────────────────────────────────────────
 while true; do

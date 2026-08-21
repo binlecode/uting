@@ -827,6 +827,21 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     only id and sock), so it leaves the chrome alone. Pid reuse can false-positive it, exactly
     as §25 records for the core's own `group_alive`. The clear is silent: the empty states
     already say it, and in list view it lands on the next keypress because that read blocks.
+  - **The TUI owns the terminal's echo, and every typed character is assembled before it is
+    a key.** `read -rsn1` hands back one BYTE on bash 3.2, so a CJK character typed at the
+    filter or the new-search prompt used to arrive as two or three separate keypresses —
+    the filter matched nothing, the prompt echoed mojibake. `utf8_complete` finishes the
+    character off its lead byte (classified by table membership, §28) before either reader
+    calls it a key, with the continuation reads on a timeout so a torn sequence cannot wedge
+    the card's once-a-second tick. Backspace then works in characters, not bytes: `${q%?}`
+    already strips a whole one on 3.2, but the `\b \b` erase is one CELL and a CJK glyph
+    occupies two, so the removed character is measured with `disp_w` and that many cells are
+    erased. And the driver's own echo is off for the whole session (`stty -echo`, restored
+    through the same trap as the cursor): `read -s` suppresses it per read only, so between
+    reads the driver echoes whatever a burst left queued — on top of the echo this UI already
+    draws itself. The filter's catch-all had to widen from `?)` (one byte, so never a whole
+    CJK character) to `*)`, which is exactly why the two shipped together — and it stops short
+    of escape sequences the arrow arms did not claim, or PageUp would type `[5~` into the query.
   - **Terminal size comes from `stty size </dev/tty`, not `$(tput cols)`.** Inside command
     substitution ncurses can miss the window-size ioctl and answer with terminfo's default
     80x24 — measured: a 60-column pane reported 80, so the card drew 80-wide rails and every
@@ -1575,14 +1590,16 @@ first; gate deletions by grep so no dangling reference survives.
 ### 25.1 Open defect register — `yt-tui` hardening pass
 
 Audited against `shell-scripts/yt-tui`. **Batch 1 (the one-line edits), batch A (the cheap
-correctness/UX edits), batch B (the IPC layer), batch C (the liveness poll) and batch D (the
-failure reporters) are fixed; the rest is not** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
+correctness/UX edits), batch B (the IPC layer), batch C (the liveness poll), batch D (the
+failure reporters) and batch E (the input layer) are fixed; only the i18n pass is not** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
 because the findings are statements about *this* design's seams, and each one is only
 actionable next to the section it sits in. The open rows below have since been re-audited
 against the code and re-measured on the machine's own bash 3.2.57. **Seven of them asserted
-something false** — F2's reason source, F5's round-trip cost, F10's byte-ordering trick,
-F11's padding unit, F13's positional reply read, the whole of F15, and then F19's own
-replacement figure, which was measured against a probe rather than against mpv — so the
+something false** — F2's reason source, F5's round-trip cost, F10's byte-ordering trick (and
+its replacement, table membership over lone bytes, was measured before it was written rather
+than assumed a second time), F11's padding unit, F13's positional reply read, the whole of F15,
+and then F19's own replacement figure, which was measured against a probe rather than against
+mpv — so the
 corrections are recorded inline rather than quietly swapped: each of those was a premise a fix
 would have been built on. The F19 round is the sharpest of them: a wrong number was found by
 re-measuring, replaced with another wrong number from a rig that did not behave like the
@@ -1618,18 +1635,14 @@ Audited clear in the same pass: every other case-arm function returns 0 on all p
 `stop_current_playback`, `apply_filter`); `mpv_get_prop` ends in `|| true` and is only ever
 used in command substitution.
 
-**Call-stack boundary — yt-tui reaching past a seam it already has.**
+**Call-stack boundary — yt-tui reaching past a seam it already has.** Empty: this category is
+closed. Both members shipped — the liveness poll (F3, batch C) and the input layer's byte-split
+readers (F10 + F9, batch E).
+
+**Shape — duplication and unfinished rules.** One left.
 
 | ID | Sev | Finding |
 |----|-----|---------|
-| F9 | med | **The filter's `?)` catch-all cannot match a multibyte character** — the Tab half is fixed (its own no-op arm); widening `?)` to `*)` belongs with F10, which is what makes the widening safe. Swallowing `q`/`s`/`9`/`0`/`l` mid-filter stays: deliberate modality ("type to narrow, Esc clears"). |
-| F10 | med | **CJK typed into the filter or the new-search prompt arrives byte-split** — see §28. Both readers need one shared UTF-8 assembly helper off the lead byte, with the continuation reads on a timeout so a lone lead byte cannot stall the once-a-second card/mini tick. Backspace is confirmed to strip a whole character on 3.2, so no repair path is needed — but its `\b \b` erase is one cell and a CJK glyph occupies two. **Classify the lead byte by table membership, the way `char_w` does:** `LC_ALL=C [[ … ]]` is not valid bash (an assignment prefix needs a simple command; `[[` is a reserved word), so it silently answers under the wrong collation, and a `( LC_ALL=C … )` subshell would fork per keypress. |
-
-**Shape — duplication and unfinished rules.**
-
-| ID | Sev | Finding |
-|----|-----|---------|
-| F8 | low | `read_query_input` returns 2 on Esc and 1 on EOF; its only caller treats both as cancel. The distinction is dead — collapse to 0/1 as part of the F10 rewrite. |
 | F11 | low | **The one-language-per-run rule stops at the list hints.** `Playing`/`Paused`, `NOW PLAYING FOCUS`, `MINI PLAYER`, and the card's `Title:`/`Channel:`/`Time:`/`Tuned:`/`Mode:`/`Status:` are hardcoded English inside a bilingual chrome (§11 — help text and errors stay English *by design*; these are chrome). They want `S_*` entries in both branches of `set_ui_lang`. **This cannot be a pure string swap**, for two reasons, and the first was recorded backwards here: bash 3.2's `%-8s` pads to eight **bytes**, not eight characters, so "时间:" (7 bytes) renders **6** cells where the fit estimate assumes 8 — an *over*-estimate, and a `${#label}` correction would err the other way. Drop `%-8s` for a translated label and emit a `disp_w`-measured pad, so the printed width and the estimate are the same number by construction. Second, the card's `wrap_print` calls hardcode a 15-space continuation to sit under a 15-cell first prefix; a shorter CJK label drifts it. Derive both prefixes from the label. English values must reproduce today's numbers exactly. |
 
 **Withdrawn — F15 was not a defect.** It read the mini player's `${#total_time}` bar sizing as
@@ -1648,18 +1661,16 @@ false-positive the shipped `check_player_alive`'s `kill -0`, exactly as §25 rec
 core's own `group_alive` — narrowed by the monotonic id, not closed, and not worth a second
 mechanism in the client.
 
-**Order — by ROI, not by severity.** The batching below is deliberate: the largest edit in the
-pass (F11) is the only purely cosmetic one.
+**Order — by ROI, not by severity.** One batch left.
 
-1. **The input layer** — F10 + F8 + F9's `?)`→`*)` widening, one shared UTF-8 helper across
-   four sites. Highest effort, and it touches every keypress, so it does not sit in front of
-   the cheap batches.
-2. **F11** — the cosmetic i18n pass, with its byte-padding layout fix.
+1. **F11** — the cosmetic i18n pass, with its byte-padding layout fix. The largest edit in the
+   pass and the only purely cosmetic one, which is why it goes last.
 
-(Four batches stood in front of these and have shipped: the cheap correctness/UX edits — F18,
+(Five batches stood in front of it and have shipped: the cheap correctness/UX edits — F18,
 F14, F16 — the IPC layer — F19, F13, F5, which the re-audit had promoted from last to first
 once a round trip turned out to cost a second rather than the borrowed ~10 ms — the liveness
-poll, F3, and the failure reporters, F2b + F7. See the closed lists below.)
+poll, F3, the failure reporters, F2b + F7, and the input layer, F10 + F8 + F9. See the closed
+lists below.)
 
 Each step ends `bash -n` clean, re-runs the `set -e` repros (the third one drives the IPC
 readers against a live peer, a stale socket and no socket), and the interactive smoke pass in
@@ -1792,6 +1803,52 @@ with 23 assertions, run three times for flake):
   the rig. Its `want` assertions poll rather than sleep: the reporters print below a
   full-height frame, so the pane scrolls and the header is briefly off-screen until the next
   `display_menu` lands — a fixed sleep there was measurably flaky.
+
+**Closed by the batch-E pass — the input layer** (`bash -n` clean, no new `shellcheck`
+findings, every earlier rig still green, plus a unit test over the real function bodies and two
+new tmux rigs; the premise was measured before a line was written, `tmp/e-probe.sh`):
+
+- **F10** — `utf8_complete` finishes a character off its lead byte and both readers go through
+  it, so a CJK character typed at the filter or the new-search prompt is one key instead of two
+  or three garbage ones. The lead-byte classes are built once with `cw_range ''` and tested by
+  membership, the way `char_w` tests its cell tables. **The premise the plan flagged as
+  unsettled held:** `cw_range` with an EMPTY prefix does build lone 0x80–0xFF bytes on 3.2.57,
+  and `[[ "$CLASS" == *"$byte"* ]]` compares bytes even though the haystack is invalid UTF-8 —
+  every lead byte C2–F4 lands in exactly one class, and continuation bytes, 0xC1, 0xF5–0xFF and
+  ASCII land in none. The `printf -v n "%d" "'$b"` fallback was not needed. Continuation reads
+  time out, so a torn sequence cannot wedge the card's 1 s tick; an incomplete sequence passes
+  through rather than being discarded, because a discard would silently eat a keypress and the
+  catch-alls already ignore what they cannot use. Backspace's echo now erases the number of
+  cells `disp_w` measures, not one — a CJK glyph is two.
+- **F8** — `read_query_input` returns 0/1. The Esc-vs-EOF distinction (2 vs 1) was never read
+  by its one caller.
+- **F9** — the filter's catch-all is widened from `?)`, which matched one BYTE and so could
+  never match an assembled character. **Deviation from the plan, and the reason for it:** a bare
+  `*)` would have made every escape sequence the arrow arms did not claim into query text —
+  PageUp would have typed `[5~`, F1 `OP`, a modified arrow `[1;5A`. An `"["?* | "O"?*)` arm
+  above it drops those; the introducer alone still falls through and is appended, exactly as
+  before, because a sequence always carries something after it.
+- **Found while testing, fixed here: the terminal driver was echoing on top of us.** `read -s`
+  turns the driver's echo off for the duration of ONE read and restores it after, so between
+  reads the driver echoes whatever is still queued — which any burst leaves behind. Measured by
+  pasting 咖啡 as six bytes at the new-search prompt: the terminal received the last character
+  **twice**, ours plus the driver's (`e5 92 96 e5 95 a1 e5 95 a1` for a query that was correctly
+  `咖啡` internally). This is **not new** — the pre-batch-E byte-at-a-time reader sprayed U+FFFD
+  across the line on the same burst — it was simply invisible while every multi-byte key was
+  mojibake anyway. A UI that draws its own input has no use for the driver's echo, so `stty
+  -echo` now covers the whole session and is restored through the same trap as the cursor
+  (`tmp/e-echo-test.sh` asserts the restore on both exit paths, because a yt-tui that exits
+  without putting `echo` back leaves the user typing blind in their shell).
+- **A harness lesson, recorded because it produced a false failure first.** The signal-path test
+  reported the tty left at `-echo` when nothing was wrong: the harness blocked in `sleep`, a
+  CHILD process, and bash defers a trap until the current command finishes. The TUI blocks in
+  `read`, a builtin a signal interrupts, so the harness had to block the same way to be
+  measuring the same thing. Same family as the batch-B probe that never closed its connection:
+  a harness that differs from the program in one detail measures that detail.
+- The other rig lesson: `wait_for "Navigation"` is not proof that the filter was left, because
+  the menu is drawn *during* filtering too — and sending the next key too early let
+  `read_nav_input`'s ESC continuation read swallow it as the sequence's second byte. Wait for
+  the filter's own prompt to go.
 
 **Closed by the list-view rail/details work:** the original audit also carried F4 — play
 metadata re-derived by re-splitting the *display* string, which only parsed correctly
@@ -1946,9 +2003,26 @@ Rules for anyone editing these scripts:
    read -rsn1 = one BYTE: not one character, on 3.2. A CJK character typed at a prompt
                           arrives as 2-3 separate "keys" (verified: 你 → e4 bd a0), so
                           any reader that accumulates keypresses into text has to
-                          reassemble the UTF-8 sequence from its lead byte. Byte-range
-                          comparisons for that need LC_ALL=C: [[ ]] in a UTF-8 locale
-                          collates by codepoint, which misorders raw bytes.
+                          reassemble the UTF-8 sequence from its lead byte (yt-tui's
+                          utf8_complete). Classify the lead byte by TABLE MEMBERSHIP,
+                          the way char_w does — NOT by byte-range comparison:
+                            `LC_ALL=C [[ … ]]`  is not valid bash at all. An assignment
+                              prefix applies to a simple command and [[ is a reserved
+                              word, so bash tries to run the raw byte as a command name;
+                              the test never runs under C collation and answers wrong.
+                            `( LC_ALL=C … )`    is correct but forks per keypress and
+                              cannot set a global.
+                          Build the classes once with cw_range '' <lo> <hi> and test with
+                          [[ "$CLASS" == *"$byte"* ]] — verified byte-exact on 3.2.57 even
+                          though the haystack is invalid UTF-8 (tmp/e-probe.sh).
+   read -s is per-read:   it turns the terminal driver's echo off for the duration of ONE
+                          read and restores it after. Between reads the driver echoes
+                          whatever is still QUEUED, which any burst (a paste, a fast
+                          multi-byte character) leaves behind — measured: pasting 咖啡 at
+                          a prompt echoed the last character twice, and byte-at-a-time it
+                          sprayed U+FFFD. A UI that draws its own input must own the echo
+                          for the whole session (stty -echo) and restore it from the same
+                          trap that restores the cursor.
    Verify:                run the empty-argument paths under /bin/bash explicitly —
                           this class is a runtime bash-version behavior, so `bash -n`
                           and shellcheck do NOT catch it; only executing on 3.2 does.
