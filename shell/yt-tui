@@ -513,21 +513,62 @@ cursor_hide() { tput civis 2>/dev/null || true; }
 cursor_show() { tput cnorm 2>/dev/null || true; }
 
 # ── IPC & Playback Controls ─────────────────────────────────────────────────────────────
+# Two rules for every reader below, and one number that is NOT what this file used to say.
+#
+# 1. Correlate on request_id, never on line order. mpv multiplexes ASYNC EVENTS to every
+#    client, interleaved with replies, so a positional read can seat an event where a
+#    property belongs (the core learned this in do_set_volume). This is what makes asking
+#    for three properties on ONE connection safe, which is why fetch_play_times opens one
+#    socket per tick instead of three.
+# 2. Do not WAIT for nc. Each reader runs it inside a process substitution and breaks on
+#    the last reply it wants; `seen` bounds the loop so a chatty player cannot hold the
+#    redraw open. A HEALTHY mpv closes as soon as nc half-closes, so this buys ~10 ms per
+#    tick (0.026s -> 0.017s for the three properties, measured on a live player). A WEDGED
+#    one never closes, and there `nc -U -w1` charges the full second per call — that is the
+#    case this shape actually rescues (3.12s -> 0.07s against a peer that never closes).
+#
+# The number: this used to claim ~1 s per round trip against any mpv, and it is wrong. It
+# was measured against a probe that never closes the connection; real mpv answers in
+# ~0.016 s. §25.1 keeps the correction.
 send_mpv_ipc() {
-    local cmd="$1"
+    # $1 is the command ARRAY body ("[\"cycle\",\"pause\"]"), not a finished object: this
+    # function appends the request_id it then waits for, and the call sites lose a layer of
+    # hand-escaped quotes.
+    local body="$1" rid seen=0
     # return 0, not 1, on a missing socket: fire-and-forget is this function's contract (the
     # nc failure below is already swallowed), and it is the LAST command of toggle_pause /
     # seek_relative / adjust_volume — a 1 here becomes the function's status, reaches the
     # case arm, and set -e kills the TUI on a keypress whose effect is optional anyway.
     [[ -n "$CURRENT_PLAY_SOCK" && -S "$CURRENT_PLAY_SOCK" ]] || return 0
-    printf '%s\n' "$cmd" | nc -U -w1 "$CURRENT_PLAY_SOCK" >/dev/null 2>&1 || true
+    # Fire-and-forget still, but now with delivery confirmation it never had: the reply is
+    # read only to know it arrived, and a player that answers nothing costs the loop nothing.
+    while IFS= read -r rid; do
+        seen=$((seen + 1))
+        [[ "$rid" == "1" ]] && break
+        ((seen >= 12)) && break
+    done < <(printf '{"command":%s,"request_id":1}\n' "$body" |
+        nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null |
+        jq -r --unbuffered 'select(.request_id != null) | .request_id' 2>/dev/null)
+    return 0
 }
 
-# The read side of the same socket: one property, on stdout, empty on any failure. Callers
-# check the socket once and then ask for several properties (see fetch_play_times).
+# The read side of the same socket: one property, on stdout, empty on any failure (a JSON
+# null included, as the old `.data // empty` did). Callers that want several properties ask
+# for them on ONE connection instead of calling this three times — see fetch_play_times.
 mpv_get_prop() {
-    printf '{"command":["get_property","%s"]}\n' "$1" |
-        nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null | jq -r '.data // empty' 2>/dev/null || true
+    local rid val out="" seen=0
+    [[ -n "$CURRENT_PLAY_SOCK" && -S "$CURRENT_PLAY_SOCK" ]] || return 0
+    while IFS="$US" read -r rid val; do
+        seen=$((seen + 1))
+        [[ "$rid" == "1" ]] && { out="$val"; break; }
+        ((seen >= 12)) && break
+    done < <(printf '{"command":["get_property","%s"],"request_id":1}\n' "$1" |
+        nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null |
+        jq -r --unbuffered 'select(.request_id != null)
+                            | "\(.request_id)\u001f\(.data)"' 2>/dev/null)
+    [[ "$out" == "null" ]] && out=""
+    printf '%s\n' "$out"
+    return 0
 }
 
 fmt_sec() {
@@ -905,10 +946,27 @@ fetch_play_times() {
         return 0
     fi
     [[ -n "$CURRENT_PLAY_SOCK" && -S "$CURRENT_PLAY_SOCK" ]] || return 0
-    local raw_pos raw_dur raw_pct
-    raw_pos=$(mpv_get_prop time-pos)
-    raw_dur=$(mpv_get_prop duration)
-    raw_pct=$(mpv_get_prop percent-pos)
+    # Three properties, ONE connection, correlated by request_id and read without waiting
+    # for nc — see send_mpv_ipc for both rules. `\(.data)` stringifies a
+    # JSON null as "null", so a missing value keeps its slot and the guards below (which
+    # already tested for "null") are unchanged.
+    local raw_pos="null" raw_dur="null" raw_pct="null" rid val got=0 seen=0
+    while IFS="$US" read -r rid val; do
+        seen=$((seen + 1))
+        case "$rid" in
+        1) raw_pos="$val"; got=$((got + 1)) ;;
+        2) raw_dur="$val"; got=$((got + 1)) ;;
+        3) raw_pct="$val"; got=$((got + 1)) ;;
+        *) ;;                                  # an async event; not one of ours
+        esac
+        ((got >= 3 || seen >= 12)) && break
+    done < <(printf '%s\n' \
+        '{"command":["get_property","time-pos"],"request_id":1}' \
+        '{"command":["get_property","duration"],"request_id":2}' \
+        '{"command":["get_property","percent-pos"],"request_id":3}' |
+        nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null |
+        jq -r --unbuffered 'select(.request_id != null)
+                            | "\(.request_id)\u001f\(.data)"' 2>/dev/null)
     [[ -n "$raw_pos" && "$raw_pos" != "null" ]] && PT_CUR=$(fmt_sec "$raw_pos")
     [[ -n "$raw_dur" && "$raw_dur" != "null" ]] && PT_TOTAL=$(fmt_sec "$raw_dur")
     [[ -n "$raw_pct" && "$raw_pct" != "null" ]] && PT_PCT=${raw_pct%.*}
@@ -1105,19 +1163,32 @@ toggle_pause() {
     # script under set -e — the second Space press killed the TUI. Same trap as char_w and
     # the banner's b_fixed, which already carry this note.
     CURRENT_PLAY_PAUSED=$((1 - CURRENT_PLAY_PAUSED))
-    send_mpv_ipc '{"command":["cycle","pause"]}'
+    send_mpv_ipc '["cycle","pause"]'
 }
 
 seek_relative() {
     local offset="$1"
     [[ -n "$CURRENT_PLAY_ID" ]] || return 0
-    send_mpv_ipc "{\"command\":[\"seek\",$offset,\"relative\"]}"
+    send_mpv_ipc "[\"seek\",$offset,\"relative\"]"
 }
 
 adjust_volume() {
-    local delta="$1"
+    local delta="$1" cur target
     [[ -n "$CURRENT_PLAY_ID" ]] || return 0
-    send_mpv_ipc "{\"command\":[\"add\",\"volume\",$delta]}"
+    # Read-modify-set, not `add volume`: the raw add goes straight to mpv, whose own ceiling
+    # is 130, so holding `0` reached a volume the rest of the suite's vocabulary says cannot
+    # exist — the core's --set-volume 0-100 validation does not guard the socket path (§9.3).
+    # Verified: a player launched at --volume 10 and pressed `0` twenty times reads 100 in
+    # `yt-play --status`, where the old `add` left it at 110. The extra round trip costs
+    # ~16 ms against a live player (see send_mpv_ipc).
+    cur=$(mpv_get_prop volume)
+    [[ -n "$cur" ]] || return 0
+    cur=${cur%.*}                                  # mpv reports e.g. 55.000000
+    [[ "$cur" =~ ^[0-9]+$ ]] || return 0
+    target=$((cur + delta))
+    ((target < 0)) && target=0
+    ((target > 100)) && target=100
+    send_mpv_ipc "[\"set_property\",\"volume\",$target]"
 }
 
 stop_current_playback() {
