@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# uting pre-push gate. This is a solo repo whose working branch IS main (54 commits,
+# zero merges), so it does NOT block a direct push to main the way actop's does —
+# blocking the normal workflow would only teach --no-verify. It blocks the two things
+# that are actually unrecoverable, and warns on the rest:
+#
+#   BLOCK  a non-fast-forward (force) push to main, and deleting main
+#   BLOCK  a syntax error in any of the four scripts (the last gate before it is public)
+#   WARN   pushing a v* tag (YT_VERSION in shell/yt must match it)
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+set -euo pipefail
+
+protected="main"
+zero="0000000000000000000000000000000000000000"
+fail=0
+warn_tag=0
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "refs/heads/${protected}" ]; then
+    if [ "$local_sha" = "$zero" ]; then
+      {
+        echo ""
+        echo "BLOCKED: this push would DELETE '${protected}' on the remote."
+      } >&2
+      fail=1
+    elif [ "$remote_sha" != "$zero" ] && ! git merge-base --is-ancestor "$remote_sha" "$local_sha" 2>/dev/null; then
+      {
+        echo ""
+        echo "BLOCKED: non-fast-forward push to '${protected}' (this is a force-push)."
+        echo "Remote ${remote_sha} is not an ancestor of ${local_sha} — pushing would"
+        echo "discard remote history. Rebase onto origin/${protected} and push again:"
+        echo "    git fetch origin && git rebase origin/${protected}"
+      } >&2
+      fail=1
+    fi
+  fi
+  case "$remote_ref" in
+    refs/tags/v*) warn_tag=1 ;;
+  esac
+done
+
+# Syntax gate on the four scripts as they stand in the worktree. Cheap, and it is the
+# check the whole suite's correctness rests on — there is no CI behind this push.
+for f in shell/yt shell/yt-search shell/yt-play shell/yt-tui; do
+  [ -f "$f" ] || continue
+  if ! /bin/bash -n "$f" 2>/tmp/uting-push-syntax.$$; then
+    {
+      echo ""
+      echo "BLOCKED: $f does not parse under /bin/bash -n:"
+      sed 's/^/    /' "/tmp/uting-push-syntax.$$"
+    } >&2
+    fail=1
+  fi
+  rm -f "/tmp/uting-push-syntax.$$"
+done
+
+if [ $warn_tag -eq 1 ]; then
+  ver="$(grep -m1 '^YT_VERSION=' shell/yt 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || true)"
+  {
+    echo ""
+    echo "WARNING: pushing a v* tag. YT_VERSION in shell/yt reads '${ver:-?}' — the tag"
+    echo "must match it, and the version is declared in exactly that one place."
+    echo "Proceeding…"
+  } >&2
+fi
+
+exit $fail

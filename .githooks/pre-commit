@@ -1,0 +1,130 @@
+#!/usr/bin/env bash
+# uting pre-commit gate. Three hard rules, in cheapest-first order:
+#   1. redaction    — no secret/credential/cookie material in staged additions
+#   2. bash 3.2     — no bash-4 feature in a staged shell script (the portability floor)
+#   3. syntax       — bash -n on the STAGED content of every staged shell script
+# Plus: refuse a force-added tmp/ file (scratch is untracked by convention).
+#
+# This hook is itself held to the 3.2 floor: no declare -A, no mapfile, every
+# array expansion guarded.
+#
+# Enable once per clone:  git config core.hooksPath .githooks
+# Bypass (discouraged):   git commit --no-verify
+set -euo pipefail
+
+fail=0
+
+# ---------------------------------------------------------------- 1. redaction
+# Length-anchored so a bare prefix in this file cannot self-match.
+patterns=(
+  'ghp_[A-Za-z0-9]{36}'
+  'gho_[A-Za-z0-9]{36}'
+  'ghu_[A-Za-z0-9]{36}'
+  'ghs_[A-Za-z0-9]{36}'
+  'ghr_[A-Za-z0-9]{36}'
+  'github_pat_[A-Za-z0-9_]{60,}'
+  'AKIA[0-9A-Z]{16}'
+  'AIza[0-9A-Za-z_-]{35}'
+  'xox[baprs]-[A-Za-z0-9-]{10,}'
+  '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+  # uting-specific: a browser cookie export or a captured YouTube session. The
+  # suite reads cookies from a live browser profile and must never carry one.
+  'Netscape HTTP Cookie File'
+  '__Secure-[13]PSID[[:space:]=]'
+  'SAPISID[[:space:]=][A-Za-z0-9_/-]{20,}'
+)
+
+added="$(git diff --cached --no-color -U0 --diff-filter=ACM -- . ':(exclude).githooks/*' \
+  | grep '^+' | grep -v '^+++' || true)"
+
+hits=""
+for p in "${patterns[@]}"; do
+  if printf '%s\n' "$added" | grep -qE -e "$p"; then
+    hits="${hits}  /${p}/"$'\n'
+  fi
+done
+
+if [ -n "$hits" ]; then
+  {
+    echo ""
+    echo "BLOCKED: staged changes appear to contain a secret / credential / cookie export."
+    echo "Matched pattern(s):"
+    printf '%s' "$hits"
+    echo ""
+    echo "Secrets live in ~/env-secrets/ — never in the repo. Cookies are read from a"
+    echo "live browser profile at runtime and are never committed."
+    echo "If this is a false positive: git commit --no-verify"
+  } >&2
+  fail=1
+fi
+
+# ------------------------------------------------------- 2./3. staged shell scripts
+# A staged script is checked as STAGED, not as it sits in the worktree — a partial
+# `git add -p` can stage something that only parses because of unstaged lines.
+staged_sh=""
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+  case "$f" in
+    shell/*) staged_sh="${staged_sh}${f}"$'\n' ;;
+    .githooks/*) staged_sh="${staged_sh}${f}"$'\n' ;;
+    *.sh) staged_sh="${staged_sh}${f}"$'\n' ;;
+  esac
+done <<EOF
+$(git diff --cached --name-only --diff-filter=ACM)
+EOF
+
+# The bash-4 features the suite forbids (docs/DESIGN.md §28). Detected on ADDED
+# lines only, so pre-existing text in an untouched region never blocks a commit.
+bash4='declare -A|mapfile|readarray|\$\{[A-Za-z_][A-Za-z0-9_]*,,|\$\{[A-Za-z_][A-Za-z0-9_]*\^\^|&>>|\|&|\$\{[A-Za-z_][A-Za-z0-9_]*\[-1\]|\$\{!\w+@\}'
+
+while IFS= read -r f; do
+  [ -n "$f" ] || continue
+
+  # The hooks themselves carry the detector pattern and prose about the rule, so they
+  # are exempt from the bash-4 scan (same carve-out the redaction check makes) — they
+  # still get the bash -n gate below.
+  case "$f" in .githooks/*) leak="" ;; *)
+    add="$(git diff --cached --no-color -U0 -- "$f" | grep '^+' | grep -v '^+++' || true)"
+    leak="$(printf '%s\n' "$add" | grep -nE "$bash4" || true)" ;;
+  esac
+  if [ -n "$leak" ]; then
+    {
+      echo ""
+      echo "BLOCKED: $f adds a bash-4 feature. The suite's floor is bash 3.2 (macOS system bash)."
+      printf '%s\n' "$leak" | sed 's/^/    /'
+      echo ""
+      echo "See docs/DESIGN.md §28 for the portable form. If a feature genuinely needs"
+      echo "bash 4+, assert ((BASH_VERSINFO[0] >= 4)) at the top — never hardcode an"
+      echo "interpreter path."
+    } >&2
+    fail=1
+  fi
+
+  if ! git show ":$f" 2>/dev/null | /bin/bash -n 2>/tmp/uting-hook-syntax.$$; then
+    {
+      echo ""
+      echo "BLOCKED: staged $f does not parse under /bin/bash -n:"
+      sed 's/^/    /' "/tmp/uting-hook-syntax.$$"
+    } >&2
+    fail=1
+  fi
+  rm -f "/tmp/uting-hook-syntax.$$"
+done <<EOF
+$staged_sh
+EOF
+
+# ------------------------------------------------------------- tmp/ discipline
+scratch="$(git diff --cached --name-only --diff-filter=ACM | grep -E '(^|/)tmp/' || true)"
+if [ -n "$scratch" ]; then
+  {
+    echo ""
+    echo "BLOCKED: a tmp/ file is staged (force-added past .gitignore):"
+    printf '%s\n' "$scratch" | sed 's/^/    /'
+    echo ""
+    echo "tmp/ is scratch by convention. A rig that has earned a permanent place moves"
+    echo "to tests/ with a docstring saying what it proves."
+  } >&2
+  fail=1
+fi
+
+exit $fail
