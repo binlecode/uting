@@ -14,6 +14,10 @@ set -euo pipefail
 # ==============================================================================
 # 1. CORE LIBRARY & DEFAULT SETTINGS (Merged from yt-common.sh)
 # ==============================================================================
+# THE version of the whole suite, declared once. The wrappers and the TUI do not carry their
+# own copy — they ask the core and print their own name in front of the answer, so a release
+# cannot ship a suite whose four entry points disagree about what they are.
+YT_VERSION="0.1.0"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Path to this script, used to re-exec a detached playback child (see detach_play).
 SELF="${BASH_SOURCE[0]}"
@@ -164,9 +168,11 @@ Options:
   -d          --detach: background playback; manage with --status/--stop/--set-volume
   --color M   auto|always|never (default: auto). No -c short form.
   -h          This help
+  -V          Print the suite version (answered before any dependency check)
 
 Long-only flags: --detach --status --stop --get-url --info --set-volume --id --all
                  --json --json-full --list --color --volume
+                 (--help and --version also have short forms: -h, -V)
 
 Output contracts (full schemas: macos/docs/DESIGN-yt.md §14):
   search    {query, count, results[8 lean fields]}  (-J: raw fields)
@@ -1447,6 +1453,10 @@ while (($#)); do
         normalized_args+=("-h")
         shift
         ;;
+    --version)
+        normalized_args+=("-V")
+        shift
+        ;;
     --color)
         [[ $# -ge 2 ]] || die "--color requires a value"
         COLOR_MODE="$2"
@@ -1533,7 +1543,7 @@ else
     set --
 fi
 
-while getopts ":n:m:M:s:f:S:dljJh" opt; do
+while getopts ":n:m:M:s:f:S:dljJhV" opt; do
     case "$opt" in
     n) NUM_RESULTS="$OPTARG" ;;
     m) MIN_DURATION="$OPTARG" ;;
@@ -1547,6 +1557,12 @@ while getopts ":n:m:M:s:f:S:dljJh" opt; do
     J) OUTPUT_MODE="json_full" ;;
     h)
         usage
+        exit 0
+        ;;
+    # Answered before ANY dependency gate: a version is the first thing a bug report needs,
+    # and needing yt-dlp installed to find out which version you have is backwards.
+    V)
+        printf 'yt %s\n' "$YT_VERSION"
         exit 0
         ;;
     :)

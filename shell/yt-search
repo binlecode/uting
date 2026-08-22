@@ -52,6 +52,7 @@ Options:
   -j       JSON: {query, count, results[]} — 8 lean fields per result
   -J       JSON with full raw yt-dlp fields per result (same envelope)
   -h       This help
+  -V       Print the suite version
 
 Output (JSON, -j): {"query","count","results":[{id,title,url,channel,duration,
                     duration_fmt,view_count,live_status}, ...]}
@@ -77,6 +78,12 @@ while (($#)); do
     case "$1" in
     -h | --help)
         print_usage
+        exit 0
+        ;;
+    -V | --version)
+        # One version, held by the core (§ YT_VERSION). Asking it and printing OUR name in
+        # front is what keeps four entry points from drifting into four version numbers.
+        printf '%s %s\n' "yt-search" "$("$IMPL" --version | awk '{print $NF}')"
         exit 0
         ;;
     -l | --list | -j | --json | -J | --json-full)

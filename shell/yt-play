@@ -71,6 +71,7 @@ Options:
             for playback; {status,...} for --status/--stop/--get-url/--info/--set-volume
   -J        Full raw yt-dlp record (with --info)
   -h        This help
+  -V        Print the suite version
 
 Playback error reason (JSON): forbidden | unavailable | format_unavailable |
                               network | stopped_by_user | unknown | null(ok)
@@ -97,6 +98,12 @@ while (($#)); do
     case "$1" in
     -h | --help)
         print_usage
+        exit 0
+        ;;
+    -V | --version)
+        # One version, held by the core (§ YT_VERSION). Asking it and printing OUR name in
+        # front is what keeps four entry points from drifting into four version numbers.
+        printf '%s %s\n' "yt-play" "$("$IMPL" --version | awk '{print $NF}')"
         exit 0
         ;;
     -j | --json | -J | --json-full | -d | --detach | --all)

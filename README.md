@@ -76,6 +76,10 @@ ln -s "$PWD/shell/yt-play"   ~/bin/ytp
 `yt` itself is reached through a path relative to the wrappers and is deliberately **not** put on
 PATH — it is internal, and `yt` is far too generic a name to occupy.
 
+`ytt --version` (or `-V`) answers before any dependency check, so it works on a machine that has
+not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. All four
+entry points report the same number: it is declared once, in the core.
+
 ## Keys
 
 `↑/↓` select · `←/→` page · `Enter` play · `Tab` focus card · `/` filter · `n` new search ·

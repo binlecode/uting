@@ -72,6 +72,7 @@ Menu options:
                 24-bit color when COLORTERM=truecolor, else ANSI-16 fallbacks.
                 Light/dark picks the theme's own light variant (see YT_BG below).
   -h        This help
+  -V        Print the suite version
 
 Keys (List View):
   ↑/↓      move selection              ←/→  change page
@@ -154,6 +155,9 @@ query=()
 while (($#)); do
     case "$1" in
     -h | --help) print_usage; exit 0 ;;
+    # Same single source as the wrappers: ask a verb, print our own name. yt-tui reaches the
+    # core only through them, so it asks the one it already resolved.
+    -V | --version) printf 'yt-tui %s\n' "$("$YT_SEARCH" --version | awk '{print $NF}')"; exit 0 ;;
     -n)
         [[ $# -ge 2 ]] || die "$1 requires a value"
         RESULT_N="$2"; shift 2 ;;

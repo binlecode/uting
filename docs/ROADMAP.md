@@ -179,9 +179,9 @@ alias 实现）—— 明天早上敲的还是 `ytt`，公开的那个名字是�
 
 | 缺项 | 后果 |
 |---|---|
-| **`LICENSE` 不存在** | 严格说还不是 open source，只是 source available |
-| **测试没进仓库** | `DESIGN-yt.md` §27 明确所有 rig 是 `tmp/` 下不追踪的一次性物件。对自己没问题，对贡献者致命：无法验证改动，也没有 CI |
-| **`--version` 不存在** | bug 报告说不清版本；brew/curl 升级后无法验证装上哪一版 |
+| ~~`LICENSE` 不存在~~ | **已补**（MIT，2026-08-21） |
+| ~~测试没进仓库~~ | **已补** —— `tests/` 四个装置入库（2026-08-21）。原先所有 rig 都是 `tmp/` 下不追踪的一次性物件：对自己没问题，对贡献者致命 |
+| ~~`--version` 不存在~~ | **已补**（2026-08-21）。曾经的后果：bug 报告说不清版本，升级后无法验证装上哪一版 |
 | 无 `CONTRIBUTING` / `CHANGELOG` | 次要 |
 | Linux 实际不可用 | §5 已述 |
 
@@ -286,7 +286,11 @@ alias 实现）—— 明天早上敲的还是 `ytt`，公开的那个名字是�
 **自解析符号链接**定位同伴（原先的 `../../shell-scripts` 跳只在那一套 dotfiles 布局里成立，搬仓
 即暴露）；`env-config` 不再保留副本，`~/bin/{yts,ytp,ytt}` 直接指向本仓。
 
-仍欠 D8 两件：**rig 入库**（连同 §27 的"rig 形状"约定与 pty/pyte 经验）、**`--version`**。
+**D8 三件已齐**：`LICENSE`（MIT）、rig 入库（`tests/` 四个装置，说明写在根 README 的
+`## Tests` 一节 —— 不设 `tests/README.md`，一个仓库一份 README）、`--version`（版本常量
+`YT_VERSION` 只在核心里声明一次，壳与 TUI 问它、打印自己的名字，四个入口不会各说各的；且在
+任何依赖门之前应答 —— 要装齐 yt-dlp 才能知道自己是哪一版是本末倒置）。
+
 公开与否另行决定 —— 仓库先建为 private。
 - README 直说依赖与平台现实（macOS 优先；Linux 需要支持 `nc -U` 的 netcat），并直说 §0 的 non-goals
   —— 省掉一半"为什么没有队列"的 issue。
