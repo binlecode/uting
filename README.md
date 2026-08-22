@@ -82,6 +82,31 @@ PATH — it is internal, and `yt` is far too generic a name to occupy.
 `m` more results · `o` sort · `v` playback mode · `Space` pause · `9/0` volume · `s` stop ·
 `l` language · `q` quit
 
+## Tests
+
+Verification rigs, not a unit-test suite — what this code gets wrong is renderer and protocol
+behaviour, which only a real pty and a real socket can show. Each file's docstring says what it
+proves; run any of them directly.
+
+| Rig | What it is for |
+|---|---|
+| `tests/tui_screen.py` | Drives the TUI in a pty and asserts on the **screen** — a pyte cell grid, after `\033[K` / `\033[J` / CHA have been applied. This is what claims like "pause repaints exactly one row, and no frame blanks the screen" are counted from (`changed_rows`, `ed_count`). |
+| `tests/pty_drive.py` | Asserts on the **stream and its timing** — spinner frames actually arriving, `Starting` → `Playing` flipping with no keypress, the 1 s tick stopping when it should, exit codes on the cancel paths. |
+| `tests/assert_pane.py` | Layout invariants on a captured pane: nothing exceeds the pane width (measured in cells), every row's title starts on the same column, the duration rail is right-flush at exactly the pane width, and the boundary rail is full width in both its static and its live form. |
+| `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that can do what the real one will not do on cue: answer out of order (`--reverse`), report a property as null, interleave async events, walk the clock, and never close its side of the socket. Every IPC rule in the read path exists because of one of these shapes. |
+
+`tui_screen.py` needs `pyte` (`pip install pyte`); nothing else here has dependencies beyond the
+suite's own, and none of it is needed at runtime.
+
+Two things these rigs learned the hard way, both of which cost a wrong green result first:
+
+- **A pty starts at 0×0, and `LINES`/`COLUMNS` do not fix it.** The TUI reads `stty size` through
+  `/dev/tty` on purpose, so without `TIOCSWINSZ` the reflow has no rows to spend and draws a
+  one-row list — whose frames look plausible enough to trust.
+- **Assert on the screen model, not the byte stream.** "Changed exactly one row" is a statement
+  about cells; the byte stream of a correct in-place frame looks nothing like the picture it
+  produces.
+
 ## Documentation
 
 - [`docs/DESIGN.md`](docs/DESIGN.md) — architecture, every non-obvious decision and why, plus the
