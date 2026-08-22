@@ -109,6 +109,15 @@ EOF
 action=""       # "" | status | stop | geturl
 flags=()
 url=()
+# yt-play plays a URL; a bare query belongs to yt-search. Called from BOTH positional
+# paths — the plain one and the one after `--` — because a gate that only guards the
+# spelling without `--` is not a gate: `yt-play -- "some query"` reached the core and
+# SEARCHED, which is the exact bypass D7 removed `yt` from PATH to prevent (§4/§13).
+# Mirrors yt-search's reject_url, which has always re-checked inside its own `--` drain.
+reject_non_url() {
+    echo "yt-play: '$1' is not a URL — to search for it use 'yt-search $1'" >&2
+    exit 1
+}
 while (($#)); do
     case "$1" in
     -h | --help)
@@ -195,6 +204,12 @@ while (($#)); do
     --)
         shift
         while (($#)); do
+            # Same check as the positional arm below: `--` stops FLAG parsing, it does
+            # not stop argument validation.
+            case "$1" in
+            http://* | https://* | www.* | youtube.com/* | youtu.be/*) ;;
+            *) reject_non_url "$1" ;;
+            esac
             url+=("$1")
             shift
         done
@@ -209,8 +224,7 @@ while (($#)); do
         shift
         ;;
     *)
-        echo "yt-play: '$1' is not a URL — to search for it use 'yt-search $1'" >&2
-        exit 1
+        reject_non_url "$1"
         ;;
     esac
 done

@@ -994,7 +994,10 @@ do_status() {
                     '{id, pid, url, mode, volume: ($live // .volume), title, started_at}' \
                     "${LIVE_PLAYER_FILES[$i]}")")
             done
-            printf '%s\n' "${parts[@]}" | jq -s '{status: "players", players: .}'
+            # -sc: one line, like the empty branch below and every other envelope. The
+            # pretty form only ever showed up with a player present, i.e. exactly when a
+            # caller is polling this.
+            printf '%s\n' "${parts[@]}" | jq -sc '{status: "players", players: .}'
         else
             echo '{"status":"players","players":[]}'
         fi
@@ -1183,7 +1186,7 @@ resolve_stream_url() {
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         local status="ok"
         ((rc != 0)) && status="error"
-        printf '%s\n' "$out" | jq -Rn \
+        printf '%s\n' "$out" | jq -Rnc \
             --arg status "$status" --arg url "$url" --arg mode "$PLAYBACK_MODE" --arg format "$fmt" \
             '{status: $status, url: $url, mode: $mode, format: $format, stream_urls: [inputs | select(length > 0)]}'
     else
@@ -1230,10 +1233,10 @@ resolve_info() {
 
     case "$OUTPUT_MODE" in
     json_full)
-        printf '%s\n' "$raw" | jq '.'
+        printf '%s\n' "$raw" | jq -c '.'
         ;;
     json)
-        printf '%s\n' "$raw" | jq --arg df "$duration_fmt" '{
+        printf '%s\n' "$raw" | jq -c --arg df "$duration_fmt" '{
             status: "ok",
             id, title,
             url: .webpage_url,
@@ -1592,11 +1595,16 @@ print_list() {
 # are pure token ballast for a headless caller. OUTPUT_MODE=json_full (-J) keeps
 # every raw field for the rare case fidelity is needed. FILTERED_JSON's own shape is
 # left untouched (print_list still reads it), so we project only here.
+# `jq -c`, both arms: every machine envelope in this suite is ONE line, which is the
+# contract the README and ROADMAP §0/§6.1 state as a differentiator and the lifecycle
+# verbs (`jq -nc`) have always honored. Search and --info were the two paths that never
+# did — 26 lines for `-j -n 3`, 76 for `-J` — so an agent reading "one line of JSON out"
+# got a pretty-printed document from the first verb it ever calls.
 emit_search_json() {
     if [[ "$OUTPUT_MODE" == "json_full" ]]; then
-        printf '%s' "$FILTERED_JSON" | jq --arg q "$QUERY" '{query: $q, count: length, results: .}'
+        printf '%s' "$FILTERED_JSON" | jq -c --arg q "$QUERY" '{query: $q, count: length, results: .}'
     else
-        printf '%s' "$FILTERED_JSON" | jq --arg q "$QUERY" \
+        printf '%s' "$FILTERED_JSON" | jq -c --arg q "$QUERY" \
             '{query: $q, count: length,
               results: map({id, title, url, channel, duration, duration_fmt, view_count, live_status})}'
     fi

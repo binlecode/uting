@@ -1643,6 +1643,16 @@ a cross-flag — this is what makes the two contracts non-overlapping.
    both: emit `<flags> -- <positional>`  (the `--` is FORWARDED, not just consumed)
 ```
 
+**`--` stops FLAG parsing, not argument validation.** Each wrapper re-applies its
+positional check inside its own `--` drain loop, and the reason is that the check is the
+wrapper's whole purpose. `yt-search` always did (`reject_url` runs on every token after
+`--`); `yt-play` did not, so `yt-play -- "some query"` walked past the "not a URL" rejection
+that `yt-play "some query"` gives, reached the core, and ran a SEARCH — printing a prose list
+or, under `-j`, a full search envelope from the verb whose contract says it plays URLs. That
+is the same bypass D7 removed `yt` from PATH to prevent (§4), reappearing *inside* the verb
+that exists to prevent it, and reachable by adding two characters. A gate that only guards
+the spelling without `--` is not a gate.
+
 The core implements the *full* set; the wrapper only restricts which subset each verb
 exposes. **Unified `-j` semantics** work because the wrapper guarantees the operation
 type: `yt-search` guarantees non-URL → core `-j` = SEARCH envelope; `yt-play`
@@ -1750,6 +1760,21 @@ rollup events (`aAppend`, whose only seg is `"\n"`), and inline style markup —
 fall out of the same two filters: cleaned text, then drop the empties. Filtering on the
 cleaned text rather than on `aAppend == 1` is deliberate: it removes every rollup marker
 observed while keeping any `aAppend` event that actually carries words.
+
+**One envelope, one line.** Every `-j` / `-J` payload the suite writes to stdout is a single
+line of JSON — search, `--info`, `--transcript`, `--get-url`, `-d`, `--status`, `--stop`,
+`--set-volume`, and every error shape above. That is what makes the output usable as NDJSON:
+a caller can read one line, parse it, and be done, without a streaming parser or a brace
+counter. It also makes `-J` a *strict superset of `-j`* in shape as well as in fields.
+
+The rule was violated for a long time by the two oldest read verbs. Search emitted 26 lines
+for `-j -n 3` and 76 for `-J`, `--info -j` emitted 16, `--get-url -j` was pretty too, and
+`--status` was compact only while the player list was **empty** — it pretty-printed as soon
+as a player existed, i.e. exactly when something is polling it. Every one of those was a bare
+`jq` where the lifecycle verbs had always used `jq -nc`; the fix was `-c` at five sites
+(`emit_search_json` ×2, `resolve_info`, `resolve_stream_url`, the `--status` `jq -s`). The
+state files under `players/` are *not* covered by this rule and stay pretty — they are an
+on-disk record read by jq, not an envelope.
 
 ## 15. Exit codes, TTY, dependencies
 
@@ -2516,9 +2541,12 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 ## 27. Verification matrix
 
-**No rig is named by path here, on purpose.** Every harness this suite has been verified with
-is a throwaway under a `tmp/` the repo does not track (`.gitignore`: `**/tmp/`), so a cited
-path is a promise the checkout cannot keep — it resolves on exactly one machine, until that
+**No *scratch* rig is named by path here, on purpose.** The exception is the four harnesses
+that earned a permanent home and are committed under `tests/` — `tui_screen.py`,
+`pty_drive.py`, `assert_pane.py`, `mpv_ipc_mock.py` — which the root README describes by name
+because a contributor cannot run what nothing points at. Everything else this suite has been
+verified with is a throwaway under a `tmp/` the repo does not track (`.gitignore`:
+`**/tmp/`), so citing one of those by path is a promise the checkout cannot keep — it resolves on exactly one machine, until that
 machine's scratch directory is cleaned. What is durable is the *shape* of each check, and that
 is what the entries below record: what was driven, how it was observed, and the count of
 assertions that survived. A rig is cheap to rebuild from its description and expensive to trust
@@ -2538,7 +2566,15 @@ the part of a rig worth keeping.
                 -d -f ascii|viz → rejected
    Core       : yt "q" → list (D2); yt (no args) → D3 error; yt <url> prose play;
                 yt -j "q" → envelope; -p rejected; invalid --color rejected
-   Gating     : yt-search rejects -f/--detach/URL; yt-play rejects -n/-s/bare-query
+   Gating     : yt-search rejects -f/--detach/URL; yt-play rejects -n/-s/bare-query —
+                each of those in BOTH spellings, bare and after `--`: `yt-play -- "a query"`,
+                `-j -- "a query"`, `-d -- "a query"`, `--get-url -- "not a url"` and
+                `--transcript -- "a query"` all exit 1 with the "use yt-search" redirect,
+                and `yt-search -- <URL>` still exits 1 with the mirror message
+   Envelopes  : every -j/-J payload is ONE line (§14) — search -j/-J, a zero-result search,
+                --info -j/-J, --get-url -j, -d -j, --status with 0 AND with 2 players,
+                --stop, an ambiguous --set-volume — measured with `| wc -l`, and each still
+                parses with the same fields (jq -e on .query/.count/.results[0], .status)
    Resolve    : yt-play --get-url (prose + -j envelope, no playback)
    Transcript : yt-play --transcript → one line of clean text on stdout, ZERO bytes on
                 stderr; -j → single-line {status,id,url,lang,is_auto,text,segments} with
@@ -2567,7 +2603,12 @@ the part of a rig worth keeping.
                 title a few seconds later; -d -j envelope carries sock+log
                 Detached log: mpv-<id>.log stays ~59 bytes with ZERO growth while
                 playing, and still records a real ytdl_hook ERROR
-                Live volume: yt-tui 9/0 on a --volume 0 player → --status reports the
+                IPC window : --set-volume --id on a JUST-launched player answers
+                {status:"error",reason:"ipc_failed"} with exit 4 until mpv is actually
+                listening — measured at t=3s vs exit 0 from t=6s on a cold URL. That is the
+                taxonomy working (4 = did not take effect), not a defect; a rig that sets a
+                property inside the start-up window reads it as a false red
+   Live volume: yt-tui 9/0 on a --volume 0 player → --status reports the
                 moved value (not the stale launch value); from 98, three 0 presses stop
                 at 100 and never reach mpv's own 130 ceiling
    yt-tui     : (tmux PTY) Enter → background play + banner; Tab → card (live
