@@ -719,19 +719,35 @@ repeat_glyph() {
     GLYPH_RUN="$out"
 }
 
-# The width every view lays out against: the real terminal width, floored at 40 (below that
-# nothing fits, and clamping beats drawing garbage) and optionally capped at <max>. Sets
-# LAYOUT_COLS. All three views carried this clamp trio inline. The cap is deliberately not
-# uniform — the two player cards pass 80 so their rails do not stretch across an ultrawide
-# window, the list view passes nothing and uses the full width for its rows — and passing it
-# as an argument is what makes that asymmetry visible instead of looking like a lost line.
+# The width every view lays out against: the real terminal width, optionally capped at
+# <max>, and floored at 24. Sets LAYOUT_COLS. All three views carried this clamp trio
+# inline. The cap is deliberately not uniform — the two player cards pass 80 so their rails
+# do not stretch across an ultrawide window, the list view passes nothing and uses the full
+# width for its rows — and passing it as an argument is what makes that asymmetry visible
+# instead of looking like a lost line.
+#
+# The FLOOR was 40, and its comment said "below that nothing fits, and clamping beats
+# drawing garbage". Clamping WAS the garbage: laying out for 40 cells in a 30-cell pane
+# wraps every chrome row and every result row, and each extra physical line pushes the
+# header off the top — the one failure the reflow exists to prevent, arriving from a
+# terminal the layout had simply decided not to believe in. Measured on a fresh list, the
+# break was exact: 40 columns clean, 39 and below wrapped. A 30-column pane is one tmux
+# split, not an exotic size.
+#
+# 24, not lower, and the reason is a measurement gap rather than a taste: print_hints emits
+# an item WIDER than the width unbroken (there is nowhere to break one), so a single long
+# field wraps and its dry-run pass reports one line where the printer emits two — chrome
+# the reflow then underspends. "mode=audio (audio-only)" is 23 cells, so 24 is the width at
+# which the widest single field still fits. Below that the clamp is honest: it is the size
+# at which one field of the status row cannot be drawn at all.
+LAYOUT_MIN=24
 LAYOUT_COLS=0
 layout_cols() {
     local max=${1:-0}
     term_size
     LAYOUT_COLS=$TERM_COLS
     ((max > 0 && LAYOUT_COLS > max)) && LAYOUT_COLS=$max
-    ((LAYOUT_COLS < 40)) && LAYOUT_COLS=40
+    ((LAYOUT_COLS < LAYOUT_MIN)) && LAYOUT_COLS=$LAYOUT_MIN
     return 0
 }
 
@@ -1702,21 +1718,39 @@ display_list_menu() {
                 b_tail=" $GL_SEP $PT_CUR / ${PT_TOTAL:-$CURRENT_PLAY_DURATION}"
             fi
         fi
-        local b_hint="" b_fixed=0
+        local b_hint=""
         if ((!nav_ok)); then
             b_hint="  [Tab $S_FOCUS | Space $S_PAUSE | s $S_STOP | 9/0 $S_VOL]"
         fi
-        # Assignment form, not ((b_fixed += DISP_W)): an arithmetic command evaluating to 0
+        # Assignment form, not ((head_w += DISP_W)): an arithmetic command evaluating to 0
         # returns status 1, which `set -e` would take as a failure (see char_w).
-        disp_w "$b_head"; b_fixed=$((b_fixed + DISP_W))
-        disp_w "$b_tail"; b_fixed=$((b_fixed + DISP_W))
+        disp_w "$b_head"; local head_w=$DISP_W
+        disp_w "$b_tail"; local tail_w=$DISP_W
         disp_w "$b_hint"; local hint_w=$DISP_W
-        local title_room=$((nav_cols - b_fixed - hint_w))
+        # The three fields are dropped in VALUE ORDER when the width cannot pay for them
+        # all, the way the footer below reclaims its lines — and for the same reason: a
+        # floor that wins against the width does not save the field, it wraps the row and
+        # spends a line the reflow had already given to a result row. The old floor did
+        # exactly that: `title_room=8` against fixed parts that already filled the pane put
+        # 31 cells on a 30-cell banner, and the header went off the top (measured at 30x24
+        # with a track playing).
+        #
+        # Key tail first: it only exists because the navigation block was dropped, and it is
+        # a copy of that block. Then the POSITION readout — the rail under the chrome band
+        # already carries the same percent, so the row loses a duplicate, not a fact. The
+        # title is last because it is the only field that names what is playing; below that
+        # there is nothing left to give and it takes the pane minus its own label.
+        local title_room=$((nav_cols - head_w - tail_w - hint_w))
         if ((title_room < 12)); then
-            b_hint=""
-            title_room=$((nav_cols - b_fixed))
+            b_hint=""; hint_w=0
+            title_room=$((nav_cols - head_w - tail_w))
         fi
-        ((title_room < 8)) && title_room=8
+        if ((title_room < 8)); then
+            b_tail=""; tail_w=0
+            title_room=$((nav_cols - head_w))
+        fi
+        # No clamp below zero: truncate_disp's contract already covers a budget that
+        # cannot hold anything, and clamping UP to 1 would spend a cell the row has not got.
         truncate_disp "$CURRENT_PLAY_TITLE" "$title_room"
         printf '%s%s %s:%s %s%s%s%s%s%s%s%s%s\033[K\n' \
             "$p_color" "$p_icon" "$p_label" "$C_RESET" \
@@ -2001,22 +2035,31 @@ display_now_playing_card() {
     cursor_hide
     # Reposition cursor to top-left without blanking the screen (eliminates flicker)
     printf '\033[H'
-    printf '%s%s%s%s%s  %s  %s%s%s\033[K\n\033[K\n' \
-        "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$GL_BULLET" \
-        "$C_BOLD" "$S_CARD_HEAD" "$C_RESET"
 
-    # The header names the view the same way the key hint that reaches it does (S_FOCUS,
-    # "focus card" / "专注卡片") — one view, one name, in both languages.
-    # Same accent as the banner, the rails and the marker — one hue per palette, with the
-    # glyph carrying the state (dim accent when paused). See the palette block.
-    play_state_marks "$GL_DOT"
-    local p_status="$PS_ICON $PS_LABEL" p_color="$PS_COLOR"
-
+    # Width first, because the header row below is measured against it. It used to print
+    # before the size was read — the last unmeasured chrome row in either view — and at 28
+    # columns the view name alone ran past the edge and wrapped, costing a second physical
+    # line in the one row that tells the two views apart.
     local cols div
     layout_cols 80
     cols=$LAYOUT_COLS
     card_divider "$cols"
     div="$DIV_STR"
+
+    # The header names the view the same way the key hint that reaches it does (S_FOCUS,
+    # "focus card" / "专注卡片") — one view, one name, in both languages. Elided the way the
+    # list's title row is: measure the fixed brand/bullet prefix, give the name what is left.
+    local c_pre="${GL_NOTE:+$GL_NOTE }$GL_BRAND  $GL_BULLET  "
+    disp_w "$c_pre"
+    truncate_disp "$S_CARD_HEAD" $((cols - DISP_W))
+    printf '%s%s%s%s%s  %s  %s%s%s\033[K\n\033[K\n' \
+        "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$GL_BULLET" \
+        "$C_BOLD" "$TRUNC_TEXT" "$C_RESET"
+
+    # Same accent as the banner, the rails and the marker — one hue per palette, with the
+    # glyph carrying the state (dim accent when paused). See the palette block.
+    play_state_marks "$GL_DOT"
+    local p_status="$PS_ICON $PS_LABEL" p_color="$PS_COLOR"
 
     # The rail carries the ACCENT, not dim: it and the progress rail are the same object in
     # two states — one static, one live — so they share the hue and differ only in glyph. A dim
@@ -2054,8 +2097,12 @@ display_now_playing_card() {
         # glyph too: one state indicator, not two. text_w is cols minus the deepest body
         # indent (4), the only prefix left now that the 8-cell label field and its 3-cell gap
         # are gone — which is also why the title gets ~11 more cells before it wraps.
+        # No floor. It was 25, and under the old 40-column clamp it could never fire
+        # (cols - 4 >= 36), so it was dead code that came alive the moment layout_cols
+        # started believing narrow terminals: at 28 columns it wrapped the title at 25
+        # cells behind a 4-cell indent, i.e. one cell past the pane. layout_cols' own
+        # floor is the guarantee this line needs — cols >= LAYOUT_MIN, so text_w >= 20.
         local text_w=$((cols - 4))
-        ((text_w < 25)) && text_w=25
 
         printf '%s%s%s\033[K\n' "$C_CYAN" "$div" "$C_RESET"
         wrap_print "$CURRENT_PLAY_TITLE" "$text_w" "  ${C_BOLD}" "  "
@@ -2083,13 +2130,30 @@ display_now_playing_card() {
             disp_w "$meta"
             if ((DISP_W + tail_w > cols)); then
                 tw=$((cols - tail_w))
-                ((tw < 8)) && tw=8
-                truncate_disp "$meta" "$tw"
-                meta="$TRUNC_TEXT"
+                # Third and last step of the same degradation: mode went, then the time is
+                # elided, and where even that will not fit the readout goes ENTIRELY. The
+                # floor here used to be 8, which is the shape the banner had too — and it
+                # fails the same way, by winning against the width instead of the field:
+                # at 24 columns "▘ Starting" plus the indent leaves 5 cells and the floor
+                # drew 8, wrapping the one row the card exists for. The status is still
+                # never dropped.
+                if ((tw < 1)); then
+                    meta=""
+                else
+                    truncate_disp "$meta" "$tw"
+                    meta="$TRUNC_TEXT"
+                fi
             fi
         fi
-        printf '    %s%s %s %s%s%s%s\033[K\n' \
-            "$C_DIM" "$meta" "$GL_SEP" "$C_RESET" "$p_color" "$p_status" "$C_RESET"
+        # The separator belongs to the pair, not to the row: with the readout dropped
+        # (narrowest terminals, above) a fixed GL_SEP left the status hanging off a
+        # separator with nothing on its left.
+        if [[ -n "$meta" ]]; then
+            printf '    %s%s %s %s%s%s%s\033[K\n' \
+                "$C_DIM" "$meta" "$GL_SEP" "$C_RESET" "$p_color" "$p_status" "$C_RESET"
+        else
+            printf '    %s%s%s\033[K\n' "$p_color" "$p_status" "$C_RESET"
+        fi
         if [[ -n "$bar_str" ]]; then
             # \033[K on the spacer row too: the card grows by two rows the moment the
             # bar appears (mpv has no time-pos for the first second or so), so an

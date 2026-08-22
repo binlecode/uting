@@ -90,10 +90,14 @@ def main(argv):
         # fails the day the wording is tuned. The last item is structural — the block is packed
         # in order and q is always last.
         if not re.search(r"\bq\s+(quit|退出)", body):
-            # Below ~12 rows the hint block is deliberately dropped so the header and the
-            # results survive; above that its absence means something scrolled off.
-            if len(lines) >= 12:
-                fails.append("navigation hint block missing (scrolled off?)")
+            # Dropped on purpose when the pane cannot pay for it (nav_ok). This was a flat
+            # "len(lines) >= 12", which only held at >= 40 columns — the chrome packs to the
+            # width, so at 30 columns the same hints cost three more lines and the gate
+            # fires in a 14-row pane. Ask instead whether the drop bought anything: a frame
+            # with rows to spare at the bottom dropped the block for nothing.
+            spare = len(lines) - 1 - max([i for i, l in enumerate(lines) if l.strip()] or [-1])
+            if spare > 1:
+                fails.append("navigation hint block missing, %d rows spare" % spare)
             else:
                 notes.append("hint block dropped (short terminal) — expected")
 
@@ -142,8 +146,14 @@ def main(argv):
             notes.append("boundary rail: %s cells" % rw)
 
     elif view == "card":
-        if "NOW PLAYING FOCUS" not in body and "专注卡片" not in body:
-            fails.append("card header missing")
+        # The view name is ELIDED at narrow widths (it is chrome like any other row), so the
+        # old literal match failed on a correct 28-column frame. The header's LAYOUT is what
+        # this rig is about: brand on line 1, blank line under it. A header too long for the
+        # pane wraps into that blank line, which is the defect the literal match was really
+        # catching.
+        head = lines[0] if lines else ""
+        if "yt-tui" not in head or (len(lines) > 1 and lines[1].strip()):
+            fails.append("card header missing or wrapped: %r" % head[:60])
         rails = [l for l in lines if re.match(r"^[─━-]{10,}$", l.strip())]
         widths = sorted(set(w(r.strip()) for r in rails))
         if len(widths) > 1:
