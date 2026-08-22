@@ -15,19 +15,27 @@ set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features (no ${v,,}, no mapfile); guard
 # empty-array expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). §28.
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# Locate the sibling verbs: next to this file when run from shell-scripts/ (or from a bin/
-# that happens to symlink them too), else by the same relative hop the wrappers themselves
-# use to reach the core. That hop is what makes this work when bin/ carries ONLY the short
-# names — invoked as bin/ytt, SCRIPT_DIR is the bin/ dir and bin/yt-search does not exist,
-# but bin/../../shell-scripts does, because the kernel resolves `..` through the bin symlink
-# into env-config. PATH stays as the last resort.
+# Resolve this script's OWN symlink chain before looking for its siblings. The short names on
+# PATH (ytt / yts / ytp) are symlinks into a checkout that can live anywhere, so `dirname $0` is
+# the symlink's directory, not the code's. This walks the chain to the real file and takes ITS
+# directory — which is the one holding the rest of the suite.
+#
+# `cd -P` / `pwd -P`, not the logical forms: a relative symlink resolves to something like
+# ~/bin/../../../elsewhere/shell, and logical `cd` would normalise those `..` textually against
+# ~/bin instead of against what ~/bin actually points at. Physical resolution is the only one
+# that lands in the right place. bash 3.2 has no `readlink -f`, hence the loop.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+    _link=$(readlink "$_self")
+    case "$_link" in
+    /*) _self="$_link" ;;
+    *)  _self="$(dirname "$_self")/$_link" ;;
+    esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
 if [[ -x "$SCRIPT_DIR/yt-search" && -x "$SCRIPT_DIR/yt-play" ]]; then
     YT_SEARCH="$SCRIPT_DIR/yt-search"
     YT_PLAY="$SCRIPT_DIR/yt-play"
-elif [[ -x "$SCRIPT_DIR/../../shell-scripts/yt-search" && -x "$SCRIPT_DIR/../../shell-scripts/yt-play" ]]; then
-    YT_SEARCH="$SCRIPT_DIR/../../shell-scripts/yt-search"
-    YT_PLAY="$SCRIPT_DIR/../../shell-scripts/yt-play"
 elif command -v yt-search >/dev/null 2>&1 && command -v yt-play >/dev/null 2>&1; then
     YT_SEARCH=$(command -v yt-search)
     YT_PLAY=$(command -v yt-play)
@@ -59,8 +67,8 @@ Menu options:
   -p NUM    Rows per page (default: 10, capped to the terminal height)
   --color MODE  Color: auto | always | never (default: auto)
   --theme NAME  Palette: minimal (default) | mono | catppuccin | tokyonight | nord
-                | gruvbox | onedark. Every theme = one signature accent + one status
-                green; mono = gray hierarchy only, no hue. Community themes emit
+                | gruvbox | onedark. Every theme = one signature accent, nothing else
+                hued; mono = gray hierarchy only, no hue. Community themes emit
                 24-bit color when COLORTERM=truecolor, else ANSI-16 fallbacks.
                 Light/dark picks the theme's own light variant (see YT_BG below).
   -h        This help
@@ -220,16 +228,22 @@ require_cmd jq nc
 # (catppuccin/tokyonight/nord/gruvbox/onedark) emit 24-bit RGB only when the terminal
 # advertises COLORTERM=truecolor; otherwise they fall back to the nearest ANSI-16 index.
 # Every theme passes through the same minimalist filter: hierarchy by gray levels
-# (dim → normal → bold), hue is ONE accent (C_CYAN) plus ONE status hue (C_GREEN).
-# C_YELLOW is retired — it stays defined ("" in every theme) so the five sites that still
-# read it render default foreground; deleting it would be eight site edits for zero
-# behavior change. C_MARK is the selection/filter marker (bold + accent). Light/dark
+# (dim → normal → bold) and hue is ONE accent (C_CYAN) — nothing else carries color.
+# The play status was the last holdout: it used to print in a second hue (a per-theme
+# C_GREEN, with C_YELLOW for paused), which read as "not this theme" wherever the accent
+# was not green — gruvbox orange chrome beside an olive status. Now both states take the
+# accent and the GLYPH carries the state (● playing / ❚❚ paused, the latter dimmed), so
+# the card matches its own rails and marker in every palette. C_GREEN and C_YELLOW are
+# both retired; C_YELLOW stays defined ("" everywhere) because a stale read of it is
+# harmless, while C_GREEN is gone outright — a live variable holding a real color that
+# nothing prints is a trap, not a spare. Its per-theme hexes are in git history if a
+# second hue is ever wanted back. C_MARK is the selection/filter marker (bold + accent). Light/dark
 # (YT_BG=auto → $COLORFGBG → OSC 11 query → dark) picks the theme's own light variant
 # (mocha/latte, night/day, polar-night/snow-storm, gruvbox dark/light, onedark/one-light);
 # for minimal it swaps cyan for blue, readable on white.
 # --color auto honors NO_COLOR. YT_SYNC: synchronized redraws (DCS 1 q/2 q), on by default,
 # off under tmux (see display_menu).
-C_RESET=''; C_BOLD=''; C_CYAN=''; C_YELLOW=''; C_DIM=''; C_GREEN=''; C_MARK=''
+C_RESET=''; C_BOLD=''; C_CYAN=''; C_YELLOW=''; C_DIM=''; C_MARK=''
 SYNC_ON=0
 COLORTERM_TC=0
 COLORS_ON=0             # set by init_colors; gates the live theme cycle (t key)
@@ -243,44 +257,42 @@ init_colorterm() {
 }
 set_theme() {
     # Community themes (catppuccin/tokyonight/nord/gruvbox/onedark) pass through the
-    # same minimalist filter as minimal: ONE signature accent + ONE status green,
-    # gray hierarchy for everything else. Hexes are the official palettes; light/dark
+    # same minimalist filter as minimal: ONE signature accent, gray hierarchy for
+    # everything else. Hexes are the official palettes; light/dark
     # is the theme's own light variant (catppuccin mocha/latte, tokyonight night/day,
     # nord polar-night/snow-storm, gruvbox dark/light, onedark/one-light).
-    local acc_r acc_g acc_b st_r st_g st_b a16
+    local acc_r acc_g acc_b a16
     case "$THEME" in
     minimal)
-        C_CYAN=$'\033[36m'; C_GREEN=$'\033[32m'; C_YELLOW=''
+        C_CYAN=$'\033[36m'; C_YELLOW=''
         C_MARK=$'\033[1;36m'
         if [[ "$BG" == light ]]; then
             C_CYAN=$'\033[34m'; C_MARK=$'\033[1;34m'
         fi
         ;;
     mono)
-        C_CYAN=''; C_GREEN=''; C_YELLOW=''; C_MARK=$'\033[1m'
+        C_CYAN=''; C_YELLOW=''; C_MARK=$'\033[1m'
         ;;
     catppuccin | tokyonight | nord | gruvbox | onedark)
         C_YELLOW=''
         case "$THEME:$BG" in
-        catppuccin:dark)  acc_r=203; acc_g=166; acc_b=247; st_r=166; st_g=227; st_b=161; a16=35 ;;
-        catppuccin:light) acc_r=136; acc_g=57;  acc_b=239; st_r=64;  st_g=160; st_b=43;  a16=35 ;;
-        tokyonight:dark)  acc_r=122; acc_g=162; acc_b=247; st_r=158; st_g=206; st_b=106; a16=34 ;;
-        tokyonight:light) acc_r=46;  acc_g=125; acc_b=233; st_r=88;  st_g=117; st_b=57;  a16=34 ;;
-        nord:dark)        acc_r=136; acc_g=192; acc_b=208; st_r=163; st_g=190; st_b=140; a16=36 ;;
-        nord:light)       acc_r=94;  acc_g=129; acc_b=172; st_r=163; st_g=190; st_b=140; a16=36 ;;
-        gruvbox:dark)     acc_r=214; acc_g=93;  acc_b=14;  st_r=152; st_g=151; st_b=26;  a16=33 ;;
-        gruvbox:light)    acc_r=175; acc_g=58;  acc_b=3;   st_r=121; st_g=116; st_b=14;  a16=31 ;;
-        onedark:dark)     acc_r=97;  acc_g=175; acc_b=239; st_r=152; st_g=195; st_b=121; a16=34 ;;
-        onedark:light)    acc_r=64;  acc_g=120; acc_b=242; st_r=80;  st_g=161; st_b=79;  a16=34 ;;
+        catppuccin:dark)  acc_r=203; acc_g=166; acc_b=247; a16=35 ;;
+        catppuccin:light) acc_r=136; acc_g=57;  acc_b=239; a16=35 ;;
+        tokyonight:dark)  acc_r=122; acc_g=162; acc_b=247; a16=34 ;;
+        tokyonight:light) acc_r=46;  acc_g=125; acc_b=233; a16=34 ;;
+        nord:dark)        acc_r=136; acc_g=192; acc_b=208; a16=36 ;;
+        nord:light)       acc_r=94;  acc_g=129; acc_b=172; a16=36 ;;
+        gruvbox:dark)     acc_r=214; acc_g=93;  acc_b=14;  a16=33 ;;
+        gruvbox:light)    acc_r=175; acc_g=58;  acc_b=3;   a16=31 ;;
+        onedark:dark)     acc_r=97;  acc_g=175; acc_b=239; a16=34 ;;
+        onedark:light)    acc_r=64;  acc_g=120; acc_b=242; a16=34 ;;
         esac
         if ((COLORTERM_TC)); then
             printf -v C_CYAN '\033[38;2;%d;%d;%dm' "$acc_r" "$acc_g" "$acc_b"
             printf -v C_MARK '\033[1;38;2;%d;%d;%dm' "$acc_r" "$acc_g" "$acc_b"
-            printf -v C_GREEN '\033[38;2;%d;%d;%dm' "$st_r" "$st_g" "$st_b"
         else
             C_CYAN=$'\033['"$a16"m
             C_MARK=$'\033[1;'"$a16"m
-            C_GREEN=$'\033[32m'
         fi
         ;;
     esac
@@ -393,14 +405,13 @@ UI_LANG=""
 set_ui_lang() {
     UI_LANG=$1
     if [[ "$UI_LANG" == "zh" ]]; then
-        S_NAV="导航:"
         S_SELECT="选择"; S_PAGE="翻页"; S_PLAY="播放"; S_VIEW="视图"; S_MODE="模式"
         S_SEARCH="搜索"; S_MORE="更多"; S_SORT="排序"; S_FILTER="过滤"
         S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"
         S_FOCUS="专注卡片"; S_PAUSE="暂停"; S_VOL="音量"
-        S_BACK_LIST="返回列表选单"; S_PAUSE_RESUME="暂停 / 继续"; S_SEEK5="快退 / 快进 5s"
-        S_VOL_ADJUST="调节音量"; S_STOP_PLAY="停止播放"
-        S_PLAYING="播放中"; S_PAUSED="已暂停"; S_CARD_HEAD="专注卡片"
+        S_BACK_LIST="列表"; S_PAUSE_RESUME="暂停"; S_SEEK="跳转"
+        S_VOL_ADJUST="音量"; S_STOP_PLAY="停止"
+        S_PLAYING="播放中"; S_PAUSED="已暂停"; S_STARTING="缓冲中"; S_CARD_HEAD="专注卡片"
         S_PROMPT_SEARCH="搜索 YouTube:"; S_NEW_SEARCH="新搜索（Esc 或留空取消）"
         S_SEARCHING="搜索中"; S_REFETCH="重新获取"; S_RESULTS_N="条"
         S_ANY_KEY="按任意键继续"; S_QUITTING="正在退出"
@@ -409,14 +420,13 @@ set_ui_lang() {
         S_FILTER_HINT="过滤（输入即筛选，Enter 播放，Esc 清除）"
         S_NOTHING="(暂无正在播放的音频)"; S_BACK_SEARCH="返回搜索列表"; S_PLAY_SEL="播放选中歌曲"
     else
-        S_NAV="Navigation:"
         S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_VIEW="view"; S_MODE="mode"
         S_SEARCH="search"; S_MORE="more"; S_SORT="sort"; S_FILTER="filter"
         S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"
         S_FOCUS="focus card"; S_PAUSE="pause"; S_VOL="volume"
-        S_BACK_LIST="back to list"; S_PAUSE_RESUME="pause / resume"; S_SEEK5="seek -/+ 5s"
-        S_VOL_ADJUST="volume"; S_STOP_PLAY="stop playback"
-        S_PLAYING="Playing"; S_PAUSED="Paused"; S_CARD_HEAD="NOW PLAYING FOCUS"
+        S_BACK_LIST="list"; S_PAUSE_RESUME="pause"; S_SEEK="seek"
+        S_VOL_ADJUST="vol"; S_STOP_PLAY="stop"
+        S_PLAYING="Playing"; S_PAUSED="Paused"; S_STARTING="Starting"; S_CARD_HEAD="NOW PLAYING FOCUS"
         S_PROMPT_SEARCH="Search YouTube:"; S_NEW_SEARCH="New search (Esc or empty to cancel)"
         S_SEARCHING="searching"; S_REFETCH="re-fetching"; S_RESULTS_N="results"
         S_ANY_KEY="Press any key"; S_QUITTING="Quitting"
@@ -469,6 +479,11 @@ GL_NOTE="♫"; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
 # ▶ / ❚❚ / ● and the arrow hints as tofu on a font that can't draw them.
 GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_DOT="●"; GL_DOT_OFF="○"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="↵"
 GL_BULLET="•"; GL_ELL="…"; GL_ARROW="→"; GL_DASH="—"
+# Spinner frames: ONE quadrant block orbiting the corners of a cell — a rotating box drawn by
+# a single glyph, so it animates without ever widening the line. Quadrants are the minimal
+# choice on purpose: they are drawn from the same box-drawing block the rails use, they are
+# unambiguously one cell wide, and they carry no color of their own.
+GL_SPIN=("▘" "▝" "▗" "▖")
 init_glyphs() {
     # One switch for the whole suite: YT_ASCII, with YT_TUI_ASCII kept as a legacy alias
     # (the core reads the same pair — a font that can't draw ♫ can't draw it anywhere).
@@ -485,6 +500,7 @@ init_glyphs() {
         GL_NOTE=""; GL_LIVE="LIVE"; GL_SEP="|"; GL_CARET=">"
         GL_PLAY=">"; GL_PAUSE="||"; GL_DOT="*"; GL_DOT_OFF="o"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
         GL_BULLET="-"; GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
+        GL_SPIN=("|" "/" "-" "\\")
     fi
     # Brand wordmark (YT_BRAND=1): the three view headers render "𝗬 𝗧  𝗧 𝗨 𝗜" in
     # mathematical sans-serif bold (U+1D5D4 block). OPT-IN on purpose: terminal fonts
@@ -515,6 +531,10 @@ CURRENT_PLAY_DURATION=""
 CURRENT_PLAY_MODE=""
 CURRENT_PLAY_SOCK=""
 CURRENT_PLAY_PAUSED=0
+# Third state, between "launched" and "playing": the -d envelope comes back as soon as the core
+# has forked, but mpv still has to resolve the stream with yt-dlp and fill its cache, and that
+# window is seconds long on a cold URL. The banner used to claim "Playing" for all of it.
+CURRENT_PLAY_LOADING=0
 # A live stream has no meaningful position: mpv reports time-pos on the whole
 # broadcast-so-far timeline with duration = the live edge, so percent-pos sits at
 # ~99.98% from the first second and the progress bar is pinned full. Track liveness
@@ -795,7 +815,13 @@ init_cell_tables() {
     cw_range '\xef\xb8'     160 175; CW_ZERO+="$CW_RANGE"    # U+FE20..U+FE2F  half marks
     cw_range '\xf0\x9f\x8f' 187 191; CW_ZERO+="$CW_RANGE"    # U+1F3FB..U+1F3FF skin tones
     cw_range '\xf0\x9f\x87' 166 191                          # U+1F1E6..U+1F1FF regional indicators
-    CW_NARROW="↵♫❚❯$CW_RANGE"                                # U+21B5 U+266B U+275A U+276F: Neutral EAW
+    # The four quadrant blocks are the spinner's frames (GL_SPIN) and are Neutral like the rest
+    # of this row — U+2596..U+259F is the one Neutral island inside the Block Elements, which is
+    # exactly why the spinner is drawn from quadrants and not from the ◐◓◑◒ circles or the
+    # ▁▃▅▇ bars: those are Ambiguous, so a terminal could give the animation two cells and make
+    # it jump. Nothing measures the spinner line today; tabling them anyway keeps "every glyph
+    # this draws has a known width" true by construction rather than by where it happens to print.
+    CW_NARROW="↵♫❚❯▘▝▗▖$CW_RANGE"                            # U+21B5 U+266B U+275A U+276F
     case "${YT_AMBIG_WIDE:-}" in
     1 | true | yes | on) CW_AMBIG_W=2 ;;
     esac
@@ -901,18 +927,22 @@ truncate_disp() {
 }
 
 # print_hints <width> <first_prefix> <cont_prefix> "key<TAB>label" | "field" …
-# Packs items into as few lines as fit <width>, two spaces between items; an item with no
-# TAB is a plain field (no label). The chrome used to print each view's hints as ONE fixed
+# Packs items into as few lines as fit <width>, HINT_SEP between items (two spaces by
+# default); an item with no TAB is a plain field (no label). The chrome used to print each view's hints as ONE fixed
 # string, which simply ran off the right edge and wrapped mid-item below ~72 columns —
 # sooner still because the labels are CJK, i.e. double-width. Every emitted line carries
 # \033[K for the in-place card renders. HINT_KEY_COLOR overrides the key style for
-# one call (the status row wants its fields dim, not key-bold). HINT_LINES reports how many
+# one call (the status row wants its fields dim, not key-bold); HINT_SEP overrides the
+# item separator for one call (the focus card joins with " · " so its six keys pack into
+# one line without brackets). Both are printed and MEASURED from the same value — a
+# separator whose width the packer did not know would wrap one item early or late. HINT_LINES reports how many
 # lines were emitted: this block is variable-height by design, and the list view has to know
 # its real height to decide how many result rows fit (see the reflow in display_list_menu).
 # HINT_MEASURE=1 runs the identical packing and reports HINT_LINES without drawing anything,
 # so a caller can ask "how tall would this block be?" before committing the space to it. Same
 # code path deliberately: a separate estimator would be free to disagree with the printer.
 HINT_KEY_COLOR=""
+HINT_SEP=""
 HINT_LINES=0
 HINT_MEASURE=0
 print_hints() {
@@ -921,6 +951,9 @@ print_hints() {
     HINT_LINES=0
     local item key label out="" out_w=0 iw ind_w first=1
     local kc=${HINT_KEY_COLOR:-$C_BOLD}
+    local sep=${HINT_SEP:-"  "} sep_w
+    disp_w "$sep"
+    sep_w=$DISP_W
     disp_w "$first_p"
     ind_w=$DISP_W
     out_w=$ind_w
@@ -934,7 +967,7 @@ print_hints() {
             disp_w "$label"
             ((iw += 1 + DISP_W))
         fi
-        if [[ -n "$out" ]] && ((out_w + 2 + iw > width)); then
+        if [[ -n "$out" ]] && ((out_w + sep_w + iw > width)); then
             if ((first)); then
                 ((HINT_MEASURE)) || printf '%s%s%s%s\033[K\n' "$C_BOLD" "$first_p" "$C_RESET" "$out"
                 first=0
@@ -948,8 +981,8 @@ print_hints() {
             out_w=$ind_w
         fi
         if [[ -n "$out" ]]; then
-            out+="  "
-            ((out_w += 2))
+            out+="${C_DIM}${sep}${C_RESET}"
+            ((out_w += sep_w))
         fi
         if [[ -n "$label" ]]; then
             out+="${kc}${key}${C_RESET} ${C_DIM}${label}${C_RESET}"
@@ -1027,11 +1060,18 @@ fetch_play_times() {
 }
 
 # Progress bar sized to the caller's layout. $2 is the FULL cell width the bar may occupy,
-# brackets included, so a caller can line its right edge up with the card's divider rails
-# instead of the old hardcoded 44 columns that ignored the terminal width entirely. The
-# rendered string is ALWAYS exactly that many cells — the head glyph is part of the track,
-# and `filled` is capped at width-1 so it stays so at 100%; a bar whose length changed with
-# position made the whole line jitter every second.
+# so a caller can lay it exactly over the card's divider rails instead of the old hardcoded
+# 44 columns that ignored the terminal width entirely. The rendered string is ALWAYS exactly
+# that many cells — the head glyph is part of the track, and `filled` is capped at width-1 so
+# it stays so at 100%; a bar whose length changed with position made the whole line jitter
+# every second.
+#
+# No [brackets]: the bar is not a widget sitting on the card, it is the card's LIVE RAIL —
+# `━` elapsed and `─` remaining are the divider's own stroke family, so the played part reads
+# as the rail thickening behind the `●` playhead (the same glyph the status row uses). The
+# ends had to go for that to work: a bracket is a boundary, and this line's whole job is to
+# be boundary-less and exactly rail-wide. They were also 2 cells of the caller's width spent
+# on punctuation, which now buy 2 more cells of resolution instead.
 PROG_BAR=""
 render_prog_bar() {
     local pct=${1%.*} total=${2:-44}
@@ -1041,7 +1081,7 @@ render_prog_bar() {
     ((pct < 0)) && pct=0
     ((total < 10)) && total=10
 
-    local width=$((total - 2))            # the track, minus the two brackets
+    local width=$total                    # the track IS the full width; no brackets
     local filled=$((pct * width / 100))
     ((filled > width - 1)) && filled=$((width - 1))
     local empty=$((width - filled - 1))   # track = filled + head + empty
@@ -1054,7 +1094,7 @@ render_prog_bar() {
     fi
     repeat_glyph "$fill" "$filled"; f_str=$GLYPH_RUN
     repeat_glyph "$rest" "$empty"; e_str=$GLYPH_RUN
-    PROG_BAR="[${f_str}${head}${e_str}]"
+    PROG_BAR="${f_str}${head}${e_str}"
 }
 
 # One emit point for every line wrap_print produces, so WRAP_LINES and the measure switch
@@ -1189,7 +1229,7 @@ print_details() {
         fi
     fi
     card_divider "$width"
-    ((DETAIL_MEASURE)) || printf '%s%s%s\n' "$C_DIM" "$DIV_STR" "$C_RESET"
+    ((DETAIL_MEASURE)) || printf '%s%s%s\033[K\n' "$C_CYAN" "$DIV_STR" "$C_RESET"
     DETAIL_LINES=1
     # The same clean-ed title the row measured, so a row and its details cannot disagree
     # about what the video is called.
@@ -1205,7 +1245,7 @@ print_details() {
     [[ -n "$views" ]] && meta+=" $GL_SEP $views"
     meta+=" $GL_SEP $vid"
     truncate_disp "$meta" $((width - 2))
-    ((DETAIL_MEASURE)) || printf '  %s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+    ((DETAIL_MEASURE)) || printf '  %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
     DETAIL_LINES=$((DETAIL_LINES + 1))
 }
 
@@ -1216,6 +1256,10 @@ toggle_pause() {
     # script under set -e — the second Space press killed the TUI. Same trap as char_w and
     # the banner's b_fixed, which already carry this note.
     CURRENT_PLAY_PAUSED=$((1 - CURRENT_PLAY_PAUSED))
+    # Pausing during the load window ends it: `core-idle` stays true while paused, so the probe
+    # could never clear the loading state on its own, and "Starting" over a player the user just
+    # paused is the wrong sentence anyway. Their keypress is the more specific truth.
+    CURRENT_PLAY_LOADING=0
     send_mpv_ipc '["cycle","pause"]'
 }
 
@@ -1258,8 +1302,19 @@ clear_play_state() {
     CURRENT_PLAY_MODE=""
     CURRENT_PLAY_SOCK=""
     CURRENT_PLAY_PAUSED=0
+    CURRENT_PLAY_LOADING=0
     CURRENT_PLAY_IS_LIVE=0
     CURRENT_PLAY_STARTED=0
+    # The list reads the whole PT_* triple now — the rail reads PT_PCT to decide
+    # live-vs-static, and the banner tail reads PT_CUR/PT_TOTAL — so all three clear here or
+    # a stale one keeps drawing a position for a player that no longer exists. PT_CUR is the
+    # one that bites: play_selected reaches this through stop_current_playback BEFORE
+    # launching the next track, so leaving it set showed the PREVIOUS track's elapsed time in
+    # the new track's banner until the first tick overwrote it. Empty is also exactly the
+    # "no reading yet" signal the banner falls back on.
+    PT_CUR=""
+    PT_TOTAL=""
+    PT_PCT=""
 }
 
 # The detached player owns its own lifecycle, so yt-tui only learns of its death by asking.
@@ -1288,6 +1343,67 @@ check_player_alive() {
     return 0
 }
 
+# The other half of check_player_alive: alive is not the same as AUDIBLE. mpv answers IPC well
+# before it plays a note, so "did the sound start?" needs mpv's own answer — `core-idle` is true
+# while the core is producing nothing (loading, seeking, waiting on cache) and flips false the
+# moment output begins, which is exactly the edge the banner should turn on. time-pos was the
+# other candidate and is worse: it goes non-null when the file is LOADED, so it would call a
+# still-buffering stream "Playing" and put the third state back where it started.
+#
+# The 20 s cap is a promise about the UI, not about mpv: on a stream slow enough to still be
+# buffering by then, the honest options are to keep an animated label running forever or to
+# fall back to what this showed before the state existed. The cap picks the second, once, and
+# the tick stops with it — a spinner that never resolves is worse than an optimistic label.
+PS_TICK=0
+PLAY_LOAD_CAP=20
+player_check_ready() {
+    ((CURRENT_PLAY_LOADING)) || return 0
+    [[ -n "$CURRENT_PLAY_ID" ]] || { CURRENT_PLAY_LOADING=0; return 0; }
+    # One frame per tick: the tick IS the animation clock (read -t 1, the only sub-forever
+    # timer bash 3.2 offers — see the fetch spinner), so the frame advances here rather than in
+    # the renderer, which can be called more than once per tick (a resize, a redraw after a key).
+    PS_TICK=$((PS_TICK + 1))
+    local idle now
+    idle=$(mpv_get_prop core-idle)
+    if [[ "$idle" == "false" ]]; then CURRENT_PLAY_LOADING=0; return 0; fi
+    # if-form for the cap, not an AND-list: house rule from char_w — an `if` is unambiguously
+    # safe under set -e where an AND-list is safe only by way of an exemption rule. No start
+    # stamp means the cap cannot be timed at all, and an untimed loading state would tick once
+    # a second forever, so that case gives up the state immediately instead.
+    now=$(date +%s 2>/dev/null || echo 0)
+    if ((CURRENT_PLAY_STARTED <= 0)); then
+        CURRENT_PLAY_LOADING=0
+        return 0
+    fi
+    if ((now - CURRENT_PLAY_STARTED >= PLAY_LOAD_CAP)); then
+        CURRENT_PLAY_LOADING=0
+    fi
+    return 0
+}
+
+# THREE states now, drawn by TWO views (the list banner and the focus card), so the choice of
+# glyph/label/colour lives here instead of twice. The views differ only in which glyph means
+# "playing" — ▶ for the banner, ● for the card, the same two they used before — so that comes
+# in as an argument. Loading takes the fetch spinner's frames (§ GL_SPIN) and the dim accent:
+# same visual language as the search that got us here, and dim because it is not the steady
+# state. Colour never carries the state (one accent per palette); the glyph does.
+PS_ICON=""; PS_LABEL=""; PS_COLOR=""
+play_state_marks() {
+    if ((CURRENT_PLAY_LOADING)); then
+        PS_ICON="${GL_SPIN[PS_TICK % ${#GL_SPIN[@]}]}"
+        PS_LABEL="$S_STARTING"
+        PS_COLOR="$C_DIM$C_CYAN"
+    elif ((CURRENT_PLAY_PAUSED)); then
+        PS_ICON="$GL_PAUSE"
+        PS_LABEL="$S_PAUSED"
+        PS_COLOR="$C_DIM$C_CYAN"
+    else
+        PS_ICON="$1"
+        PS_LABEL="$S_PLAYING"
+        PS_COLOR="$C_CYAN"
+    fi
+}
+
 stop_current_playback() {
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
         "$YT_PLAY" --stop --id "$CURRENT_PLAY_ID" -j >/dev/null 2>&1 || true
@@ -1311,21 +1427,51 @@ PAGE_CAP=$(( LINES_N - 8 ))
 ((PAGE_CAP >= 3)) || PAGE_CAP=3
 ((PAGE_SIZE <= PAGE_CAP)) || PAGE_SIZE=$PAGE_CAP
 
-# Interactive: with no query on command line, prompt for one. Empty / Ctrl-D cancels.
-if ((${#query[@]} == 0)); then
-    printf '%s %s ' "$GL_CARET" "$S_PROMPT_SEARCH" >&2
-    IFS= read -r _q || { printf '\n' >&2; exit 0; }
-    [[ -n "${_q//[[:space:]]/}" ]] || { echo "yt-tui: no query entered" >&2; exit 0; }
-    query=("$_q")
-fi
-QUERY_LABEL="${query[*]}"
+# ── Fetch spinner ───────────────────────────────────────────────────────────────────────
+# A search is the one moment this TUI has nothing to draw, and a still `searching…` line reads
+# as hung — at startup it is the only thing on an otherwise blank terminal. The animation runs
+# in a BACKGROUND subshell so fetch_json keeps its plain synchronous shape. Backgrounding the
+# SEARCH instead would have cost more than it looks: `kill -0` still succeeds on an unreaped
+# child, so the poll would spin forever, and getting the status back would mean an rc file and
+# a done-marker for a call that already returns three distinct codes. Nothing else writes to
+# the terminal while a fetch is in flight, so there is no interleaving to guard against.
+#
+# `sleep 0.12` is the timer because bash 3.2 has no other one: `read -t` truncates a fractional
+# timeout there (measured — `-t 0.2` sat through a 5 s pipe instead of returning), and 1 s is
+# not an animation. It forks ~8 times a second for the length of one fetch; BSD and GNU sleep
+# both take decimals. Each frame prints the glyph and backs the cursor onto it, so the next
+# frame overwrites in place and the line never grows.
+SPIN_PID=""
+spin_start() {
+    # Echo off for the fetch, and deliberately NOT restored on stop: a key pressed while the
+    # search is in flight would otherwise be echoed into the middle of the spinner line. Every
+    # caller is on its way into the menu loop, which owns the terminal with echo off anyway.
+    tty_echo_off
+    cursor_hide
+    printf ' '
+    ( while :; do
+        for f in ${GL_SPIN[@]+"${GL_SPIN[@]}"}; do printf '%s\b' "$f"; sleep 0.12; done
+      done ) &
+    SPIN_PID=$!
+}
+# Closes the line the caller opened: erases the frame the subshell left under the cursor, then
+# newline, so whatever comes next (a redraw, or report_fetch_failure's sentence) starts clean.
+spin_stop() {
+    [[ -n "$SPIN_PID" ]] || { printf '\n'; return 0; }
+    kill "$SPIN_PID" 2>/dev/null || true
+    wait "$SPIN_PID" 2>/dev/null || true
+    SPIN_PID=""
+    printf ' \n'
+}
 
 # ── SEARCH delegate ─────────────────────────────────────────────────────────────────────
 SEARCH_ERR=""
 fetch_json() {
     local out cnt errfile rc=0
     errfile=$(mktemp "${TMPDIR:-/tmp}/yt-tui-search-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/yt-tui-search-err.$$"
+    spin_start
     out=$("$YT_SEARCH" -j -n "$RESULT_N" -s "$SORT_FIELD" ${SEARCH_ARGS[@]+"${SEARCH_ARGS[@]}"} -- "$QUERY_LABEL" 2>"$errfile") || rc=$?
+    spin_stop
     SEARCH_ERR=$(<"$errfile")
     rm -f "$errfile"
     ((rc == 0)) || return 1
@@ -1407,13 +1553,26 @@ display_list_menu() {
     layout_cols
     nav_cols=$LAYOUT_COLS
     LINES_N=$TERM_LINES
-    clear
+    # In-place repaint, the way the card has always done it: home the cursor and let every line
+    # below erase its own tail (\033[K), then \033[J at the end wipes whatever the old frame
+    # left underneath. This used to be `clear`, which blanks the screen and THEN redraws it —
+    # two visible states per frame, so pause/resume (one changed glyph) flashed the whole list.
+    # The DCS frame hold hides that on terminals that honour it; under tmux, where it is off by
+    # default, nothing did. Erase-as-you-draw has no blank state to see in either case.
+    #
+    # This did NOT make the redraw incremental, and that is deliberate: a keypress still
+    # recomputes and rewrites the whole frame (2413 bytes in 15-24 ms at 100x30 — the same frame
+    # an arrow-down writes). What went away is the number of states the terminal shows, not the
+    # work. The geometry below is measured per frame rather than fixed, so almost any state
+    # change could move it; DESIGN-yt.md §11 records why a banner-only repaint for the one change
+    # that cannot (pause) was rejected rather than forgotten.
+    printf '\033[H'
     # Title. Elided like every other row: a long query used to wrap and push the whole layout
     # down a line.
     local t_head="${GL_NOTE:+$GL_NOTE }$GL_BRAND  query="
     disp_w "$t_head"
     truncate_disp "'$QUERY_LABEL'" $((nav_cols - DISP_W))
-    printf '%s%s%s%s%s  query=%s\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$TRUNC_TEXT"
+    printf '%s%s%s%s%s  query=%s\033[K\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$TRUNC_TEXT"
     chrome_h=$((chrome_h + 1))
     
     # Status line
@@ -1438,21 +1597,54 @@ display_list_menu() {
     # the gate drops this block on a short terminal, the banner's tail carries
     # Tab/Space/s/9/0 instead. A rail sits UNDER the block (Option B): one boundary
     # between the chrome band (status + banner + keys) and the result rows — the card's
-    # rail language. It prints only with the block: no Navigation, no rail.
-    disp_w "$S_NAV"
-    local nav_pad
-    printf -v nav_pad '%*s' $((DISP_W + 1)) ''
+    # rail language. It prints only with the block: no keys, no rail.
+    #
+    # NO LABEL, and GL_SEP between items — the same two-space indent and the same separator
+    # the card's own hint block uses, so the two views print one object rather than two that
+    # merely list the same keys. The label went for the reason the card's body has none: the
+    # keys ARE the content, and its neighbours (the banner above, the rail below) carry no
+    # label either, so "Navigation:" was the only thing on the chrome band announcing what
+    # the reader could already see. It also cost 12 cells on the widest line here.
+    #
+    # The PLAYBACK keys cluster at the end, before s/q: 9/0, Space and [/] are all handled by
+    # the universal case in the menu loop, so they work here exactly as they do in the card,
+    # and all three were missing from the one view whose job is to write the keys down. The
+    # card's hint block and the banner's short-terminal fallback already documented volume and
+    # pause, which is what made their absence here a gap rather than a decision.
+    #
+    # S_VOL ("volume"), not the card's S_VOL_ADJUST ("vol"): this block spells its labels out
+    # ("language", "search") where the card abbreviates to keep six keys on one line.
+    #
+    # The seek keys print as "[ ]", NOT "[/]": / is this line's "or" separator (9/0, ↑/↓), but
+    # the two keys here ARE brackets, so wrapping a slash in them read as "a bracketed /" and
+    # collided with the real / filter entry three items earlier. A space says "two keys" without
+    # spending a character that already means something else on this line.
+    #
+    # S_SEEK is deliberately the bare word for BOTH sites at two different step sizes — the
+    # card's arrows seek 5s, these brackets seek 10s. That is why it is no longer called
+    # S_SEEK5: the label never named a number, so the only thing the old name did was promise
+    # a step size that the second caller does not honour. Still undocumented on purpose: p/P
+    # (a pure Tab alias) and Esc (a no-op in this view).
+    #
+    # HINT_SEP is set around the MEASURE call as well as the print call below, never just
+    # one: the separator is 3 cells against the default 2, and across 11 gaps that is 11
+    # cells — enough to move the block from one line to two. Measuring with a narrower
+    # separator than the printer uses is how the reflow underestimates the chrome and lets
+    # the header scroll off the top, which is the failure the measure pass exists to prevent.
+    local nav_pad="  "
     local nav_items=(
         "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY" "Tab	$S_VIEW" "v	$S_MODE"
         "n	$S_SEARCH" "m	$S_MORE" "o	$S_SORT" "/	$S_FILTER" "l	$S_LANGKEY"
-        "s	$S_STOP" "q	$S_QUIT"
+        "9/0	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "s	$S_STOP" "q	$S_QUIT"
     )
     # Measure the block before committing the space: on a very short terminal it is 4 lines of
     # a 10-line screen, and printing it would push the header off the top no matter how the
     # rows are repaged. Then the keys go and the results stay — the card view still
     # documents the keys.
     HINT_MEASURE=1
-    print_hints "$nav_cols" "$S_NAV " "$nav_pad" "${nav_items[@]}"
+    HINT_SEP=" $GL_SEP "
+    print_hints "$nav_cols" "$nav_pad" "$nav_pad" "${nav_items[@]}"
+    HINT_SEP=""
     HINT_MEASURE=0
     local nav_h=$HINT_LINES
     # 4 = the blank line after the block, one result row, the blank line after the rows, the
@@ -1472,16 +1664,40 @@ display_list_menu() {
 
     # Persistent Now-Playing banner (when background playback is active)
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
-        local p_icon="$GL_PLAY" p_label="$S_PLAYING" p_color="$C_GREEN"
-        if ((CURRENT_PLAY_PAUSED)); then
-            p_icon="$GL_PAUSE"
-            p_label="$S_PAUSED"
-            p_color=""      # retired yellow → default fg, same as the card's paused state
-        fi
+        # Accent, not a status hue: the banner's state colour is the same accent the
+        # marker and rails use, so it reads as this palette (see the palette block). The
+        # glyph is what says which state — dimmed for paused, a turning quadrant while the
+        # stream is still coming up. play_state_marks owns that choice for both views.
+        play_state_marks "$GL_PLAY"
+        local p_icon="$PS_ICON" p_label="$PS_LABEL" p_color="$PS_COLOR"
         # Pure status line: shares ONE line with a variable-length title, so measure the
         # fixed parts and give the title what is left (elided). The key tail appears only
         # when the Navigation block above was dropped (short-terminal fallback).
-        local b_head="$p_icon $p_label: " b_tail=" $GL_SEP $CURRENT_PLAY_DURATION"
+        local b_head="$p_icon $p_label: "
+        # The tail is a POSITION readout, not a duration: elapsed / total, the same pairing
+        # the card's meta row shows, so the two views do not disagree about where the track
+        # is. PT_CUR/PT_TOTAL come from the shared clock — nav_tick fetches them once a
+        # second while the list is up — so the banner costs no IPC of its own and is at most
+        # one second stale, the resolution it is drawn at anyway.
+        #
+        # Empty PT_CUR means NO reading has landed yet (the first frame after Enter, before
+        # the first tick) and falls back to the duration alone, rather than printing a bare
+        # "/" or an empty field. PT_TOTAL falls back the same way: fetch_play_times seeds it
+        # from CURRENT_PLAY_DURATION and only replaces it once mpv answers, so the readout
+        # never changes SHAPE a second into playback — it is short_dur and fmt_sec spelling
+        # the same number (see CURRENT_PLAY_DURATION's note in play_selected).
+        #
+        # Live keeps the card's live form (elapsed GL_SEP LIVE, no slash): mpv's clock
+        # describes the broadcast, not this listen, so there is no total to divide by — the
+        # same fact fetch_play_times encodes by returning early for live.
+        local b_tail=" $GL_SEP $CURRENT_PLAY_DURATION"
+        if [[ -n "$PT_CUR" ]]; then
+            if ((CURRENT_PLAY_IS_LIVE)); then
+                b_tail=" $GL_SEP $PT_CUR $GL_SEP ${PT_TOTAL:-$CURRENT_PLAY_DURATION}"
+            else
+                b_tail=" $GL_SEP $PT_CUR / ${PT_TOTAL:-$CURRENT_PLAY_DURATION}"
+            fi
+        fi
         local b_hint="" b_fixed=0
         if ((!nav_ok)); then
             b_hint="  [Tab $S_FOCUS | Space $S_PAUSE | s $S_STOP | 9/0 $S_VOL]"
@@ -1498,26 +1714,42 @@ display_list_menu() {
         fi
         ((title_room < 8)) && title_room=8
         truncate_disp "$CURRENT_PLAY_TITLE" "$title_room"
-        printf '%s%s %s:%s %s%s%s%s%s%s%s%s%s\n' \
+        printf '%s%s %s:%s %s%s%s%s%s%s%s%s%s\033[K\n' \
             "$p_color" "$p_icon" "$p_label" "$C_RESET" \
             "$C_CYAN" "$TRUNC_TEXT" "$C_RESET" \
             "$C_DIM" "$b_tail" "$C_RESET" \
             "$C_DIM" "$b_hint" "$C_RESET"
     else
-        printf '\n'
+        printf '\033[K\n'
     fi
     chrome_h=$((chrome_h + 1))    # the banner row, or the blank line standing in for it
 
     if ((nav_ok)); then
-        print_hints "$nav_cols" "$S_NAV " "$nav_pad" "${nav_items[@]}"
+        HINT_SEP=" $GL_SEP "
+        print_hints "$nav_cols" "$nav_pad" "$nav_pad" "${nav_items[@]}"
+        HINT_SEP=""
         chrome_h=$((chrome_h + nav_h))
-        # Rail under the Navigation block: one boundary between the chrome band and the
-        # result rows (card_divider caches on width+glyph, like the card rails).
-        card_divider "$nav_cols"
-        printf '%s%s%s\n' "$C_DIM" "$DIV_STR" "$C_RESET"
+        # Rail under the key-hint block: one boundary between the chrome band and the
+        # result rows (card_divider caches on width+glyph, like the card rails). Accent, not
+        # dim: a rail is a rail in every view, and the card's carries the accent because it
+        # pairs with the live rail — matching here keeps one rail language across views.
+        #
+        # And while a track plays this IS that live rail: the shared clock leaves the percent
+        # in PT_PCT (nav_tick), so the boundary doubles as the position readout and the list
+        # needs no bar of its own. No percent — a live stream, or the first second before mpv
+        # answers — keeps the static rail, so the line never disappears or changes width.
+        local list_rail=""
+        if [[ -n "$CURRENT_PLAY_ID" && -n "$PT_PCT" ]]; then
+            render_prog_bar "$PT_PCT" "$nav_cols"
+            list_rail="$PROG_BAR"
+        else
+            card_divider "$nav_cols"
+            list_rail="$DIV_STR"
+        fi
+        printf '%s%s%s\033[K\n' "$C_CYAN" "$list_rail" "$C_RESET"
         chrome_h=$((chrome_h + 1))
     fi
-    printf '\n'
+    printf '\033[K\n'
     chrome_h=$((chrome_h + 1))
 
     # ── Reflow: how many rows fit is MEASURED, not guessed ──────────────────────────────
@@ -1641,7 +1873,7 @@ display_list_menu() {
     # Result rows
     if ((NUM_ENTRIES == 0)); then
         truncate_disp "$S_NO_MATCH $GL_DASH $S_NO_MATCH_KEYS" "$nav_cols"
-        printf '%s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+        printf '%s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
     else
         # EVERY row carries its number, and the marker gets its own 2-cell slot in front of
         # it — "> " where an unselected row leaves "  ". The number is not the selection's to
@@ -1694,20 +1926,26 @@ display_list_menu() {
             # moves backwards and cleanly overwrites the title tail instead of pushing the
             # rail into a wrap — the failure mode we want, and one the width layer's
             # over-counting rule already refuses to produce.
+            # \033[K goes FIRST on a row, not last: the rail is placed with CHA, which jumps
+            # over the cells between the title and the rail without writing them, so a
+            # trailing erase would leave the previous frame's longer title showing through the
+            # gap. Erasing the line before drawing it is the only order that covers a hole the
+            # draw itself never touches. (The card needs no such thing — it writes every line
+            # contiguously from column 1.)
             if ((i == selected)); then
                 # Marker AND number in C_MARK (accent), title in bold, rail back to its own
                 # dim — the selected line no longer inherits one hue end-to-end.
-                printf '%s> %*s%s %s%s%s\033[%dG%s%s%s\n' \
+                printf '\033[K%s> %*s%s %s%s%s\033[%dG%s%s%s\n' \
                     "$C_MARK" $((iw - 2)) "$n." "$C_RESET" "$C_BOLD" "$disp" "$C_RESET" \
                     $((nav_cols - rail_w + 1)) "$C_DIM" "$rail" "$C_RESET"
             else
-                printf '  %*s %s%s\033[%dG%s%s\n' \
+                printf '\033[K  %*s %s%s\033[%dG%s%s\n' \
                     $((iw - 2)) "$n." "$disp" "$C_DIM" $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
             fi
         done
     fi
     # Spacer, unless the reflow above spent it on a result row.
-    ((row_gap)) && printf '\n'
+    ((row_gap)) && printf '\033[K\n'
 
     # Footer: pagination
     if ((NUM_PAGES > 1 && dots_ok)); then
@@ -1721,10 +1959,10 @@ display_list_menu() {
                 if ((p == page)); then dots+="$C_BOLD$C_CYAN$GL_DOT$C_RESET"
                 else dots+="$C_BOLD$GL_DOT_OFF$C_RESET"; fi
             done
-            printf '%s%s\n' "$dots" "$C_RESET"
+            printf '%s%s\033[K\n' "$dots" "$C_RESET"
         else
             dots="page $page/$NUM_PAGES"
-            printf '%s%s%s\n' "$C_BOLD" "$dots" "$C_RESET"
+            printf '%s%s%s\033[K\n' "$C_BOLD" "$dots" "$C_RESET"
         fi
     fi
 
@@ -1740,16 +1978,21 @@ display_list_menu() {
         # it is the part that cannot be dropped.
         if ((filter_hint)); then
             truncate_disp "$S_FILTER_HINT" "$nav_cols"
-            printf '%s%s%s\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+            printf '%s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
         fi
         printf '%s>%s %s' "$C_MARK" "$C_RESET" "$FILTER_LABEL"
+        # \033[J from the caret, not \033[K first: it erases the rest of THIS line and every
+        # line below in one sequence, and it leaves the cursor where it is — which is where the
+        # filter's next character has to land.
+        printf '\033[J'
         cursor_show
     else
+        printf '\033[J'
         cursor_hide
     fi
 }
 
-# Now Playing Focus Card (Flicker-Free In-Place Render)
+# Now Playing Focus Card (in-place render, like the list above — see display_list_menu)
 display_now_playing_card() {
     cursor_hide
     # Reposition cursor to top-left without blanking the screen (eliminates flicker)
@@ -1760,11 +2003,10 @@ display_now_playing_card() {
 
     # The header names the view the same way the key hint that reaches it does (S_FOCUS,
     # "focus card" / "专注卡片") — one view, one name, in both languages.
-    local p_status="$GL_DOT $S_PLAYING" p_color="$C_GREEN"
-    if ((CURRENT_PLAY_PAUSED)); then
-        p_status="$GL_PAUSE $S_PAUSED"
-        p_color="$C_YELLOW"
-    fi
+    # Same accent as the banner, the rails and the marker — one hue per palette, with the
+    # glyph carrying the state (dim accent when paused). See the palette block.
+    play_state_marks "$GL_DOT"
+    local p_status="$PS_ICON $PS_LABEL" p_color="$PS_COLOR"
 
     local cols div
     layout_cols 80
@@ -1772,14 +2014,21 @@ display_now_playing_card() {
     card_divider "$cols"
     div="$DIV_STR"
 
+    # The rail carries the ACCENT, not dim: it and the progress rail are the same object in
+    # two states — one static, one live — so they share the hue and differ only in glyph. A dim
+    # rail above an accent bar read as two unrelated lines that happened to be the same width.
+    # There is only ONE rail now: the bottom one was a third parallel line closing a box the
+    # card does not need, and with the bar spanning the full width the card already ends on a
+    # horizontal. `\033[J` at the end of the render, not a rail, is what clears stale rows.
     if [[ -z "$CURRENT_PLAY_ID" ]]; then
-        printf '%s%s%s\033[K\n' "$C_DIM" "$div" "$C_RESET"
+        printf '%s%s%s\033[K\n' "$C_CYAN" "$div" "$C_RESET"
         printf '  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$S_NOTHING" "$C_RESET"
         # 60 CJK cells of copy: pack it like the hint rows so it cannot run off a narrow
         # terminal (the empty state is the one place a full sentence is drawn).
+        HINT_SEP=" $GL_SEP "
         print_hints "$cols" "  " "  " \
-            "[Tab]/[Esc]	$S_BACK_SEARCH" "[Enter]	$S_PLAY_SEL"
-        printf '%s%s%s\033[K\n' "$C_DIM" "$div" "$C_RESET"
+            "Tab	$S_BACK_SEARCH" "Enter	$S_PLAY_SEL"
+        HINT_SEP=""
     else
         # fetch_play_times owns the IPC and the live special case (elapsed listening time,
         # no percent, no bar — mpv's own position would be pinned at 100%).
@@ -1789,9 +2038,9 @@ display_now_playing_card() {
         total_time="$PT_TOTAL"
         if [[ -n "$PT_PCT" ]]; then
             pct_str=" (${PT_PCT}%)"
-            # The bar is indented like the rest of the card body (4 cells) and ends
-            # flush with the divider rails, which are `cols` wide from column 0.
-            render_prog_bar "$PT_PCT" $((cols - 4))
+            # The bar is NOT body-indented: it is the live rail, not text, so it lays
+            # exactly over the divider rail's own footprint — `cols` cells from column 0.
+            render_prog_bar "$PT_PCT" "$cols"
             bar_str="$PROG_BAR"
         fi
 
@@ -1804,7 +2053,7 @@ display_now_playing_card() {
         local text_w=$((cols - 4))
         ((text_w < 25)) && text_w=25
 
-        printf '%s%s%s\033[K\n' "$C_DIM" "$div" "$C_RESET"
+        printf '%s%s%s\033[K\n' "$C_CYAN" "$div" "$C_RESET"
         wrap_print "$CURRENT_PLAY_TITLE" "$text_w" "  ${C_BOLD}" "  "
         wrap_print "$CURRENT_PLAY_CHANNEL" "$text_w" "    ${C_DIM}" "    "
         # One meta row, fields joined by the suite's separator: "3:21 / 9:27 (37%) · audio ·
@@ -1841,15 +2090,20 @@ display_now_playing_card() {
             # \033[K on the spacer row too: the card grows by two rows the moment the
             # bar appears (mpv has no time-pos for the first second or so), so an
             # uncleared spacer kept showing the divider rail the previous frame drew there.
-            printf '\033[K\n    %s%s%s\033[K\n' "$C_CYAN" "$bar_str" "$C_RESET"
+            printf '\033[K\n%s%s%s\033[K\n' "$C_CYAN" "$bar_str" "$C_RESET"
         fi
         # No rail between the bar and the hints: the readout sits directly above the bar it
-        # labels, and the hints flow straight after it, bare-indented like the empty state —
-        # the bottom rail closes the card.
+        # labels, and the hints flow straight after it, bare-indented like the empty state.
+        # Nothing closes the card below them — see the rail note above.
+        # Six keys on ONE line at 80 cols: no brackets, joined by GL_SEP. The bracket pair
+        # was doing the job the bold/dim weight split already does, at 2 cells per key, and
+        # the labels are one word each — 110 cells of hints became 63, so the block stops
+        # being two lines (and stops stealing a row from the body at short heights).
+        HINT_SEP=" $GL_SEP "
         print_hints "$cols" "  " "  " \
-            "[Tab/Esc]	$S_BACK_LIST" "[Space]	$S_PAUSE_RESUME" "[$GL_AH]	$S_SEEK5" \
-            "[9/0]	$S_VOL_ADJUST" "[s]	$S_STOP_PLAY" "[q]	$S_QUIT"
-        printf '%s%s%s\033[K\n' "$C_DIM" "$div" "$C_RESET"
+            "Tab	$S_BACK_LIST" "Space	$S_PAUSE_RESUME" "$GL_AH	$S_SEEK" \
+            "9/0	$S_VOL_ADJUST" "s	$S_STOP_PLAY" "q	$S_QUIT"
+        HINT_SEP=""
     fi
     # Clean up any leftover lines below
     printf '\033[J'
@@ -1939,6 +2193,10 @@ play_selected() {
     CURRENT_PLAY_MODE="$PLAY_MODE"
     CURRENT_PLAY_SOCK="$sock"
     CURRENT_PLAY_PAUSED=0
+    # Launched, not yet audible. player_check_ready clears this when mpv says it is producing
+    # output, and read_nav_input runs on a 1 s tick until it does, so the banner flips on its
+    # own rather than waiting for the user to press something.
+    CURRENT_PLAY_LOADING=1
 
     # Metadata straight out of the row arrays. This used to re-parse the composed display
     # string by splitting on " $GL_SEP " — which mis-split any title that itself contained
@@ -2001,7 +2259,7 @@ new_search() {
     q="$QUERY_INPUT"
     [[ -n "${q//[[:space:]]/}" ]] || return 0
     QUERY_LABEL="$q"
-    printf '%s%s\n' "$S_SEARCHING" "$GL_ELL"
+    printf '%s%s' "$S_SEARCHING" "$GL_ELL"
     fetch_json || rc=$?
     if ((rc != 0)); then
         QUERY_LABEL="$prev"
@@ -2015,7 +2273,7 @@ new_search() {
 more_results() {
     local prev="$RESULT_N" rc=0 page="$page_index" sel="$selected"
     RESULT_N=$(( RESULT_N + 25 ))
-    printf '\n%s%s%s %s %s "%s" %s %s %s%s\n' \
+    printf '\n%s%s%s %s %s "%s" %s %s %s%s' \
         "$C_BOLD" "$S_MORE_ACT" "$C_RESET" "$GL_DASH" "$S_REFETCH" "$QUERY_LABEL" \
         "$GL_SEP" "$RESULT_N" "$S_RESULTS_N" "$GL_ELL"
     fetch_json || rc=$?
@@ -2045,7 +2303,7 @@ cycle_sort() {
         [[ "${SORT_CYCLE[$i]}" == "$SORT_FIELD" ]] && { cur=$i; break; }
     done
     SORT_FIELD="${SORT_CYCLE[$(( (cur + 1) % n ))]}"
-    printf '\n%s%s%s %s %s %s %s "%s"%s\n' \
+    printf '\n%s%s%s %s %s %s %s "%s"%s' \
         "$C_BOLD" "$S_SORT_ACT" "$C_RESET" "$GL_ARROW" "$SORT_FIELD" "$GL_DASH" \
         "$S_REFETCH" "$QUERY_LABEL" "$GL_ELL"
     fetch_json || rc=$?
@@ -2187,15 +2445,44 @@ utf8_complete() {
 }
 
 # ── Key Input Readers ───────────────────────────────────────────────────────────────────
+
+# What one tick of the shared clock does before the caller redraws. The card polls inside its
+# own renderer — its whole body IS the readout — so it wants nothing here; every other view
+# needs only the percent for its rail. Doing that poll on the CLOCK rather than in the
+# renderer is the point: a keypress redraw then costs no IPC at all (fetch_play_times is an
+# `nc` + `jq` pair, i.e. two forks), and a view that repaints between ticks simply reuses the
+# last values — at most one second old, which is the resolution the rail is drawn at anyway.
+nav_tick() {
+    if [[ "$TUI_VIEW_MODE" == "card" ]]; then return 0; fi
+    if [[ -z "$CURRENT_PLAY_ID" ]]; then return 0; fi
+    fetch_play_times
+    return 0
+}
+
 READ_NAV_KEY=""
 read_nav_input() {
     READ_NAV_KEY=""
     local input="" next="" seq=""
     local -a t_opt=()
-    if [[ "$TUI_VIEW_MODE" == "card" ]]; then
+    # ONE clock, shared by every view that reads through this function (list, card, and the
+    # live filter, which drives the same reader). It used to be card-only, which is why the
+    # list could not carry a live element at all: two timers would also be two places to
+    # change the cadence, and they drift (§25.1's F7 shape).
+    #
+    # The gate is not WHICH view is up but whether anything on screen can change without a
+    # keypress — that is playback, so it is one condition in one place. Consequences both
+    # ways: the list now ticks while a track plays (its rail is live), and the card no longer
+    # ticks when nothing is playing, where it used to repaint a static "(nothing playing)"
+    # once a second forever. LOADING is in the test because the pre-socket window has a
+    # spinner to advance before there is any play id to poll.
+    #
+    # Deliberately NOT shared: read_query_input, the `n` new-search prompt. A tick there would
+    # repaint the screen mid-keystroke while a query is being typed.
+    if [[ -n "$CURRENT_PLAY_ID" ]] || ((CURRENT_PLAY_LOADING)); then
         t_opt=(-t 1)
     fi
     if ! IFS= read -rsn1 ${t_opt[@]+"${t_opt[@]}"} input; then
+        nav_tick
         return 1
     fi
     if [[ "$input" != $'\x1b' ]]; then
@@ -2236,6 +2523,13 @@ read_query_input() {
         # (new_search) does `read_query_input || return 0` — both always meant cancel, so the
         # distinction was dead weight that read like a promise.
         $'\x1b') printf '\n'; return 1 ;;
+        # bash's own `read -n` puts the tty in non-canonical mode, so Ctrl-D arrives as the
+        # BYTE 0x04, not as EOF — the catch-all below used to append it to the query and send a
+        # control character to the search. Give it the shell's meaning instead: cancel on an
+        # empty line, ignored once there is something to keep.
+        $'\x04')
+            [[ -z "$query" ]] || continue
+            printf '\n'; return 1 ;;
         $'\x7f' | $'\b')
             if [[ -n "$query" ]]; then
                 # ${query%?} strips a whole CHARACTER on 3.2 under a UTF-8 locale (verified with
@@ -2289,6 +2583,33 @@ FILTER_LABEL=""
 FILTER_MODE=0
 selected=0
 page_index=1
+# Interactive: with no query on command line, prompt for one. Esc / empty / Ctrl-D all cancel.
+# Deliberately down HERE and not up with the other startup setup: the plain `read -r` this used
+# to be had no way to see Esc, so the first prompt of the session was the one place in the app
+# where Esc did nothing. read_query_input already owns that contract (and UTF-8 assembly, and
+# backspace) for the in-app new-search prompt, and bash cannot call a function before its
+# definition — so the prompt moves to the reader rather than the reader being duplicated.
+# Echo off for the duration: read_query_input echoes what it assembles, so the driver's copy
+# would print every character twice (see tty_echo_off).
+if ((${#query[@]} == 0)); then
+    printf '%s %s ' "$GL_CARET" "$S_PROMPT_SEARCH" >&2
+    tty_echo_off
+    # if-form, not `read_query_input; rc=$?`: a cancel returns status 1, and under set -e that
+    # bare call kills the script at status 1 before this block can say what it meant (see
+    # char_w). Cancelling the first prompt is a clean quit, so it exits 0.
+    if ! read_query_input; then tty_echo_restore; exit 0; fi
+    tty_echo_restore
+    [[ -n "${QUERY_INPUT//[[:space:]]/}" ]] || { echo "yt-tui: no query entered" >&2; exit 0; }
+    query=("$QUERY_INPUT")
+fi
+QUERY_LABEL="${query[*]}"
+
+# The first fetch is a network round trip and nothing has been drawn yet, so without this the
+# session opens on a blank terminal for a couple of seconds and reads as hung. Same wording as
+# the `n` prompt's line, plus the query — a query that came from argv was never echoed back, and
+# this is the only thing on screen until the list paints over it.
+printf '%s "%s"%s' "$S_SEARCHING" "$QUERY_LABEL" "$GL_ELL"
+
 rc=0
 fetch_json || rc=$?
 if ((rc != 0)); then
@@ -2304,6 +2625,7 @@ tty_echo_off
 # ── Menu loop ─────────────────────────────────────────────────────────────────────────
 while true; do
     check_player_alive   # a player that ended or crashed must not keep its banner
+    player_check_ready   # …and one that has not started yet must not claim it is playing
     page_min=$(( (page_index - 1) * PAGE_SIZE ))
     page_max=$(( page_min + PAGE_SIZE - 1 ))
     if ((selected < page_min)); then selected=$page_min; fi
@@ -2316,7 +2638,10 @@ while true; do
     # Universal View Toggle (Tab or p)
     # Toggles: list (Search List) ◄──► card (Now Playing Focus Card)
     if [[ "$READ_NAV_KEY" == $'\t' || "$READ_NAV_KEY" == "p" || "$READ_NAV_KEY" == "P" ]]; then
-        clear
+        # No `clear` on the switch either: both renderers now paint in place and end with
+        # \033[J, so the incoming view overwrites the outgoing one line by line and wipes
+        # whatever was longer. The clear was the last blank frame left in the app — on a switch
+        # it flashed the whole screen for the sake of rows the next render was about to cover.
         case "$TUI_VIEW_MODE" in
         list) TUI_VIEW_MODE="card" ;;
         *) TUI_VIEW_MODE="list" ;;
@@ -2337,7 +2662,7 @@ while true; do
     # Now Playing card specific handlers
     if [[ "$TUI_VIEW_MODE" == "card" ]]; then
         case "$READ_NAV_KEY" in
-        ESC) clear; TUI_VIEW_MODE="list" ;;
+        ESC) TUI_VIEW_MODE="list" ;;                       # in-place, as with Tab above
         "[C" | "OC" | "["*C | "O"*C) seek_relative 5 ;;    # right arrow → seek +5s
         "[D" | "OD" | "["*D | "O"*D) seek_relative -5 ;;   # left arrow → seek -5s
         "[A" | "OA" | "["*A | "O"*A) adjust_volume 5 ;;    # up arrow → volume +5

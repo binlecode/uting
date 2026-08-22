@@ -6,10 +6,10 @@ systematic reference: architecture, functional structure, module contract, suppo
 workflows, and the rationale behind them. Each fact lives in ONE section; everything
 else points at it.
 
-- Core engine: `shell-scripts/yt` (single source of truth, non-interactive)
-- Narrow headless verbs: `shell-scripts/yt-search`, `shell-scripts/yt-play`
-- Interactive UI: `shell-scripts/yt-tui` (owned glue over the verbs; no extra deps)
-- Caller-facing surface: each verb's own `-h`/`--help` · Contributor notes: `shell-scripts/README.md`
+- Core engine: `shell/yt` (single source of truth, non-interactive)
+- Narrow headless verbs: `shell/yt-search`, `shell/yt-play`
+- Interactive UI: `shell/yt-tui` (owned glue over the verbs; no extra deps)
+- Caller-facing surface: each verb's own `-h`/`--help` · Orientation: `README.md`
 - Runtime deps: `yt-dlp`, `jq` (search); `mpv` (playback); `curl` optional (§8.2).
   No fzf / TUI framework — only foundational primitives.
 
@@ -80,25 +80,29 @@ One line each; full rationale lives in the referenced section.
       makes the width tables exact instead of merely conservative, because a
       text-presentation glyph cannot carry a U+FE0F and become two cells behind the
       table's back. 17 glyphs, closed inventory.                              (§21)
+  D11 A detached player has NO KEYBOARD. detach_play redirects the child's stdin to
+      /dev/null and run_mpv adds --input-terminal=no on the detached path. This is a
+      consequence of D9's process group, not an independent choice: `set -m` suppresses
+      bash's OWN automatic /dev/null for background jobs, so the child inherited the
+      caller's tty and mpv raced yt-tui for every keystroke.                  (§9.1)
 ```
 
 ## 4. Command topology & file layout
 
 Four commands, one engine. `yt` is the full **non-interactive** core (search + play +
-resolve + lifecycle), kept internal to `shell-scripts/` — not a PATH-exposed surface.
+resolve + lifecycle), kept internal to `shell/` — not a PATH-exposed surface.
 `yt-search`/`yt-play` are narrow real wrappers that gate flags and delegate. `yt-tui`
 is the interactive human surface — pure orchestration with **zero** search/play logic.
 
 ```
-                          PATH entries (per OS)
-        macos/bin/                               linux/bin/
-        ├── yts  → yt-search                     ├── yts  → yt-search
-        ├── ytp  → yt-play                       ├── ytp  → yt-play
-        └── ytt  → yt-tui                        └── ytt  → yt-tui
-              (symlinks → ../../shell-scripts/…)
-              ONE name per command: the long names are NOT in bin/
+                          PATH entries (user-created)
+        ~/bin/
+        ├── yts  → <checkout>/shell/yt-search
+        ├── ytp  → <checkout>/shell/yt-play
+        └── ytt  → <checkout>/shell/yt-tui
+              ONE name per command: the long names are NOT on PATH
 
-        shell-scripts/
+        shell/
           yt          CORE engine (all search/play/resolve/lifecycle logic); not
                       symlinked into bin/ — reached only by the wrappers below
           yt-search   narrow wrapper ─┐  each locates `yt` by a path RELATIVE to its
@@ -113,21 +117,30 @@ is the interactive human surface — pure orchestration with **zero** search/pla
                                         yt-tui ─► jq        (primitive)
 ```
 
-**Why symlinks, not copies:** `macos/bin` and `linux/bin` hold only symlinks with zero
-OS-specific logic (OS branching lives in the core via `uname -s`). One physical copy,
-so platforms can't drift.
+**Why symlinks, not copies:** the PATH entries are symlinks with zero logic of their own
+(OS branching lives in the core via `uname -s`). One physical copy of every script, so no
+two installs can drift.
 
 **Why only the SHORT names are on PATH:** `bin/` used to carry both spellings of all
 three commands — six symlinks onto three scripts — so every command answered to two
 names and each doc, allowlist and habit had to pick one. The short forms won because
 they are what actually gets typed; the long names stay the canonical *identity* of the
 scripts (help text, errors, this doc) without also being PATH entries. Consequence:
-`yt-tui` can no longer find its verbs as siblings in `bin/`, so it falls back to the
-same `../../shell-scripts/` hop the wrappers use to reach the core — invoked as
-`bin/ytt`, `bin/../../shell-scripts/yt-search` resolves because the kernel walks `..`
-through the `bin` symlink into env-config. Anything that called `yt-search`/`yt-play`
-by name through PATH (agent tool definitions, Claude Code Bash allowlist entries) must
-use `yts`/`ytp`, or an absolute path into `shell-scripts/`.
+invoked as `~/bin/ytt`, a script's `$0` is the SYMLINK, not the code — so each script
+resolves its own symlink chain first and takes the real file's directory as the place to
+look for its siblings. That is the whole mechanism, and it is why the checkout can live
+anywhere.
+
+`cd -P` / `pwd -P`, not the logical forms: a relative symlink resolves to something like
+`~/bin/../../../elsewhere/shell`, and a logical `cd` would normalise those `..` textually
+against `~/bin` rather than against what `~/bin` actually points at — landing in a
+directory that does not exist. bash 3.2 has no `readlink -f`, hence the hand-rolled loop.
+(This replaced an earlier `../../shell-scripts/` hop that only worked inside one specific
+dotfiles layout; extracting the suite into its own repo is what exposed it.)
+
+Anything that called `yt-search`/`yt-play` by name through PATH (agent tool definitions,
+Claude Code Bash allowlist entries) must use `yts`/`ytp`, or an absolute path into the
+checkout's `shell/`.
 
 **Why real wrappers, not `$0`-dispatch in one script:** a real, short wrapper makes each
 tool *physically* what it claims — `yt-search`'s help is short because the script is
@@ -144,8 +157,8 @@ agent (`yt-search`/`yt-play`) — goes through a narrow verb, never `yt` directl
 PATH-exposed `yt` only invited bypassing the flag-gating the verbs exist to provide
 (D7). The wrappers don't need it on PATH either: they resolve `IMPL` via a path
 relative to their own `$SCRIPT_DIR`, so `yt` only has to exist as a file in
-`shell-scripts/`. `yt` keeps its full standalone argument parsing (D2/D3) for
-direct debugging from `shell-scripts/`, it's just no longer advertised as a surface.
+`shell/`. `yt` keeps its full standalone argument parsing (D2/D3) for
+direct debugging from `shell/`, it's just no longer advertised as a surface.
 
 **Why a shared core at all, not per-verb `yt-dlp`/`mpv` (D7):** Search and play
 genuinely SHARE logic: per-platform cookie-from-browser detection serves both, and
@@ -457,13 +470,31 @@ later**. Two facts break naive process-tree killing:
 Solution: launch the child as its **own process-group leader** and operate on the whole
 group. `pgid` is invariant under reparenting, so it always reaches every descendant.
 
+**The process group costs the child its free stdin, and that has to be paid back
+explicitly.** bash redirects a background job's stdin to `/dev/null` on its own — but only
+while job control is OFF, which is exactly what `set -m` turns on for the sake of the group
+above. So the two lines that buy the pgid silently hand the child the LAUNCHER's stdin, and
+for an interactive caller that is the terminal. mpv then keeps `input-terminal` on and reads
+the same tty its launcher reads: under `yt-tui` the two processes raced for every byte, and
+mpv's own default bindings own `[`/`]` (playback **speed**), `9`/`0`, `Space`, `q`, `s` and
+`m` — the same keys the TUI binds. Whichever `read()` won got the byte, so keys "did
+nothing" nondeterministically and `[`/`]` silently changed the speed of the stream when mpv
+won. Verified with `lsof` under a pty: before, wrapper and mpv both held `/dev/ttysNNN` and
+mpv answered `input-terminal=true`; after, both hold `/dev/null` and it answers `false`.
+`</dev/null` goes on the launch rather than only into mpv's flags because the launch is the
+one place every detached player passes through, and it covers the whole child tree —
+the probe's `yt-dlp`/`curl` and any late retry mpv included. The mpv flag is kept as well:
+it states the same fact where mpv can be read, and survives anyone who later launches the
+child differently.
+
 ```
    detach_play():
       ensure_state_dir()              # 0700 STATE_DIR + players/ (socket = a control channel)
       id = new_player_id()            # mktemp token; socket path known before launch
       set -m                          # monitor mode: backgrounded job = pgroup leader
       YT_IPC_SOCK=mpv-<id>.sock YT_DETACHED=1 \
-        nohup bash SELF -f MODE [--volume N] [-S SORT] -- URL > mpv-<id>.log 2>&1 &  # pgid == pid ($!)
+        nohup bash SELF -f MODE [--volume N] [-S SORT] -- URL \
+            </dev/null >mpv-<id>.log 2>&1 &        # pgid == pid ($!); stdin: see below
       set +m ; disown
       players/<id>.json ← {id,pid,url,mode,format,started_at,log,sock,title:null,volume}
       rm PLAYERS_DIR/<id>              # drop bare mktemp token; state lives in <id>.json
@@ -725,11 +756,16 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
    yt-tui "lofi" -n 40
         │  parse: SEARCH_ARGS=(-n 40) ; PLAY_MODE=audio ; reject cross-flags
         │  require: jq + verbs; TTY on BOTH -t 0 and -t 1 (reads keys AND draws)
-        │  no query on argv → prompt "❯ Search YouTube: " (empty/Ctrl-D cancels, exit 0)
+        │  no query on argv → prompt "❯ Search YouTube: " via read_query_input
+        │  (Esc / empty / Ctrl-D on an empty line all cancel, exit 0) — the SAME reader
+        │  the `n` prompt uses, so Esc means the same thing at the first prompt as
+        │  everywhere else; that is why the prompt sits after the input layer is defined
         ▼
    SEARCH  fetch_json:  json = yt-search -j -n "$RESULT_N" "${SEARCH_ARGS[@]}" -- "lofi"
         │  the ONLY search path — the initial fetch, `n` new-search, and `m` more-results
         │  all use it, then the same build_all_rows → load_rows, so they can never drift
+        │  spin_start/spin_stop bracket the call, so all four fetch paths (startup, n, m,
+        │  o) animate their own `…` line for free — one spinner, no per-caller copies
         ▼
    ALL_ROWS  jq: .results[] → [url, title, duration_fmt, view_count, channel, live_status]
         │  SIX RAW FIELDS, no rendered display string: the row draws title + duration
@@ -747,14 +783,14 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     │    List View:     title · status · live Now-Playing banner · result rows       │
     │                   (fixed index field + title + right-rail duration) ·          │
     │                   pagination dots · details section for the SELECTED row ·     │
-    │                   live filter input. A dim rail sits under the Navigation      │
-    │                   block (chrome | content boundary, drawn with it or not).     │
+    │                   live filter input. An ACCENT rail sits under the             │
+    │                   key-hint block (chrome | content boundary, with it or not).  │
     │    Card:          full-screen rail-bounded card, label-less body (title,       │
     │                   channel, one dot-separated meta row), progress bar &         │
     │                   interactive controls                                         │
     │  read_nav_input: one keypress; decodes ESC-[/O arrow sequences                 │
     │    ↑/↓  move selection (paginate at edges)      ←/→  page (list) / seek 5s (card)│
-    │    [ / ] seek ∓10s from ANY view                ↑/↓  volume (card)             │
+    │    [ ] seek   ∓10s from ANY view                ↑/↓  volume (card)             │
     │    Enter → play_selected:   yt-play -d -j -f MODE -- url  (NON-BLOCKING)       │
     │    Tab/p → toggle view:     List View ◄──► Now Playing card                    │
     │    Space → toggle pause:    sends IPC cycle pause over UNIX socket             │
@@ -781,11 +817,12 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
 - **TWO SWITCHABLE VIEWS toggled with `Tab` (or `p`):**
   - **List View (Search & Browse)**: Interactive multi-row list with a top Now-Playing banner.
   - **Now Playing card**: Clean distraction-free card with word-wrapped title within
-    adaptive divider rails, live `playtime / total time (pct%)`, and dynamic visual progress bar.
-    The rails open the card (top) and close it (bottom) only — nothing separates the
-    progress bar from the hints, so the readout labels the bar above it and the
-    hints flow straight after it (the redundant rail between bar and hints was
-    removed in the theme pass).
+    one adaptive divider rail, live `playtime / total time (pct%)`, and a progress bar that
+    is itself a rail. There is exactly ONE static rail, under the header; nothing separates
+    the progress bar from the hints, so the readout labels the bar above it and the hints
+    flow straight after it (the redundant rail between bar and hints went in the theme pass;
+    the bottom rail went with the bracket removal below, since the full-width bar already
+    gives the card a closing horizontal and `\033[J`, not a rail, is what clears stale rows).
   - **There was a third view, and deleting it was the point.** A "mini player" rendered the
     same four facts as the card in three lines. Two renderers for one state is the F7 shape
     (duplication that drifts): they had already disagreed about where the progress bar was
@@ -793,16 +830,72 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     through three states also meant two presses to get back to the list from the card, on a
     key whose whole job is "away and back". Nothing the mini did is unreachable now — it was
     the card minus the rails.
-  - **Anti-Flicker in-place rendering**: Real-time 1s timer refreshes time and progress bars smoothly
-    via `\033[H` (cursor home) without full-screen blanking or flashing. Because nothing is
-    blanked, **every row a frame emits must carry `\033[K`** — blank spacer rows included.
-    The card grows by two rows the moment the progress bar appears (mpv has no `time-pos`
-    for the first second or so), and an uncleared spacer kept displaying the divider rail
-    the previous, shorter frame had drawn on that line.
-  - **The progress bar is sized to the layout, not hardcoded.** `render_prog_bar pct total`
-    takes the FULL cell width it may occupy (brackets included): the card passes
-    `cols - 4`, so the bar keeps the body indent and ends flush with the divider rails
-    rather than at a hardcoded width. The rendered string is *always* exactly that
+  - **Anti-Flicker in-place rendering — now BOTH views, and no `clear` left in the app.**
+    Real-time 1s timer refreshes time and progress bars smoothly via `\033[H` (cursor home)
+    without full-screen blanking or flashing. Because nothing is blanked, **every row a frame
+    emits must carry `\033[K`** — blank spacer rows included. The card grows by two rows the
+    moment the progress bar appears (mpv has no `time-pos` for the first second or so), and an
+    uncleared spacer kept displaying the divider rail the previous, shorter frame had drawn on
+    that line.
+
+    The LIST used to be the exception: it opened every redraw with `clear`, which blanks the
+    screen and then repaints it — two visible states per frame. Any keypress flashed the whole
+    list, and pause/resume made that obvious, because the only thing that actually changed was
+    one glyph in the banner. The DCS frame hold hides a blank-then-draw on terminals that honour
+    it, which is why this survived so long; under tmux, where sync is off by default, nothing
+    did. `display_list_menu` now homes the cursor and erases as it draws like the card, closing
+    with one `\033[J`, and pause/resume repaints exactly one row (measured with a pyte screen
+    model: one changed row, zero `ED` sequences). The view-switch `clear` on Tab/Esc went with
+    it — both renderers end in `\033[J`, so the incoming frame covers the outgoing one, and the
+    switch was the last blank frame in the app.
+
+    Two details the list needed and the card did not:
+    - **`\033[K` goes FIRST on a result row, not last.** The duration rail is placed with CHA
+      (`\033[<n>G`), which jumps over the cells between title and rail without writing them, so
+      a trailing erase leaves the previous frame's longer title showing through the gap. Erase,
+      then draw, is the only order that covers a hole the draw itself never touches.
+    - **The filter caret closes the frame with `\033[J` alone.** It erases the rest of that line
+      AND every line below in one sequence, and leaves the cursor where the next typed character
+      has to land — a `\033[K` first would be redundant, and a cursor move would be wrong.
+
+    **What this did NOT change: a keypress still recomputes and rewrites the whole frame, and
+    that is deliberate.** What went away is the number of states the terminal *shows* (blank,
+    then drawn → drawn), not the work. Every key handler ends in `continue`, the top of the loop
+    calls `display_menu`, and `display_menu` is the only writer to the screen — there is no
+    dirty-region tracking and no partial-draw path. Measured on a 100x30 pty: a pause emits
+    **2413 bytes in 15-24 ms**, byte-for-byte the same frame an arrow-down emits when four rows
+    genuinely changed.
+
+    The recompute is what the reflow costs. List geometry is *measured* per frame, not fixed:
+    `PAGE_SIZE` is `LINES_N` minus the measured chrome, `print_hints` packs to the width (1-4
+    lines, and the count moves with the chrome language), and the details block is however far
+    the selected title wraps — so a frame reads `stty size`, runs the hint packing, runs
+    `print_details` twice (measure, then draw) and walks every row through `truncate_disp`. Any
+    state change *could* move that geometry, so the renderer recomputes instead of trying to know
+    when it cannot.
+
+    Pause is the one change that provably cannot move it — one glyph and one word inside a line
+    whose length elision already fixed. Repainting just that row was considered and rejected: it
+    needs the banner's absolute screen row (today `chrome_h` accumulates *while drawing*; it is
+    not a row map anything can query), a CUP or save/restore to reach it, and the banner's title
+    elision recomputed anyway, because that depends on `nav_cols` and on whether the nav block
+    was dropped. The result is a second draw path covering a subset of the first — the F7 shape
+    (§25.1), where the copies drift and every banner change has to be made twice. 2.4 KB and
+    ~20 ms per keypress is invisible at typing rates, and the only redraws that repeat on their
+    own (the card's clock, the `Starting` tick) run at 1 Hz. Revisit if a frame ever has to be
+    drawn faster than that, not because the byte count looks large.
+  - **The progress bar IS the card's live rail.** `render_prog_bar pct total` takes the FULL
+    cell width it may occupy: the card passes `cols`, the divider rail's own width, and prints
+    it at column 0 like the rail — so the bar lays exactly over the rail's footprint rather
+    than sitting at a hardcoded width. Two changes got it there, both 2026-08. It is drawn as
+    a rule, not as body text: it took the 4-cell body indent until then, which left its left
+    edge hanging inside the rails while only its right edge was flush. And the `[`/`]` ends
+    are gone: a bracket is a boundary, and a line whose job is to be exactly rail-wide and
+    boundary-less cannot have ends. `━` elapsed and `─` remaining are the divider's own stroke
+    family, so the played part reads as the rail thickening behind the `●` playhead — the same
+    glyph the status row uses — instead of a widget parked on the card. The brackets were also
+    2 cells of the caller's width spent on punctuation; they now buy 2 more cells of
+    resolution (`width = total`, not `total - 2`). The rendered string is *always* exactly that
     many cells — the head glyph is part of the track and `filled` is capped at `width-1`,
     where the old fixed-42 bar measured 46 cells at 0%, 44 at 50% and 47 at 100%, making
     the line jitter on every refresh. `repeat_glyph` builds the runs because
@@ -865,7 +958,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
 
     **The rule is now exhaustive: nothing drawn as chrome is a literal at its print site.**
     It was not, for two passes — the hint rows went through the table while the play state
-    (`Playing`/`Paused`, drawn twice: the list banner's label and the card's status), the card
+    (`Playing`/`Paused`/`Starting`, drawn twice: the list banner's label and the card's status), the card
     header, and every *transient* line (the startup prompt, the `n` prompt, `searching…`, the
     `m`/`o` action echoes, the no-matches copy, the filter banner, `Press any key…`,
     `Quitting…`) stayed English inside a Chinese frame. They were easy to miss precisely
@@ -898,13 +991,23 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     the terminal advertises `COLORTERM=truecolor` — otherwise they fall back to
     the nearest ANSI-16 index, so the chrome is never garbage on a limited
     terminal. Every theme, community included, passes through the same minimalist
-    filter: hierarchy by gray levels (dim → normal → bold), hue is ONE accent
-    (`C_CYAN`: headers, selection marker) plus ONE status hue (`C_GREEN`:
-    playing); the rest of a community palette (its yellow/red/purple/…) is
-    dropped on purpose. `C_YELLOW` is retired but stays defined as `""` — the five
-    sites that still read it render default foreground, because the theme is a
-    table of VALUES (`set_theme`) and the rendering sites are untouched; deleting
-    the variable would be eight site edits for zero behavior change. `C_MARK` is
+    filter: hierarchy by gray levels (dim → normal → bold) and hue is ONE accent
+    (`C_CYAN`: headers, selection marker, play status, and the card's rails — the static
+    rail and the live progress rail are one object in two states, so a dim rail above an
+    accent bar read as two unrelated lines that merely shared a width); the rest of a community
+    palette (its yellow/red/purple/…) is dropped on purpose. The play status was
+    the last two-hue holdout — `C_GREEN` for playing, `C_YELLOW` for paused — and
+    a second hue reads as "not this theme" wherever the accent is not green
+    (gruvbox's orange chrome beside an olive status). Both status sites (the list
+    banner's label and the card's meta row) now take the accent, with the GLYPH
+    carrying the state: `●` (card) / `▶` (banner) playing, `❚❚` paused, and a turning
+    quadrant while the stream is still coming up — the last two dim-accent, because
+    neither is the steady state. So
+    `C_GREEN` is gone outright — a live variable holding a real color that nothing
+    prints is a trap, not a spare, and its ten per-theme hexes are recoverable from
+    git — while `C_YELLOW` stays defined as `""`: no site reads it any more, but a
+    stale read costs nothing, whereas deleting it is edits for zero behavior
+    change. `C_MARK` is
     the compound selection/filter style (bold + accent). `YT_THEME` picks the
     family (`mono` = hue zero, bold/dim carry everything); `--theme` beats env,
     and the **`t` key** cycles the family live from any view — the same `set_theme`
@@ -964,7 +1067,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     a font without the block shows tofu and only the user's eyes can judge that.
     `YT_ASCII=1` wins over `YT_BRAND` — a font that cannot draw ♫ cannot draw these.
 
-    **Neutral EAW — one cell in every terminal, unconditionally (4)**
+    **Neutral EAW — one cell in every terminal, unconditionally (8)**
 
     | glyph | cp | declared as | name |
     |---|---|---|---|
@@ -972,6 +1075,19 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     | `♫` | U+266B | `GL_NOTE` | Beamed Eighth Notes |
     | `❚` | U+275A | `GL_PAUSE` (drawn `❚❚`) | Heavy Vertical Bar |
     | `❯` | U+276F | `GL_CARET` | Heavy Right-Pointing Angle Quotation Mark Ornament |
+    | `▖` | U+2596 | `GL_SPIN` | Quadrant Lower Left |
+    | `▗` | U+2597 | `GL_SPIN` | Quadrant Lower Right |
+    | `▘` | U+2598 | `GL_SPIN` | Quadrant Upper Left |
+    | `▝` | U+259D | `GL_SPIN` | Quadrant Upper Right |
+
+    The four quadrants are the fetch spinner AND the `Starting` play state — one animation
+    reused, so the wait for a search and the wait for a stream look like the same thing — and
+    their EAW class is the reason they were chosen: U+2596..U+259F is the one Neutral island inside the Block Elements, so the
+    animation is one cell in every terminal and under every setting. The obvious alternatives
+    are not — `◐◓◑◒` and the `▁▃▅▇` bars are Ambiguous, so `YT_AMBIG_WIDE=1` (or a terminal
+    that treats Ambiguous as wide) would let the frames jump between one and two cells. They
+    are in `CW_NARROW` even though nothing measures the spinner line, so the "every glyph has
+    a known width" invariant holds by construction and not by where the glyph happens to print.
 
     **Ambiguous EAW — one cell by default, two only under `YT_AMBIG_WIDE=1` (13)**
 
@@ -993,13 +1109,13 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
 
     The Ambiguous 13 are the **entire** configuration-dependent surface: the only characters
     whose cell count a terminal setting can move, and the only ones `YT_AMBIG_WIDE` touches.
-    The Neutral 4 are one cell by definition of their class, so no setting reaches them.
+    The Neutral 8 are one cell by definition of their class, so no setting reaches them.
     `♫` U+266B belongs there and not with the arrows — it is Neutral, so it stays one cell
     even under `YT_AMBIG_WIDE`.
 
-    Everything the TUI draws is therefore in one of four buckets: ASCII (1 cell), these 17
+    Everything the TUI draws is therefore in one of four buckets: ASCII (1 cell), these 21
     (tabled), CJK label text (2, exact), or untabled and conservatively over-counted.
-    `YT_ASCII=1` (auto-on for a non-UTF-8 locale) replaces all 17 with ASCII equivalents, so
+    `YT_ASCII=1` (auto-on for a non-UTF-8 locale) replaces all 21 with ASCII equivalents, so
     the inventory has exactly two states and no font-dependent middle ground — which is why
     every drawn glyph must have a `GL_*` name. Page dots were the last hardcoded literals
     (`●` / `○` inline, with `○` having no name at all); they now go through
@@ -1069,7 +1185,11 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     they run out of room sooner than their character count suggests) and returns through a
     global, since this runs several times per redraw and `$(...)` would fork. On top of it:
     `print_hints` packs `key<TAB>label` items (or bare fields) into as few lines as fit,
-    with a first/continuation prefix; `truncate_disp` elides a variable-length value that
+    with a first/continuation prefix and `HINT_SEP` between items (two spaces unless the
+    caller overrides it — the same one-call override shape as `HINT_KEY_COLOR`, and both
+    the printer and the packer's fit test read the same value, so a separator the packer
+    did not know about cannot wrap an item one slot early); `truncate_disp` elides a
+    variable-length value that
     shares a one-line budget with fixed chrome. Applied to the navigation row, the card's
     hint block, the empty-state copy, and the list's
     status row (whose `min=`/`max=` now appear only when set — at their `0s` default they
@@ -1119,6 +1239,21 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     number on the row under the cursor removes the one label that says *which* row that is,
     which is the thing a reader looks for when they want to say where they are. Reverted; the
     marker got its own slot instead, which is what the fixed sub-field made room for.
+  - **The focus card's hint line is dot-joined and bracket-free.** Six keys with
+    `[bracketed]` keys, two-space joins and sentence labels (`back to list`,
+    `pause / resume`, `stop playback`) measured 110 cells — two lines at every width the
+    card supports, and at short heights that second line came out of the body. The keys
+    keep their place and size; what changed is the shape: brackets dropped (the bold-key /
+    dim-label weight split already separates the two, so the brackets spent 2 cells per
+    item saying it twice), labels cut to one word each, and items joined by the suite's
+    `GL_SEP` (` · `, dim) instead of two spaces — 63 cells, one line down to 63 columns
+    (69 under `YT_AMBIG_WIDE=1`, where `←`/`→`/`·` each cost two cells instead of one).
+    Below that it wraps to two, the same graceful path every other chrome block takes.
+    The zh labels were re-cut, not trimmed mechanically: `返回列表选单` → `列表`,
+    `快退 / 快进 5s` → `跳转`, so the zh line measures 63 too. `S_QUIT` is deliberately
+    untouched — the list view's navigation block shares it, and it was already one word.
+    The empty state (`nothing playing`) takes the same treatment for consistency, though
+    with two items it fit either way.
   - **The card's body carries no labels.** `Title:` / `Channel:` / `Time:` / `Mode:` /
     `Status:` (and the hint block's `Controls:`) are gone; typography carries the same
     structure — bold title, dim channel, one dim meta row `3:21 / 9:27 (37%) · audio ·
@@ -1134,6 +1269,48 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     with no labels there is no pad to get wrong. The title also loses its `▶`: play state
     lives in the meta row's coloured status, and two indicators for one fact is the same
     duplication in miniature.
+  - **The list's key-hint block loses its label too, and gains the keys it never wrote
+    down.** `Navigation:` was the last label on the chrome band, and it went for the reason
+    the card's `Controls:` did: the keys ARE the content, and its neighbours — the banner
+    above, the rail below — carry no label either, so the word only announced what the reader
+    could already see. It also cost 12 cells on the widest line in the view. `S_NAV` is
+    deleted from both language tables rather than left defined, since nothing reads it. The
+    separator becomes `GL_SEP`, matching the card's block, so the two views print one object
+    instead of two that merely list the same keys — and `HINT_SEP` is set around the MEASURE
+    call as well as the print call, never just one: ` · ` is 3 cells against the default 2,
+    which across 11 gaps is 11 cells, enough to move the block from one line to two, and a
+    measure pass that under-counts the chrome is precisely how the header scrolls off the top.
+    Three keys were also **missing from the one view whose job is to write keys down**:
+    `9/0` volume, `Space` pause and `[ ]` seek are all handled by the menu loop's universal
+    case, so they always worked here — the card's hint block and the banner's short-terminal
+    fallback both documented volume and pause, and §12.4 and §18 documented all three, which
+    is what makes their absence a gap rather than a decision. They cluster at the end beside
+    `s`, being the playback keys in a list otherwise about moving and searching. The seek keys
+    print as `[ ]`, **not** `[/]`: `/` is this line's "or" separator (`9/0`, `↑/↓`), but these
+    two keys ARE brackets, so a slash wrapped in them read as "a bracketed `/`" and collided
+    with the real `/ filter` entry three items earlier. A space says "two keys" without
+    spending a character that already means something else on the line. `S_SEEK5` is renamed
+    `S_SEEK`: its value was always the bare word, and it now serves the card's ±5s arrows and
+    the list's ±10s brackets both, so a name claiming one step size was the only thing the old
+    name did. Still undocumented on purpose: `p`/`P` (a pure `Tab` alias) and `Esc` (a no-op
+    in this view).
+  - **The banner's tail is a POSITION, not a duration.** It used to print the track length
+    alone (`▶ Playing: … · 3:34`), which is the one number already on the row three lines
+    below it; it now prints `1:12 / 3:34`, the same pairing the card's meta row shows, so the
+    two views cannot disagree about where the track is. It costs no IPC of its own: `PT_CUR`
+    and `PT_TOTAL` are whatever the shared clock last left, at most a second old, which is the
+    resolution the line is drawn at. Empty `PT_CUR` means no reading has landed yet — the
+    first frame after Enter, before the first tick — and falls back to the duration alone
+    rather than printing a bare `/`; `PT_TOTAL` falls back the same way, and because
+    `fetch_play_times` seeds it from the row's own `short_dur` and only replaces it with
+    `fmt_sec` once mpv answers, the readout never changes SHAPE a second into playback. Live
+    keeps the card's live form (`12:34 · LIVE`, no slash): mpv's clock describes the
+    broadcast, not this listen, so there is no total to divide by. **This also made
+    `clear_play_state` incomplete.** It reset `PT_PCT` for the rail's sake but left `PT_CUR`
+    and `PT_TOTAL` standing, and `play_selected` reaches it through `stop_current_playback`
+    *before* launching the next track — so the banner would have shown the PREVIOUS track's
+    elapsed time until the first tick overwrote it. All three clear together now, and empty is
+    also exactly the "no reading yet" signal the fallback reads.
   - **The rail is placed with an absolute column jump, not computed padding.** Right-aligning
     by padding emits `room - DISP_W` spaces, which lands the column wherever OUR measurement
     says — and the width rule over-counts *by design*. A title of mathematical-bold letters
@@ -1284,6 +1461,82 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
   in ASCII mode or past a readable dot cap. The terminal cursor is hidden while the menu is
   drawn (so no stray block parks below the footer) and shown only for the bottom filter input,
   typed prompts, and playback; a `trap … EXIT` restores it on quit / error / Ctrl-C.
+- **Fetch spinner.** A search is the only moment the TUI has nothing to draw — at startup it is
+  the only thing on an otherwise blank terminal — and a still `searching "lofi"…` reads as hung,
+  which is why the line now ends in a rotating quadrant (`▘▝▗▖`, `|/-\` under `YT_ASCII=1`).
+  Three decisions worth keeping: (1) it brackets `fetch_json`, not its callers, so the startup
+  fetch, `n`, `m` and `o` all animate from one implementation and a fifth caller would get it
+  automatically; (2) the ANIMATION is what runs in a background subshell, not the search —
+  backgrounding the search would need an rc file and a done-marker, because `kill -0` still
+  succeeds on an unreaped child and the poll would never end, and `fetch_json`'s three distinct
+  return codes would have to be smuggled back through a file; (3) the timer is `sleep 0.12`
+  because bash 3.2 has no other one — `read -t` truncates a fractional timeout there (measured:
+  `-t 0.2` sat through a 5 s pipe), and a 1 s frame is not an animation. Each frame prints its
+  glyph and backspaces onto it, so the line never grows; `spin_stop` erases the last frame and
+  closes the line, which is what keeps `report_fetch_failure`'s sentence on a clean row. Echo
+  goes off at `spin_start` and is deliberately NOT restored — a key pressed mid-fetch would
+  otherwise land inside the spinner line, and every caller is heading into the menu loop, which
+  runs with echo off anyway.
+- **ONE clock, shared by every view.** `read_nav_input`'s `-t 1` used to be granted per
+  view — card always, list only while `CURRENT_PLAY_LOADING`. That is why the list could carry
+  no live element at all, and two grants of the same timeout are two places to change the
+  cadence, which drift (the F7 shape). There is now a single condition, and it does not ask
+  which view is up: it asks whether anything on screen can change **without a keypress**,
+  which is playback. `[[ -n "$CURRENT_PLAY_ID" ]] || ((CURRENT_PLAY_LOADING))` — the play id
+  covers a running player, LOADING covers the pre-socket window where a spinner has to advance
+  before there is anything to poll. It cuts both ways on purpose: the list now ticks for the
+  whole of playback (its rail is live, below), and the card *stops* ticking when nothing is
+  playing, where it used to repaint a static `(nothing playing)` once a second forever. The
+  live filter comes along for free, since `filter_live` drives the same reader.
+  - **`read_query_input` is deliberately excluded.** The `n` new-search prompt has its own
+    reader and stays untimed: a tick there would repaint the screen mid-keystroke while a
+    query is being typed.
+  - **The clock owns the polling, not the renderer** (`nav_tick`). The card polls inside its
+    own renderer because its whole body IS the readout; every other view needs only the
+    percent for its rail, so that poll happens on the tick instead. `fetch_play_times` is an
+    `nc` + `jq` pair — two forks — and putting it in the list renderer would have charged
+    every arrow keypress one IPC round-trip. A view that repaints between ticks reuses the
+    last values, at most one second old, which is the resolution the rail is drawn at anyway.
+    Exactly one poll per tick in every view: the card's from its renderer, everyone else's
+    from `nav_tick`.
+- **The list's rail is the same rail, and it goes live during playback.** The boundary under
+  the navigation block is drawn in the accent now, not dim — a rail is a rail in every view,
+  and the card's carries the accent because it pairs with the live progress rail, so matching
+  here keeps one rail language (`print_details`' rail joins it). While a track plays that
+  boundary *is* the live rail: the clock leaves the percent in `PT_PCT`, so the line doubles as
+  the position readout and the list needs no bar of its own. It never changes width or
+  disappears — no percent (a live stream, or the first second before mpv answers) draws the
+  static divider at the identical `nav_cols` width, and `clear_play_state` resets `PT_PCT` so a
+  stopped player cannot leave a position drawn behind it.
+- **Three play states, not two.** `-d` returns as soon as the core
+  has forked, but mpv still has to resolve the stream through yt-dlp and fill its cache, and on
+  a cold URL that is *seconds* (measured: ~9 s on a first-play lofi mix). The banner claimed
+  `▶ Playing` for the whole silent window. There is now a `Starting` state between launched and
+  audible, carrying the fetch spinner's quadrant frames so the wait looks like the wait that
+  preceded it. Four things make it work:
+  - **`core-idle`, not `time-pos`.** mpv answers IPC long before it plays a note. `core-idle` is
+    true while the core is producing nothing — loading, seeking, waiting on cache — and flips
+    false the instant output begins, which is exactly the edge the label should turn on.
+    `time-pos` goes non-null when the file is merely *loaded*, so it would call a still-buffering
+    stream "playing" and put the problem back where it started.
+  - **This state is what first made a ticking list necessary** (see the shared clock above).
+    A banner that only refreshed on a keypress would be the same staleness bug
+    `check_player_alive` exists to prevent.
+  - **One decider, two views.** `play_state_marks` picks glyph/label/colour; the banner and the
+    card pass in their own "playing" glyph (`▶` / `●`, the two they already used) and draw what
+    comes back. With three states and two views, the alternative was six branches in two places.
+  - **No rail during the window, deliberately.** The list keeps its static divider — the
+    live rail needs a percent and there is none yet — and the card draws no bar, which costs
+    the card a one-time two-row growth when the first percent lands. Considered and declined:
+    an animated "indeterminate" rail would be a SECOND state indicator beside the spinner and
+    the label, the same duplication the card's title dropped its `▶` for, with the added cost
+    that a sweep sitting at 40% is indistinguishable from a track at 40%. The list's own line
+    never changes width either way, which is what makes the static choice free there.
+  - **Two ways out besides success.** A pause during the window clears the state — `core-idle`
+    stays true while paused, so the probe could never clear it, and `Starting` over a player the
+    user just paused is the wrong sentence. And a 20 s cap clears it regardless: on a stream that
+    slow the choice is between an animation that never resolves and the optimistic label this
+    showed before the state existed, and the cap picks the second, once.
 - **URL plumbing:** the url is field 1 of the US-separated record and `load_rows` splits it
   back into `urls[]` alongside the five `R_*` field arrays, so a pick is a direct array index
   — never re-parsing a rendered line. Titles cannot break the field boundary because `clean`
@@ -1458,7 +1711,7 @@ kept out of flags to keep each verb's flag surface narrow.
                       YT_VIDEO_FORMAT_FAST  YT_ASCII_VO (tct)  YT_MPV_INPUT_CONF
                       YT_ASCII (1 = ASCII glyph fallbacks; auto-on for a non-UTF-8 locale;
                         read by BOTH the core and yt-tui — legacy alias YT_TUI_ASCII).
-                        Covers the WHOLE glyph set: ♫ ● ○ ❯ · ▶ ❚❚ • … → — ↑/↓ ←/→ ↵
+                        Covers the WHOLE glyph set: ♫ ● ○ ❯ · ▶ ❚❚ • … → — ↑/↓ ←/→ ↵ ▘▝▗▖
                         and the bar/rail runs. Verified by asserting a rendered pane
                         holds no non-ASCII beyond the label text.
                       YT_LANG (en|zh) = language of yt-tui's menu chrome; default zh
@@ -1492,7 +1745,7 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
 ## 17. Function map & provenance
 
 ```
-   Core (shell-scripts/yt)
+   Core (shell/yt)
      Setup/util : usage, die, is_non_negative_int, validate_enum,
                   require_cmd/require_deps, mpv_supports_vo, normalize_playback_mode,
                   set_action, JQ_PRELUDE (jq p2/fmt_dur — the one duration formatter)
@@ -1511,16 +1764,22 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
    Interactive  : yt-tui   (fetch_json → build_all_rows → load_rows → menu loop:
                   display_menu · read_nav_input · move_selection · play_selected ·
                   new_search [read_query_input, Esc cancels] · filter_live → apply_filter)
-     Views      : display_list_menu (rows + banner + reflow),
+                  Startup prompt: same read_query_input, run with echo off before the
+                  first fetch — one reader, one Esc contract, no second implementation
+     Views      : display_list_menu (rows + banner + reflow; in-place \033[H/K/J),
                   display_now_playing_card, display_menu (dispatch, DCS frame hold)
      Width layer: char_w/disp_w/truncate_disp/cluster_back, cw_range/init_cell_tables
+     Fetch UX   : spin_start/spin_stop (background subshell, sleep 0.12 frames)
+                  wrapped around fetch_json — every fetch path animates
      Chrome     : layout_cols, print_hints (HINT_MEASURE), wrap_print/wrap_emit
                   (WRAP_MEASURE), print_details (DETAIL_MEASURE), card_divider,
                   repeat_glyph, render_prog_bar
      Input      : read_nav_input/read_query_input, utf8_complete + init_lead_tables
                   (one key per CHARACTER), tty_echo_off/tty_echo_restore,
                   cursor_hide/cursor_show
-     Player     : send_mpv_ipc, fetch_play_times (one connection for pos/dur/pct),
+     Player     : send_mpv_ipc, mpv_get_prop, fetch_play_times (one connection for pos/dur/pct),
+                  player_check_ready (core-idle → clears the Starting state, 20 s cap),
+                  play_state_marks (playing/paused/starting → glyph+label+colour, both views),
                   toggle_pause, seek_relative, adjust_volume, stop_current_playback,
                   check_player_alive, clear_play_state, elapsed_since_play,
                   cleanup_on_exit
@@ -1559,7 +1818,7 @@ whole width layer are net-new.
                / filter (live narrow) · n new search · m more results · o sort ·
                v cycle mode (audio→video→fast, applies to the next Enter)
        Card  : ←/→ seek ∓5s · ↑/↓ volume · Esc back to the list
-       Both  : Space pause/resume · s stop · 9/0 volume · [ / ] seek ∓10s ·
+       Both  : Space pause/resume · s stop · 9/0 volume · [ ] seek ∓10s ·
                l chrome language (en↔zh) · t palette family · q quit (reaps its player)
 ```
 
@@ -1699,7 +1958,7 @@ first; gate deletions by grep so no dangling reference survives.
 
 ### 25.1 Open defect register — `yt-tui` hardening pass
 
-Audited against `shell-scripts/yt-tui`. **Batch 1 (the one-line edits), batch A (the cheap
+Audited against `shell/yt-tui`. **Batch 1 (the one-line edits), batch A (the cheap
 correctness/UX edits), batch B (the IPC layer), batch C (the liveness poll), batch D (the
 failure reporters), batch E (the input layer), the views-cleanup pass and the i18n pass are
 ALL fixed — the register is empty** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
@@ -1759,7 +2018,7 @@ an ambiguous-width bug on the grounds that `total_time` can be `● LIVE`. It co
 live branch of `fetch_play_times` returns early with `PT_PCT=""`, and that view's `bar_total`
 was only computed inside `if [[ -n "$PT_PCT" ]]`, where every part of the prefix is ASCII
 (`fmt_sec` / `SHORT_DUR`). Neither the variable nor the view exists now — the card sizes its
-bar from `cols - 4`, never from `${#var}`. The `·` separator on that line is likewise live-only, i.e. bar-free. What was
+bar from `cols`, never from `${#var}`. The `·` separator on that line is likewise live-only, i.e. bar-free. What was
 wrong there was only the comment, which stated the conclusion ("all the prefix cells are
 ASCII") without the early-return that makes it true; it now names that early return. No
 arithmetic changed.
@@ -1906,7 +2165,8 @@ with 23 assertions, run three times for flake):
   away.
 - Not colored. The plan called for `C_YELLOW` on the play reason; the theme pass retired that
   variable (it is `''` in every theme), and the `n`/`m`/`o` failures it sits beside print plain,
-  so a sixth read of a retired global would have bought nothing.
+  so reading a retired global would have bought nothing. The status-accent pass took the last
+  real read of it with the card's paused branch, so it is now assigned and never read.
 - **Correction — the plan's own repro for F2b was already unreachable.** It said to force
   `-f ascii` through the detached path and watch the core refuse. F16 (batch A) validates `-f`
   against `MODE_CYCLE` at startup, so `ascii` now dies in argument parsing and never reaches
@@ -1984,6 +2244,18 @@ new tmux rigs; the premise was measured before a line was written):
   lessons were about a rig measuring the wrong thing; this one is about a rig measuring nothing
   and reporting success, which no amount of re-reading the assertion would have caught — it
   took looking at what the machine was actually doing.
+- **A fourth, from the in-place-render pass: a PTY with no window size renders a ONE-ROW list,
+  and every frame assertion made on it is worthless.** A bare `pty.fork()` starts at 0x0, and
+  `LINES`/`COLUMNS` in the environment do not fix it — `term_size` reads `stty size` through
+  `/dev/tty` on purpose (§ the width layer), so the reflow had no rows to spend and drew exactly
+  one. The frames looked plausible enough to trust: header, banner, ONE result, footer. The rig
+  has to `ioctl(fd, TIOCSWINSZ, …)` before the first read; after that the same drive produced the
+  full ten-row page and the row diffs meant something. Same family as the three above — the
+  harness differed from a real terminal in one detail, and that detail was the whole subject of
+  the test. Second half of the same lesson: assert on a SCREEN MODEL (a pyte `Screen` fed the raw
+  bytes), not on the byte stream. "Pause changed exactly one row" is a claim about cells after
+  `\033[K` / `\033[J` / CHA have been applied — grepping emitted bytes cannot make it, and the
+  byte stream of a correct in-place frame looks nothing like the screen it produces.
 
 **Closed by the reflow floor fix — the "pre-existing" rig failure** (`bash -n` clean, no
 `shellcheck` delta, every suite green, and the list rig is finally 22/22 instead of 21/1):
@@ -2074,6 +2346,49 @@ because `clean` collapses whitespace, and which threw away the `views` field it 
 (§11), and the tab-collapse hazard the fix had to dodge is why the record separator is US
 rather than tab. The same audit noted this document's §11 diagram naming `s`/`S` for
 new-search/more-results instead of `n`/`m`; also corrected.
+
+**Closed by the input-latency pass — the Enter key was being read as a UTF-8 lead byte:**
+
+- **A one-byte read of Enter is the EMPTY string.** `read` strips its `\n` delimiter, and
+  ICRNL turns Return into `\n` even in the non-canonical mode `read -n1` sets up — which is
+  why every case arm downstream already lists `""` beside `$'\n'` and `$'\r'`. `utf8_complete`
+  then tested that empty string against the lead-byte tables, and **`*""*` matches EVERY
+  pattern**, so Enter was classified as a 2-byte lead and sat in the `read -rsn1 -t 1` below
+  waiting for a continuation byte that cannot arrive. Cost: a full second of dead screen after
+  every Enter, plus a SWALLOWED keystroke whenever the user pressed something inside that
+  second (it was appended to `CHAR_IN` and read as one wrong key). Fixed with an early return
+  on empty.
+- **The bug was localised by an A/B the user had already run without knowing it.** The report
+  was "a big delay after the startup prompt, but none with the query on argv" — two paths that
+  share `fetch_json` entirely and differ only in `read_query_input`. Timed over a pty, Enter to
+  the `searching` line: **1038 ms vs 20 ms**, and the fix takes the prompt path to 32 ms. The
+  same second was also being paid before every `play_selected`, since `read_nav_input` routes
+  Enter through the same call — invisible there, because a play takes seconds anyway, which is
+  why it was reported as a *prompt* bug.
+- The other three `== *"$var"*` globs (`char_w`, `cluster_back`) were audited in the same pass
+  and are unreachable with an empty argument: all of them only ever receive `${s:$i:1}` for
+  `i < ${#s}`.
+
+**Closed by the detached-input pass — the player was eating the TUI's keys:**
+
+- **The defect is in §9.1's launch, and the symptom was in the TUI.** `[` and `]` "did
+  nothing". They decoded correctly (`0x5b`/`0x5d`, verified with an instrumented copy) and the
+  IPC worked (`time-pos` `30.47 → 20.47 → 10.45 → 20.43` across `[ [ ]`), so neither the
+  binding nor the wire was at fault: mpv was sitting on the caller's tty and winning the race
+  for the byte. See §9.1 for the mechanism (`set -m` suppressing bash's automatic `/dev/null`)
+  and the `lsof` evidence. Worth recording that the keys had been in **§12.4 and §18 all
+  along** — the design documented three keys the UI never told anyone about, and once they were
+  added to the hint block the collision surface with mpv became visible.
+- **Correction, kept because two further defects were nearly filed on it.** This pass first
+  concluded that mpv holding the tty also broke bash's `read -t 1`, and therefore killed the
+  list view's one-second clock — the evidence being a `PT_CUR` that stayed empty and reads that
+  blocked 12 s and 41 s. Both halves were wrong. An A/B with mpv on and off the tty times out
+  **4/4 either way**, and the tick chain runs 6/6 against a local synthetic source; the long
+  reads were YouTube throttling this session's own repeated searches to 57–90 s, which stalled
+  the harness inside `play_selected`'s command substitution and left no idle second for a tick
+  to fire in. **A measurement taken through a saturated network is not a measurement of the
+  program** — the same family as the echo-rig and probe-vs-mpv lessons above, and the reason
+  the clock was finally verified against `av://lavfi:sine` instead of a video.
 
 ## 26. Non-goals / known constraints
 
@@ -2168,6 +2483,23 @@ the part of a rig worth keeping.
                 survives (24 captures). The same matrix on the pre-fix build fails three
                 of them (62x12, 46x14, 40x14, all with the filter open), which is the
                 assertion earning its place
+                In-place render (pyte screen model over a 100x30 pty, so the assertion is
+                what a TERMINAL ends up showing, not what the script emitted): pause →
+                resume changes exactly ONE screen row (the banner) and the whole session
+                emits ZERO ED sequences — no `clear` in a frame, none on a Tab/Esc view
+                switch. Same rig: arrow-down changes 4 rows (two row lines, two details
+                lines), a filter narrowing 25 → 3 results leaves no stale rows under the
+                shorter frame, and list↔card in both directions leaves nothing of the
+                outgoing view. Cost of a frame, same rig: a pause writes 2413 bytes in
+                15-24 ms — the same full frame an arrow-down writes, which is the measured
+                form of "the redraw is whole-frame ON PURPOSE" (§11)
+                Fetch spinner / play states (same pty rig, real network): the four fetch
+                paths (startup, n, m, o) each animate their own `…` line; Enter → the
+                banner reads `Starting` with a turning quadrant for the whole mpv
+                start-up window (~9 s on a cold URL) and flips to `Playing` with NO
+                keypress; Tab mid-window shows the same state on the card; Space during
+                it wins and the 1 s tick stops; YT_ASCII=1 draws both animations as
+                |/-\
                 Views cleanup (card matrix + index captures + view-cycle pane): the card
                 renders NO label text at 40/60/80/120 cols x en/zh x vod/live/empty
                 (25 assertions), always ONE meta row, dropping "· mode" at 40 rather
@@ -2226,6 +2558,27 @@ the part of a rig worth keeping.
                 menu never blocks; Enter on another row switches track without a gap;
                 a launch that fails prints the core's own last stderr line and waits on
                 "press any key"; non-TTY (piped stdin or stdout) → dies cleanly
+   Input      : (pty, timed) Enter at the startup prompt reaches the `searching` line in
+                32 ms against 1038 ms before the utf8_complete guard; the same query on
+                argv measures ~20 ms either way, which is what localised the stall to
+                read_query_input rather than to the fetch the two paths share
+   Detach fd  : (pty) lsof on the wrapper AND mpv — fd 0 is /dev/null and mpv answers
+                input-terminal=false; before the fix both held /dev/ttysNNN with
+                input-terminal=true. The A/B names `set -m` and not the `&` as the cause:
+                the same mpv backgrounded WITHOUT set -m gets /dev/null for free
+   Clock      : read -rsn1 -t 1 times out 4/4 at 1 s with a live detached player attached
+                and the parent on the tty; the whole tick chain (timeout → three-property
+                one-connection fetch → advancing pos/dur/pct) runs 6/6 against a LOCAL
+                synthetic source (av://lavfi:sine), which keeps YouTube throttling out of
+                a timing measurement it had already corrupted once (§25.1)
+   Banner     : the tail's fallback ladder, 8/8 at the function level — no reading yet →
+                duration alone; --:-- + seeded total; elapsed/total; mpv's own total
+                winning over the row's; empty total → duration; live with and without a
+                reading; and a 1:02:03 / 11:53:45 long-form pair
+   Nav block  : real renders at 130 cols (label-less, dot-separated, two lines with the
+                three added keys), at 60x12 (the gate DROPS the block, header still on
+                line 1, nothing scrolled), and in zh after the S_SEEK rename
+                (9/0 音量 · Space 暂停 · [ ] 跳转) with no set -u abort
 ```
 
 ## 28. Portability contract — bash 3.2

@@ -10,14 +10,28 @@ set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
 # expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). DESIGN-yt.md §28.
 
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
-# Locate the impl whether invoked via a bin/ symlink (../../shell-scripts) or directly.
-if [[ -f "$SCRIPT_DIR/../../shell-scripts/yt" ]]; then
-    IMPL="$SCRIPT_DIR/../../shell-scripts/yt"
-elif [[ -f "$SCRIPT_DIR/yt" ]]; then
+# Resolve this script's OWN symlink chain before looking for its siblings. The short names on
+# PATH (ytt / yts / ytp) are symlinks into a checkout that can live anywhere, so `dirname $0` is
+# the symlink's directory, not the code's. This walks the chain to the real file and takes ITS
+# directory — which is the one holding the rest of the suite.
+#
+# `cd -P` / `pwd -P`, not the logical forms: a relative symlink resolves to something like
+# ~/bin/../../../elsewhere/shell, and logical `cd` would normalise those `..` textually against
+# ~/bin instead of against what ~/bin actually points at. Physical resolution is the only one
+# that lands in the right place. bash 3.2 has no `readlink -f`, hence the loop.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+    _link=$(readlink "$_self")
+    case "$_link" in
+    /*) _self="$_link" ;;
+    *)  _self="$(dirname "$_self")/$_link" ;;
+    esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
+if [[ -f "$SCRIPT_DIR/yt" ]]; then
     IMPL="$SCRIPT_DIR/yt"
 else
-    echo "yt-search: cannot locate yt (core)" >&2
+    echo "yt-search: cannot locate yt (core) next to $SCRIPT_DIR" >&2
     exit 1
 fi
 
