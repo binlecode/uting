@@ -1,3 +1,5 @@
 # Throwaway scratch — verification rigs live here until they earn a place in tests/
 **/tmp/
 .DS_Store
+__pycache__/
+*.pyc
