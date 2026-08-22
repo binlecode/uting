@@ -15,8 +15,9 @@ set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features (no ${v,,}, no mapfile); guard
 # empty-array expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). §28.
 
-# Resolve this script's OWN symlink chain before looking for its siblings. The short names on
-# PATH (ytt / yts / ytp) are symlinks into a checkout that can live anywhere, so `dirname $0` is
+# Resolve this script's OWN symlink chain before looking for its siblings. The PATH entries
+# (yt-search / yt-play, and ytt for the TUI) are symlinks into a checkout that can live
+# anywhere, so `dirname $0` is
 # the symlink's directory, not the code's. This walks the chain to the real file and takes ITS
 # directory — which is the one holding the rest of the suite.
 #

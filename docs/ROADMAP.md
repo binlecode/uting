@@ -86,8 +86,9 @@ PyPI、**同领域**的 GitHub 同名仓库。
 
 已知瑕疵、接受：挪威语里 `uting` 是真词，意为"陋习 / 讨人厌的东西"。
 
-**别名策略**：`uting` 只作**发布名**。本机继续用 `ytt` / `yts` / `ytp`（Go 版用 argv[0] 分派或 shell
-alias 实现）—— 明天早上敲的还是 `ytt`，公开的那个名字是干净的。
+**别名策略**：`uting` 只作**发布名**。本机人机面继续用 `ytt`（Go 版用 argv[0] 分派或 shell alias
+实现）—— 明天早上敲的还是 `ytt`，公开的那个名字是干净的。agent 面用规范长名 `yt-search` /
+`yt-play`，不再留 `yts` / `ytp`：短名的理由是省打字，而 agent 面没人打（见 `DESIGN.md` D0）。
 
 ### 3.2 被否掉的候选，及原因
 
@@ -237,15 +238,16 @@ alias 实现）—— 明天早上敲的还是 `ytt`，公开的那个名字是�
   一份 2494 行的设计文档"。文档是更可传播的产物。
 - **D3 —— 任何重写之前先冻结契约**（envelope schema、player record、退出码表、生命周期语义）。
   它是唯一完整活过重写的东西，也是 Go 版的验收规格。
-- **D4 —— Go 的第一步只做 TUI**（`ytt` → Go），调用今天原封不动的 `yts` / `ytp`。被否方案 —— 一次性
+- **D4 —— Go 的第一步只做 TUI**（`ytt` → Go），调用今天原封不动的 `yt-search` / `yt-play`。被否方案 —— 一次性
   全量移植：把生命周期语义和渲染器重写放进同一次变更，回归无法二分定位。
 - **D5 —— "core 是否也去 Go" 是独立的、条件触发的决定**（§9）。触发前 `yt` 保持 shell。
-- **D6 —— 发布名 `uting`（§3.1）；本机别名保留 `ytt` / `yts` / `ytp`。**
+- **D6 —— 发布名 `uting`（§3.1）；本机 PATH 为 `ytt`（人机面短名）+ `yt-search` / `yt-play`
+  （agent 面规范长名）。`yts` / `ytp` 弃用 —— 一个命令一个名字，短名只留给真会被手敲的那个。**
 - **D7 —— Go 版只发一个二进制加子命令，绝不发三个通用名的可执行文件。**
 
   ```sh
-  uting search …     # 今天的 yts
-  uting play …       # 今天的 ytp
+  uting search …     # 今天的 yt-search
+  uting play …       # 今天的 yt-play
   uting              # 无参数 → TUI（今天的 ytt）
   uting mcp          # 第三张脸，D5 触发后
   ```

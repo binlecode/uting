@@ -47,11 +47,11 @@ shell/yt-search -j -n 2 -- lofi | wc -l        # README claims ONE line — see 
 shell/yt-search -J -n 2 -- lofi | jq -e '.results[0]|has("id")' >/dev/null; echo "full exit=$?"
 
 # gating (each must be exit 1, with a message naming the other verb)
-shell/yt-search --detach -- x  >/dev/null 2>&1; echo "yts --detach exit=$? (want 1)"
-shell/yt-search -f audio -- x  >/dev/null 2>&1; echo "yts -f exit=$? (want 1)"
-shell/yt-play "a query"        >/dev/null 2>&1; echo "ytp bare query exit=$? (want 1)"
-shell/yt-play -- "a query"     >/dev/null 2>&1; echo "ytp -- query exit=$? (want 1)"
-shell/yt-play -n 5 -- URL      >/dev/null 2>&1; echo "ytp -n exit=$? (want 1)"
+shell/yt-search --detach -- x  >/dev/null 2>&1; echo "yt-search --detach exit=$? (want 1)"
+shell/yt-search -f audio -- x  >/dev/null 2>&1; echo "yt-search -f exit=$? (want 1)"
+shell/yt-play "a query"        >/dev/null 2>&1; echo "yt-play bare query exit=$? (want 1)"
+shell/yt-play -- "a query"     >/dev/null 2>&1; echo "yt-play -- query exit=$? (want 1)"
+shell/yt-play -n 5 -- URL      >/dev/null 2>&1; echo "yt-play -n exit=$? (want 1)"
 
 # argv ordering: a flag-shaped query after -- is SEARCHED, never interpreted
 shell/yt -l -- --status | head -2                # must be search output, not a player list
@@ -151,7 +151,7 @@ than YouTube — network throttling has corrupted a timing measurement here befo
 ## verify-suite — <date>
 
 Phase 1 syntax      PASS (4 scripts, /bin/bash 3.2)
-Phase 2 contract    FAIL — search -j emitted 26 lines (want 1); ytp -- "<query>" exit 0 (want 1)
+Phase 2 contract    FAIL — search -j emitted 26 lines (want 1); yt-play -- "<query>" exit 0 (want 1)
 Phase 3 rigs        PASS (tui_screen, pty_drive; assert_pane at 100/62 list + 100 card)
 Phase 4 lifecycle   SKIPPED (audible playback — not run)
 

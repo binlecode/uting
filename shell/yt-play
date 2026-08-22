@@ -10,8 +10,9 @@ set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
 # expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). DESIGN-yt.md §28.
 
-# Resolve this script's OWN symlink chain before looking for its siblings. The short names on
-# PATH (ytt / yts / ytp) are symlinks into a checkout that can live anywhere, so `dirname $0` is
+# Resolve this script's OWN symlink chain before looking for its siblings. The PATH entries
+# (yt-search / yt-play, and ytt for the TUI) are symlinks into a checkout that can live
+# anywhere, so `dirname $0` is
 # the symlink's directory, not the code's. This walks the chain to the real file and takes ITS
 # directory — which is the one holding the rest of the suite.
 #
@@ -42,6 +43,7 @@ yt-play — play, resolve, or manage playback of a YouTube URL
 Usage:
   yt-play [-f mode] [--volume N] [-j] <URL>  Play a URL (blocks until done)
   yt-play --info [-j|-J] <URL>            Fetch metadata (title/chapters/desc), do not play
+  yt-play --transcript [--sub-lang L] [-j|-J] <URL>  Captions as clean text, do not play
   yt-play --get-url [-f mode] [-j] <URL>  Resolve stream URL(s), do not play
   yt-play -d <URL>                        Detached background audio (concurrent players OK)
   yt-play --status [-j]                   List live detached players (always exit 0)
@@ -64,6 +66,14 @@ Options:
   --info    Fetch rich metadata (read-only, non-blocking): title, channel,
             uploader, upload_date, duration, view/like counts, live_status,
             description, chapters. Text by default; -j lean JSON; -J full raw record
+  --transcript  Fetch the caption track and print it as clean text, ready to drop into
+            a prompt (read-only, nothing plays). Prefers human-authored captions and
+            falls back to auto-generated ones. -j is the lean envelope (text + size
+            counters); -J is the same envelope plus the timed segments.
+            Alias: --subtitles
+  --sub-lang L  Caption language(s) for --transcript: a comma-separated PRIORITY CHAIN,
+            the first one the video actually has wins (default: en,zh-Hans,zh,ja).
+            Alias: --sub-langs
   --get-url Resolve direct stream URL(s) instead of playing (non-blocking)
   --status  List live detached players (JSON: a 'players' array)
   --stop    Stop a detached player (--id ID), or all (--all)
@@ -75,6 +85,8 @@ Options:
 
 Playback error reason (JSON): forbidden | unavailable | format_unavailable |
                               network | stopped_by_user | unknown | null(ok)
+  network covers connectivity AND HTTP 429 rate limiting (both retryable); forbidden (403)
+  means the opposite — these credentials will not work, retrying will not help
 Lifecycle JSON:
   -d            {status:"started",id,pid,url,mode,started_at,title,sock,log}
   --status      {status:"players",players:[{id,pid,url,mode,volume,title,started_at}...]}
@@ -84,6 +96,9 @@ Lifecycle JSON:
                 | {status:"ambiguous",players:[...]} | {status:"error",reason:"ipc_failed"}
 Info JSON (--info -j): {status,id,title,url,channel,uploader,upload_date,duration,
                        duration_fmt,view_count,like_count,live_status,description,chapters}
+Transcript JSON (--transcript -j): {status,id,url,lang,is_auto,chars,segment_count,text}
+  -J = the same envelope plus segments[{start,duration,text}] in seconds (superset of -j)
+  no captions / fetch failure -> {status:"error",url,reason} and exit 1
 
 To search for something to play, use: yt-search <query>
 EOF
@@ -130,6 +145,23 @@ while (($#)); do
         flags+=("$1")
         shift
         ;;
+    --transcript | --subtitles)
+        action=transcript
+        flags+=("$1")
+        shift
+        ;;
+    --sub-lang=* | --sub-langs=*)
+        flags+=("$1")
+        shift
+        ;;
+    --sub-lang | --sub-langs)
+        [[ $# -ge 2 ]] || {
+            echo "yt-play: $1 requires a value" >&2
+            exit 1
+        }
+        flags+=("$1" "$2")
+        shift 2
+        ;;
     --set-volume=*)
         action=set-volume
         flags+=("$1")
@@ -169,7 +201,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "yt-play: unknown flag '$1' (play flags: -f -d -j --get-url --status --stop --set-volume --id --all)" >&2
+        echo "yt-play: unknown flag '$1' (play flags: -f -d -j --get-url --info --transcript --status --stop --set-volume --id --all)" >&2
         exit 1
         ;;
     http://* | https://* | www.* | youtube.com/* | youtu.be/*)
@@ -188,6 +220,22 @@ done
 if [[ "$action" != status && "$action" != stop && "$action" != set-volume ]] && ((${#url[@]} == 0)); then
     echo "yt-play: a YouTube URL is required (see 'yt-play -h')" >&2
     exit 1
+fi
+
+# --transcript is a READ-ONLY metadata verb: it never plays, so a playback flag next to it
+# is a caller who believes otherwise. Reject instead of silently ignoring - the core's
+# set_action only catches conflicting ACTIONS, and -f/-d/--volume are not actions, so
+# without this gate they would be accepted and quietly do nothing. This is the gating
+# layer's whole job (DESIGN-yt.md §13).
+if [[ "$action" == transcript ]] && ((${#flags[@]})); then
+    for f in "${flags[@]}"; do
+        case "$f" in
+        -d | --detach | -f | --volume | --volume=*)
+            echo "yt-play: $f cannot be combined with --transcript (it does not play)" >&2
+            exit 1
+            ;;
+        esac
+    done
 fi
 
 # flags is always non-empty for status/stop (they add their own flag); for play it may

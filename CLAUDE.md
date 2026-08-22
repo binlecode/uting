@@ -8,7 +8,7 @@ This file is the single source of truth for repository guidelines, used by Claud
 
 The suite is exposed **directly** to shell-capable agents with no MCP wrapper, so the **CLI contract itself** (argv, exit codes, output shape, process lifecycle) *is* the product and the safety boundary. Every design choice follows from that. Full rationale: `docs/DESIGN.md`.
 
-**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `yts`/`ytp`/`ytt` onto their own PATH.
+**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `ytt` (the human surface) and `yt-search`/`yt-play` (the agent surface) onto their own PATH.
 
 ## Runtime Environment (Required)
 
@@ -57,9 +57,9 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
 **Dependency graph — search/play logic exists ONCE, in the core:**
 
 ```
-  ~/bin/yts → shell/yt-search ─┐
-  ~/bin/ytp → shell/yt-play  ──┼─► exec shell/yt (core) ─► yt-dlp · mpv · jq
-  ~/bin/ytt → shell/yt-tui ────┘   (via yt-search -j → render → yt-play -d -j)
+  ~/bin/yt-search → shell/yt-search ─┐
+  ~/bin/yt-play   → shell/yt-play  ──┼─► exec shell/yt (core) ─► yt-dlp · mpv · jq
+  ~/bin/ytt       → shell/yt-tui ────┘   (via yt-search -j → render → yt-play -d -j)
 ```
 
 Each wrapper locates the core by a path **relative to its own resolved script location** (self-resolving symlink chain, `cd -P`/`pwd -P` — bash 3.2 has no `readlink -f`), so the checkout can live anywhere and needs no `bin/` entry to work.
@@ -180,7 +180,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 ## Coding Style & Naming Conventions
 
 - Match the surrounding style: 4-space indentation, `snake_case` functions, `UPPER_SNAKE` globals, `local` for everything inside a function, `set -euo pipefail` semantics respected (see the arithmetic rule above).
-- Long names (`yt`, `yt-search`, `yt-play`, `yt-tui`) are the canonical identity used in help text, errors, and docs. Short names (`yts`, `ytp`, `ytt`) are what goes on PATH. Do not mix the two in one sentence, and never add a second name for an existing command.
+- **One name per command.** `yt`, `yt-search`, `yt-play`, `yt-tui` are the canonical identity — help text, errors, docs, and (for the two agent-facing wrappers) the PATH entry itself. `ytt` is the single deliberate short form, because `yt-tui` is the one command a human types by hand; `yts`/`ytp` are deprecated. Never add a second name for an existing command.
 - Per-request choices are **flags**; set-once tuning is an **environment variable** (`YT_*`) — this keeps each verb's flag surface narrow enough for a small model to call safely. Do not add a flag for something a user sets once.
 - Never add a runtime dependency. The suite's differentiator is that it depends only on primitives everyone already has.
 - Prefer small, incremental edits in the existing scripts over refactors that move logic between files.

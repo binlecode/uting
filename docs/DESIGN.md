@@ -54,11 +54,13 @@ while costing portability. Conclusion: own the glue, depend only on primitives.
 One line each; full rationale lives in the referenced section.
 
 ```
-  D0  Names: yt, yt-search, yt-play, yt-tui — self-descriptive, and still the
-      canonical name every doc, help text and error message uses. On PATH, though,
-      bin/ carries ONLY the short forms yts/ytp/ytt: three symlinks for three
-      scripts, where six meant two names for every command. The long names remain
-      the identity of the scripts, not entries in bin/.  (§4)
+  D0  Names: yt, yt-search, yt-play, yt-tui — self-descriptive, and the canonical
+      name every doc, help text and error message uses. ONE name per command on
+      PATH, and for the two AGENT-facing wrappers that name is the canonical one:
+      bin/ carries yt-search and yt-play under their own names, beside ytt for the
+      TUI — the one command a human types by hand. yts/ytp are deprecated; they
+      were a second spelling of an identity that already existed, which is the very
+      thing this decision exists to prevent.  (§4)
       "tui" not "ui": it is precisely a full-screen *terminal* UI.
   D1  The core (yt) is NON-INTERACTIVE. An agent-facing engine that can prompt can
       also hang; removing the capability makes the failure mode impossible.   (§6)
@@ -97,10 +99,10 @@ is the interactive human surface — pure orchestration with **zero** search/pla
 ```
                           PATH entries (user-created)
         ~/bin/
-        ├── yts  → <checkout>/shell/yt-search
-        ├── ytp  → <checkout>/shell/yt-play
-        └── ytt  → <checkout>/shell/yt-tui
-              ONE name per command: the long names are NOT on PATH
+        ├── yt-search → <checkout>/shell/yt-search    agent surface
+        ├── yt-play   → <checkout>/shell/yt-play      agent surface
+        └── ytt       → <checkout>/shell/yt-tui       human surface
+              ONE name per command; ytt is the only short form
 
         shell/
           yt          CORE engine (all search/play/resolve/lifecycle logic); not
@@ -121,11 +123,23 @@ is the interactive human surface — pure orchestration with **zero** search/pla
 (OS branching lives in the core via `uname -s`). One physical copy of every script, so no
 two installs can drift.
 
-**Why only the SHORT names are on PATH:** `bin/` used to carry both spellings of all
-three commands — six symlinks onto three scripts — so every command answered to two
-names and each doc, allowlist and habit had to pick one. The short forms won because
-they are what actually gets typed; the long names stay the canonical *identity* of the
-scripts (help text, errors, this doc) without also being PATH entries. Consequence:
+**Why the PATH name IS the canonical name, and why `ytt` is the exception:** `bin/` once
+carried both spellings of all three commands — six symlinks onto three scripts — so every
+command answered to two names and each doc, allowlist and habit had to pick one. The rule
+that settled it was ONE name per command, and the short forms won on the grounds that they
+are what actually gets typed.
+
+That ground holds for exactly one of the three. `yt-tui` is the human surface and `ytt` is
+typed by hand every day. `yt-search` and `yt-play` are the AGENT surface: nobody types them,
+an agent gains nothing from three letters, and their help text and error messages have always
+said `yt-search` / `yt-play`. So for those two the short form was never a second name that
+bought typing — it was just a second name, which is what the rule existed to prevent, and it
+put the identity and the PATH entry at two different spellings of the same command. They now
+sit on PATH under their own names and `yts`/`ytp` are deprecated.
+
+Deprecation costs nothing to honour: no script reads its own `argv[0]` for dispatch (the
+symlink chain below is resolved only to LOCATE the siblings), so a leftover `~/bin/yts` goes
+on working — it is simply no longer a documented spelling. Consequence:
 invoked as `~/bin/ytt`, a script's `$0` is the SYMLINK, not the code — so each script
 resolves its own symlink chain first and takes the real file's directory as the place to
 look for its siblings. That is the whole mechanism, and it is why the checkout can live
@@ -138,9 +152,17 @@ directory that does not exist. bash 3.2 has no `readlink -f`, hence the hand-rol
 (This replaced an earlier `../../shell-scripts/` hop that only worked inside one specific
 dotfiles layout; extracting the suite into its own repo is what exposed it.)
 
-Anything that called `yt-search`/`yt-play` by name through PATH (agent tool definitions,
-Claude Code Bash allowlist entries) must use `yts`/`ytp`, or an absolute path into the
-checkout's `shell/`.
+Anything that calls `yt-search`/`yt-play` by name through PATH — agent tool definitions,
+Claude Code Bash allowlist entries — now uses exactly those names. This paragraph used to
+read "must use `yts`/`ytp`, or an absolute path into the checkout's `shell/`", and that
+sentence was the whole argument for D0's revision: the friction landed on the one surface
+that cannot infer a name from context, so an allowlist entry said `yts` while every error
+message the agent read back said `yt-search`.
+
+Callers INSIDE the checkout (the rigs in `tests/`, the skills) use the repo-relative
+`shell/yt-search` form instead. They run beside the code and must not depend on the user's
+PATH at all — a rig that resolved through `~/bin` would be testing the install, not the
+suite.
 
 **Why real wrappers, not `$0`-dispatch in one script:** a real, short wrapper makes each
 tool *physically* what it claims — `yt-search`'s help is short because the script is
@@ -1556,7 +1578,8 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
 - **Owns:** search (list/JSON), URL playback (prose + JSON + taxonomy), stream resolve,
   detached lifecycle. Full flag set; the wrappers delegate to it.
 - **Flags:** `-n -m -M -s -S -l -j -J -f -d` + long `--json --json-full --detach
-  --status --stop --get-url --info --set-volume --id --all --color --volume` (color is
+  --status --stop --get-url --info --transcript --sub-lang --set-volume --id --all
+  --color --volume` (color is
   `--color` only — no `-c` short form; `-S` is the format-sort override — no `-F`).
   `--` ends option parsing: everything after it is the query/URL, verbatim (§6). At most
   one action per call; `--id`/`--all` belong to `--stop`/`--set-volume`; `-d` combines with
@@ -1568,6 +1591,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
    yt --status         list players         yt --set-volume N [--id ID]  live volume
    yt --stop [--id ID | --all]  stop one/all  (--id from --status)
    yt --info <url>     metadata (prose)     yt --info -j <url>  metadata JSON (-J raw)
+   yt --transcript <url>  captions as text   yt --transcript -j <url>  + timed segments
    yt "query"          LIST (D2, default)   yt -j "query"  search JSON envelope
    yt -J "query"       full-field JSON      yt             → error (D3)
   ```
@@ -1599,12 +1623,14 @@ a cross-flag — this is what makes the two contracts non-overlapping.
    yt-search                                  yt-play
    ─────────────────────────────────         ─────────────────────────────────
    allow: -n -m -M -s -S -l -j -J            allow: -f -d -j -J --detach --get-url
-          --color -h                                --info --status --stop --set-volume
+          --color -h                                --info --transcript --sub-lang
+                                                    --status --stop --set-volume
                                                     --id --all --color -h --volume
    reject (→ "use yt-play"):                  reject (→ "use yt-search"):
           -f -d --detach --status                   -n -m -M -s -S -l --list
-          --stop --get-url --info
-          --set-volume --id --all
+          --stop --get-url --info                 also rejects -f/-d/--volume when
+          --transcript --sub-lang                 they appear alongside --transcript,
+          --set-volume --id --all                 which is read-only and never plays
    positional: a QUERY (reject URLs)         positional: a URL
    default: inject -l if no -l/-j/-J         URL required unless
                                              --status/--stop/--set-volume
@@ -1649,7 +1675,13 @@ Playback status (`yt-play -j <url>`):
   "exit_code":0, "reason":null, "retried":false }
 ```
 `reason` enum: `forbidden | unavailable | format_unavailable | network |
-stopped_by_user | unknown | null(ok)`.
+stopped_by_user | unknown | null(ok)`. **`network` covers HTTP 429 rate limiting** as well
+as connectivity: both are retryable, which is the only branch a caller takes on it, so 429
+did not earn a new enum member in a contract three verbs publish. It is deliberately NOT
+grouped with `forbidden` — 403 says these credentials never work, 429 says not right now.
+`--transcript` is what surfaced this (it fetches a caption file per language and can trip
+YouTube's limiter within a handful of calls) but playback and search could always reach it,
+reporting `unknown` — the one reason a caller cannot act on.
 
 Lifecycle / resolve:
 ```
@@ -1671,7 +1703,47 @@ Lifecycle / resolve:
    --info   : {status,id,title,url,channel,uploader,upload_date,duration,duration_fmt,
               view_count,like_count,live_status,description,chapters} ; -J = raw record
               chapters = [{start_time,end_time,title}] | null ; error → {status,url,reason}
+   --transcript : {status:"ok", id, url, lang, is_auto, chars, segment_count, text}
+              -J = the SAME envelope plus segments:[{start,duration,text}…] (seconds) —
+              a strict superset, the same relation search's -J has to its -j (a caller
+              that widens never loses a field it was already reading).
+              text is the segment texts joined by a space — the SAME string the default
+              (prose) mode prints, so the two output modes cannot drift.
+              `segments` is absent from -j because it is the same words TWICE: on a
+              444-cue auto track the full envelope is 52,732 bytes, of which `text` is
+              16,916 and `segments` is 35,647 carrying that identical text plus its
+              timings. -j is 17,074 bytes — 3.1x smaller, no information lost for the
+              summarise-this case the verb exists for (§22, token efficiency). `chars`
+              and `segment_count` keep the lean form self-describing: a caller can budget
+              context and knows what -J would add without fetching it.
+              The raw json3 document is deliberately NOT what -J returns: it carries no
+              status/lang/is_auto, so widening would LOSE fields — the one thing the -J
+              contract never does anywhere else in this suite.
+              lang is the track that was actually written, which is the first entry of the
+              --sub-lang priority chain the video turned out to have.
+              is_auto = the track came from YouTube's auto-generated captions rather than
+              a human-authored one; decided from the printed human-caption dict, not from
+              the file (manual and auto land under the same name).
+              error → {status:"error", url, reason} with exit 1, mirroring --info. reason
+              is the shared enum plus `no_subtitles_available`, which also covers a track
+              that parses to zero usable cues (an empty transcript is a miss, not an
+              empty success — a caller handed {"text":""} would summarise silence).
 ```
+
+**Why `--transcript` is one yt-dlp call.** `--print` implies `--simulate`, and a simulating
+yt-dlp writes no subtitle file — so `--no-simulate` is what lets a single invocation both
+write the captions and report the metadata needed to describe them. (`--dump-json` carries
+the same implication, which is why it cannot be the vehicle here: it is the natural-looking
+recipe that silently produces no captions at all.) The printed field is `%(subtitles)j`
+alone — `%(automatic_captions)j` runs to 940 languages / 3.2 MB on a popular video once
+YouTube's machine translations are counted, and the human dict's keys already answer
+`is_auto`. Captions are requested as `--sub-format json3` so the cleanup stays a jq program:
+json3 carries the timing as structured fields, where VTT/SRT would need a timeline parser.
+Three shapes get dropped — the leading window-definition event (no `segs`), auto-caption
+rollup events (`aAppend`, whose only seg is `"\n"`), and inline style markup — and all three
+fall out of the same two filters: cleaned text, then drop the empties. Filtering on the
+cleaned text rather than on `aAppend == 1` is deliberate: it removes every rollup marker
+observed while keeping any `aAppend` event that actually carries words.
 
 ## 15. Exit codes, TTY, dependencies
 
@@ -1679,6 +1751,7 @@ Lifecycle / resolve:
    0    success; also --status/--stop (always); 130 normalized (SIGINT; clean q already exits 0)
    1    usage/validation error (die), wrapper flag-gating rejection, resolve failure
         (prose), empty-query (D3), yt-tui non-TTY refusal, conflicting actions,
+        --info / --transcript fetch failure (incl. no_subtitles_available),
         --id/--all outside a lifecycle verb, -d with an action or with -f ascii|viz
    2+   propagated yt-dlp / mpv failure (playback, resolve -j, SEARCH failure — search
         reports 2 even when yt-dlp exits 1, so a tool failure is never confused with 1)
@@ -1692,8 +1765,8 @@ Lifecycle / resolve:
    deps : core needs yt-dlp jq mpv before search/play/geturl; --status/--stop need
           only jq (--status uses nc opportunistically for live volume and degrades to
           the recorded value without it), --set-volume needs jq+nc (nc gated lazily so a
-          bare search never demands it), and --info needs only yt-dlp+jq (all checked
-          before the mpv gate). yt-tui needs only jq and the verbs. curl is an OPTIONAL soft dep for
+          bare search never demands it), and --info / --transcript need only yt-dlp+jq
+          (all checked before the mpv gate). yt-tui needs only jq and the verbs. curl is an OPTIONAL soft dep for
           the play-time client probe (§8.2). BSD `nc -U` is stock on macOS; the Linux
           netcat `-U` gap is a known, documented limitation (§26 / script comment).
 ```
@@ -1868,7 +1941,7 @@ exit 4) exit 0 so a polling loop never misreads a normal state as failure.
 |---|---|---|
 | Discoverability | `--help` is ground truth for a caller with no tribal knowledge | ✅ per-verb narrow help + full `yt -h` |
 | Structured output | parse without string-matching prose | ✅ search (`-j`/`-J`) + playback (`-j`) |
-| Token efficiency | high-signal beats complete | ✅ 8-field `-j` (~4× smaller); `-J` opt-in |
+| Token efficiency | high-signal beats complete | ✅ 8-field `-j` (~4× smaller); `-J` opt-in; `--transcript -j` drops the duplicated `segments` (3.1×) |
 | Exit-code contract | success/failure must be detectable | ✅ `cmd \|\| rc=$?`; 130 normalized |
 | Trust boundary | agent strings never hit a shell interpolation point | ✅ query/URL single argv elements; `--` guard |
 | Refuse-don't-hang | never block on absent stdin | ✅ core non-interactive; `yt-tui` requires a TTY |
@@ -2443,6 +2516,22 @@ the part of a rig worth keeping.
                 yt -j "q" → envelope; -p rejected; invalid --color rejected
    Gating     : yt-search rejects -f/--detach/URL; yt-play rejects -n/-s/bare-query
    Resolve    : yt-play --get-url (prose + -j envelope, no playback)
+   Transcript : yt-play --transcript → one line of clean text on stdout, ZERO bytes on
+                stderr; -j → single-line {status,id,url,lang,is_auto,text,segments} with
+                is_auto:false on a human-captioned video and 60 cues recovered; -J → the
+                SAME envelope + segments, asserted a strict superset (del(.segments) is
+                byte-equal to -j) — 17,074 vs 52,732 bytes on a 444-cue track;
+                --sub-lang on a language
+                the video does not carry → {status:"error",reason:"no_subtitles_available"}
+                exit 1 under -j and a die() sentence in prose mode — note yt-dlp exits 0
+                for an absent language, so the miss is detected by NO FILE WRITTEN, never
+                by the exit status; --transcript with -d/-f/--volume rejected by the
+                wrapper; --transcript --info → conflicting actions; a bad --sub-lang is
+                refused in 0.016s (before any network round trip); the temp caption dir
+                under the 0700 state dir is gone afterwards on every path
+                Parser: driven offline against a saved human track and a saved auto track
+                — 60 and 52 cues, zero residual tags, newlines or empty cues in either,
+                and the auto track's rollup duplicates absent from the output
    Playback   : yt-play -j <bad-id> → {status:error, reason:unavailable, retried:false}
                 (both probes fail to resolve → keep cookies, mpv emits the real error)
    Lifecycle  : -d ×2 → --status lists BOTH players → --set-volume --id (only that

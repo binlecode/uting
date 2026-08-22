@@ -142,6 +142,7 @@ Usage (everything after -- is the query/URL, so a query may start with '-'):
   yt [-n num] [-m sec] [-M sec] [-s sort] [-S fmt] [-l|-j|-J] -- <search query>
   yt [-f mode] [--volume N] [-j] -- <URL>              play a URL (blocks)
   yt --info [-j|-J] -- <URL>                           metadata only, no playback
+  yt --transcript [--sub-lang L] [-j|-J] -- <URL>      captions as text, no playback
   yt --get-url [-f mode] [-j] -- <URL>                 resolve stream URL(s), no playback
   yt -d [-f mode] [--volume N] [-j] -- <URL>           detached background playback
   yt --status [-j]                                     list live detached players
@@ -164,14 +165,21 @@ Options:
               volume; change it live with --set-volume.
   -l          Plain text list output (search; default)
   -j          JSON output: search envelope, or one-line status JSON for play/lifecycle
-  -J          Search/--info JSON with the full raw yt-dlp fields
+  -J          Search/--info JSON with the full raw yt-dlp fields; with --transcript,
+              the same envelope plus the timed `segments` array
   -d          --detach: background playback; manage with --status/--stop/--set-volume
+  --transcript  Fetch the caption track and print it as clean text (read-only, nothing
+              plays). Prefers human-authored captions, falls back to auto-generated ones.
+              Alias: --subtitles
+  --sub-lang L  Caption language(s) for --transcript: a comma-separated priority chain,
+              first one the video actually has wins (default: en,zh-Hans,zh,ja).
+              Alias: --sub-langs
   --color M   auto|always|never (default: auto). No -c short form.
   -h          This help
   -V          Print the suite version (answered before any dependency check)
 
 Long-only flags: --detach --status --stop --get-url --info --set-volume --id --all
-                 --json --json-full --list --color --volume
+                 --transcript --sub-lang --json --json-full --list --color --volume
                  (--help and --version also have short forms: -h, -V)
 
 Output contracts (full schemas: macos/docs/DESIGN-yt.md §14):
@@ -179,7 +187,7 @@ Output contracts (full schemas: macos/docs/DESIGN-yt.md §14):
             failure -> {status:"error", query, count:0, results:[], reason}
   play -j   {status, url, mode, exit_code, reason, retried}
             reason: forbidden|unavailable|format_unavailable|network|stopped_by_user|
-                    unknown|null(ok)
+                    unknown|null(ok)   (network also covers HTTP 429 rate limiting)
   -d -j     {status:"started", id, pid, url, mode, started_at, title, sock, log}
   --status  {status:"players", players:[{id,pid,url,mode,volume,title,started_at}]}
   --stop    {status:"stopped", id, stopped} | {status:"stopped", scope:"all", stopped}
@@ -188,6 +196,12 @@ Output contracts (full schemas: macos/docs/DESIGN-yt.md §14):
   --get-url {status, url, mode, format, stream_urls[]}
   --info    {status, id, title, url, channel, uploader, upload_date, duration,
              duration_fmt, view_count, like_count, live_status, description, chapters}
+  --transcript {status, id, url, lang, is_auto, chars, segment_count, text}
+             -J adds segments[{start,duration,text}] (seconds) — a strict SUPERSET of -j.
+             -j omits it on purpose: `segments` repeats the same words `text` already
+             carries, and dropping it is 3.1x smaller on a 444-cue track.
+             failure -> {status:"error", url, reason}; reason uses the enum above, plus
+             no_subtitles_available.
   duration_fmt is null when the duration is unknown (e.g. a live stream).
 
 Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp/mpv failure · 4 lifecycle
@@ -196,7 +210,7 @@ Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp/mpv failure · 4 
 Playback keys (mpv, during a blocking 'yt <url>' playback):
   _  toggle video track on/off        q  stop playback and exit
 
-Dependencies: yt-dlp + jq (search, --info); mpv (playback); nc (--set-volume);
+Dependencies: yt-dlp + jq (search, --info, --transcript); mpv (playback); nc (--set-volume);
               curl optional (play-time client probe, §8.2)
 
 Environment:
@@ -574,7 +588,15 @@ classify_playback_error() {
         echo "format_unavailable"
         return
     fi
-    if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out|Unable to download (webpage|API page|JSON metadata)' <<<"$text"; then
+    # 429 lands in `network`, not `unknown`: it is a transport-level, RETRYABLE refusal, and
+    # `network` is the enum member that already means "try again later". Adding a
+    # `rate_limited` member instead would grow a contract three verbs publish (§14) for no
+    # branch a caller would take differently. It is grouped here rather than with `forbidden`
+    # (403) deliberately — 403 means these credentials never work, 429 means not right now.
+    # Reached first by --transcript, which fetches a caption file per language and can trip
+    # YouTube's limiter within a handful of calls, but it was always reachable from playback
+    # and search too; before this it read as `unknown`, the one reason a caller cannot act on.
+    if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out|HTTP Error 429|Too Many Requests|Unable to download (webpage|API page|JSON metadata)' <<<"$text"; then
         echo "network"
         return
     fi
@@ -1260,6 +1282,209 @@ resolve_info() {
     exit "$rc"
 }
 
+# The ONE json3 -> segments transform. json3 (YouTube's own JSON caption format) is asked
+# for by name precisely so this stays a jq program: VTT/SRT would need a timeline parser in
+# awk, and the point of --sub-format json3 is that the timing is already structured.
+#
+# Three shapes in a real json3 file have to be dropped, and all three are dropped by the
+# SAME two filters rather than by naming them (verified against both a human-authored and
+# an auto-generated track):
+#   1. the leading window-definition event  -> no "segs" key at all
+#   2. auto-caption rollup events (aAppend) -> their only seg is "\n", so it cleans to ""
+#   3. style markup inside a cue            -> gsub'd out, then collapsed whitespace
+# Filtering on the CLEANED TEXT being empty, instead of on `aAppend == 1`, is deliberate:
+# it drops the rollup markers we have seen while keeping any hypothetical aAppend event
+# that actually carries words. The trailing consecutive-dedup is insurance on top.
+#
+# Auto tracks carry word-level segs (each with its own tOffsetMs); joining them with no
+# separator is correct because YouTube puts the leading space INSIDE each seg's utf8.
+JQ_TRANSCRIPT='
+def clean: gsub("<[^>]*>"; "") | gsub("[[:space:]]+"; " ") | sub("^ +"; "") | sub(" +$"; "");
+[ .events[]?
+  | select(has("segs"))
+  | { start:    ((.tStartMs // 0) / 1000),
+      duration: ((.dDurationMs // 0) / 1000),
+      text:     ([.segs[]? | .utf8 // ""] | join("") | clean) }
+  | select(.text != "") ]
+| reduce .[] as $s ([]; if ((length > 0) and (.[-1].text == $s.text)) then . else . + [$s] end)
+'
+
+# Fetch a video's caption track and hand it over as text an agent can put straight in a
+# prompt, or as a structured envelope. Read-only: nothing plays, no mpv, no state file.
+#
+# ONE yt-dlp call does both halves of the job, which is the whole reason this verb is
+# cheap. The flag combination is load-bearing and each piece was picked against a measured
+# alternative:
+#   --write-subs --write-auto-subs   ask for human captions AND auto ones in one pass;
+#                                    yt-dlp prefers the human track when both exist.
+#   --no-simulate                    REQUIRED. --print alone implies --simulate, and a
+#                                    simulating yt-dlp writes no subtitle file at all. The
+#                                    same trap sinks --dump-json: it implies simulate too,
+#                                    so "dump the metadata and write the subs" is not a
+#                                    thing one invocation can do without this flag.
+#   --print %(id)s, %(subtitles)j    the id for the envelope, and the HUMAN-caption dict
+#                                    (one line, ~15 KB) purely to answer is_auto: the
+#                                    written file's language tag is either a key in it
+#                                    (human) or it is not (auto). automatic_captions is
+#                                    deliberately NOT printed - with YouTube's machine
+#                                    translations it runs to 940 languages / 3.2 MB.
+#   --sub-format json3               see JQ_TRANSCRIPT.
+#   -o <dir>/%(id)s.%(ext)s          yt-dlp splices the language in, so the file lands as
+#                                    <id>.<lang>.json3 - that name is how the language and
+#                                    the human/auto answer are recovered.
+#
+# Language selection is a PRIORITY CHAIN, not a single tag: yt-dlp writes a file for every
+# candidate it can satisfy, and the first candidate in the caller's own order that actually
+# landed wins. So the default chain returns English when it exists and Chinese/Japanese
+# when it does not, in one round trip and with no "which languages exist" query first.
+resolve_transcript() {
+    local url=$1
+    local langs="$SUB_LANG"
+    [[ -n "$langs" ]] || langs="$SUB_LANG_CHAIN"
+
+    # Captions are content: keep them inside the 0700 state dir for the seconds they exist,
+    # never in a world-readable /tmp path. Same directory (and mode) the players use.
+    ensure_state_dir
+    local dir
+    dir=$(mktemp -d "$STATE_DIR/transcript.XXXXXX" 2>/dev/null) || dir="$STATE_DIR/transcript.$$"
+    mkdir -p "$dir" 2>/dev/null || true
+    # This function exits on every path, so one EXIT trap is the whole cleanup story. It is
+    # safe to claim EXIT outright: nothing else in the core installs one (the only other
+    # trap is detach_title_updater's `trap '' HUP INT`, in a background child).
+    trap 'rm -rf "$dir" 2>/dev/null || true' EXIT
+
+    local cmd=(yt-dlp --skip-download --no-simulate)
+    if ((${#YT_COOKIE_ARGS[@]} > 0)); then
+        cmd+=("${YT_COOKIE_ARGS[@]}")
+    fi
+    cmd+=(
+        --write-subs --write-auto-subs
+        --sub-langs "$langs"
+        --sub-format json3
+        --print "%(id)s"
+        --print "%(subtitles)j"
+        -o "$dir/%(id)s.%(ext)s"
+        --no-warnings --quiet
+        "$url"
+    )
+
+    # stderr is captured rather than discarded so a failure can be classified into the same
+    # reason enum the playback and search paths use, instead of being reported as a generic
+    # "no captions" when the real answer is 429 / private video / no network.
+    local err out rc=0
+    err="$dir/yt-dlp.err"
+    out=$("${cmd[@]}" 2>"$err") || rc=$?
+
+    local vid subs_json
+    vid=$(printf '%s\n' "$out" | sed -n 1p)
+    subs_json=$(printf '%s\n' "$out" | sed -n 2p)
+
+    if [[ -z "$vid" ]]; then
+        transcript_fail "$url" "$(classify_playback_error "$(cat "$err" 2>/dev/null)" "$rc")"
+    fi
+
+    # Pick the first candidate the caller asked for that yt-dlp actually wrote. Comma split
+    # by parameter expansion, not IFS+set --: this is inside a function whose $1 is the URL.
+    local pick="" lang="" rest="$langs" cand
+    while [[ -n "$rest" ]]; do
+        cand="${rest%%,*}"
+        if [[ "$rest" == *,* ]]; then rest="${rest#*,}"; else rest=""; fi
+        [[ -n "$cand" ]] || continue
+        if [[ -f "$dir/$vid.$cand.json3" ]]; then
+            pick="$dir/$vid.$cand.json3"
+            lang="$cand"
+            break
+        fi
+    done
+    # Fallback for a tag yt-dlp normalised on the way out (asking for `zh` can land
+    # `zh-Hans`): take whatever single track did arrive rather than calling it a miss.
+    if [[ -z "$pick" ]]; then
+        local f base
+        for f in "$dir"/*.json3; do
+            [[ -f "$f" ]] || continue
+            pick="$f"
+            base="${f##*/}"
+            base="${base%.json3}"
+            lang="${base#"$vid".}"
+            break
+        done
+    fi
+
+    # No file written is the miss signal, NOT the exit status: yt-dlp exits 0 for a language
+    # that simply does not exist on the video (verified), and non-zero only when something
+    # else went wrong - which the branch above already reported.
+    if [[ -z "$pick" ]]; then
+        if ((rc != 0)); then
+            transcript_fail "$url" "$(classify_playback_error "$(cat "$err" 2>/dev/null)" "$rc")"
+        fi
+        transcript_fail "$url" "no_subtitles_available"
+    fi
+
+    # is_auto from the printed human-caption dict: the track's language is a key there, or
+    # it came from the automatic side. `NA` is yt-dlp's rendering of an absent field.
+    local is_auto=true
+    if [[ -n "$subs_json" && "$subs_json" != "NA" ]]; then
+        if printf '%s' "$subs_json" | jq -e --arg l "$lang" 'has($l)' >/dev/null 2>&1; then
+            is_auto=false
+        fi
+    fi
+
+    local segments
+    segments=$(jq -c "$JQ_TRANSCRIPT" "$pick" 2>/dev/null) || segments=""
+    # A track that parses to nothing is a miss, not an empty success: an agent handed
+    # {"text":""} would summarise silence and never learn the captions were unusable.
+    if [[ -z "$segments" || "$segments" == "[]" ]]; then
+        transcript_fail "$url" "no_subtitles_available"
+    fi
+
+    # -j vs -J is the SAME split the search path already publishes (§14/§22): -j is the
+    # lean projection, -J is the same envelope at full fidelity - a strict SUPERSET, so an
+    # agent that widens -j to -J keeps every field it was already reading.
+    #
+    # What -j drops is `segments`, and it is dropped because it is the SAME WORDS TWICE:
+    # measured on a 444-cue auto track, the envelope is 52,698 bytes of which `text` is
+    # 16,917 and `segments` is 35,647 carrying that identical 16,917 bytes of text plus its
+    # timings. Dropping it is a 3.1x cut with zero information loss for the summarise-this
+    # case this verb exists for. `chars` and `segment_count` stay so the lean form is still
+    # self-describing: a caller can budget context, and knows what -J would add, without
+    # fetching it. (Not the raw json3 document, which was the other candidate for -J: it
+    # carries no status/lang/is_auto, so widening would LOSE fields - the one thing the
+    # existing -J contract never does.)
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        local full=false
+        [[ "$OUTPUT_MODE" == "json_full" ]] && full=true
+        jq -nc --arg id "$vid" --arg url "$url" --arg lang "$lang" \
+            --argjson is_auto "$is_auto" --argjson segments "$segments" \
+            --argjson full "$full" \
+            '($segments | map(.text) | join(" ")) as $text
+             | {status: "ok", id: $id, url: $url, lang: $lang, is_auto: $is_auto,
+                chars: ($text | length), segment_count: ($segments | length), text: $text}
+             + (if $full then {segments: $segments} else {} end)'
+    else
+        # Same string the envelope's `text` carries, so the two output modes can never
+        # disagree about what the transcript says.
+        printf '%s' "$segments" | jq -r 'map(.text) | join(" ")'
+    fi
+    exit 0
+}
+
+# The one place --transcript reports a miss, so the text and JSON shapes cannot drift.
+# Mirrors resolve_info: machine callers get {status:"error", url, reason} and exit 1, humans
+# get a sentence on stderr. `reason` is the shared enum, never prose.
+transcript_fail() {
+    local url=$1 reason=$2
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        jq -nc --arg url "$url" --arg reason "$reason" \
+            '{status: "error", url: $url, reason: $reason}'
+        exit 1
+    fi
+    case "$reason" in
+    no_subtitles_available) die "no captions available for: $url" ;;
+    *) die "could not fetch captions ($reason) for: $url" ;;
+    esac
+}
+
+
 # ==============================================================================
 # 4. SEARCH EXECUTION & INTERACTIVE MENU LOGIC
 # ==============================================================================
@@ -1408,10 +1633,16 @@ OUTPUT_MODE="list"
 FILTERED_JSON=""
 # Playback lifecycle / structured-output state.
 DETACH=0
-ACTION=""            # "" (normal) | status | stop | geturl | info | set-volume
+ACTION=""            # "" (normal) | status | stop | geturl | info | set-volume | transcript
 ACTION_FLAG=""       # the flag that set ACTION, for conflict messages
 PLAYBACK_RETRIED=0   # set by play_url_with_probe; surfaced in the playback JSON
 SET_VOLUME_ARG=""    # value from --set-volume N
+SUB_LANG=""          # value from --sub-lang (empty = use SUB_LANG_CHAIN)
+# Default caption-language priority chain for --transcript. A CHAIN, not a single default,
+# because the useful answer is "whatever this video actually has, in my order of
+# preference" - and yt-dlp can be asked for all of them in the one round trip it was
+# already making. English first, then Simplified//generic Chinese, then Japanese.
+SUB_LANG_CHAIN="en,zh-Hans,zh,ja"
 TARGET_ID=""         # value from --id (target a specific detached player)
 STOP_ALL=0           # --stop --all
 RESOLVED_ID=""       # resolve_target out-param: the resolved player id
@@ -1505,6 +1736,19 @@ while (($#)); do
         ;;
     --info)
         set_action info --info
+        shift
+        ;;
+    --transcript | --subtitles)
+        set_action transcript --transcript
+        shift
+        ;;
+    --sub-lang | --sub-langs)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        SUB_LANG="$2"
+        shift 2
+        ;;
+    --sub-lang=* | --sub-langs=*)
+        SUB_LANG="${1#*=}"
         shift
         ;;
     --set-volume)
@@ -1669,6 +1913,16 @@ fi
 if [[ "$ACTION" == "info" ]]; then
     require_deps yt-dlp jq
     resolve_info "$QUERY"
+fi
+# --transcript is the same shape as --info: read-only, yt-dlp + jq, never mpv. Validate the
+# language list HERE rather than inside the fetch so a typo costs no network round trip; the
+# value reaches yt-dlp as one argv element, so this is a contract check, not a quoting one.
+if [[ "$ACTION" == "transcript" ]]; then
+    if [[ -n "$SUB_LANG" && ! "$SUB_LANG" =~ ^[A-Za-z0-9][A-Za-z0-9_,.-]*$ ]]; then
+        die "--sub-lang takes a comma-separated list of language tags (e.g. en or zh-Hans,en)"
+    fi
+    require_deps yt-dlp jq
+    resolve_transcript "$QUERY"
 fi
 
 require_deps yt-dlp jq mpv

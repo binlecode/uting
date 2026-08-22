@@ -6,11 +6,12 @@ Search YouTube, play it through mpv detached from your terminal, and keep contro
 TUI if you are a human, from a single-line JSON contract if you are a program.
 
 ```sh
-ytt                              # interactive: search, browse, play, control
-yts -j -n 25 -- "lofi hip hop"   # machine: one line of JSON out
-ytp -d -j -- "<url>"             # machine: launch detached, get {id, pid, sock}
-ytp --status -j                  # machine: what is playing, where, how loud
-ytp --stop --id <id> -j          # machine: stop it
+ytt                                    # interactive: search, browse, play, control
+yt-search -j -n 25 -- "lofi hip hop"   # machine: one line of JSON out
+yt-play -d -j -- "<url>"               # machine: launch detached, get {id, pid, sock}
+yt-play --transcript -j -- "<url>"     # machine: captions as clean text + timed segments
+yt-play --status -j                    # machine: what is playing, where, how loud
+yt-play --stop --id <id> -j            # machine: stop it
 ```
 
 ## Status
@@ -65,13 +66,18 @@ cd uting
 ./shell/yt-tui "lofi hip hop"     # or: ./shell/yt-tui  and type a query
 ```
 
-For daily use, symlink short names onto your PATH:
+For daily use, symlink onto your PATH — the TUI under the short name you type by hand, the
+two agent-facing wrappers under their own names:
 
 ```sh
 ln -s "$PWD/shell/yt-tui"    ~/bin/ytt
-ln -s "$PWD/shell/yt-search" ~/bin/yts
-ln -s "$PWD/shell/yt-play"   ~/bin/ytp
+ln -s "$PWD/shell/yt-search" ~/bin/yt-search
+ln -s "$PWD/shell/yt-play"   ~/bin/yt-play
 ```
+
+The older `yts` / `ytp` spellings are **deprecated**. Nothing in the suite reads its own
+`argv[0]`, so an existing `~/bin/yts` keeps working — it is simply no longer a documented
+name, and one name per command is the point.
 
 `yt` itself is reached through a path relative to the wrappers and is deliberately **not** put on
 PATH — it is internal, and `yt` is far too generic a name to occupy.
