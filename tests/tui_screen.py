@@ -37,6 +37,7 @@ import fcntl
 import os
 import pty
 import select
+import signal
 import struct
 import sys
 import termios
@@ -55,6 +56,11 @@ def drive(argv, script, cols=COLS, rows=ROWS, env=None):
     """Run yt-tui with `argv`, sending scripted keys, and return screen snapshots.
 
     script: [(seconds_since_start, keys_bytes, label), ...] — must be time-ordered.
+             A step whose second element is a (cols, rows) TUPLE resizes the pty instead
+             of sending keys: window size, SIGWINCH, and the model resized to match. That
+             is the only way to test a resize, and a resize is the one state change no
+             keypress produces — the TUI redraws from its WINCH handler, so a rig that can
+             only type cannot tell a repaint from a frame left over from the old width.
     returns: [(label, [screen lines], raw_bytes_since_previous_mark), ...] plus a
              trailing ("final", ...) mark.
     """
@@ -91,7 +97,14 @@ def drive(argv, script, cols=COLS, rows=ROWS, env=None):
             # Snapshot BEFORE sending: this is the frame the key is about to act on.
             marks.append((script[sent][2], [l.rstrip() for l in screen.display], raw))
             raw = b""
-            os.write(fd, script[sent][1])
+            action = script[sent][1]
+            if isinstance(action, tuple):
+                c, r_ = action
+                fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", r_, c, 0, 0))
+                screen.resize(r_, c)
+                os.kill(pid, signal.SIGWINCH)
+            else:
+                os.write(fd, action)
             sent += 1
 
     marks.append(("final", [l.rstrip() for l in screen.display], raw))

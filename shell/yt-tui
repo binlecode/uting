@@ -2125,6 +2125,41 @@ display_menu() {
     if ((SYNC_ON)); then printf '\033P=2q'; fi
 }
 
+# ── Terminal resize ─────────────────────────────────────────────────────────────────────
+# Every frame is laid out against the size read at the TOP of its render — layout_cols for
+# the width, LINES_N for the reflow — so a resize invalidates the frame on screen entire:
+# the row count, the hint packing, every elision width and the CHA rail column all describe
+# a terminal that no longer exists. Nothing noticed. With no track playing read_nav_input
+# blocks with no timeout, so the stale frame stood until the next keypress, and the reflow
+# that exists to fit the pane was fitting the pane it had two sizes ago. The geometry itself
+# was already right — a fresh start at a size and a shrink to that size settle on the same
+# frame — so what was missing was only the trigger.
+#
+# The redraw happens INSIDE the handler rather than through a flag the reader polls, because
+# bash 3.2 does not interrupt `read` for a trapped signal: it runs the handler and then
+# RESUMES the read (verified in a pty — the handler's output arrives while the read is still
+# blocked, and that same read still returns the key typed a second later). A flag would
+# therefore be seen at exactly the moment a keypress would have repainted anyway, which is
+# the bug and not the fix.
+#
+# WINCH_OK gates it to the wait that owns the whole screen. Everywhere else something else
+# owns the cursor — the `n` prompt is echoing a query mid-keystroke, press_any_key is
+# holding a message in the scroll area, the fetch spinner is animating one line — and a
+# full-screen repaint there erases what the user is reading or typing. Setting it around
+# the one blocking read in read_nav_input covers both key loops that own the screen (the
+# menu loop and filter_live, which drive the same reader) and reaches neither of the others.
+#
+# No re-entrancy guard, and that is measured rather than assumed: bash defers a second
+# WINCH until this handler returns, so a drag-resize (one signal per column, 66 of them
+# from 100 columns down to 34) still settles on a frame drawn for the final size.
+WINCH_OK=0
+on_winch() {
+    if ((! WINCH_OK)); then return 0; fi
+    display_menu "$page_index"
+    return 0
+}
+trap on_winch WINCH
+
 # ── Failure reporting ───────────────────────────────────────────────────────────────────
 # The tail both reporters below share. A message printed into the scroll area lives exactly
 # until the next redraw, and the next redraw is one keypress away — so the pause is not a
@@ -2485,10 +2520,17 @@ read_nav_input() {
     if [[ -n "$CURRENT_PLAY_ID" ]] || ((CURRENT_PLAY_LOADING)); then
         t_opt=(-t 1)
     fi
+    # The resize gate is armed for THIS read only — the wait that owns the whole screen —
+    # and not for the escape-sequence reads below: their bytes are the tail of a key already
+    # pressed, and a repaint between them would draw a frame from a state that key is about
+    # to change. See on_winch.
+    WINCH_OK=1
     if ! IFS= read -rsn1 ${t_opt[@]+"${t_opt[@]}"} input; then
+        WINCH_OK=0
         nav_tick
         return 1
     fi
+    WINCH_OK=0
     if [[ "$input" != $'\x1b' ]]; then
         # One byte is not one key: finish the character before handing it up. The ESC/arrow
         # decoding below is untouched — those sequences are all ASCII.
