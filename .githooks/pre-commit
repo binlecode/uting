@@ -73,7 +73,7 @@ done <<EOF
 $(git diff --cached --name-only --diff-filter=ACM)
 EOF
 
-# The bash-4 features the suite forbids (docs/DESIGN.md §28). Detected on ADDED
+# The bash-4 features the suite forbids (docs/SPEC-system.md §28). Detected on ADDED
 # lines only, so pre-existing text in an untouched region never blocks a commit.
 bash4='declare -A|mapfile|readarray|\$\{[A-Za-z_][A-Za-z0-9_]*,,|\$\{[A-Za-z_][A-Za-z0-9_]*\^\^|&>>|\|&|\$\{[A-Za-z_][A-Za-z0-9_]*\[-1\]|\$\{!\w+@\}'
 
@@ -93,7 +93,7 @@ while IFS= read -r f; do
       echo "BLOCKED: $f adds a bash-4 feature. The suite's floor is bash 3.2 (macOS system bash)."
       printf '%s\n' "$leak" | sed 's/^/    /'
       echo ""
-      echo "See docs/DESIGN.md §28 for the portable form. If a feature genuinely needs"
+      echo "See docs/SPEC-system.md §28 for the portable form. If a feature genuinely needs"
       echo "bash 4+, assert ((BASH_VERSINFO[0] >= 4)) at the top — never hardcode an"
       echo "interpreter path."
     } >&2

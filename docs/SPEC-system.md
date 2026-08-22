@@ -1,10 +1,16 @@
-# yt CLI Suite — Design & Implementation
+# SPEC-system — uting, system scope
 
 `yt` · `yt-search` · `yt-play` · `yt-tui` — a YouTube search + terminal-playback CLI
-suite, designed as much for **LLM/agent callers** as for humans. This is the single
-systematic reference: architecture, functional structure, module contract, supported
-workflows, and the rationale behind them. Each fact lives in ONE section; everything
-else points at it.
+suite, designed as much for **LLM/agent callers** as for humans. This is the
+**code-synced spec**: architecture, functional structure, module contract, supported
+workflows, and the rationale behind them, kept in step with the code on every change that
+touches architecture or a contract. Each fact lives in ONE section; everything else points
+at it.
+
+Scope is `system` — the whole suite. A per-surface `SPEC-<scope>.md` splits out only when
+one earns it, and the one-fact-one-section rule then holds across the family. What this
+document is NOT: a proposal (`DESIGN-<topic>.md`), the sequencing (`ROADMAP.md`), or work
+in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 
 - Core engine: `shell/yt` (single source of truth, non-interactive)
 - Narrow headless verbs: `shell/yt-search`, `shell/yt-play`
@@ -2034,7 +2040,7 @@ first; gate deletions by grep so no dangling reference survives.
 Audited against `shell/yt-tui`. **Batch 1 (the one-line edits), batch A (the cheap
 correctness/UX edits), batch B (the IPC layer), batch C (the liveness poll), batch D (the
 failure reporters), batch E (the input layer), the views-cleanup pass and the i18n pass are
-ALL fixed — the register is empty** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `TODO-` file
+ALL fixed — the register is empty** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `PLAN-` file
 because the findings are statements about *this* design's seams, and each one is only
 actionable next to the section it sits in. The open rows below have since been re-audited
 against the code and re-measured on the machine's own bash 3.2.57. **Seven of them asserted
@@ -2486,6 +2492,24 @@ new-search/more-results instead of `n`/`m`; also corrected.
       keypress would mean a process chain per 1s refresh tick). The socket is therefore a
       documented part of the `-d` contract (§9.3) and is handed to clients in the `-d -j`
       envelope; a verb is added only when a caller genuinely cannot speak to the socket.
+      **That condition is not met today**: a shell-capable agent can drive the socket
+      itself (`printf … | nc -U "$sock"`), and the socket path is handed to it precisely
+      so it can. The caller that genuinely cannot is one confined to a declared tool
+      surface — an MCP face — which `ROADMAP.md` §0 still lists as a non-goal, gated by
+      its §9 triggers. So these verbs are blocked on THAT decision, not on effort.
+      Two constraints, decided in advance so the decision does not have to be reopened
+      to design them:
+        - `--seek` must require a SIGNED value for a relative move (`+30` / `-15`) and a
+          distinct spelling for an absolute one (`--seek-to 120`). A bare `--seek 30`
+          reading as absolute contradicts both mpv's own default (relative) and
+          `yt-tui`'s `seek_relative`, and would silently jump a caller who meant +30s —
+          the failure mode §22's *contract stability* row exists to prevent.
+        - `--toggle-pause` is NOT to be added. mpv's `cycle pause` returns no value, so
+          the resulting state in the envelope could only be a guess. `--pause` /
+          `--resume` are strictly better for a machine caller anyway: idempotent, with no
+          read-modify-write race. Toggling stays a `yt-tui` keypress.
+      A prerequisite for any of them: `--status` has no `paused` field today, so an agent
+      that paused could not observe that it had — see `ROADMAP.md` §10 P0.
     - Linux `nc -U` portability — macOS-primary tool; BSD `nc -U` is stock, GNU netcat
       variants differ (`ncat -U` works; `netcat-traditional` has no Unix-socket support).
       Accepted as a known gap, noted in a script comment rather than solved now.

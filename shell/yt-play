@@ -8,7 +8,7 @@
 # give an LLM caller a small, single-purpose contract it cannot misuse.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
-# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). DESIGN-yt.md §28.
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). SPEC-system.md §28.
 
 # Resolve this script's OWN symlink chain before looking for its siblings. The PATH entries
 # (yt-search / yt-play, and ytt for the TUI) are symlinks into a checkout that can live
@@ -226,7 +226,7 @@ fi
 # is a caller who believes otherwise. Reject instead of silently ignoring - the core's
 # set_action only catches conflicting ACTIONS, and -f/-d/--volume are not actions, so
 # without this gate they would be accepted and quietly do nothing. This is the gating
-# layer's whole job (DESIGN-yt.md §13).
+# layer's whole job (SPEC-system.md §13).
 if [[ "$action" == transcript ]] && ((${#flags[@]})); then
     for f in "${flags[@]}"; do
         case "$f" in
@@ -242,7 +242,7 @@ fi
 # be empty, and url may be empty for status/stop — build the argv guarding both.
 # `--` is FORWARDED (not just consumed here) so the impl stops option parsing before the
 # URL — a URL or query-shaped token beginning with '-' can never be read as a flag.
-# DESIGN-yt.md §6.
+# SPEC-system.md §6.
 argv=()
 ((${#flags[@]})) && argv+=("${flags[@]}")
 ((${#url[@]})) && argv+=(-- "${url[@]}")

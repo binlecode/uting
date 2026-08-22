@@ -21,7 +21,7 @@ together with a design document that is longer than most of the code it describe
 packaged: there is no installer and no Homebrew formula, and none is planned for the shell version
 (see [`docs/ROADMAP.md`](docs/ROADMAP.md) for why, and for what a Go rewrite would change).
 
-The document may be the more useful artifact. `docs/DESIGN.md` records things that are usually
+The document may be the more useful artifact. `docs/SPEC-system.md` records things that are usually
 learned and then forgotten: East-Asian-width handling in a terminal renderer, DCS frame
 synchronisation, correlating mpv IPC replies by `request_id`, and the `set -e` traps that bash 3.2
 sets for you.
@@ -54,7 +54,7 @@ scope decision rather than a gap. The TUI's job ends at: find it, play it, watch
   path needs.
 - `yt-dlp`, `jq`, `mpv`, `nc` (BSD netcat ships with macOS). `curl` is an optional soft dependency.
 - bash 3.2 — the version macOS ships. The suite is written to that floor on purpose; see
-  `docs/DESIGN.md` §28.
+  `docs/SPEC-system.md` §28.
 
 Nothing is vendored. Install yt-dlp and mpv however you normally would.
 
@@ -119,7 +119,7 @@ Two things these rigs learned the hard way, both of which cost a wrong green res
 
 ## Documentation
 
-- [`docs/DESIGN.md`](docs/DESIGN.md) — architecture, every non-obvious decision and why, plus the
+- [`docs/SPEC-system.md`](docs/SPEC-system.md) — architecture, every non-obvious decision and why, plus the
   verification matrix.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — positioning and non-goals, the naming survey, the OSS
   readiness assessment, and the conditions under which the core would move to Go.

@@ -1585,7 +1585,7 @@ display_list_menu() {
     # recomputes and rewrites the whole frame (2413 bytes in 15-24 ms at 100x30 — the same frame
     # an arrow-down writes). What went away is the number of states the terminal shows, not the
     # work. The geometry below is measured per frame rather than fixed, so almost any state
-    # change could move it; DESIGN-yt.md §11 records why a banner-only repaint for the one change
+    # change could move it; SPEC-system.md §11 records why a banner-only repaint for the one change
     # that cannot (pause) was rejected rather than forgotten.
     printf '\033[H'
     # Title. Elided like every other row: a long query used to wrap and push the whole layout
@@ -2278,7 +2278,7 @@ play_selected() {
     # id/pid/sock in one jq pass. The socket path is READ FROM THE ENVELOPE, never rebuilt:
     # it is the core's private state layout, and hardcoding "$TMPDIR/yt-cli-$(id -u)/mpv-
     # $id.sock" here duplicated it in a second script that would break silently if the core
-    # ever moved its state dir. DESIGN-yt.md §9.3.
+    # ever moved its state dir. SPEC-system.md §9.3.
     # US, not tab, for the same reason build_all_rows uses it: all three fields default to
     # "" here, and a run of tabs collapses, so a player that reported no pid would have had
     # its socket path read into `pid` — and then the guard below would reject a play that

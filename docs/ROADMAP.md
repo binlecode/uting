@@ -1,15 +1,21 @@
 # ROADMAP-yt — `yt` 套件的下一步
 
-2026-08-21 写。与 `DESIGN-yt.md` 配套：那份讲这套东西**是什么**，这份记录它**该变成什么**、为什么、
+2026-08-21 写。与 `SPEC-system.md` 配套：那份讲这套东西**是什么**，这份记录它**该变成什么**、为什么、
 以及每一步开工前必须先成立的条件。
 
 范围：整个 `yt` 套件（`yt`、`yt-search`、`yt-play`、`yt-tui`），外加"其中哪一部分该被公开发布"这个
-问题。不是功能清单 —— 单个功能的实现前规划仍然写 `TODO-<topic>.md`，上线后并入 `DESIGN-yt.md`。
+问题。不是功能清单 —— 单个功能的实现前规划写 `PLAN-<topic>.md`，一路带着进度、上线即删，契约并入
+`SPEC-system.md`。
 
-> 文档类型说明：`ROADMAP-` 是**新前缀**，不在 `CLAUDE.md` 登记的三种（`RUNBOOK-` / `DESIGN-` /
-> `TODO-`）之内。它刻意不用 `TODO-`：TODO 是单个功能的实现前规划、上线即删，而这份要跨阶段存活，
-> 装的是必须活过重写的决定。若保留该前缀，应登记进 `CLAUDE.md`；若不保留，把它并成
-> `DESIGN-yt.md` 的 §0。
+> 文档类型（2026-08-22 定稿，规则在 `CLAUDE.md`）：四段流水线
+> **`DESIGN-<topic>`（待决，蒸馏成 future work 后删）→ `ROADMAP`（已决定+排序）→
+> `PLAN-<topic>`（可施工，自带进度，上线即删）→ `SPEC-<scope>`（与代码同步，永久）**。
+> 第三段用 `PLAN-` 而非 `TODO-`：plan 会记录自己的进度，todo 只是一张没做的清单。
+> 这份是流水线里唯一不终结的一环，所以它装的是"必须活过重写的决定"。
+> 本文档此前那条注释已作废：它称 `CLAUDE.md` 登记了 `RUNBOOK-` / `DESIGN-` / `TODO-` 三种前缀，
+> 而 `CLAUDE.md` 里从来没有这张表，仓库里也没有 RUNBOOK。同轮把与代码同步的那份从
+> `DESIGN.md` 改名为 `SPEC-system.md` —— 它一直在做双重身份：是与代码同步的规格，却挂着提案阶段
+> 的名字，而 `DESIGN-` 这个前缀现在归还给真正待决的探索。
 
 ---
 
@@ -35,22 +41,32 @@
 
 ---
 
-## 1. 现状（2026-08-21）
+## 1. 现状（2026-08-22）
 
 | 文件 | 行数 | 角色 | 受众 |
 |---|---:|---|---|
-| `shell/yt` | 1695 | 引擎。yt-dlp 调用、jq prelude、时长格式、播放、脱离终端的播放器生命周期（id/pid/sock/lock/state dir、reap）、`--status`/`--stop`/`--set-volume`/`--get-url`/`--info` | 机器（经壳调用） |
-| `shell/yt-search` | 126 | parse → gate → `exec yt` | agent tool call |
-| `shell/yt-play` | 180 | parse → gate → `exec yt` | agent tool call |
-| `shell/yt-tui` | 2667 | 应用。自绘菜单、焦点卡片、宽度层、reflow、主题、中英 i18n、mpv IPC 客户端 | 人 |
-| `docs/DESIGN.md` | 2494 | 架构 + 设计理由 + 验证矩阵 | 两者 |
+| `shell/yt` | 1965 | 引擎。yt-dlp 调用、jq prelude、时长格式、播放、脱离终端的播放器生命周期（id/pid/sock/lock/state dir、reap）、`--status`/`--stop`/`--set-volume`/`--get-url`/`--info`/`--transcript` | 机器（经壳调用） |
+| `shell/yt-search` | 148 | parse → gate → `exec yt` | agent tool call |
+| `shell/yt-play` | 249 | parse → gate → `exec yt` | agent tool call |
+| `shell/yt-tui` | 2806 | 应用。自绘菜单、焦点卡片、宽度层、reflow、主题、中英 i18n、mpv IPC 客户端 | 人 |
+| `docs/SPEC-system.md` | 2745 | 架构 + 设计理由 + 验证矩阵（与代码同步的那一份） | 两者 |
 
 运行时依赖：**yt-dlp、jq、mpv、nc**（curl 可选，用于播放时间的客户端探测）。
 可移植性契约：**bash 3.2**（macOS 自带）。
 
-2026-08-21 这轮已落地（均已记入 `DESIGN-yt.md`）：启动提示支持 Esc 取消（复用
+2026-08-21 这轮已落地（均已记入 `SPEC-system.md`）：启动提示支持 Esc 取消（复用
 `read_query_input`）、四条 fetch 路径统一的象限块 spinner、第三个播放态（`Starting`，由 `core-idle`
 判定，列表仅在该态下按秒 tick）、列表视图改为就地渲染（任何一帧都不再清屏）。
+
+2026-08-22 这轮已落地（同上）：
+
+- **`--transcript`** —— agent 侧的内容理解原语：字幕取回并清洗成可直接进 prompt 的文本。只读，
+  不播放，依赖仍是 yt-dlp + jq。`-j` 精简 / `-J` 加 `segments`（严格超集，与 search 的
+  `-j`/`-J` 同一关系）。定位上不属 §0 的 non-goals：那一列是**播放器层**功能，而它与 `--info`
+  同类，是只读元数据。
+- **HTTP 429 归入 `network`** —— 此前落到 `unknown`（调用方唯一无法据以行动的那个值）。可重试是
+  调用方唯一会分支的语义，因此不新增枚举成员。
+- **文档四段流水线定稿** + 与代码同步的那份从 `DESIGN.md` 改名 `SPEC-system.md`（见头部注释）。
 
 ---
 
@@ -88,7 +104,7 @@ PyPI、**同领域**的 GitHub 同名仓库。
 
 **别名策略**：`uting` 只作**发布名**。本机人机面继续用 `ytt`（Go 版用 argv[0] 分派或 shell alias
 实现）—— 明天早上敲的还是 `ytt`，公开的那个名字是干净的。agent 面用规范长名 `yt-search` /
-`yt-play`，不再留 `yts` / `ytp`：短名的理由是省打字，而 agent 面没人打（见 `DESIGN.md` D0）。
+`yt-play`，不再留 `yts` / `ytp`：短名的理由是省打字，而 agent 面没人打（见 `SPEC-system.md` D0）。
 
 ### 3.2 被否掉的候选，及原因
 
@@ -143,8 +159,8 @@ PyPI、**同领域**的 GitHub 同名仓库。
 ## 5. 调研（三）：发布 shell 版要付的账
 
 - **四个运行时依赖**（yt-dlp、jq、mpv、nc），全部由用户负责安装并保持可用。
-- **bash 3.2 与 5 的行为差异**，可移植性契约已长篇记录（`DESIGN-yt.md` §28）—— 那是持续的维护承诺。
-- **Linux 自带 netcat 没有 `-U`**（`DESIGN-yt.md` §26）。发布后从个人脚注变成平台缺口。
+- **bash 3.2 与 5 的行为差异**，可移植性契约已长篇记录（`SPEC-system.md` §28）—— 那是持续的维护承诺。
+- **Linux 自带 netcat 没有 `-U`**（`SPEC-system.md` §26）。发布后从个人脚注变成平台缺口。
 - **终端动物园**：DCS 帧同步、Ambiguous 宽度、tmux 透传 —— 宽度层与 `YT_AMBIG_WIDE` 存在的全部理由，
   发布后都会变成外部 bug 类别。
 - **`yt` 是不安全的公开可执行名** —— 太短太通用，link `bin/yt` 的 formula 会直接冲突。
@@ -225,7 +241,7 @@ PyPI、**同领域**的 GitHub 同名仓库。
 
 6. **agent 驱动两面都成立，第二面支持 shell。** 使用层面语言无关。开发层面：shell 利于**迭代**
    （无构建、可整文件读懂、原地改、pty 立验、ssh 上 `vi` 就能修）；Go 利于**重构安全**（本文件已出过
-   **三次 `set -e` 回归**，`DESIGN-yt.md` §25.1 —— 正是编译器一次消灭的一类）。不足以压过第 2 条，
+   **三次 `set -e` 回归**，`SPEC-system.md` §25.1 —— 正是编译器一次消灭的一类）。不足以压过第 2 条，
    但方向相反，必须记录。
 
 ---
@@ -274,11 +290,20 @@ PyPI、**同领域**的 GitHub 同名仓库。
 
 ### P0 —— 契约抽取（不写代码，解锁其余全部）
 
-- 从 `DESIGN-yt.md` 抽成独立契约文档：envelope schema（search / play / status）、player record
+- 从 `SPEC-system.md` 抽成独立契约文档：envelope schema（search / play / status）、player record
   schema、退出码表、生命周期语义（launch → status → stop、幂等、歧义 → 4）、`-j` 单行保证。
 - 补上 §6.2 那个洞：**`-d` 同步失败的机读原因字段**。现在定字段、在 shell 里实现，Go 版继承一个没有
   洞的契约。
+- 同一批、同样便宜、且互为前提的另两件（2026-08-22 识别）：
+  - **`--status` 增加 live `paused` 字段。** 今天播放器的暂停状态在任何 envelope 里都读不到，
+    这正是 `live_volume()` 当初要消灭的那种谎（state file 说一套、socket 说另一套）。它也是
+    运行时播控动词的前置条件：没有可观测的状态，动词加了也是瞎的（`SPEC-system.md` §26）。顺带修掉
+    `yt-tui` 本地 `CURRENT_PLAY_PAUSED` 与外部改动不同步的问题。
+  - **`live_volume()` 泛化为通用属性读。** 上一条一落地它就有第二个调用方，且 `volume` 与
+    `pause` 能在同一个连接里一次读完 —— 不是空想的抽象。
 - 验收：只读这份文档就能写出 JSON diff 测试，不需要读 `yt`。
+- 上面这批"便宜且互为前提"的三件已经写成可施工的 `docs/PLAN-envelope-observability.md`
+  （字段名、jq、验证矩阵都在那份里；上线即删）。
 
 ### P1 —— 独立仓库（D2 + D8）
 
@@ -306,7 +331,7 @@ PyPI、**同领域**的 GitHub 同名仓库。
 - mpv socket 用 `net.Dial("unix", …)` —— 客户端侧就此甩掉 nc。
 - 交给库因而可删的清单：显示宽度表、resize 处理、事件循环、`\033[K`/`\033[J` 记账、每次按键的
   `stty` fork。
-- 验收：对着 `DESIGN-yt.md` §27 与 shell TUI 并排比对 —— 窄终端网格、reflow 下限用例、中英、
+- 验收：对着 `SPEC-system.md` §27 与 shell TUI 并排比对 —— 窄终端网格、reflow 下限用例、中英、
   `YT_ASCII=1`、播放态迁移。复用 pty + pyte 屏幕模型 harness，连同教训：首次读取前 `TIOCSWINSZ`，
   断言下在屏幕模型而非字节流上。
 
@@ -325,7 +350,20 @@ PyPI、**同领域**的 GitHub 同名仓库。
 
 ---
 
-## 11. 开放问题
+## 11. Future work（已蒸馏，等触发条件）
+
+- **运行时播控动词 `--pause` / `--resume` / `--seek`。** 不是没想清楚，是**卡在一个决定上**：
+  `SPEC-system.md` §26 把它们列为非目标，解禁条件是"调用方真的没法直接跟 socket 说话"。而今天
+  有 shell 的 agent 能自己 `nc -U`（socket 路径就在 `-d -j` envelope 里，是故意给的），所以条件
+  未成立。唯一让它成立的调用方是只能调已声明工具面的 agent —— 即 `uting mcp`，而 MCP 仍是 §0 的
+  non-goal，由 §9 把关。**因此这批动词挂在 §9 触发条件 1 上，不是排期问题。**
+  两条设计约束已预先定好、写进 §26，届时不必重开讨论：`--seek` 相对必须带符号、绝对另用
+  `--seek-to`；`--toggle-pause` 不做（`cycle pause` 不回值，envelope 兑现不了）。
+  前置条件同样已记录：`--status` 今天没有 `paused` 字段，agent 暂停了也观测不到 —— 见 §10 P0。
+
+---
+
+## 12. 开放问题
 
 - **定位是否就此冻结在 §0？** 这是唯一能连锁改写本文档的问题：一旦改成"收听应用"，§4 的对标对象、
   §6.2 的完整度结论、被删的 P4 都要回来。

@@ -22,7 +22,7 @@ passed because it was skipped — say it was skipped.
 /bin/bash -n shell/yt shell/yt-search shell/yt-play shell/yt-tui && echo "syntax OK"
 ```
 
-`/bin/bash` explicitly, not `bash`: the floor is macOS's system 3.2 (`docs/DESIGN.md` §28), and
+`/bin/bash` explicitly, not `bash`: the floor is macOS's system 3.2 (`docs/SPEC-system.md` §28), and
 a Homebrew bash 5 on PATH will happily parse things 3.2 rejects. Then the class `bash -n`
 cannot see — runtime 3.2 behaviors — by exercising the empty-argument and empty-array paths:
 
@@ -143,7 +143,7 @@ Two properties worth measuring while a player runs, both of which have regressed
 
 For anything timing-sensitive, drive a **local synthetic source** (`av://lavfi:sine`) rather
 than YouTube — network throttling has corrupted a timing measurement here before
-(`docs/DESIGN.md` §25.1).
+(`docs/SPEC-system.md` §25.1).
 
 ## Reporting
 

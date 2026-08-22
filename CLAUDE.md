@@ -6,7 +6,7 @@ This file is the single source of truth for repository guidelines, used by Claud
 
 **uting** (u-ting / 你听) — an agent-first YouTube engine with a terminal face. A four-script bash suite: search YouTube through `yt-dlp`, play it through `mpv` detached from the terminal, and keep controlling it — from a TUI if you are a human, from a single-line JSON contract if you are a program.
 
-The suite is exposed **directly** to shell-capable agents with no MCP wrapper, so the **CLI contract itself** (argv, exit codes, output shape, process lifecycle) *is* the product and the safety boundary. Every design choice follows from that. Full rationale: `docs/DESIGN.md`.
+The suite is exposed **directly** to shell-capable agents with no MCP wrapper, so the **CLI contract itself** (argv, exit codes, output shape, process lifecycle) *is* the product and the safety boundary. Every design choice follows from that. Full rationale: `docs/SPEC-system.md`.
 
 **Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `ytt` (the human surface) and `yt-search`/`yt-play` (the agent surface) onto their own PATH.
 
@@ -64,7 +64,7 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
 
 Each wrapper locates the core by a path **relative to its own resolved script location** (self-resolving symlink chain, `cd -P`/`pwd -P` — bash 3.2 has no `readlink -f`), so the checkout can live anywhere and needs no `bin/` entry to work.
 
-**Primitives sit behind seams** (`docs/DESIGN.md` §5): `mpv` behind `run_mpv()` (single play seam) plus the `mpv_supports_vo()` capability probe; `yt-dlp` at ~5 named sites (`fetch_results`, `resolve_stream_url`, `resolve_info`, `probe_media_fetchable`, `detach_title_updater`); `jq` pervasive. Keep new primitive calls inside the existing seams.
+**Primitives sit behind seams** (`docs/SPEC-system.md` §5): `mpv` behind `run_mpv()` (single play seam) plus the `mpv_supports_vo()` capability probe; `yt-dlp` at ~5 named sites (`fetch_results`, `resolve_stream_url`, `resolve_info`, `probe_media_fetchable`, `detach_title_updater`); `jq` pervasive. Keep new primitive calls inside the existing seams.
 
 **Governing principle: correctness is added *down* in the core, so every surface inherits it — never *up* in a UI.** A fix in `yt-tui` that the core could have made is a bug in the wrong file.
 
@@ -100,11 +100,11 @@ If a feature genuinely needs bash 4+, the honest move is `((BASH_VERSINFO[0] >= 
 
 ### 2. One fact, one place
 
-`docs/DESIGN.md` is the systematic reference and each fact lives in exactly ONE of its sections; everything else points at it. Do not restate a contract in the README, in `usage()`, and in the design doc — state it once and cross-reference. `YT_VERSION` is declared once, in the core; the wrappers and the TUI ask it and print their own name, so four entry points can never disagree.
+`docs/SPEC-system.md` is the code-synced spec and each fact lives in exactly ONE of its sections; everything else points at it. Do not restate a contract in the README, in `usage()`, and in the design doc — state it once and cross-reference. `YT_VERSION` is declared once, in the core; the wrappers and the TUI ask it and print their own name, so four entry points can never disagree.
 
 ### 3. Scratch stays under `tmp/`
 
-`.gitignore` carries `**/tmp/`. All throwaway scripts, captures, and probe output go there — never the repo root, never `tests/`. A rig graduates into `tests/` only when it earns a permanent place, and then it gets a docstring saying what it proves. Consequently `docs/DESIGN.md` §27 **names no rig by path**: a cited scratch path is a promise the checkout cannot keep. Record the *shape* of a check, not its filename.
+`.gitignore` carries `**/tmp/`. All throwaway scripts, captures, and probe output go there — never the repo root, never `tests/`. A rig graduates into `tests/` only when it earns a permanent place, and then it gets a docstring saying what it proves. Consequently `docs/SPEC-system.md` §27 **names no rig by path**: a cited scratch path is a promise the checkout cannot keep. Record the *shape* of a check, not its filename.
 
 ### 4. The contract is frozen surface
 
@@ -123,7 +123,7 @@ These are **verification rigs, not a unit-test suite.** What this code gets wron
 - measures a title's width in characters rather than display cells — a CJK title is two cells, and `len()` passes a line that visibly wraps;
 - fakes the data or the logic under test. A fake **peer** (`mpv_ipc_mock.py`) is legitimate — it produces shapes the real mpv will not produce on cue. A fake renderer or a stubbed core is not;
 - exists only to raise a count, or asserts a default value that a behavioral check already exercises;
-- times a network-dependent path against YouTube when a local synthetic source (`av://lavfi:sine`) would do — throttling has corrupted a timing measurement here before (`docs/DESIGN.md` §25.1).
+- times a network-dependent path against YouTube when a local synthetic source (`av://lavfi:sine`) would do — throttling has corrupted a timing measurement here before (`docs/SPEC-system.md` §25.1).
 
 ### Accept a check when it drives a real surface:
 
@@ -152,7 +152,7 @@ The refactor that produced this architecture followed a staged, reversible order
   B  Repoint callers / wrappers / symlinks; run the headless regression.
   C  Delete the old path — the destructive step, kept LAST and small; grep-gate every
      removed symbol before deleting it; regress again.
-  D  Update docs (docs/DESIGN.md, README.md, usage()).
+  D  Update docs (docs/SPEC-system.md, README.md, usage()).
   E  Final headed (tmux) + headless sweep.
 ```
 
@@ -160,10 +160,32 @@ Principle: put the single destructive step last and smallest, prove its replacem
 
 ## SDLC & Architectural Documentation
 
-- `docs/DESIGN.md` — architecture, every non-obvious decision and why, the function map, the data contracts, the risk/defect register, and the verification matrix. **Kept in sync on every PR that touches architecture or a contract.**
+**Documents move through four stages, and the prefix says which one a file is in.** A doc that
+stops moving is a doc nobody trusts, so each stage names what ends it:
+
+| Stage | Prefix | What it holds | What ends it |
+|---|---|---|---|
+| design / research | `DESIGN-<topic>.md` | exploring an open question — options, measurements, trade-offs. Nothing here is decided | **distil it into future work** (a `ROADMAP.md` entry), then delete the doc. It is scaffolding, not an artifact |
+| roadmap | `ROADMAP.md` | the decided and the sequenced: positioning, non-goals, phases, and the conditions that would reopen a decision | nothing — it is the one doc that outlives a rewrite |
+| plan | `PLAN-<topic>.md` | one feature, ready to build: field names, flags, the verification matrix. Decided already, or it would still be a `DESIGN-`. **Tracks its own progress while the work is in flight** — the status line and per-item state are updated as things land | **delete on landing**, once its contract is in the spec |
+| code-synced spec | `SPEC-<scope>.md` | what the code actually is and why. Every fact in exactly ONE section | never; it is **kept in sync on every change that touches architecture or a contract** |
+
+Today the only scope is `docs/SPEC-system.md`; a per-surface `SPEC-<scope>.md` splits out when one
+earns it. The rule that keeps the family honest is the one that already governs a single file: one
+fact, one section, everything else points at it.
+
+`PLAN-`, not `TODO-`, for the third stage: a plan **carries work-in-progress state** — it is
+updated as items land and is only deleted when the last one has — whereas a todo is a list of
+things not done, with nowhere to record that three of five now are. The stage needs the former.
+(`TODO-` is also doubly spoken for: an agent's own in-session task list, and `// TODO` comments.)
+
+The live files:
+
+- `docs/SPEC-system.md` — architecture, every non-obvious decision and why, the function map, the data contracts, the risk/defect register, and the verification matrix. **Kept in sync on every PR that touches architecture or a contract.**
 - `docs/ROADMAP.md` — positioning and non-goals, the naming survey, the OSS-readiness assessment, and the conditions under which the core would move to Go. Consult §0 before adding a feature: **no queue, no playlist management, no listening history, no favourites, no downloader, no channel subscriptions** — their absence is a scope decision, not a gap.
-- `docs/PLAN-*.md` — scoped implementation plans (e.g. the low-cost agent-tooling surface). A plan is Planning until its contract lands in `docs/DESIGN.md`.
+- `docs/PLAN-*.md` — whatever is ready to build or in flight, with its progress recorded inline. Empty is a valid state.
 - One repo, one README: there is deliberately no `tests/README.md` — the rigs are described in the root README's `## Tests` section and in their own docstrings.
+
 ### Agent skills
 
 **Skills live in `.claude/skills/` — nowhere else.** Claude Code discovers project skills only there (plus `~/.claude/skills/` and plugins); a skill parked anywhere else is invisible and will simply never be invoked. Four exist:
@@ -171,9 +193,9 @@ Principle: put the single destructive step last and smallest, prove its replacem
 | Skill | Use it when |
 |---|---|
 | `run-yt-tui` | You need to *see* the TUI. It requires a real TTY on both stdin and stdout, so a Bash-tool call proves nothing — this covers the tmux drive, the pty-size trap, the ready markers, the keymap, and the detached-player cleanup a session kill does **not** do |
-| `capture-pane` | A terminal frame in `README.md` / `docs/DESIGN.md` is stale. Capture → clean (`clean_capture.py`, which refuses a mid-fetch frame) → **prove with `tests/assert_pane.py`** → splice with a Python replace. Never hand-draw a frame |
+| `capture-pane` | A terminal frame in `README.md` / `docs/SPEC-system.md` is stale. Capture → clean (`clean_capture.py`, which refuses a mid-fetch frame) → **prove with `tests/assert_pane.py`** → splice with a Python replace. Never hand-draw a frame |
 | `verify-suite` | Before a push, before a `YT_VERSION` bump, after touching the core / a wrapper / the renderer. The four-phase sweep this repo has instead of CI; phase 4 starts audible playback and is run deliberately |
-| `audit-conformance` | Periodically, not per-commit. Whole-suite scan against 12 rules (surface layering, DRY, bash 3.2, dead code, swallowed errors, contract and doc drift) → `docs/TODO-conformance-YYYY-MM-DD.md`. Ships `fn_graph.py` (defs vs call sites across all four scripts) as a manual aid — **never** as a gate or a `tests/` member |
+| `audit-conformance` | Periodically, not per-commit. Whole-suite scan against 12 rules (surface layering, DRY, bash 3.2, dead code, swallowed errors, contract and doc drift) → `docs/PLAN-conformance-YYYY-MM-DD.md`. Ships `fn_graph.py` (defs vs call sites across all four scripts) as a manual aid — **never** as a gate or a `tests/` member |
 
 A skill may propose a *structural detector as a manual aid*; it may never propose one as a test. The rigs-only mandate above binds skills too.
 

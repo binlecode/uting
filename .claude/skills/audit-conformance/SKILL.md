@@ -1,6 +1,6 @@
 ---
 name: audit-conformance
-description: Periodic whole-suite audit of uting against the coding rules baked into this skill — surface layering (no YouTube logic in the TUI), DRY across the four scripts, bash 3.2 portability, dead functions and one-sided variables, swallowed errors, contract drift in the JSON envelope / exit codes, and doc drift against docs/DESIGN.md. Inventories every violation with file:line + rule citation, then writes a scoped cleanup report. The whole-tree counterpart to reviewing a single diff. Never proposes structural or guard tests.
+description: Periodic whole-suite audit of uting against the coding rules baked into this skill — surface layering (no YouTube logic in the TUI), DRY across the four scripts, bash 3.2 portability, dead functions and one-sided variables, swallowed errors, contract drift in the JSON envelope / exit codes, and doc drift against docs/SPEC-system.md. Inventories every violation with file:line + rule citation, then writes a scoped cleanup report. The whole-tree counterpart to reviewing a single diff. Never proposes structural or guard tests.
 argument-hint: "[file-or-surface scope, default all of shell/]"
 ---
 
@@ -17,7 +17,7 @@ write a scoped cleanup report.
 1.7k-line core plus a 2.8k-line TUI written to a frozen bash 3.2 floor. Nothing but judgment
 defends its invariants, and three of them erode silently: logic creeping *up* into the TUI, a
 bash-4 idiom slipping in (it runs fine on the author's shell and aborts under `/bin/bash`), and
-`docs/DESIGN.md` drifting away from the code it claims to describe. Those are the accretion
+`docs/SPEC-system.md` drifting away from the code it claims to describe. Those are the accretion
 classes this skill owns.
 
 **This skill is self-contained.** Every rule is defined below. It cross-references `CLAUDE.md`
@@ -38,7 +38,7 @@ and both are restated inline where they matter.
   particular (single-line JSON, exit codes) are cheap to execute and easy to mis-read.
 - **This skill does not edit code.** It produces an inventory + a cleanup report.
 
-**Produces:** `docs/TODO-conformance-YYYY-MM-DD.md` + a terminal summary. Scratch scripts go in
+**Produces:** `docs/PLAN-conformance-YYYY-MM-DD.md` + a terminal summary. Scratch scripts go in
 `tmp/` (create it if absent) — never the repo root, never `tests/`.
 
 ---
@@ -54,10 +54,10 @@ and both are restated inline where they matter.
 | R5 | **bash 3.2 violation** | `declare -A`, `mapfile`/`readarray`, `${var,,}`/`${var^^}`, `${arr[-1]}`, `&>>`, `\|&`, `${!prefix@}`; an unguarded `"${arr[@]}"` on a possibly-empty array under `set -u`; a bare `((n += w))` **as a statement** under `set -e`; treating `read -rsn1` as one character rather than one byte; `LC_ALL=C [[ … ]]` (not valid bash at all). | the forbidden-idiom greps below, then **read** each array expansion and each `((…))` to classify statement vs test. The pre-commit hook blocks these on *added* lines; this rule sweeps what predates the hook. |
 | R6 | **Swallowed error** | `\|\| true`, `2>/dev/null`, or an empty branch on a path where the user must see the failure — a real fault rendered as an empty list, a `0`, or a blank field. A *deliberate* best-effort degrade is fine **if** it degrades visibly (`--:--`, `n/a`, `LIVE`) and never as a fake value. | `grep -n '|| true\|2>/dev/null' shell/*` then read every hit and ask what the user sees when it fires. |
 | R7 | **Optimistic state** | State written before the operation it asserts has committed: a player record or a "playing" flag persisted before mpv is confirmed launched, a lock recorded before it is held, `TTY_ECHO_OFF=1` set before `stty` succeeded. A failure mid-op then leaves a lying record. | read the order of the write vs the op, in `detach_play`, the lock helpers, and the echo/cursor traps. |
-| R8 | **Contract drift** | The frozen surface (`CLAUDE.md`): `-j` emits **one line**; the envelope's field names; the exit-code taxonomy (0 ok · 1 usage/validation · 2+ propagated tool failure · 4 didn't take effect); lifecycle semantics (idempotent stop, ambiguity → 4). Any deviation, in either direction — code that violates the doc, or a doc that overstates the code. | **run the command.** `shell/yt-search -j -n 2 -- lofi \| wc -l` must be 1. Check each documented rejection actually rejects, including via `--`. Compare against `docs/DESIGN.md` §14/§15. |
+| R8 | **Contract drift** | The frozen surface (`CLAUDE.md`): `-j` emits **one line**; the envelope's field names; the exit-code taxonomy (0 ok · 1 usage/validation · 2+ propagated tool failure · 4 didn't take effect); lifecycle semantics (idempotent stop, ambiguity → 4). Any deviation, in either direction — code that violates the doc, or a doc that overstates the code. | **run the command.** `shell/yt-search -j -n 2 -- lofi \| wc -l` must be 1. Check each documented rejection actually rejects, including via `--`. Compare against `docs/SPEC-system.md` §14/§15. |
 | R9 | **Naming drift** | Env knobs missing the `YT_` prefix; a unit-less numeric where the codebase suffixes (`_s`, `_ms`, `_pct`); a deprecated short alias (`yts`/`ytp`) used anywhere at all, or `ytt` used where the canonical `yt-tui` belongs (one name per command — `CLAUDE.md`); a new envelope field whose name doesn't match its siblings' style. | grep the env-read sites against §16's documented list; scan user-visible strings for the wrong name form. |
 | R10 | **Dead code** | A function with zero call sites (across all four scripts and the rigs); a `case` arm for a flag no usage text mentions and nothing emits; an env knob read nowhere; a code path reachable only through a removed flag. | the function graph (Pass 0): defs minus call sites. Confirm by reading — a function called only from a heredoc or a `trap` string looks dead to a grep. |
-| R11 | **Doc drift** | `docs/DESIGN.md` is the single home of each fact and it is the *spec*: §15 exit codes, §16 config surface, §17 function map, §14 data contracts, §27 verification matrix. A function map missing a function, a config table missing a knob, a §27 entry citing a rig **by path** (§27 forbids it by construction — a scratch path is a promise the checkout can't keep), or a fact restated in the README *and* the design doc so the two can disagree. | diff the function graph against §17; diff the `YT_*` read sites against §16; diff observed exit codes against §15; grep §27 for `tmp/` or `tests/` paths. |
+| R11 | **Doc drift** | `docs/SPEC-system.md` is the single home of each fact and it is the *spec*: §15 exit codes, §16 config surface, §17 function map, §14 data contracts, §27 verification matrix. A function map missing a function, a config table missing a knob, a §27 entry citing a rig **by path** (§27 forbids it by construction — a scratch path is a promise the checkout can't keep), or a fact restated in the README *and* the design doc so the two can disagree. | diff the function graph against §17; diff the `YT_*` read sites against §16; diff observed exit codes against §15; grep §27 for `tmp/` or `tests/` paths. |
 | R12 | **Terminal-ownership violation (yt-tui only)** | The TUI owns the whole screen: every drawn line goes through the measured-width layer (`char_w`/`wrap_print` and friends) so a CJK or math-bold glyph is counted in cells; echo and the cursor are owned for the session and restored from the **same** trap; a redraw is a whole frame, never a partial that leaves a stale row. A raw `printf`/`echo` of variable-width content, or a `stty` restore that isn't in the trap, is a violation. | grep `printf\|echo` in `shell/yt-tui` for lines carrying interpolated title/channel text; read the trap. |
 
 ### The suite's layer order (for R3 / R4)
@@ -84,7 +84,7 @@ TUI. The core may not read a `YT_TUI_*`-shaped knob; the TUI may not construct y
    a narrow scope (say `shell/yt-tui`) still build the whole graph, so cross-file edges into
    the scope stay visible.
 
-2. **Pick up any open report:** `ls docs/TODO-conformance-*.md`. If a recent one is
+2. **Pick up any open report:** `ls docs/PLAN-conformance-*.md`. If a recent one is
    unaddressed, read it and fold new findings in — do not re-list tracked violations as new.
 
 3. **Build the function graph.** `fn_graph.py` (next to this file) lists every function
@@ -116,11 +116,11 @@ TUI. The core may not read a `YT_TUI_*`-shaped knob; the TUI may not construct y
    # R6 swallowed errors
    grep -n '|| true\|2>/dev/null' shell/*
 
-   # R9/R11 config surface: every YT_* read site, to diff against DESIGN.md §16
+   # R9/R11 config surface: every YT_* read site, to diff against SPEC-system.md §16
    grep -ohE 'YT_[A-Z_]+' shell/* | sort -u
 
    # R11 §27 must cite no rig by path
-   sed -n '/## 27. Verification matrix/,/## 28/p' docs/DESIGN.md | grep -n 'tmp/\|tests/'
+   sed -n '/## 27. Verification matrix/,/## 28/p' docs/SPEC-system.md | grep -n 'tmp/\|tests/'
    ```
 
 5. **Run the contract, don't read it** (R8). These are seconds each and settle the class:
@@ -183,7 +183,7 @@ The orchestrator does this, so source-verification stays in one place.
    - **Cap the action plan at one coherent theme.** Everything else goes to a
      `## Deferred backlog` section with counts. An unscoped 40-item plan never ships.
 
-4. **Write `docs/TODO-conformance-YYYY-MM-DD.md`** from the template below. Each task names
+4. **Write `docs/PLAN-conformance-YYYY-MM-DD.md`** from the template below. Each task names
    the rule + `file:line`, states a **structural** fix (move down into the core / collapse /
    delete / rename), and gives a `done_when` that is observable — *"`shell/yt-search -j` emits
    one line and `grep yt-dlp shell/yt-tui` is empty"* — **never** "a guard test passes".
@@ -244,7 +244,7 @@ Violations: N read-confirmed (M grep candidates dropped on read)
 Recurring classes (git-log corroborated): [class — count]
 Plan this round: <theme> — K tasks
 Deferred: N
-Report: docs/TODO-conformance-<date>.md
+Report: docs/PLAN-conformance-<date>.md
 ```
 
 **Cadence:** periodic, not per-commit — the residue accumulates between runs by design. Good

@@ -8,7 +8,7 @@
 # unambiguous contract. Output defaults to the plain list (-l) unless -j/-J is given.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
-# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). DESIGN-yt.md §28.
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). SPEC-system.md §28.
 
 # Resolve this script's OWN symlink chain before looking for its siblings. The PATH entries
 # (yt-search / yt-play, and ytt for the TUI) are symlinks into a checkout that can live
@@ -144,5 +144,5 @@ fi
 
 # `--` is FORWARDED, not just consumed here: it is what stops the impl from reading a
 # query that looks like a flag as one (`yt-search -- --status` must search for the text,
-# not list players). DESIGN-yt.md §6.
+# not list players). SPEC-system.md §6.
 exec "$IMPL" "${flags[@]}" -- "${query[@]}"
