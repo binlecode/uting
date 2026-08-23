@@ -6,7 +6,7 @@
 #
 #   BLOCK  a non-fast-forward (force) push to main, and deleting main
 #   BLOCK  a syntax error in any of the four scripts (the last gate before it is public)
-#   WARN   pushing a v* tag (YT_VERSION in shell/ut-play must match it)
+#   WARN   pushing a v* tag (shell/VERSION must match it)
 #
 # Enable once per clone:  git config core.hooksPath .githooks
 set -euo pipefail
@@ -56,10 +56,10 @@ for f in shell/ut-play shell/yt-search shell/yt-play shell/yt-tui; do
 done
 
 if [ $warn_tag -eq 1 ]; then
-  ver="$(grep -m1 '^YT_VERSION=' shell/ut-play 2>/dev/null | sed 's/.*"\(.*\)".*/\1/' || true)"
+  ver="$(cat shell/VERSION 2>/dev/null || true)"
   {
     echo ""
-    echo "WARNING: pushing a v* tag. YT_VERSION in shell/ut-play reads '${ver:-?}' — the tag"
+    echo "WARNING: pushing a v* tag. shell/VERSION reads '${ver:-?}' — the tag"
     echo "must match it, and the version is declared in exactly that one place."
     echo "Proceeding…"
   } >&2

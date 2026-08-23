@@ -1,25 +1,27 @@
 #!/usr/bin/env bash
-# yt-search — dedicated non-interactive YouTube search (narrow, agent-facing surface).
+# yt-search — the YouTube SEARCH ENGINE: query -> result envelope. Agent-facing.
 #
-# This is a real wrapper, not a symlink: it owns a search-only --help, accepts only
-# search flags (rejecting playback/lifecycle flags with a redirect to yt-play), then
-# delegates to the shared implementation `yt` (core). Keeping the heavy logic
-# in one place avoids drift; the narrowing here is what gives an LLM caller a small,
-# unambiguous contract. Output defaults to the plain list (-l) unless -j/-J is given.
+# One half of the youtube engine pair (`yt-search` + `yt-resolve`); the player
+# (`ut-play`) is source-agnostic and knows neither. This file owns everything that is
+# YouTube-specific about searching: the yt-dlp invocation, the cookie decision, the
+# result shaping, and the duration formatter. It has NO playback, lifecycle, or mpv
+# logic and never starts a process that outlives it. See docs/PLAN-ut-restructure.md.
+#
+# It used to be a gating wrapper that exec'd the core. The gate and the implementation
+# are merged here because after the engine/player split there is no longer a second
+# caller to gate against: this file IS the search verb. docs/SPEC-system.md §13.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
 # expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). SPEC-system.md §28.
 
-# Resolve this script's OWN symlink chain before looking for its siblings. The PATH entries
-# (yt-search / yt-play, and ytt for the TUI) are symlinks into a checkout that can live
-# anywhere, so `dirname $0` is
-# the symlink's directory, not the code's. This walks the chain to the real file and takes ITS
-# directory — which is the one holding the rest of the suite.
+# Resolve this script's OWN symlink chain before looking for its siblings. The PATH entry
+# is a symlink into a checkout that can live anywhere, so `dirname $0` is the symlink's
+# directory, not the code's. This walks the chain to the real file and takes ITS directory.
 #
 # `cd -P` / `pwd -P`, not the logical forms: a relative symlink resolves to something like
-# ~/bin/../../../elsewhere/shell, and logical `cd` would normalise those `..` textually against
-# ~/bin instead of against what ~/bin actually points at. Physical resolution is the only one
-# that lands in the right place. bash 3.2 has no `readlink -f`, hence the loop.
+# ~/bin/../../../elsewhere/shell, and logical `cd` would normalise those `..` textually
+# against ~/bin instead of against what ~/bin actually points at. Physical resolution is the
+# only one that lands in the right place. bash 3.2 has no `readlink -f`, hence the loop.
 _self="${BASH_SOURCE[0]}"
 while [[ -L "$_self" ]]; do
     _link=$(readlink "$_self")
@@ -29,16 +31,369 @@ while [[ -L "$_self" ]]; do
     esac
 done
 SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
-if [[ -f "$SCRIPT_DIR/ut-play" ]]; then
-    IMPL="$SCRIPT_DIR/ut-play"
+
+# THE version of the whole suite, declared once — in a data file, not in code. The engines
+# and the player are independent executables that share no library, so a shell variable in
+# any one of them would make the others ask IT for the version, which is the wrong
+# dependency direction for a player that must not know its engines. A one-line file each
+# reads keeps "one fact, one place" with zero code sharing. CLAUDE.md § one fact, one place.
+if [[ -r "$SCRIPT_DIR/VERSION" ]]; then
+    YT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
 else
-    echo "yt-search: cannot locate ut-play (core) next to $SCRIPT_DIR" >&2
-    exit 1
+    YT_VERSION="unknown"
 fi
+
+# The engine's own name, as it appears in the envelope. This is what lets a caller route a
+# result back to the right `<engine>-resolve` without pattern-matching the URL.
+ENGINE_NAME="youtube"
+
+# ==============================================================================
+# 1. SETTINGS
+# ==============================================================================
+
+: "${YT_COOKIE_BROWSER:=chrome}"
+
+# Cookies (login) are ON by default (browser: chrome) so login-gated / members / age-
+# restricted videos — invisible to an anonymous client — are searchable. Verify the browser
+# profile exists on this platform; if not, run anonymously rather than break, so a machine
+# without the configured browser degrades gracefully to no-login.
+# Set YT_COOKIE_BROWSER=none to force anonymous-only (skips the keychain read).
+# The browser's cookie DB should be readable (Chrome ideally closed) for a clean extraction.
+YT_COOKIE_ARGS=()
+if [[ -n "${YT_COOKIE_BROWSER:-}" && "$YT_COOKIE_BROWSER" != "none" ]]; then
+    browser_exists=0
+    case "$YT_COOKIE_BROWSER" in
+    chrome|chromium|brave)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            if [[ -d "$HOME/Library/Application Support/Google/Chrome" || -d "$HOME/Library/Application Support/BraveSoftware" || -d "$HOME/Library/Application Support/Chromium" ]]; then
+                browser_exists=1
+            fi
+        else
+            if [[ -d "$HOME/.config/google-chrome" || -d "$HOME/.config/chromium" || -d "$HOME/.config/BraveSoftware" ]]; then
+                browser_exists=1
+            fi
+        fi
+        ;;
+    safari)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Safari" ]] && browser_exists=1
+        fi
+        ;;
+    firefox)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Firefox" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.mozilla/firefox" ]] && browser_exists=1
+        fi
+        ;;
+    edge)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Microsoft Edge" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/microsoft-edge" ]] && browser_exists=1
+        fi
+        ;;
+    opera)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/com.operasoftware.Opera" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/opera" ]] && browser_exists=1
+        fi
+        ;;
+    vivaldi)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Vivaldi" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/vivaldi" ]] && browser_exists=1
+        fi
+        ;;
+    *)
+        browser_exists=0
+        ;;
+    esac
+
+    if ((browser_exists)); then
+        YT_COOKIE_ARGS=(--cookies-from-browser "$YT_COOKIE_BROWSER")
+    fi
+fi
+
+NUM_RESULTS=25
+MIN_DURATION=0
+MAX_DURATION=0
+SORT_FIELD="relevance"
+FORMAT_SORT=""
+COLOR_MODE="auto"
+OUTPUT_MODE="list"
+QUERY=""
+FILTERED_JSON=""
+
+# Glyph fallback shares ONE switch with yt-tui (YT_ASCII, legacy alias YT_TUI_ASCII): a
+# terminal whose font can't draw ♫ can't draw it in either surface, and a non-UTF-8 locale
+# (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as yt-tui does.
+MUSIC_CHAR="♫"
+case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
+1 | true | yes | on) MUSIC_CHAR="" ;;
+"")
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *UTF-8* | *utf-8* | *UTF8* | *utf8*) ;;
+    *) MUSIC_CHAR="" ;;
+    esac
+    ;;
+esac
+
+# ==============================================================================
+# 2. HELPERS
+# ==============================================================================
+
+die() {
+    local red='' reset=''
+    case "${COLOR_MODE:-auto}" in
+    always)
+        red=$'\033[31m'
+        reset=$'\033[0m'
+        ;;
+    auto)
+        if [[ -t 2 ]]; then
+            red=$'\033[31m'
+            reset=$'\033[0m'
+        fi
+        ;;
+    never) ;;
+    esac
+    echo "${red}Error:${reset} $*" >&2
+    exit 1
+}
+
+is_non_negative_int() {
+    [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+validate_enum() {
+    local value=$1
+    shift
+    local allowed
+    for allowed in "$@"; do
+        if [[ "$value" == "$allowed" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+require_cmd() {
+    local cmd=$1
+    command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
+}
+
+require_deps() {
+    local cmd
+    for cmd in "$@"; do
+        require_cmd "$cmd"
+    done
+}
+
+# The ONE implementation of duration formatting: seconds -> "[Nd ]HHh:MMm:SSs". It is a
+# jq prelude, not a bash function, because every consumer is already shaping JSON with jq —
+# a bash version meant forking jq once per row just to read a field back out (25 results =
+# 50+ forks, measured 40x slower than one jq program) and keeping two copies of the same
+# padding logic. An unknown duration yields NULL rather than a fake "00h:00m:00s", so each
+# caller decides how to render it (a live stream has no duration). SPEC-system.md §7.
+JQ_PRELUDE='
+def p2: tostring | if length < 2 then "0" + . else . end;
+def fmt_dur:
+  if type != "number" then null
+  else (. | floor) as $t
+    | ($t / 86400 | floor) as $d
+    | (($t % 86400) / 3600 | floor) as $h
+    | (($t % 3600) / 60 | floor) as $m
+    | ($t % 60) as $s
+    | (if $d > 0 then "\($d)d " else "" end) + "\($h | p2)h:\($m | p2)m:\($s | p2)s"
+  end;
+'
+
+# Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
+# caller can branch on `reason` instead of string-matching raw extractor wording (which is
+# not a contract and drifts across versions). The ENUM is the shared fact and lives in
+# docs/SPEC-system.md §14 — this is the yt-dlp-side reader of it; the player carries its own
+# mpv-side reader. No member may be added here that the enum does not already have.
+# `unknown` is the conservative default — never guess a cause we did not positively identify.
+classify_yt_dlp_error() {
+    local text=$1 rc=$2
+    if ((rc == 130)); then
+        echo "stopped_by_user"
+        return
+    fi
+    if grep -qiE 'HTTP Error 403|[^a-z]403[^0-9]|Forbidden' <<<"$text"; then
+        echo "forbidden"
+        return
+    fi
+    if grep -qiE 'Video unavailable|Private video|has been removed|no longer available|does not exist|account.*terminated|members-only|Sign in to confirm' <<<"$text"; then
+        echo "unavailable"
+        return
+    fi
+    if grep -qiE 'Requested format is not available|No video formats|requested format|only images are available' <<<"$text"; then
+        echo "format_unavailable"
+        return
+    fi
+    # 429 lands in `network`, not `unknown`: it is a transport-level, RETRYABLE refusal, and
+    # `network` is the enum member that already means "try again later". It is grouped here
+    # rather than with `forbidden` (403) deliberately — 403 means these credentials never
+    # work, 429 means not right now.
+    if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out|HTTP Error 429|Too Many Requests|Unable to download (webpage|API page|JSON metadata)' <<<"$text"; then
+        echo "network"
+        return
+    fi
+    echo "unknown"
+}
+
+# This process's own scratch dir: 0700, created lazily, removed however we exit. Lazily
+# because -h / -V must answer without touching the filesystem, and process-level rather than
+# a function `local` because the EXIT trap runs after the function has returned — a `local`
+# would be out of scope there and abort under `set -u`.
+#
+# The engine no longer writes into the player's state dir: `players/` has exactly one owner
+# (ut-play), and an engine reaching into it was only ever an artefact of the two living in
+# one file. Captions and error text are content, so 0700 rather than a bare /tmp path.
+SCRATCH_DIR=""
+cleanup_scratch() {
+    [[ -n "$SCRATCH_DIR" ]] && rm -rf "$SCRATCH_DIR" 2>/dev/null
+    return 0
+}
+trap cleanup_scratch EXIT
+
+ensure_scratch() {
+    [[ -n "$SCRATCH_DIR" ]] && return 0
+    SCRATCH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/yt-search.XXXXXX") || die "cannot create a scratch directory"
+    chmod 700 "$SCRATCH_DIR" 2>/dev/null || true
+}
+
+# ==============================================================================
+# 3. SEARCH
+# ==============================================================================
+
+fetch_results() {
+    local cmd=(
+        yt-dlp
+        "ytsearch${NUM_RESULTS}:${QUERY}"
+    )
+
+    # Duration bounds are enforced CLIENT-SIDE (in the jq shaping below); --match-filter is
+    # only a cheap server-side pre-filter. Reason: with --flat-playlist yt-dlp marks entries
+    # "incomplete", so a filter on a field a flat entry doesn't carry (a live stream has no
+    # duration) cannot decide and KEEPS the entry — verified: `-m 999999` still returned a
+    # live result. The filter is also sent only when a bound was actually asked for; the old
+    # unconditional "duration > 0" filtered nothing and only muddied the contract.
+    local match_filter=""
+    ((MIN_DURATION > 0)) && match_filter="duration > $MIN_DURATION"
+    if ((MAX_DURATION > 0)); then
+        [[ -n "$match_filter" ]] && match_filter+=" and "
+        match_filter+="duration < $MAX_DURATION"
+    fi
+    [[ -n "$match_filter" ]] && cmd+=(--match-filter "$match_filter")
+
+    if (( ${#YT_COOKIE_ARGS[@]} > 0 )); then
+        cmd+=("${YT_COOKIE_ARGS[@]}")
+    fi
+
+    cmd+=(
+        --flat-playlist
+        --dump-single-json
+        -f ba
+        --skip-download
+        --no-warnings
+        --ignore-errors
+        --quiet
+    )
+
+    if [[ -n "$FORMAT_SORT" ]]; then
+        cmd+=(--format-sort "$FORMAT_SORT")
+    fi
+
+    # Search used to be the one surface with NO error contract: a yt-dlp failure aborted on
+    # `set -e` with raw stderr even under -j, so an agent got a jq parse error instead of a
+    # shape it could branch on. Capture the failure and emit the same {status:"error",
+    # reason} taxonomy the rest of the suite uses; the exit code stays yt-dlp's own.
+    ensure_scratch
+    local result_json rc=0 err="$SCRATCH_DIR/search.err"
+    result_json=$("${cmd[@]}" 2>"$err") || rc=$?
+    if ((rc != 0)) || [[ -z "$result_json" ]]; then
+        local reason
+        reason=$(classify_yt_dlp_error "$(cat "$err" 2>/dev/null)" "$rc")
+        if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+            jq -nc --arg e "$ENGINE_NAME" --arg q "$QUERY" --arg reason "$reason" \
+                '{status: "error", engine: $e, query: $q, count: 0, results: [], reason: $reason}'
+        else
+            cat "$err" >&2 2>/dev/null || true
+            echo "Error: search failed for '$QUERY' ($reason)" >&2
+        fi
+        # §15 reserves 1 for usage/validation, so a propagated extractor failure reports
+        # 2+ even when yt-dlp itself exited 1; -j callers branch on .status instead.
+        exit $((rc <= 1 ? 2 : rc))
+    fi
+
+    # ONE jq program does the whole shaping: duration bounds -> duration_fmt -> sort.
+    # Sort is a client-side re-order of the fetched set; "relevance" keeps YouTube's native
+    # ranking (the order ytsearch returned) — no re-sort. Numeric fields sort descending,
+    # with unknown values (live streams) last. SORT_FIELD is validated at startup, so there
+    # is no unknown-field branch to handle here.
+    local sort_expr=""
+    case "$SORT_FIELD" in
+    duration) sort_expr=' | sort_by(.duration // -1) | reverse' ;;
+    view_count) sort_expr=' | sort_by(.view_count // -1) | reverse' ;;
+    esac
+
+    local bounds="true"
+    ((MIN_DURATION > 0)) && bounds+=" and (.duration != null and .duration > $MIN_DURATION)"
+    ((MAX_DURATION > 0)) && bounds+=" and (.duration != null and .duration < $MAX_DURATION)"
+
+    FILTERED_JSON=$(printf '%s' "$result_json" | jq "$JQ_PRELUDE
+        [ (.entries // [])[] | select($bounds) | . + {duration_fmt: (.duration | fmt_dur)} ]$sort_expr")
+}
+
+# Prose list. One jq program (it used to fork five jq per row — 125 for -n 25 — and
+# re-derive duration_fmt that FILTERED_JSON already carries). Unknown fields render as
+# LIVE / "--" / "-" instead of leaking a raw JSON `null` into human output.
+print_list() {
+    printf '%s' "$FILTERED_JSON" | jq -r --arg note "$MUSIC_CHAR" '
+        to_entries[]
+        | (.key + 1) as $i
+        | .value
+        | (if $note == "" then "" else $note + " " end) + "\($i). \(.title)",
+          "  - " + (if .live_status == "is_live" then "LIVE" else (.duration_fmt // "--") end),
+          "  - " + (if .view_count == null then "n/a" else (.view_count | tostring) end) + " views",
+          "  - \(.url)"'
+}
+
+# Structured search output for agent callers. Wraps results in a stable
+# {status, engine, query, count, results} envelope so a caller gets the query echoed back,
+# a result count, and — since the split — the NAME OF THE ENGINE that produced them, which
+# is what lets `ut-play` route a chosen result back to the matching `<engine>-resolve`
+# without pattern-matching its URL. Default (OUTPUT_MODE=json) projects each entry to a
+# lean, high-signal 8-field schema — the raw yt-dlp entries carry ~23 fields (thumbnail
+# arrays, ie_key, x-forwarded-for, two URL variants, …) that are pure token ballast for a
+# headless caller. OUTPUT_MODE=json_full (-J) keeps every raw field for the rare case
+# fidelity is needed. FILTERED_JSON's own shape is left untouched (print_list still reads
+# it), so we project only here.
+# `jq -c`, both arms: every machine envelope in this suite is ONE line, which is the
+# contract the README and ROADMAP §0/§6.1 state as a differentiator.
+emit_search_json() {
+    if [[ "$OUTPUT_MODE" == "json_full" ]]; then
+        printf '%s' "$FILTERED_JSON" | jq -c --arg e "$ENGINE_NAME" --arg q "$QUERY" \
+            '{status: "ok", engine: $e, query: $q, count: length, results: .}'
+    else
+        printf '%s' "$FILTERED_JSON" | jq -c --arg e "$ENGINE_NAME" --arg q "$QUERY" \
+            '{status: "ok", engine: $e, query: $q, count: length,
+              results: map({id, title, url, channel, duration, duration_fmt, view_count, live_status})}'
+    fi
+}
+
+# ==============================================================================
+# 4. CLI
+# ==============================================================================
 
 print_usage() {
     cat <<'EOF'
-yt-search — non-interactive YouTube search
+yt-search — the YouTube search engine (non-interactive)
 
 Usage:
   yt-search [options] <search query>
@@ -50,29 +405,31 @@ Options:
   -s FIELD Sort field: relevance | view_count | duration (default: relevance)
   -S SORT  yt-dlp format-sort override (--format-sort)
   -l       Plain text list output (default)
-  -j       JSON: {query, count, results[]} — 8 lean fields per result
+  -j       JSON: {status, engine, query, count, results[]} — 8 lean fields per result
   -J       JSON with full raw yt-dlp fields per result (same envelope)
+  --color MODE  auto | always | never (default: auto)
   -h       This help
   -V       Print the suite version
 
-Output (JSON, -j): {"query","count","results":[{id,title,url,channel,duration,
-                    duration_fmt,view_count,live_status}, ...]}
+Output (JSON, -j): {"status","engine","query","count","results":[{id,title,url,channel,
+                    duration,duration_fmt,view_count,live_status}, ...]}
+  results[].id is this engine's media id — the input to `yt-resolve`.
 
-To play a result, pass its url to: yt-play <url>
+Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp failure (see .reason)
+
+To play a result, pass its url or id to: ut-play
 EOF
 }
 
-# Value-taking flags (consume the next token) vs boolean flags, restricted to the
-# search surface. Anything outside these is rejected — playback/lifecycle flags get a
-# pointer to yt-play so the caller learns the right tool instead of a bare error.
-# Collect option tokens and query tokens separately: the impl's getopts stops at the
-# first positional, so every flag (including the injected -l default) must be emitted
-# before the query.
+# Value-taking flags (consume the next token) vs boolean flags, restricted to the search
+# surface. Anything outside these is rejected — playback/lifecycle flags get a pointer to
+# ut-play so the caller learns the right tool instead of a bare error. This gate is the
+# whole reason a narrow verb exists (SPEC-system.md §13); it used to live in a separate
+# wrapper file and now sits directly in front of the implementation it guards.
 has_format=0
-flags=()
 query=()
 reject_url() {
-    echo "yt-search: '$1' looks like a URL — use 'yt-play $1' to play it" >&2
+    echo "yt-search: '$1' looks like a URL — use 'ut-play $1' to play it" >&2
     exit 1
 }
 while (($#)); do
@@ -82,36 +439,57 @@ while (($#)); do
         exit 0
         ;;
     -V | --version)
-        # One version, held by the core (§ YT_VERSION). Asking it and printing OUR name in
-        # front is what keeps four entry points from drifting into four version numbers.
-        printf '%s %s\n' "yt-search" "$("$IMPL" --version | awk '{print $NF}')"
+        # Answered before ANY dependency gate: a version is the first thing a bug report
+        # needs, and needing yt-dlp installed to find out which version you have is
+        # backwards.
+        printf 'yt-search %s\n' "$YT_VERSION"
         exit 0
         ;;
-    -l | --list | -j | --json | -J | --json-full)
+    -l | --list)
         has_format=1
-        flags+=("$1")
+        OUTPUT_MODE="list"
+        shift
+        ;;
+    -j | --json)
+        has_format=1
+        OUTPUT_MODE="json"
+        shift
+        ;;
+    -J | --json-full)
+        has_format=1
+        OUTPUT_MODE="json_full"
         shift
         ;;
     --color=*)
-        flags+=("$1")
+        COLOR_MODE="${1#*=}"
         shift
         ;;
-    -n | -m | -M | -s | -S | --color)
-        [[ $# -ge 2 ]] || {
-            echo "yt-search: $1 requires a value" >&2
-            exit 1
-        }
-        flags+=("$1" "$2")
+    --color)
+        [[ $# -ge 2 ]] || { echo "yt-search: $1 requires a value" >&2; exit 1; }
+        COLOR_MODE="$2"
+        shift 2
+        ;;
+    -n | -m | -M | -s | -S)
+        [[ $# -ge 2 ]] || { echo "yt-search: $1 requires a value" >&2; exit 1; }
+        case "$1" in
+        -n) NUM_RESULTS="$2" ;;
+        -m) MIN_DURATION="$2" ;;
+        -M) MAX_DURATION="$2" ;;
+        -s) SORT_FIELD="$2" ;;
+        -S) FORMAT_SORT="$2" ;;
+        esac
         shift 2
         ;;
     -f | -d | --detach | --status | --stop | --get-url | --info | --transcript | --subtitles | --sub-lang | --sub-langs | --set-volume | --id | --all)
-        echo "yt-search: $1 is a playback flag — use yt-play for playback" >&2
+        echo "yt-search: $1 is a playback flag — use ut-play for playback" >&2
         exit 1
         ;;
     --)
         shift
+        # `--` stops FLAG parsing, it does not stop argument validation: a query token
+        # that looks like a URL is still the wrong tool, and a query beginning with '-'
+        # must survive as a query. SPEC-system.md §6.
         while (($#)); do
-            # yt-search searches text; a URL belongs to yt-play.
             case "$1" in
             http://* | https://* | www.* | youtube.com/* | youtu.be/*) reject_url "$1" ;;
             esac
@@ -138,11 +516,40 @@ if ((${#query[@]} == 0)); then
     echo "yt-search: a search query is required (see 'yt-search -h')" >&2
     exit 1
 fi
+QUERY="${query[*]}"
+if [[ -z "${QUERY//[[:space:]]/}" ]]; then
+    echo "yt-search: a search query is required (see 'yt-search -h')" >&2
+    exit 1
+fi
 
-# Default to the plain list unless the caller picked a JSON format.
-((has_format)) || flags+=("-l")
+# The default output is the plain list; -j/-J/-l override.
+((has_format)) || OUTPUT_MODE="list"
 
-# `--` is FORWARDED, not just consumed here: it is what stops the impl from reading a
-# query that looks like a flag as one (`yt-search -- --status` must search for the text,
-# not list players). SPEC-system.md §6.
-exec "$IMPL" "${flags[@]}" -- "${query[@]}"
+if ! is_non_negative_int "$NUM_RESULTS"; then
+    die "-n must be a non-negative integer"
+fi
+if ! is_non_negative_int "$MIN_DURATION"; then
+    die "-m must be a non-negative integer"
+fi
+if ! is_non_negative_int "$MAX_DURATION"; then
+    die "-M must be a non-negative integer"
+fi
+if ((MAX_DURATION > 0 && MAX_DURATION <= MIN_DURATION)); then
+    die "-M must be greater than -m when both are set"
+fi
+if ! validate_enum "$SORT_FIELD" relevance view_count duration; then
+    die "-s must be one of: relevance, view_count, duration"
+fi
+if ! validate_enum "$COLOR_MODE" auto always never; then
+    die "--color must be one of: auto, always, never"
+fi
+
+require_deps yt-dlp jq
+
+fetch_results
+if [[ "$OUTPUT_MODE" == "list" ]]; then
+    print_list
+else
+    emit_search_json
+fi
+exit 0

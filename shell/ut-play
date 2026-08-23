@@ -14,11 +14,17 @@ set -euo pipefail
 # ==============================================================================
 # 1. CORE LIBRARY & DEFAULT SETTINGS (Merged from yt-common.sh)
 # ==============================================================================
-# THE version of the whole suite, declared once. The wrappers and the TUI do not carry their
-# own copy — they ask the core and print their own name in front of the answer, so a release
-# cannot ship a suite whose four entry points disagree about what they are.
-YT_VERSION="0.2.0"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# THE version of the whole suite, declared once — in a data file, not in code. The player and
+# the engines are independent executables that share no library, so a shell variable in any
+# one of them would make the others ask IT for the version, which is the wrong dependency
+# direction for a player that must not know its engines. A one-line file each reads keeps
+# "one fact, one place" with zero code sharing. CLAUDE.md § one fact, one place.
+if [[ -r "$SCRIPT_DIR/VERSION" ]]; then
+    YT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
+else
+    YT_VERSION="unknown"
+fi
 # Path to this script, used to re-exec a detached playback child (see detach_play).
 SELF="${BASH_SOURCE[0]}"
 
@@ -129,32 +135,27 @@ fi
 
 usage() {
     cat <<EOF
-ut-play — the non-interactive core engine of the YT CLI suite (search / play / resolve /
-detached-playback lifecycle). This is the shared implementation the suite's three PATH
-surfaces delegate to, not itself an advertised command — prefer them (each has its own
--h, and each gates the flags it cannot use):
+ut-play — the non-interactive PLAYER: play / resolve / detached-playback lifecycle. It is
+the source-agnostic half of the suite; searching belongs to an engine (yt-search), and this
+file knows nothing about any one site beyond the URL it is handed. Still reached through
+yt-play today, which gates the flags this surface cannot use:
 
-  yt-search   search -> text list or JSON
+  yt-search   search -> text list or JSON (the YouTube engine)
   yt-play     play / resolve / manage playback of a URL
   yt-tui      interactive terminal browser (pick + play)
 
-Usage (everything after -- is the query/URL, so a query may start with '-'):
-  yt [-n num] [-m sec] [-M sec] [-s sort] [-S fmt] [-l|-j|-J] -- <search query>
-  yt [-f mode] [--volume N] [-j] -- <URL>              play a URL (blocks)
-  yt --info [-j|-J] -- <URL>                           metadata only, no playback
-  yt --transcript [--sub-lang L] [-j|-J] -- <URL>      captions as text, no playback
-  yt --get-url [-f mode] [-j] -- <URL>                 resolve stream URL(s), no playback
-  yt -d [-f mode] [--volume N] [-j] -- <URL>           detached background playback
-  yt --status [-j]                                     list live detached players
-  yt --stop [--id ID | --all] [-j]                     stop one player (or all); idempotent
-  yt --set-volume N [--id ID] [-j]                     live volume on a detached player
-  yt (no query, no URL, no action)                     usage error; use yt-tui to browse
+Usage (everything after -- is the URL, so a URL may start with '-'):
+  ut-play [-f mode] [--volume N] [-j] -- <URL>         play a URL (blocks)
+  ut-play --info [-j|-J] -- <URL>                      metadata only, no playback
+  ut-play --transcript [--sub-lang L] [-j|-J] -- <URL> captions as text, no playback
+  ut-play --get-url [-f mode] [-j] -- <URL>            resolve stream URL(s), no playback
+  ut-play -d [-f mode] [--volume N] [-j] -- <URL>      detached background playback
+  ut-play --status [-j]                                list live detached players
+  ut-play --stop [--id ID | --all] [-j]                stop one player (or all); idempotent
+  ut-play --set-volume N [--id ID] [-j]                live volume on a detached player
+  ut-play (no URL, no action)                          usage error; use yt-tui to browse
 
 Options:
-  -n NUM      Number of search results to fetch (default: 25)
-  -m SEC      Minimum duration in seconds (entries of unknown duration are excluded)
-  -M SEC      Maximum duration in seconds (same)
-  -s FIELD    Sort field: relevance|view_count|duration (default: relevance)
   -S SORT     yt-dlp format-sort override (--format-sort; e.g. res:720,fps)
   -f MODE     Playback mode (default: audio)
               audio|ba  audio-only          video|bv  high-quality video+audio
@@ -163,9 +164,9 @@ Options:
               (-d rejects ascii/viz: a detached player has no terminal to draw on)
   --volume N  mpv startup volume, 0-100 (default: mpv's own). For -d this is the STARTING
               volume; change it live with --set-volume.
-  -l          Plain text list output (search; default)
-  -j          JSON output: search envelope, or one-line status JSON for play/lifecycle
-  -J          Search/--info JSON with the full raw yt-dlp fields; with --transcript,
+  -l          Prose output (default)
+  -j          JSON output: one-line status JSON for play/lifecycle
+  -J          --info JSON with the full raw yt-dlp fields; with --transcript,
               the same envelope plus the timed `segments` array
   -d          --detach: background playback; manage with --status/--stop/--set-volume
   --transcript  Fetch the caption track and print it as clean text (read-only, nothing
@@ -183,8 +184,6 @@ Long-only flags: --detach --status --stop --get-url --info --set-volume --id --a
                  (--help and --version also have short forms: -h, -V)
 
 Output contracts (full schemas: macos/docs/SPEC-system.md §14):
-  search    {query, count, results[8 lean fields]}  (-J: raw fields)
-            failure -> {status:"error", query, count:0, results:[], reason}
   play -j   {status, url, mode, exit_code, reason, retried}
             reason: forbidden|unavailable|format_unavailable|network|stopped_by_user|
                     unknown|null(ok)   (network also covers HTTP 429 rate limiting)
@@ -213,8 +212,8 @@ Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp/mpv failure · 4 
 Playback keys (mpv, during a blocking 'yt <url>' playback):
   _  toggle video track on/off        q  stop playback and exit
 
-Dependencies: yt-dlp + jq (search, --info, --transcript); mpv (playback); nc (--set-volume);
-              curl optional (play-time client probe, §8.2)
+Dependencies: yt-dlp + jq (--info, --transcript, stream resolution); mpv (playback);
+              nc (--set-volume); curl optional (play-time client probe, §8.2)
 
 Environment:
   YT_COOKIE_BROWSER    Browser for cookie extraction / login (default: chrome; "none" =
@@ -1684,135 +1683,9 @@ transcript_fail() {
 
 
 # ==============================================================================
-# 4. SEARCH EXECUTION & INTERACTIVE MENU LOGIC
-# ==============================================================================
-
-fetch_results() {
-    local cmd=(
-        yt-dlp
-        "ytsearch${NUM_RESULTS}:${QUERY}"
-    )
-
-    # Duration bounds are enforced CLIENT-SIDE (in the jq shaping below); --match-filter is
-    # only a cheap server-side pre-filter. Reason: with --flat-playlist yt-dlp marks entries
-    # "incomplete", so a filter on a field a flat entry doesn't carry (a live stream has no
-    # duration) cannot decide and KEEPS the entry — verified: `-m 999999` still returned a
-    # live result. The filter is also sent only when a bound was actually asked for; the old
-    # unconditional "duration > 0" filtered nothing and only muddied the contract.
-    local match_filter=""
-    ((MIN_DURATION > 0)) && match_filter="duration > $MIN_DURATION"
-    if ((MAX_DURATION > 0)); then
-        [[ -n "$match_filter" ]] && match_filter+=" and "
-        match_filter+="duration < $MAX_DURATION"
-    fi
-    [[ -n "$match_filter" ]] && cmd+=(--match-filter "$match_filter")
-
-    if (( ${#YT_COOKIE_ARGS[@]} > 0 )); then
-        cmd+=("${YT_COOKIE_ARGS[@]}")
-    fi
-
-    cmd+=(
-        --flat-playlist
-        --dump-single-json
-        -f ba
-        --skip-download
-        --no-warnings
-        --ignore-errors
-        --quiet
-    )
-
-    if [[ -n "$FORMAT_SORT" ]]; then
-        cmd+=(--format-sort "$FORMAT_SORT")
-    fi
-
-    # Search used to be the one surface with NO error contract: a yt-dlp failure aborted on
-    # `set -e` with raw stderr even under -j, so an agent got a jq parse error instead of a
-    # shape it could branch on. Capture the failure and emit the same {status:"error",
-    # reason} taxonomy the playback path uses; the exit code stays yt-dlp's own.
-    ensure_state_dir
-    local result_json rc=0 err="$STATE_DIR/search.$$"
-    result_json=$("${cmd[@]}" 2>"$err") || rc=$?
-    if ((rc != 0)) || [[ -z "$result_json" ]]; then
-        local reason
-        reason=$(classify_playback_error "$(cat "$err" 2>/dev/null)" "$rc")
-        if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
-            jq -nc --arg q "$QUERY" --arg reason "$reason" \
-                '{status: "error", query: $q, count: 0, results: [], reason: $reason}'
-        else
-            cat "$err" >&2 2>/dev/null || true
-            echo "Error: search failed for '$QUERY' ($reason)" >&2
-        fi
-        rm -f "$err" 2>/dev/null || true
-        # §15 reserves 1 for usage/validation, so a propagated extractor failure reports
-        # 2+ even when yt-dlp itself exited 1; -j callers branch on .status instead.
-        exit $((rc <= 1 ? 2 : rc))
-    fi
-    rm -f "$err" 2>/dev/null || true
-
-    # ONE jq program does the whole shaping: duration bounds -> duration_fmt -> sort.
-    # Sort is a client-side re-order of the fetched set; "relevance" keeps YouTube's native
-    # ranking (the order ytsearch returned) — no re-sort. Numeric fields sort descending,
-    # with unknown values (live streams) last. SORT_FIELD is validated at startup, so there
-    # is no unknown-field branch to handle here.
-    local sort_expr=""
-    case "$SORT_FIELD" in
-    duration) sort_expr=' | sort_by(.duration // -1) | reverse' ;;
-    view_count) sort_expr=' | sort_by(.view_count // -1) | reverse' ;;
-    esac
-
-    local bounds="true"
-    ((MIN_DURATION > 0)) && bounds+=" and (.duration != null and .duration > $MIN_DURATION)"
-    ((MAX_DURATION > 0)) && bounds+=" and (.duration != null and .duration < $MAX_DURATION)"
-
-    FILTERED_JSON=$(printf '%s' "$result_json" | jq "$JQ_PRELUDE
-        [ (.entries // [])[] | select($bounds) | . + {duration_fmt: (.duration | fmt_dur)} ]$sort_expr")
-}
-
-# Prose list. One jq program (it used to fork five jq per row — 125 for -n 25 — and
-# re-derive duration_fmt that FILTERED_JSON already carries). Unknown fields render as
-# LIVE / "--" / "-" instead of leaking a raw JSON `null` into human output.
-print_list() {
-    printf '%s' "$FILTERED_JSON" | jq -r --arg note "$MUSIC_CHAR" '
-        to_entries[]
-        | (.key + 1) as $i
-        | .value
-        | (if $note == "" then "" else $note + " " end) + "\($i). \(.title)",
-          "  - " + (if .live_status == "is_live" then "LIVE" else (.duration_fmt // "--") end),
-          "  - " + (if .view_count == null then "n/a" else (.view_count | tostring) end) + " views",
-          "  - \(.url)"'
-}
-
-# Structured search output for agent callers. Wraps results in a stable
-# {query, count, results} envelope so a caller gets the query echoed back and a
-# result count without having to derive them. Default (OUTPUT_MODE=json) projects
-# each entry to a lean, high-signal 8-field schema — the raw yt-dlp entries carry
-# ~23 fields (thumbnail arrays, ie_key, x-forwarded-for, two URL variants, …) that
-# are pure token ballast for a headless caller. OUTPUT_MODE=json_full (-J) keeps
-# every raw field for the rare case fidelity is needed. FILTERED_JSON's own shape is
-# left untouched (print_list still reads it), so we project only here.
-# `jq -c`, both arms: every machine envelope in this suite is ONE line, which is the
-# contract the README and ROADMAP §0/§6.1 state as a differentiator and the lifecycle
-# verbs (`jq -nc`) have always honored. Search and --info were the two paths that never
-# did — 26 lines for `-j -n 3`, 76 for `-J` — so an agent reading "one line of JSON out"
-# got a pretty-printed document from the first verb it ever calls.
-emit_search_json() {
-    if [[ "$OUTPUT_MODE" == "json_full" ]]; then
-        printf '%s' "$FILTERED_JSON" | jq -c --arg q "$QUERY" '{query: $q, count: length, results: .}'
-    else
-        printf '%s' "$FILTERED_JSON" | jq -c --arg q "$QUERY" \
-            '{query: $q, count: length,
-              results: map({id, title, url, channel, duration, duration_fmt, view_count, live_status})}'
-    fi
-}
-
-# ==============================================================================
 # 5. CLI OPTIONS PARSING & VALIDATION
 # ==============================================================================
 
-NUM_RESULTS=25
-MIN_DURATION=0
-MAX_DURATION=0
-SORT_FIELD="relevance"
 PLAYBACK_MODE="audio"
 FORMAT_SORT=""
 VOLUME=""
@@ -1820,6 +1693,7 @@ COLOR_MODE="auto"
 # Glyph fallback shares ONE switch with yt-tui (YT_ASCII, legacy alias YT_TUI_ASCII): a
 # terminal whose font can't draw ♫ can't draw it in either surface, and a non-UTF-8 locale
 # (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as yt-tui does.
+# Only --info's prose output uses it now; it leaves with resolve_info at PLAN step B-2.
 MUSIC_CHAR="♫"
 case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
 1 | true | yes | on) MUSIC_CHAR="" ;;
@@ -1830,10 +1704,8 @@ case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
     esac
     ;;
 esac
-# Default search output is the plain list; -j/-J/-l override. (No interactive menu:
-# the core is non-interactive — interactive browsing lives in yt-tui.)
+# Default output is prose; -j/-J select a machine envelope.
 OUTPUT_MODE="list"
-FILTERED_JSON=""
 # Playback lifecycle / structured-output state.
 DETACH=0
 ACTION=""            # "" (normal) | status | stop | geturl | info | set-volume | transcript
@@ -1990,12 +1862,8 @@ else
     set --
 fi
 
-while getopts ":n:m:M:s:f:S:dljJhV" opt; do
+while getopts ":f:S:dljJhV" opt; do
     case "$opt" in
-    n) NUM_RESULTS="$OPTARG" ;;
-    m) MIN_DURATION="$OPTARG" ;;
-    M) MAX_DURATION="$OPTARG" ;;
-    s) SORT_FIELD="$OPTARG" ;;
     f) PLAYBACK_MODE=$(normalize_playback_mode "$OPTARG") ;;
     S) FORMAT_SORT="$OPTARG" ;;
     d) DETACH=1 ;;
@@ -2025,21 +1893,6 @@ shift $((OPTIND - 1))
 
 QUERY="$*"
 
-if ! is_non_negative_int "$NUM_RESULTS"; then
-    die "-n must be a non-negative integer"
-fi
-if ! is_non_negative_int "$MIN_DURATION"; then
-    die "-m must be a non-negative integer"
-fi
-if ! is_non_negative_int "$MAX_DURATION"; then
-    die "-M must be a non-negative integer"
-fi
-if ((MAX_DURATION > 0 && MAX_DURATION <= MIN_DURATION)); then
-    die "-M must be greater than -m when both are set"
-fi
-if ! validate_enum "$SORT_FIELD" relevance view_count duration; then
-    die "-s must be one of: relevance, view_count, duration"
-fi
 if ! validate_enum "$COLOR_MODE" auto always never; then
     die "--color must be one of: auto, always, never"
 fi
@@ -2085,11 +1938,11 @@ if ((DETACH)) && ((! IS_URL)); then
     die "--detach requires a YouTube URL"
 fi
 
-# A bare invocation (no URL, no query, no lifecycle action) is a usage error (D3).
-# Report it before the heavier yt-dlp/mpv dependency check so the message is about
-# the missing input, not a missing player. Interactive browsing lives in yt-tui.
+# A bare invocation (no URL, no lifecycle action) is a usage error (D3). Report it before
+# the heavier yt-dlp/mpv dependency check so the message is about the missing input, not a
+# missing player. Searching lives in yt-search; interactive browsing in yt-tui.
 if ((! IS_URL)) && [[ -z "${QUERY//[[:space:]]/}" ]] && [[ -z "$ACTION" ]]; then
-    die "provide a search query or a URL (for interactive browsing, run yt-tui)"
+    die "provide a URL (to search, run yt-search; for interactive browsing, yt-tui)"
 fi
 
 # Lifecycle queries need only jq and take no URL — handle them before the heavier
@@ -2137,7 +1990,7 @@ if [[ "$PLAYBACK_MODE" == "ascii" ]]; then
 fi
 
 # =-----------------------------------------------------------------------------
-# ROUTING: Direct play (URLs) or Non-interactive Search output
+# ROUTING: play a URL. (Search left for the yt-search engine at PLAN step B-1.)
 # =-----------------------------------------------------------------------------
 if ((IS_URL)); then
     if [[ "$ACTION" == "geturl" ]]; then
@@ -2163,12 +2016,9 @@ if ((IS_URL)); then
 fi
 
 # =-----------------------------------------------------------------------------
-# Non-URL: non-interactive search output. (Empty-query guard is enforced above.)
+# Non-URL: nothing left to route. Search moved out to the engine (yt-search) when the suite
+# split into player + engines, and the core's old D2 contract (bare `yt "query"` -> list)
+# went with it. Anything non-URL reaching here is a caller holding the wrong tool.
+# docs/PLAN-ut-restructure.md §5 B-1.
 # =-----------------------------------------------------------------------------
-fetch_results
-if [[ "$OUTPUT_MODE" == "list" ]]; then
-    print_list
-else
-    emit_search_json
-fi
-exit 0
+die "'$QUERY' is not a URL — run 'yt-search -- $QUERY' to search for it"

@@ -74,6 +74,11 @@ jq_ok() {
 echo "── search envelope ────────────────────────────────────────────────"
 report "search -j envelope" 0 \
     "$(jq_ok '.query and .count and (.results|length==3)' shell/yt-search -j -n 3 -- lofi)"
+# The engine names itself in its own envelope. This is what lets a caller route a chosen
+# result back to the matching <engine>-resolve without pattern-matching its URL, so a new
+# engine that forgets the field breaks routing rather than merely looking different.
+report "search -j names its engine" 0 \
+    "$(jq_ok '.status=="ok" and .engine=="youtube"' shell/yt-search -j -n 2 -- lofi)"
 report "search -J has raw id" 0 \
     "$(jq_ok '.results[0]|has("id")' shell/yt-search -J -n 2 -- lofi)"
 # Was an open R8 drift (26 lines for -n 3); fixed, so it is a hard check now — a "known"
@@ -94,9 +99,14 @@ report "yt-play -d + action"      1 "$(rc shell/yt-play -d --stop)"
 report "yt-play -- <query>"      1 "$(rc shell/yt-play -- "a query")"
 
 echo "── argv order: a flag-shaped query after -- is SEARCHED ───────────"
-# Not a player list: --status after -- is four characters of query text.
-report "yt -l -- --status searches" 0 \
-    "$(shell/ut-play -l -- --status 2>&1 | head -1 | grep -qv '^{' && echo 0 || echo 1)"
+# Not a player list: --status after -- is eight characters of query text. The check lives on
+# yt-search because that is where searching lives now; the player has no search branch left
+# to confuse a flag-shaped token with (PLAN-ut-restructure step B-1).
+report "yt-search -- --status searches" 0 \
+    "$(shell/yt-search -l -- --status 2>&1 | head -1 | grep -qv '^{' && echo 0 || echo 1)"
+# The other half of that split: a non-URL positional is no longer a search, it is a usage
+# error naming the right tool. Exit 1, not a silent fall-through to playback.
+report "core: non-URL is a usage error" 1 "$(rc /bin/bash shell/ut-play -- "a query")"
 
 echo "── --transcript: read-only, so the gate and both envelopes are all ─"
 # The ok-path fixture must be a video that HAS captions and the error-path one must not:

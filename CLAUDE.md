@@ -46,9 +46,10 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
 
 | File | Role |
 |------|------|
-| `shell/ut-play` | **CORE engine** (2.2k lines) — all search / play / resolve / lifecycle logic, non-interactive, never prompts. Owns the detached player lifecycle (id / pid / socket / lock / state dir / reap), the JSON envelope, the exit-code taxonomy, and `YT_VERSION`. **Not on PATH** and not symlinked into `bin/`: every caller goes through a narrow verb, and a PATH-exposed core only invites bypassing the flag-gating the verbs exist to provide. Renamed from `shell/yt` on 2026-08-23 (`docs/PLAN-ut-restructure.md` step A); it still holds the YouTube engine, which step B carves out |
-| `shell/yt-search` | Narrow headless verb — gates flags (rejects `-f` / `--detach` / a URL) and `exec`s the core. Short because the script *is* short |
+| `shell/ut-play` | **The player** (2.0k lines) — all search / play / resolve / lifecycle logic, non-interactive, never prompts. Owns the detached player lifecycle (id / pid / socket / lock / state dir / reap), the JSON envelope, the exit-code taxonomy, and `YT_VERSION`. **Not on PATH** and not symlinked into `bin/`: every caller goes through a narrow verb, and a PATH-exposed core only invites bypassing the flag-gating the verbs exist to provide. Renamed from `shell/yt` (`docs/PLAN-ut-restructure.md` step A); search left for `yt-search` at step B-1, and the remaining YouTube logic (`resolve_*`, the cookie block, the PO-token probe) leaves at B-2 |
+| `shell/yt-search` | **The YouTube search engine** (540 lines) — query → result envelope. Owns its own yt-dlp call, cookie decision, result shaping and duration formatter, and its own flag gate (the wrapper merged in at step B-1: with the engine split out there is no second caller left to gate against). Zero playback or lifecycle logic |
 | `shell/yt-play` | Narrow headless verb — gates flags (rejects `-n` / `-s` / a bare query) and `exec`s the core. Owns the lifecycle verbs' argv surface (`--detach`, `--status`, `--stop`, `--set-volume`, `--get-url`, `--info`) |
+| `shell/VERSION` | The suite version, declared once — a one-line data file, not a shell variable. The player and the engines are independent executables sharing no library, so a variable in any one of them would make the others ask *it* for the version — the wrong dependency direction for a player that must not know its engines |
 | `shell/yt-tui` | The human face (2.8k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
 | `tests/assert_pane.py` | Layout invariants on a captured pane, measured in **cells** (east-asian-width), not characters: nothing exceeds the pane width, titles start on one column, the duration rail is right-flush |
 | `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that does what the real one will not do on cue: answer out of order, report a property null, interleave async events, walk the clock, never close its side |
@@ -56,9 +57,9 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
 **Dependency graph — search/play logic exists ONCE, in the core:**
 
 ```
-  ~/bin/yt-search → shell/yt-search ─┐
-  ~/bin/yt-play   → shell/yt-play  ──┼─► exec shell/ut-play (core) ─► yt-dlp · mpv · jq
-  ~/bin/ytt       → shell/yt-tui ────┘   (via yt-search -j → render → yt-play -d -j)
+  ~/bin/yt-search → shell/yt-search ─────► yt-dlp · jq          (the YouTube search engine)
+  ~/bin/yt-play   → shell/yt-play  ─────► exec shell/ut-play ─► yt-dlp · mpv · jq
+  ~/bin/ytt       → shell/yt-tui ────────► (yt-search -j → render → yt-play -d -j)
 ```
 
 Each wrapper locates the core by a path **relative to its own resolved script location** (self-resolving symlink chain, `cd -P`/`pwd -P` — bash 3.2 has no `readlink -f`), so the checkout can live anywhere and needs no `bin/` entry to work.
@@ -214,7 +215,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 - One logical change per commit. Renderer changes come with the capture or the rig output that proves them.
 - `bash -n` on all four scripts before every commit; the relevant rig before every push.
 - **Always ask before `git push`.** Never force-push `main`.
-- There is no release process to run: the shell suite is not packaged (`docs/ROADMAP.md` D1). `YT_VERSION` in `shell/ut-play` is bumped deliberately, alone, when the contract or a user-visible surface changes — not once per commit.
+- There is no release process to run: the shell suite is not packaged (`docs/ROADMAP.md` D1). The version in `shell/VERSION` is bumped deliberately, alone, when the contract or a user-visible surface changes — not once per commit.
 
 ## Security & Configuration Tips
 

@@ -19,11 +19,16 @@ in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 - Runtime deps: `yt-dlp`, `jq` (search); `mpv` (playback); `curl` optional (§8.2).
   No fzf / TUI framework — only foundational primitives.
 
-> **Naming, in flight (2026-08-23).** The core file was renamed `shell/yt` → `shell/ut-play`
-> (`docs/PLAN-ut-restructure.md` step A). Below this line, a bare `yt` in prose or in a
-> process diagram still means that core. The names and the diagrams are redrawn in step E,
-> together — the invocation stack in §6.1 changes shape in step B (mpv stops running yt-dlp
-> itself), so redrawing it now and again then would be drawing it twice.
+> **Restructure in flight (2026-08-23).** Two things below this line are behind the code,
+> both by design (`docs/PLAN-ut-restructure.md`): the core file was renamed `shell/yt` →
+> `shell/ut-play` (step A), so a bare `yt` in prose or in a process diagram still means that
+> player; and **search has left it for the `yt-search` engine** (step B-1), which now owns
+> the search yt-dlp call, the cookie decision and the duration formatter, declares
+> `engine`/`status` in its envelope, and merged its former gating wrapper. The player's old
+> D2 contract (bare `yt "query"` → list) is gone with it, and the version now lives in
+> `shell/VERSION`. Names, diagrams and §13's gating model are redrawn together in step E —
+> the §6.1 invocation stack changes shape again at B-2 (mpv stops running yt-dlp itself),
+> so redrawing it now and again then would be drawing it twice.
 
 The document flows: **I. System architecture → II. Functional structure →
 III. Modular API → IV. Supported workflows → V. Aligned best practice.**
