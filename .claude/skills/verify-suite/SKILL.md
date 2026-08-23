@@ -80,17 +80,13 @@ keypress**, and the in-place repaint (a keypress must emit zero screen-clears).
 the one thing shell cannot do. To capture a frame for a doc rather than a check, use the
 **capture-pane** skill.
 
-Two things in `tests/` are superseded by `tui_pane.sh` and should not be treated as steps:
-`tui_screen.py` (a hand-rolled pty plus a `pyte` dependency, in a suite whose claim is that it
-depends only on primitives everyone already has) and `pty_drive.py`, which is a scenario
-*driver*, not a check — invoked bare it drives nothing (30 bytes, 0 matches) and still exits 0.
-If a timing question needs it, give it a scenario and read the timestamps, not the exit status:
-
-```bash
-python3 tests/pty_drive.py 'lofi hip hop' --at 12 q --secs 15 --grep 'searching|results='
-#   → searching at ~0.0s, results= a few seconds later. The two timestamped matches ARE the
-#     assertion; `exit=None` is not a failure — the rig stops reading before it reaps.
-```
+The two pty rigs this phase used to list (`tui_screen.py`, `pty_drive.py`) are **deleted**, not
+demoted. `tui_pane.sh` covers what they proved and reaches what they could not: `tmux
+capture-pane` is a real terminal's cell grid and `tmux pipe-pane` is its byte stream, so the
+screen claims, the screen-clear count and the spinner's four turning quadrants are all here —
+and the hand-rolled pty plus a `pyte` install are gone from a suite whose whole claim is that
+it depends only on primitives everyone already has. The one thing they carried that needed a
+player (`Starting` → `Playing` flipping on the tick) moved to phase 4's rig.
 
 `mpv_ipc_mock.py` is a fixture, not a step: a resident peer that never closes its side, so
 running it standalone hangs and asserts nothing. Point a change at it when you touch the IPC

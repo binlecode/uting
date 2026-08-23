@@ -1045,7 +1045,7 @@ elapsed_since_play() {
 # own `nc -U`, a second TUI) moves the real state without telling us — the identical reason
 # the core reads `volume` off the socket instead of the state file (SPEC-system.md §9.3).
 # The local flip STAYS: it is what repaints the banner on the keypress instead of up to a
-# second later (tests/tui_screen.py counts that row), and this read corrects it on the next
+# second later (tests/tui_pane.sh counts the repaint), and this read corrects it on the next
 # tick. Optimism, then truth.
 #
 # The live path no longer returns before the socket read — it asks for `pause` ALONE. The

@@ -142,6 +142,37 @@ if start ed 100 30; then
     tmux kill-session -t "$S" 2>/dev/null; S=""
 fi
 
+echo "── the fetch spinner actually animates ────────────────────────────"
+# A static line and a turning one look identical in a settled capture, so this reads the
+# STREAM: pipe-pane from launch, stop at the ready marker, and require all four quadrants.
+# Count each glyph SEPARATELY and without LC_ALL=C: under the C locale a bracket expression
+# of multibyte glyphs is a set of BYTES, so it matches fragments and reports a single glyph —
+# which looks exactly like a spinner that never advanced. That false red cost a bug report.
+S=tp-spin
+RAW=$OUT/spin.bin
+tmux kill-session -t "$S" 2>/dev/null
+: > "$RAW"
+tmux new-session -d -s "$S" -x 80 -y 24 "cd '$REPO' && env YT_SYNC=0 shell/yt-tui '$QUERY'"
+tmux pipe-pane -t "$S" -o "cat >> '$RAW'"
+i=0
+while [ $i -lt 80 ]; do
+    tmux capture-pane -t "$S" -p 2>/dev/null | grep -q 'results=' && break
+    sleep 0.2; i=$((i + 1))
+done
+tmux pipe-pane -t "$S"
+tmux kill-session -t "$S" 2>/dev/null; S=""
+seen=0; total=0
+for g in $(printf '\xe2\x96\x96 \xe2\x96\x98 \xe2\x96\x9d \xe2\x96\x97'); do
+    c=$(grep -ao "$g" "$RAW" 2>/dev/null | wc -l | tr -d ' ')
+    total=$((total + ${c:-0}))
+    [ "${c:-0}" -gt 0 ] && seen=$((seen + 1))
+done
+if [ "$seen" -eq 4 ]; then
+    ok "spinner turned: 4/4 quadrants, $total frames during the fetch"
+else
+    bad "spinner drew only $seen/4 quadrants ($total frames) — static line?"
+fi
+
 echo
 printf '%s: %d ok, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 if [ "$fail" -ne 0 ]; then printf 'failures:\n%s' "$FAILED"; exit 1; fi

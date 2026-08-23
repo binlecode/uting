@@ -1,0 +1,103 @@
+#!/usr/bin/env bash
+# The detached-player lifecycle: the one surface whose bugs are PROCESSES, not output.
+# Everything here starts real players, so it is gated — set YT_TEST_LIFECYCLE=1 to run it.
+# Every player is launched with --volume 0, so it is silent, and the run does not pass until
+# `pgrep` comes back empty: a leaked mpv is the failure this file exists to catch.
+#
+# It also carries the one timing claim that needs a player: Starting -> Playing flips on the
+# TUI's own 1 s tick with NO keypress. That was the last thing `pty_drive.py` was kept for.
+#
+# Portability: bash 3.2. Needs tmux for the tick check, jq for the envelopes.
+#
+# Usage:  YT_TEST_LIFECYCLE=1 tests/lifecycle.sh
+# Exit:   0 = every check held, 1 = at least one failed, 2 = refused to run (not gated in)
+
+set -uo pipefail
+REPO=$(cd -P "$(dirname "$0")/.." && pwd -P) || exit 1
+cd "$REPO" || exit 1
+
+if [ "${YT_TEST_LIFECYCLE:-0}" != "1" ]; then
+    echo "lifecycle.sh: starts real players — re-run with YT_TEST_LIFECYCLE=1" >&2
+    exit 2
+fi
+
+# Two long, stable tracks. Silent at --volume 0; the point is the process, not the audio.
+U1=${YT_TEST_URL1:-https://www.youtube.com/watch?v=n61ULEU7CO0}
+U2=${YT_TEST_URL2:-https://www.youtube.com/watch?v=8S0FDjFBj8o}
+
+pass=0; fail=0; FAILED=""
+ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
+bad() { fail=$((fail + 1)); FAILED="${FAILED}    ${1}"$'\n'; printf '  FAIL  %s\n' "$1"; }
+report() { if [ "$2" = "$3" ]; then ok "$1 ($3)"; else bad "$1: want $2, got $3"; fi; }
+
+# Always stop everything, however this exits — a leaked player outlives the shell.
+cleanup() {
+    tmux kill-session -t lc-tick 2>/dev/null
+    shell/yt-play --stop --all -j >/dev/null 2>&1
+    return 0
+}
+trap cleanup EXIT INT TERM
+
+shell/yt-play --stop --all -j >/dev/null 2>&1        # start from a clean slate
+
+echo "── detach returns BEFORE mpv is up ────────────────────────────────"
+# The envelope is the handle; if this waited for the player there would be nothing detached
+# about it. A slow return has meant the title updater holding the captured pipe.
+t0=$(date +%s)
+o1=$(shell/yt-play -d -j --volume 0 -- "$U1" 2>/dev/null)
+t1=$(date +%s)
+report "detach envelope" 0 \
+    "$(printf '%s' "$o1" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
+if [ $((t1 - t0)) -le 3 ]; then ok "detach returned in $((t1 - t0))s (<= 3)"
+else bad "detach took $((t1 - t0))s — is something holding the pipe?"; fi
+
+id1=$(printf '%s' "$o1" | jq -r '.id // empty')
+o2=$(shell/yt-play -d -j --volume 0 -- "$U2" 2>/dev/null)
+id2=$(printf '%s' "$o2" | jq -r '.id // empty')
+
+echo "── two players: the POPULATED envelope, one compact line ──────────"
+report "--status one line" 1 "$(shell/yt-play --status -j | wc -l | tr -d ' ')"
+report "--status sees 2"   2 "$(shell/yt-play --status -j | jq '.players | length')"
+
+echo "── a selector-less mutation on 2 players is ambiguous -> exit 4 ───"
+report "--set-volume no --id" 4 "$(shell/yt-play --set-volume 40 -j >/dev/null 2>&1; echo $?)"
+report "--set-volume --id"    0 "$(shell/yt-play --set-volume 40 --id "$id1" -j >/dev/null 2>&1; echo $?)"
+# Only the targeted player moved: a mutation that leaks across players is the bug --id exists for.
+report "only the target moved" "40" \
+    "$(shell/yt-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.volume')"
+
+echo "── Starting -> Playing flips on the tick, with NO keypress ────────"
+# The TUI polls the player once a second, so the banner must resolve on its own. Nothing is
+# typed after Enter on purpose; a keypress would repaint anyway and prove nothing.
+tmux kill-session -t lc-tick 2>/dev/null
+tmux new-session -d -s lc-tick -x 100 -y 30 "cd '$REPO' && env YT_SYNC=0 shell/yt-tui 'lofi hip hop'"
+i=0
+while [ $i -lt 80 ]; do
+    tmux capture-pane -t lc-tick -p 2>/dev/null | grep -q 'results=' && break
+    sleep 0.3; i=$((i + 1))
+done
+tmux send-keys -t lc-tick Enter
+flip=""
+i=0
+while [ $i -lt 60 ]; do                              # up to 30s for mpv to produce output
+    if tmux capture-pane -t lc-tick -p 2>/dev/null | grep -qE 'Playing:'; then flip=yes; break; fi
+    sleep 0.5; i=$((i + 1))
+done
+tmux kill-session -t lc-tick 2>/dev/null
+if [ "$flip" = yes ]; then ok "banner reached Playing unprompted in ~$(echo "$i * 0.5" | bc)s"
+else bad "banner never left Starting — the 1s tick is not resolving the state"; fi
+
+echo "── stop is targeted, then idempotent, and leaks nothing ───────────"
+report "--stop --id"       0 "$(shell/yt-play --stop --id "$id1" -j >/dev/null 2>&1; echo $?)"
+report "--stop --all"      0 "$(shell/yt-play --stop --all -j >/dev/null 2>&1; echo $?)"
+report "--stop --all again" 0 "$(shell/yt-play --stop --all -j >/dev/null 2>&1; echo $?)"
+report "no players left"   0 "$(shell/yt-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
+
+sleep 1
+n=$(pgrep -f 'mpv .*--input-ipc-server' 2>/dev/null | wc -l | tr -d ' ')
+report "no orphan mpv" 0 "${n:-0}"
+
+echo
+printf '%s: %d ok, %d failed\n' "$(basename "$0")" "$pass" "$fail"
+if [ "$fail" -ne 0 ]; then printf 'failures:\n%s' "$FAILED"; exit 1; fi
+exit 0

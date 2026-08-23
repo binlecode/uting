@@ -95,30 +95,35 @@ entry points report the same number: it is declared once, in the core.
 ## Tests
 
 Verification rigs, not a unit-test suite — what this code gets wrong is renderer and protocol
-behaviour, which only a real pty and a real socket can show. Each file's docstring says what it
-proves; run any of them directly.
+behaviour, which only a real terminal and a real socket can show. tmux IS that terminal, so
+nothing here hand-rolls a pty. Each file's header says what it proves; run any of them
+directly.
 
 | Rig | What it is for |
 |---|---|
-| `tests/tui_screen.py` | Drives the TUI in a pty and asserts on the **screen** — a pyte cell grid, after `\033[K` / `\033[J` / CHA have been applied. This is what claims like "pause repaints exactly one row, and no frame blanks the screen" are counted from (`changed_rows`, `ed_count`). |
-| `tests/pty_drive.py` | Asserts on the **stream and its timing** — spinner frames actually arriving, `Starting` → `Playing` flipping with no keypress, the 1 s tick stopping when it should, exit codes on the cancel paths. |
 | `tests/assert_pane.py` | Layout invariants on a captured pane: nothing exceeds the pane width (measured in cells), every row's title starts on the same column, the duration rail is right-flush at exactly the pane width, and the boundary rail is full width in both its static and its live form. |
 | `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that can do what the real one will not do on cue: answer out of order (`--reverse`), report a property as null (`--null pause`), start out paused (`--paused`), interleave async events, walk the clock, and never close its side of the socket. Every IPC rule in the read path exists because of one of these shapes. |
 | `tests/contract.sh` | The CLI contract, asserted by running it: the search envelope, every documented rejection, `--transcript` both ways, the lifecycle verbs, the live `--status` read (against the mock, over a real socket), the tombstone record for a player that died unasked, and the exit-code taxonomy. |
-| `tests/tui_pane.sh` | The TUI's layout at four geometries plus the chrome variants, the redraw-on-resize path with no keypress, and the in-place repaint rule (a keypress emits no screen-clear) — `assert_pane.py` applied as a sweep. |
+| `tests/tui_pane.sh` | The TUI against a real terminal (tmux): layout at four geometries plus the chrome variants, redraw-on-resize with no keypress, the in-place repaint rule (a keypress emits no screen-clear), and the fetch spinner actually turning. Starts no playback. |
+| `tests/lifecycle.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, `Starting` → `Playing` flipping on the tick with no keypress, and zero orphan mpv at the end. Starts real players at `--volume 0`, so it is gated behind `YT_TEST_LIFECYCLE=1`. |
 
-`tui_screen.py` needs `pyte` (`pip install pyte`); `contract.sh` skips its live-read block
-without `python3` (it drives the mock). Nothing else here has dependencies beyond the suite's
-own, and none of it is needed at runtime.
+The two `.sh` rigs need `tmux`; `contract.sh` skips its live-read block without `python3` (it
+drives the mock). There is no `pip install` step: a suite whose claim is that it depends only
+on primitives everyone already has should not need a Python terminal emulator to test itself,
+which is why the two pty rigs it used to carry are gone. Nothing here is needed at runtime.
 
-Two things these rigs learned the hard way, both of which cost a wrong green result first:
+Four things these rigs learned the hard way, every one of which produced a wrong result first:
 
-- **A pty starts at 0×0, and `LINES`/`COLUMNS` do not fix it.** The TUI reads `stty size` through
-  `/dev/tty` on purpose, so without `TIOCSWINSZ` the reflow has no rows to spend and draws a
-  one-row list — whose frames look plausible enough to trust.
-- **Assert on the screen model, not the byte stream.** "Changed exactly one row" is a statement
-  about cells; the byte stream of a correct in-place frame looks nothing like the picture it
-  produces.
+- **Wait on a ready marker, never on a sleep.** A captured spinner frame is a picture of the
+  loading state, not of the layout.
+- **Assert on the cell grid, not the byte stream** — for a claim that is about the screen.
+  `tmux capture-pane` is that grid; `tmux pipe-pane` is the byte stream, for the claims that
+  really are about bytes (a screen-clear, a spinner frame).
+- **A piped `while read` loop body runs in a subshell**, so every failure it counted was
+  discarded and the run reported green regardless.
+- **Match multibyte glyphs without `LC_ALL=C`.** Under the C locale a bracket expression of
+  multibyte characters is a set of *bytes*: it matches fragments, reports one glyph where four
+  turned, and reads as a spinner that never advanced.
 
 ## Documentation
 

@@ -23,8 +23,8 @@ goes stale. The checks:
 
   card rails   In the card view, every divider rail and the progress bar are the same width.
 
-Captures come from `tmux capture-pane -p` or from tui_screen.py's screen model (write the
-lines to a file). Ambiguous-width characters count as ONE cell, matching the suite's default
+Captures come from `tmux capture-pane -p` — which is what tui_pane.sh feeds this, and the
+only source now that the pty rigs are gone. Ambiguous-width characters count as ONE cell, matching the suite's default
 (YT_AMBIG_WIDE unset); pass --ambig-wide to match the other setting.
 
 usage: assert_pane.py <capture.txt> <pane_width> [list|card] [--rows N] [--ambig-wide]

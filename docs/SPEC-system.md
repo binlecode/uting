@@ -925,8 +925,9 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     one glyph in the banner. The DCS frame hold hides a blank-then-draw on terminals that honour
     it, which is why this survived so long; under tmux, where sync is off by default, nothing
     did. `display_list_menu` now homes the cursor and erases as it draws like the card, closing
-    with one `\033[J`, and pause/resume repaints exactly one row (measured with a pyte screen
-    model: one changed row, zero `ED` sequences). The view-switch `clear` on Tab/Esc went with
+    with one `\033[J`, and pause/resume repaints exactly one row (one changed row, zero `ED`
+    sequences — `tests/tui_pane.sh` counts the `ED`s in `tmux pipe-pane`'s stream between two
+    marks, since tmux emits its own clear when the pane opens). The view-switch `clear` on Tab/Esc went with
     it — both renderers end in `\033[J`, so the incoming frame covers the outgoing one, and the
     switch was the last blank frame in the app.
 
@@ -2431,10 +2432,14 @@ new tmux rigs; the premise was measured before a line was written):
   has to `ioctl(fd, TIOCSWINSZ, …)` before the first read; after that the same drive produced the
   full ten-row page and the row diffs meant something. Same family as the three above — the
   harness differed from a real terminal in one detail, and that detail was the whole subject of
-  the test. Second half of the same lesson: assert on a SCREEN MODEL (a pyte `Screen` fed the raw
-  bytes), not on the byte stream. "Pause changed exactly one row" is a claim about cells after
-  `\033[K` / `\033[J` / CHA have been applied — grepping emitted bytes cannot make it, and the
-  byte stream of a correct in-place frame looks nothing like the screen it produces.
+  the test. Second half of the same lesson: assert on a CELL GRID, not on the byte stream. "Pause
+  changed exactly one row" is a claim about cells after `\033[K` / `\033[J` / CHA have been
+  applied — grepping emitted bytes cannot make it, and the byte stream of a correct in-place
+  frame looks nothing like the screen it produces. The rig that taught this was a `pyte`
+  model over a hand-rolled pty; it is gone, and the lesson is why. Emulating a terminal to
+  test a terminal program leaves a harness that can differ from a real one in exactly the
+  detail under test. `tmux` is a real terminal: `capture-pane` gives the grid for the screen
+  claims and `pipe-pane` gives the stream for the byte claims, with no model in between.
 
 **Closed by the reflow floor fix — the "pre-existing" rig failure** (`bash -n` clean, no
 `shellcheck` delta, every suite green, and the list rig is finally 22/22 instead of 21/1):
@@ -2617,9 +2622,9 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 ## 27. Verification matrix
 
-**No *scratch* rig is named by path here, on purpose.** The exception is the six harnesses
-that earned a permanent home and are committed under `tests/` — `tui_screen.py`,
-`pty_drive.py`, `assert_pane.py`, `mpv_ipc_mock.py`, `contract.sh`, `tui_pane.sh` — which the root README describes by name
+**No *scratch* rig is named by path here, on purpose.** The exception is the five harnesses
+that earned a permanent home and are committed under `tests/` — `contract.sh`, `tui_pane.sh`,
+`lifecycle.sh`, `assert_pane.py`, `mpv_ipc_mock.py` — which the root README describes by name
 because a contributor cannot run what nothing points at. Everything else this suite has been
 verified with is a throwaway under a `tmp/` the repo does not track (`.gitignore`:
 `**/tmp/`), so citing one of those by path is a promise the checkout cannot keep — it resolves on exactly one machine, until that
@@ -2732,10 +2737,10 @@ the part of a rig worth keeping.
                 survives (24 captures). The same matrix on the pre-fix build fails three
                 of them (62x12, 46x14, 40x14, all with the filter open), which is the
                 assertion earning its place
-                In-place render (pyte screen model over a 100x30 pty, so the assertion is
-                what a TERMINAL ends up showing, not what the script emitted): pause →
-                resume changes exactly ONE screen row (the banner) and the whole session
-                emits ZERO ED sequences — no `clear` in a frame, none on a Tab/Esc view
+                In-place render (`tmux capture-pane` over a 100x30 pane, so the assertion
+                is what a TERMINAL ends up showing, not what the script emitted): pause →
+                resume changes exactly ONE screen row (the banner) and a keypress emits
+                ZERO ED sequences — no `clear` in a frame, none on a Tab/Esc view
                 switch. Same rig: arrow-down changes 4 rows (two row lines, two details
                 lines), a filter narrowing 25 → 3 results leaves no stale rows under the
                 shorter frame, and list↔card in both directions leaves nothing of the

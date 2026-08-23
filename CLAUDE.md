@@ -15,7 +15,7 @@ The suite is exposed **directly** to shell-capable agents with no MCP wrapper, s
 - **bash 3.2** — macOS's frozen system `/bin/bash`. This is a deliberate floor, not an accident: zero install step, identical behavior under macOS, Linux, containers, CI, and cron/launchd. Do **not** raise it, and do **not** hardcode a Homebrew bash path. See the portability contract below — it is a hard rule.
 - Runtime deps, all external and unvendored: `yt-dlp`, `jq`, `mpv`, `nc` (BSD netcat, stock on macOS). `curl` is an optional soft dep for the play-time client probe.
 - **macOS first.** Linux is not currently usable: stock netcat has no `-U`, which the mpv IPC path needs. Do not "fix" Linux support by adding a dependency — that decision is gated in `docs/ROADMAP.md` §9.
-- Verification rigs need `python3` and, for `tests/tui_screen.py`, `pyte` (`pip install pyte`). Nothing in `tests/` is needed at runtime.
+- Verification rigs need `tmux` (the two `.sh` sweeps) and `python3` (`assert_pane.py`, `mpv_ipc_mock.py`). **No `pip install`**: a suite that depends only on primitives should not need a Python terminal emulator to test itself. Nothing in `tests/` is needed at runtime.
 - There is **no** build step, no venv, no lockfile, and no CI. The checks below are run by hand — that is the whole reason they are written out — with two of them gated locally by git hooks:
 
 ```sh
@@ -33,8 +33,9 @@ shell/yt-tui "lofi hip hop"                                   # interactive; nee
 shell/yt --help                                               # core help (core is internal, not on PATH)
 shell/yt-tui --version                                        # answers before any dependency gate
 
-python3 tests/tui_screen.py                                   # screen-model assertions (needs pyte)
-python3 tests/pty_drive.py                                    # stream + timing assertions
+tests/contract.sh                                             # the CLI contract, 30+ checks
+tests/tui_pane.sh                                             # the TUI via tmux; starts no playback
+YT_TEST_LIFECYCLE=1 tests/lifecycle.sh                        # detached players; gated, silent
 python3 tests/assert_pane.py <capture.txt> <pane_width> [list|card]
 python3 tests/mpv_ipc_mock.py --reverse                       # fake IPC peer for the awkward shapes
 ```
@@ -49,8 +50,6 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
 | `shell/yt-search` | Narrow headless verb — gates flags (rejects `-f` / `--detach` / a URL) and `exec`s the core. Short because the script *is* short |
 | `shell/yt-play` | Narrow headless verb — gates flags (rejects `-n` / `-s` / a bare query) and `exec`s the core. Owns the lifecycle verbs' argv surface (`--detach`, `--status`, `--stop`, `--set-volume`, `--get-url`, `--info`) |
 | `shell/yt-tui` | The human face (2.8k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
-| `tests/tui_screen.py` | Drives the TUI in a real pty and asserts on the **screen** — a pyte cell grid after `\033[K` / `\033[J` / CHA have been applied. Claims like "pause repaints exactly one row, and no frame blanks the screen" are counted here |
-| `tests/pty_drive.py` | Asserts on the **stream and its timing** — spinner frames arriving, `Starting` → `Playing` flipping with no keypress, the 1 s tick stopping, exit codes on cancel paths |
 | `tests/assert_pane.py` | Layout invariants on a captured pane, measured in **cells** (east-asian-width), not characters: nothing exceeds the pane width, titles start on one column, the duration rail is right-flush |
 | `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that does what the real one will not do on cue: answer out of order, report a property null, interleave async events, walk the clock, never close its side |
 
@@ -119,7 +118,7 @@ These are **verification rigs, not a unit-test suite.** What this code gets wron
 ### Reject a check when it:
 
 - drives an internal shell function directly instead of the command's real entry point, or asserts on a private helper's output in isolation;
-- greps the **byte stream** for a claim that is about the **screen** ("changed exactly one row", "nothing blanked") — the byte stream of a correct in-place frame looks nothing like the picture it produces. Assert on the pyte cell grid;
+- greps the **byte stream** for a claim that is about the **screen** ("changed exactly one row", "nothing blanked") — the byte stream of a correct in-place frame looks nothing like the picture it produces. Assert on the cell grid `tmux capture-pane` returns. (The converse also holds: a screen-clear and a spinner frame ARE byte claims, and `tmux pipe-pane` is where to read them);
 - measures a title's width in characters rather than display cells — a CJK title is two cells, and `len()` passes a line that visibly wraps;
 - fakes the data or the logic under test. A fake **peer** (`mpv_ipc_mock.py`) is legitimate — it produces shapes the real mpv will not produce on cue. A fake renderer or a stubbed core is not;
 - exists only to raise a count, or asserts a default value that a behavioral check already exercises;
@@ -138,7 +137,7 @@ a pty running the actual script; a real mpv or the IPC mock over a real unix soc
 
 - `bash -n` on the core and all three wrappers.
 - Run the empty-argument and empty-array paths under `/bin/bash` explicitly (the 3.2 floor).
-- For any renderer change: a real pty capture plus `tests/assert_pane.py` at 40/62/80/100 cols, and `tests/tui_screen.py`.
+- For any renderer change: `tests/tui_pane.sh` (it sweeps the geometries and the chrome variants, and calls `assert_pane.py` for each).
 - For any lifecycle change: `-d` twice → `--status` lists both → `--set-volume --id` → `--stop --id` → `--stop --all` → `--status` empty, and assert **zero orphan mpv** afterwards.
 - For any contract change: the `-j` envelope stays one line, and the exit code matches the taxonomy.
 
