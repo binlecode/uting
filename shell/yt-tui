@@ -1033,13 +1033,25 @@ elapsed_since_play() {
     fmt_sec $((now - CURRENT_PLAY_STARTED))
 }
 
-# Position / duration / percent for the attached mpv, fetched in ONE place: sets PT_CUR,
-# PT_TOTAL and PT_PCT (PT_PCT empty means "draw no bar"). It was inlined per view back when
-# there were two player views, and the copies had already drifted — one built its percent
-# string and bar inline, the other deferred the bar. The live special case belongs here too:
-# "mpv's clock describes the broadcast, not this listen" is a fact about the fetch, not about
-# a view, and returning early also spares three IPC round-trips per second that the live path
-# only fetched to discard.
+# Position / duration / percent for the attached mpv, plus the PAUSE state, fetched in ONE
+# place: sets PT_CUR, PT_TOTAL and PT_PCT (PT_PCT empty means "draw no bar") and refreshes
+# CURRENT_PLAY_PAUSED. It was inlined per view back when there were two player views, and the
+# copies had already drifted — one built its percent string and bar inline, the other deferred
+# the bar. The live special case belongs here too: "mpv's clock describes the broadcast, not
+# this listen" is a fact about the fetch, not about a view.
+#
+# Pause is read here rather than tracked locally because the local value LIES: toggle_pause
+# flips CURRENT_PLAY_PAUSED, but anything else driving the same socket (yt-play, an agent's
+# own `nc -U`, a second TUI) moves the real state without telling us — the identical reason
+# the core reads `volume` off the socket instead of the state file (SPEC-system.md §9.3).
+# The local flip STAYS: it is what repaints the banner on the keypress instead of up to a
+# second later (tests/tui_screen.py counts that row), and this read corrects it on the next
+# tick. Optimism, then truth.
+#
+# The live path no longer returns before the socket read — it asks for `pause` ALONE. The
+# early return used to spare the whole round trip, but it also froze the pause chrome for
+# exactly the listener most likely to leave a stream parked. One property on one connection
+# costs a live tick what a static tick already pays.
 PT_CUR=""
 PT_TOTAL=""
 PT_PCT=""
@@ -1047,33 +1059,50 @@ fetch_play_times() {
     PT_CUR="--:--"
     PT_TOTAL="$CURRENT_PLAY_DURATION"
     PT_PCT=""
+    local live=0
     if ((CURRENT_PLAY_IS_LIVE)); then
+        live=1
         PT_CUR=$(elapsed_since_play)
         PT_TOTAL="$GL_LIVE"
-        return 0
     fi
     [[ -n "$CURRENT_PLAY_SOCK" && -S "$CURRENT_PLAY_SOCK" ]] || return 0
-    # Three properties, ONE connection, correlated by request_id and read without waiting
+    # Up to four properties, ONE connection, correlated by request_id and read without waiting
     # for nc — see send_mpv_ipc for both rules. `\(.data)` stringifies a
     # JSON null as "null", so a missing value keeps its slot and the guards below (which
-    # already tested for "null") are unchanged.
-    local raw_pos="null" raw_dur="null" raw_pct="null" rid val got=0 seen=0
+    # already tested for "null") are unchanged. The live request set is `pause` only: mpv's
+    # clock describes the broadcast, so its position/duration would be fetched to discard.
+    local raw_pos="null" raw_dur="null" raw_pct="null" raw_pause="null" rid val got=0 seen=0
+    local want=4
+    local -a reqs=(
+        '{"command":["get_property","time-pos"],"request_id":1}'
+        '{"command":["get_property","duration"],"request_id":2}'
+        '{"command":["get_property","percent-pos"],"request_id":3}'
+        '{"command":["get_property","pause"],"request_id":4}'
+    )
+    if ((live)); then
+        want=1
+        reqs=('{"command":["get_property","pause"],"request_id":4}')
+    fi
     while IFS="$US" read -r rid val; do
         seen=$((seen + 1))
         case "$rid" in
         1) raw_pos="$val"; got=$((got + 1)) ;;
         2) raw_dur="$val"; got=$((got + 1)) ;;
         3) raw_pct="$val"; got=$((got + 1)) ;;
+        4) raw_pause="$val"; got=$((got + 1)) ;;
         *) ;;                                  # an async event; not one of ours
         esac
-        ((got >= 3 || seen >= 12)) && break
-    done < <(printf '%s\n' \
-        '{"command":["get_property","time-pos"],"request_id":1}' \
-        '{"command":["get_property","duration"],"request_id":2}' \
-        '{"command":["get_property","percent-pos"],"request_id":3}' |
+        ((got >= want || seen >= 12)) && break
+    done < <(printf '%s\n' "${reqs[@]}" |
         nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null |
         jq -r --unbuffered 'select(.request_id != null)
                             | "\(.request_id)\u001f\(.data)"' 2>/dev/null)
+    # "null" (the player did not answer, or answered null) leaves the local value alone —
+    # a missing answer is not evidence that it resumed.
+    [[ "$raw_pause" == "true" ]] && CURRENT_PLAY_PAUSED=1
+    [[ "$raw_pause" == "false" ]] && CURRENT_PLAY_PAUSED=0
+    # if-form, not an AND-list: house rule for an arithmetic test (see player_check_ready).
+    if ((live)); then return 0; fi
     [[ -n "$raw_pos" && "$raw_pos" != "null" ]] && PT_CUR=$(fmt_sec "$raw_pos")
     [[ -n "$raw_dur" && "$raw_dur" != "null" ]] && PT_TOTAL=$(fmt_sec "$raw_dur")
     [[ -n "$raw_pct" && "$raw_pct" != "null" ]] && PT_PCT=${raw_pct%.*}
