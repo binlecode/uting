@@ -1,0 +1,949 @@
+#!/usr/bin/env bash
+# yt-resolve — the YouTube RESOLVE ENGINE: a media handle -> direct stream URL(s) plus the
+# HTTP headers needed to fetch them, and the two read-only metadata verbs that share the
+# same extractor. Agent-facing.
+#
+# The other half of the youtube engine pair (`yt-search` + `yt-resolve`); the player
+# (`ut-play`) is source-agnostic and knows neither. Everything YouTube-specific about
+# turning a handle into bytes lives here: the yt-dlp invocation, the cookie decision, the
+# format-per-mode table, the GVS proof-of-origin probe, and captions. It has NO playback,
+# lifecycle, or mpv logic and never starts a process that outlives it.
+#
+# Why it exists at all: mpv's ytdl_hook used to do the extraction, so the last yt-dlp call
+# in a play was one WE did not make and could not see or classify. Now the player is handed
+# a URL it opens with --no-ytdl, and there is exactly one extraction, made by us.
+# docs/PLAN-ut-restructure.md §3.3.
+set -euo pipefail
+# Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). SPEC-system.md §28.
+
+# Resolve this script's OWN symlink chain before looking for its siblings — see the same
+# block in yt-search for why `cd -P`/`pwd -P` and a hand-rolled loop (bash 3.2 has no
+# `readlink -f`).
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+    _link=$(readlink "$_self")
+    case "$_link" in
+    /*) _self="$_link" ;;
+    *)  _self="$(dirname "$_self")/$_link" ;;
+    esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
+
+# THE version of the whole suite, declared once — in a data file, not in code. See the same
+# block in yt-search / ut-play. CLAUDE.md § one fact, one place.
+if [[ -r "$SCRIPT_DIR/VERSION" ]]; then
+    YT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
+else
+    YT_VERSION="unknown"
+fi
+
+# The engine's own name, as it appears in the envelope AND as the command prefix its two
+# executables carry. Name == prefix is deliberate: it lets `ut-play --engine yt` find
+# `yt-resolve` by string concatenation, with no name->command registry to keep in sync in
+# both the player and the TUI. docs/PLAN-ut-restructure.md §2.2.
+ENGINE_NAME="yt"
+
+# ==============================================================================
+# 1. SETTINGS
+# ==============================================================================
+
+: "${YT_COOKIE_BROWSER:=chrome}"
+: "${YT_AUDIO_FORMAT:=ba/b}"
+# Default to highest quality video+audio. This can start slower than progressive streams.
+: "${YT_VIDEO_FORMAT:=bv*+ba/b}"
+# Optional fast-start progressive format for interactive playback.
+: "${YT_VIDEO_FORMAT_FAST:=b[height<=720][ext=mp4]/b[height<=720]/b[ext=mp4]/b}"
+
+# Cookies (login) are ON by default (browser: chrome) so login-gated / members / age-
+# restricted videos — invisible to an anonymous client — resolve. Verify the browser
+# profile exists on this platform; if not, run anonymously rather than break, so a machine
+# without the configured browser degrades gracefully to no-login.
+# Set YT_COOKIE_BROWSER=none to force anonymous-only (skips the keychain read and the probe).
+YT_COOKIE_ARGS=()
+if [[ -n "${YT_COOKIE_BROWSER:-}" && "$YT_COOKIE_BROWSER" != "none" ]]; then
+    browser_exists=0
+    case "$YT_COOKIE_BROWSER" in
+    chrome|chromium|brave)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            if [[ -d "$HOME/Library/Application Support/Google/Chrome" || -d "$HOME/Library/Application Support/BraveSoftware" || -d "$HOME/Library/Application Support/Chromium" ]]; then
+                browser_exists=1
+            fi
+        else
+            if [[ -d "$HOME/.config/google-chrome" || -d "$HOME/.config/chromium" || -d "$HOME/.config/BraveSoftware" ]]; then
+                browser_exists=1
+            fi
+        fi
+        ;;
+    safari)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Safari" ]] && browser_exists=1
+        fi
+        ;;
+    firefox)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Firefox" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.mozilla/firefox" ]] && browser_exists=1
+        fi
+        ;;
+    edge)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Microsoft Edge" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/microsoft-edge" ]] && browser_exists=1
+        fi
+        ;;
+    opera)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/com.operasoftware.Opera" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/opera" ]] && browser_exists=1
+        fi
+        ;;
+    vivaldi)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Vivaldi" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/vivaldi" ]] && browser_exists=1
+        fi
+        ;;
+    *)
+        browser_exists=0
+        ;;
+    esac
+
+    if ((browser_exists)); then
+        YT_COOKIE_ARGS=(--cookies-from-browser "$YT_COOKIE_BROWSER")
+    fi
+fi
+
+# The anonymous client. player_client=android is the one that fetches when the
+# authenticated client set hands back a googlevideo URL missing its GVS proof-of-origin
+# token — see the probe below.
+ANON_ARGS=(--extractor-args "youtube:player_client=android")
+
+ACTION="stream"      # stream | info | transcript
+PLAYBACK_MODE="audio"
+FORMAT_SORT=""
+COLOR_MODE="auto"
+OUTPUT_MODE="list"   # list (prose) | json | json_full
+TARGET=""            # the handle as the caller typed it
+TARGET_URL=""        # the watch URL it normalises to
+FMT=""               # the yt-dlp format string the mode resolves to
+SUB_LANG=""
+# Default caption-language priority chain for --transcript. A CHAIN, not a single default,
+# because the useful answer is "whatever this video actually has, in my order of
+# preference" — and yt-dlp can be asked for all of them in the one round trip it was
+# already making. English first, then Simplified/generic Chinese, then Japanese.
+SUB_LANG_CHAIN="en,zh-Hans,zh,ja"
+
+# Glyph fallback shares ONE switch with yt-tui (YT_ASCII, legacy alias YT_TUI_ASCII): a
+# terminal whose font can't draw ♫ can't draw it in either surface, and a non-UTF-8 locale
+# (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as yt-tui does.
+MUSIC_CHAR="♫"
+case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
+1 | true | yes | on) MUSIC_CHAR="" ;;
+"")
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *UTF-8* | *utf-8* | *UTF8* | *utf8*) ;;
+    *) MUSIC_CHAR="" ;;
+    esac
+    ;;
+esac
+
+# ==============================================================================
+# 2. HELPERS
+# ==============================================================================
+
+die() {
+    local red='' reset=''
+    case "${COLOR_MODE:-auto}" in
+    always)
+        red=$'\033[31m'
+        reset=$'\033[0m'
+        ;;
+    auto)
+        if [[ -t 2 ]]; then
+            red=$'\033[31m'
+            reset=$'\033[0m'
+        fi
+        ;;
+    never) ;;
+    esac
+    echo "${red}Error:${reset} $*" >&2
+    exit 1
+}
+
+validate_enum() {
+    local value=$1
+    shift
+    local allowed
+    for allowed in "$@"; do
+        if [[ "$value" == "$allowed" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+require_cmd() {
+    local cmd=$1
+    command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
+}
+
+require_deps() {
+    local cmd
+    for cmd in "$@"; do
+        require_cmd "$cmd"
+    done
+}
+
+# The ONE implementation of duration formatting: seconds -> "[Nd ]HHh:MMm:SSs". A jq
+# prelude, not a bash function, so a caller already shaping JSON pays one fork instead of
+# one per row. An unknown duration yields NULL rather than a fake "00h:00m:00s", so each
+# caller decides how to render it (a live stream has no duration). SPEC-system.md §7.
+JQ_PRELUDE='
+def p2: tostring | if length < 2 then "0" + . else . end;
+def fmt_dur:
+  if type != "number" then null
+  else (. | floor) as $t
+    | ($t / 86400 | floor) as $d
+    | (($t % 86400) / 3600 | floor) as $h
+    | (($t % 3600) / 60 | floor) as $m
+    | ($t % 60) as $s
+    | (if $d > 0 then "\($d)d " else "" end) + "\($h | p2)h:\($m | p2)m:\($s | p2)s"
+  end;
+'
+
+# Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
+# caller can branch on `reason` instead of string-matching raw extractor wording (which is
+# not a contract and drifts across versions). The ENUM is the shared fact and lives in
+# docs/SPEC-system.md §14 — this is one of the two yt-dlp-side readers of it (yt-search
+# carries the other); the player carries its own, much smaller, mpv-side reader. No member
+# may be added here that the enum does not already have. `unknown` is the conservative
+# default — never guess a cause we did not positively identify.
+classify_yt_dlp_error() {
+    local text=$1 rc=$2
+    if ((rc == 130)); then
+        echo "stopped_by_user"
+        return
+    fi
+    if grep -qiE 'HTTP Error 403|[^a-z]403[^0-9]|Forbidden' <<<"$text"; then
+        echo "forbidden"
+        return
+    fi
+    if grep -qiE 'Video unavailable|Private video|has been removed|no longer available|does not exist|account.*terminated|members-only|Sign in to confirm' <<<"$text"; then
+        echo "unavailable"
+        return
+    fi
+    if grep -qiE 'Requested format is not available|No video formats|requested format|only images are available' <<<"$text"; then
+        echo "format_unavailable"
+        return
+    fi
+    # 429 lands in `network`, not `unknown`: it is a transport-level, RETRYABLE refusal, and
+    # `network` is the enum member that already means "try again later". It is grouped here
+    # rather than with `forbidden` (403) deliberately — 403 means these credentials never
+    # work, 429 means not right now.
+    if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out|HTTP Error 429|Too Many Requests|Unable to download (webpage|API page|JSON metadata)' <<<"$text"; then
+        echo "network"
+        return
+    fi
+    echo "unknown"
+}
+
+# This process's own scratch dir: 0700, created lazily, removed however we exit. Lazily
+# because -h / -V must answer without touching the filesystem, and process-level rather
+# than a function `local` because the EXIT trap runs after the function has returned — a
+# `local` would be out of scope there and abort under `set -u`.
+#
+# 0700 rather than a bare /tmp path because captions are CONTENT and the captured yt-dlp
+# stderr can name a cookie database. The engine does not reach into the player's state dir:
+# `players/` has exactly one owner (ut-play).
+SCRATCH_DIR=""
+ERR_FILE=""
+cleanup_scratch() {
+    [[ -n "$SCRATCH_DIR" ]] && rm -rf "$SCRATCH_DIR" 2>/dev/null
+    return 0
+}
+trap cleanup_scratch EXIT
+
+ensure_scratch() {
+    [[ -n "$SCRATCH_DIR" ]] && return 0
+    SCRATCH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/yt-resolve.XXXXXX") || die "cannot create a scratch directory"
+    chmod 700 "$SCRATCH_DIR" 2>/dev/null || true
+    ERR_FILE="$SCRATCH_DIR/yt-dlp.err"
+    : >"$ERR_FILE"
+}
+
+normalize_playback_mode() {
+    case "$1" in
+    audio | ba) echo "audio" ;;
+    video | bv) echo "video" ;;
+    fast | fst) echo "fast" ;;
+    ascii | asc) echo "ascii" ;;
+    viz | waves | wave) echo "viz" ;;
+    *) die "-f must be one of: audio, video, fast, ascii, viz, waves, ba, bv, fst, asc, wave" ;;
+    esac
+}
+
+# The yt-dlp format string a playback mode resolves to. This table is the reason format
+# selection belongs to the engine and not the player: `bv*+ba/b` is a yt-dlp expression,
+# and the player must never learn to read one. ut-play sends a MODE and gets back bytes.
+format_for_mode() {
+    case "$1" in
+    video) echo "$YT_VIDEO_FORMAT" ;;
+    fast) echo "$YT_VIDEO_FORMAT_FAST" ;;
+    ascii) echo "$YT_VIDEO_FORMAT" ;;
+    *) echo "$YT_AUDIO_FORMAT" ;; # audio, viz
+    esac
+}
+
+# A handle is either a URL or this engine's own media id. Knowing that a YouTube id is
+# exactly 11 characters of [A-Za-z0-9_-] is ENGINE knowledge — it is precisely what the
+# player gave up when it stopped being a YouTube tool, so the shape check lives here.
+normalize_target() {
+    local t=$1
+    case "$t" in
+    http://* | https://*)
+        TARGET_URL="$t"
+        ;;
+    www.* | youtube.com/* | m.youtube.com/* | music.youtube.com/* | youtu.be/*)
+        TARGET_URL="https://$t"
+        ;;
+    *)
+        [[ "$t" =~ ^[A-Za-z0-9_-]{11}$ ]] ||
+            die "'$t' is neither a YouTube URL nor an 11-character video id (to search, run yt-search)"
+        TARGET_URL="https://www.youtube.com/watch?v=$t"
+        ;;
+    esac
+}
+
+# ==============================================================================
+# 3. STREAM RESOLUTION
+# ==============================================================================
+
+# ONE yt-dlp call answers the whole question: the signed media URL(s) for the selected
+# format, the per-format http_headers that must accompany them, and the title/duration the
+# player needs for its OSD and its state record. --dump-single-json runs format selection,
+# so `requested_formats` is present exactly when the selection merged two streams.
+dump_once() {
+    local cmd=(yt-dlp --dump-single-json --no-playlist -f "$FMT")
+    [[ -n "$FORMAT_SORT" ]] && cmd+=(--format-sort "$FORMAT_SORT")
+    (($#)) && cmd+=("$@")
+    cmd+=(--no-warnings --quiet "$TARGET_URL")
+    "${cmd[@]}" 2>>"$ERR_FILE"
+}
+
+# Project a raw yt-dlp record down to [ {url, http_headers} ], VIDEO FIRST. jq's sort is
+# stable, so a merge keeps yt-dlp's own ordering within each class and an audio-only
+# selection stays a one-element list. The player reads position, not codec: element 0 is
+# what mpv opens, element 1 (when present) is its --audio-file.
+JQ_STREAMS='
+[ if (.requested_formats | type) == "array"
+  then (.requested_formats[] | {url: .url, http_headers: (.http_headers // {}), vcodec: (.vcodec // "none")})
+  else {url: .url, http_headers: (.http_headers // {}), vcodec: (.vcodec // "none")}
+  end
+]
+| map(select(.url != null))
+| sort_by(if .vcodec == "none" then 1 else 0 end)
+'
+
+# The probe needs curl to test-fetch a byte of a resolved media URL. yt-dlp is already a
+# hard dependency; curl is near-universal but optional here.
+have_probe_tools() {
+    command -v curl >/dev/null 2>&1
+}
+
+# True (0) if the media URLs in this record can actually be FETCHED, not merely resolved:
+# a signed googlevideo URL answers 206/200 when authorized and 403 when it is missing the
+# GVS proof-of-origin token. That 403 is the exact failure that used to make mpv abort
+# mid-load, so the probe's verdict matches what playback would do — letting us pick the
+# working client BEFORE the player ever launches. For HLS playlists the first segment is
+# probed, so a manifest that 200s with 403 segments is caught. The record's own
+# http_headers are replayed on the probe request, so what we test is what mpv will send.
+#
+# When curl is absent we CANNOT probe, and the honest answer is "assume fetchable": the
+# caller then keeps its first-choice client. This is the one capability lost in the
+# ytdl_hook retreat — the old play-fail-replay retry lived in the player, which no longer
+# knows what a cookie is. Narrow intersection (no curl AND cookies AND a PO-token video).
+probe_raw() {
+    local raw=$1
+    have_probe_tools || return 0
+
+    local media
+    media=$(printf '%s' "$raw" | jq -r "$JQ_STREAMS | .[0].url // empty") || return 1
+    [[ -n "$media" ]] || return 1
+
+    local hdr_args=()
+    local h
+    while IFS= read -r h; do
+        [[ -n "$h" ]] && hdr_args+=(-H "$h")
+    done < <(printf '%s' "$raw" | jq -r "$JQ_STREAMS | (.[0].http_headers // {}) | to_entries[] | \"\(.key): \(.value)\"" 2>/dev/null)
+
+    if [[ "$media" == *"m3u8"* || "$media" == *"/hls_playlist/"* ]]; then
+        local first_seg
+        first_seg=$(curl -sSL --max-time 5 ${hdr_args[@]+"${hdr_args[@]}"} "$media" 2>/dev/null | grep -E '^https?://' | head -n 1 || true)
+        [[ -n "$first_seg" ]] && media="$first_seg"
+    fi
+
+    local code
+    code=$(curl -sSL -o /dev/null -I -r 0- --max-time 10 -w '%{http_code}' ${hdr_args[@]+"${hdr_args[@]}"} "$media" 2>/dev/null) || return 1
+    [[ "$code" == 2* ]]
+}
+
+# The resolve envelope (docs/SPEC-system.md §14). `format` is the format STRING this
+# engine actually used — the player records it verbatim and never reads it. `http_headers`
+# is a REQUIRED key, empty object when none: it closes the hole where --get-url handed
+# back a bare URL that a Referer-checking host would 403.
+emit_stream() {
+    local raw=$1 retried=$2
+    local retried_json=false
+    ((retried)) && retried_json=true
+
+    if [[ "$OUTPUT_MODE" == "json_full" ]]; then
+        printf '%s\n' "$raw" | jq -c '.'
+        return 0
+    fi
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        printf '%s\n' "$raw" | jq -c \
+            --arg engine "$ENGINE_NAME" --arg mode "$PLAYBACK_MODE" --arg format "$FMT" \
+            --argjson retried "$retried_json" \
+            "($JQ_STREAMS) as \$s
+             | {status: \"ok\", engine: \$engine,
+                id: (.id // null), url: (.webpage_url // null),
+                title: (.title // null), duration: (.duration // null),
+                mode: \$mode, format: \$format,
+                stream_urls: [\$s[].url],
+                http_headers: (\$s[0].http_headers // {}),
+                retried: \$retried}"
+        return 0
+    fi
+    # Prose: the stream URLs, one per line — what a human piping this into another tool
+    # wants, and the shape the old `--get-url` printed.
+    printf '%s' "$raw" | jq -r "$JQ_STREAMS | .[].url"
+}
+
+# Report a resolve that produced nothing usable. Exit code follows the suite taxonomy:
+# 2+ is a PROPAGATED tool failure and 1 is reserved for usage, so a yt-dlp status of 0 or 1
+# is FLOORED to 2 — yt-dlp exits 1 for an unavailable video, and letting that through would
+# make "this video is gone" indistinguishable from "you called me wrong". Same idiom, and
+# same reason, as yt-search's fetch_results.
+resolve_fail() {
+    local rc=$1 reason
+    reason=$(classify_yt_dlp_error "$(cat "$ERR_FILE" 2>/dev/null)" "$rc")
+    ((rc <= 1)) && rc=2
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        jq -nc --arg engine "$ENGINE_NAME" --arg url "$TARGET_URL" \
+            --arg mode "$PLAYBACK_MODE" --arg reason "$reason" \
+            '{status: "error", engine: $engine, url: $url, mode: $mode, reason: $reason}'
+    else
+        echo "yt-resolve: could not resolve a stream for $TARGET_URL ($reason)" >&2
+    fi
+    exit "$rc"
+}
+
+# Cookies are ON by default so login-gated content resolves; but some PUBLIC videos 403
+# with cookies (missing GVS PO token) while the anonymous client fetches fine, and
+# login-gated videos are the reverse. So: try the preferred client, probe it, and switch
+# only if the other one actually fetches. If NEITHER does (network down, unresolvable,
+# both 403) we hand back the cookie attempt anyway and let the player produce the real
+# transport error, so the reason taxonomy stays accurate instead of guessing.
+resolve_stream() {
+    ensure_scratch
+    FMT=$(format_for_mode "$PLAYBACK_MODE")
+
+    local raw_c="" rc_c=0 raw_a="" rc_a=0
+
+    if ((${#YT_COOKIE_ARGS[@]} > 0)); then
+        raw_c=$(dump_once "${YT_COOKIE_ARGS[@]}") || rc_c=$?
+        if ((rc_c == 0)) && [[ -n "$raw_c" ]] && probe_raw "$raw_c"; then
+            emit_stream "$raw_c" 0
+            return 0
+        fi
+        raw_a=$(dump_once "${ANON_ARGS[@]}") || rc_a=$?
+        if ((rc_a == 0)) && [[ -n "$raw_a" ]] && probe_raw "$raw_a"; then
+            emit_stream "$raw_a" 1
+            return 0
+        fi
+        if ((rc_c == 0)) && [[ -n "$raw_c" ]]; then
+            emit_stream "$raw_c" 0
+            return 0
+        fi
+        resolve_fail "$rc_c"
+    fi
+
+    # Anonymous-only (YT_COOKIE_BROWSER=none, or no profile on this machine): nothing to
+    # weigh, so no probe either.
+    raw_a=$(dump_once "${ANON_ARGS[@]}") || rc_a=$?
+    if ((rc_a == 0)) && [[ -n "$raw_a" ]]; then
+        emit_stream "$raw_a" 0
+        return 0
+    fi
+    resolve_fail "$rc_a"
+}
+
+# ==============================================================================
+# 4. METADATA VERBS (read-only: nothing plays, no mpv, no state file)
+# ==============================================================================
+
+# Fetch rich metadata for a video WITHOUT playing. Closes the gap where an agent had to
+# leave this ecosystem and drop to raw `yt-dlp --dump-json` just to learn what a video is
+# (description, chapters, uploader, upload date, like count). Honours cookies like
+# resolution. Output mirrors search's field discipline: -j projects a lean, high-signal
+# schema (the raw record carries ~40 fields of formats/thumbnails/fragments that are pure
+# token ballast for a headless caller); -J returns the full raw record; default is a
+# readable text block. duration_fmt is synthesized the same way search does, so info and
+# search agree on the shape.
+resolve_info() {
+    ensure_scratch
+    local cmd=(yt-dlp --dump-single-json --skip-download)
+    if ((${#YT_COOKIE_ARGS[@]} > 0)); then
+        cmd+=("${YT_COOKIE_ARGS[@]}")
+    fi
+    cmd+=(--no-warnings --quiet "$TARGET_URL")
+
+    local raw rc=0
+    raw=$("${cmd[@]}" 2>"$ERR_FILE") || rc=$?
+
+    if ((rc != 0)) || [[ -z "$raw" ]]; then
+        local reason
+        reason=$(classify_yt_dlp_error "$(cat "$ERR_FILE" 2>/dev/null)" "$rc")
+        if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+            jq -nc --arg engine "$ENGINE_NAME" --arg url "$TARGET_URL" --arg reason "$reason" \
+                '{status: "error", engine: $engine, url: $url, reason: $reason}'
+            exit 1
+        fi
+        die "could not fetch metadata for: $TARGET_URL ($reason)"
+    fi
+
+    # Same jq prelude as search, so --info and search can never drift on this format.
+    local duration_fmt
+    duration_fmt=$(printf '%s' "$raw" | jq -r "$JQ_PRELUDE (.duration | fmt_dur) // empty")
+
+    case "$OUTPUT_MODE" in
+    json_full)
+        printf '%s\n' "$raw" | jq -c '.'
+        ;;
+    json)
+        printf '%s\n' "$raw" | jq -c --arg engine "$ENGINE_NAME" --arg df "$duration_fmt" '{
+            status: "ok",
+            engine: $engine,
+            id, title,
+            url: .webpage_url,
+            channel, uploader, upload_date,
+            duration, duration_fmt: (if $df == "" then null else $df end),
+            view_count, like_count, live_status,
+            description,
+            chapters: (if (.chapters | type) == "array"
+                       then [.chapters[] | {start_time, end_time, title}]
+                       else null end)
+        }'
+        ;;
+    *)
+        local title channel upload_date view_count like_count live_status webpage_url description
+        title=$(printf '%s' "$raw" | jq -r '.title // "(untitled)"')
+        channel=$(printf '%s' "$raw" | jq -r '.channel // .uploader // "?"')
+        upload_date=$(printf '%s' "$raw" | jq -r '.upload_date // "?"')
+        view_count=$(printf '%s' "$raw" | jq -r '.view_count // "?"')
+        like_count=$(printf '%s' "$raw" | jq -r '.like_count // "?"')
+        live_status=$(printf '%s' "$raw" | jq -r '.live_status // "?"')
+        webpage_url=$(printf '%s' "$raw" | jq -r '.webpage_url // empty')
+        description=$(printf '%s' "$raw" | jq -r '.description // ""')
+
+        if [[ -n "$MUSIC_CHAR" ]]; then printf '%s %s\n' "$MUSIC_CHAR" "$title"; else printf '%s\n' "$title"; fi
+        printf '  - channel: %s\n' "$channel"
+        printf '  - uploaded: %s\n' "$upload_date"
+        [[ -n "$duration_fmt" ]] && printf '  - duration: %s\n' "$duration_fmt"
+        printf '  - views: %s   likes: %s\n' "$view_count" "$like_count"
+        printf '  - live: %s\n' "$live_status"
+        [[ -n "$webpage_url" ]] && printf '  - url: %s\n' "$webpage_url"
+
+        local chapters_txt
+        chapters_txt=$(printf '%s' "$raw" | jq -r '
+            if (.chapters | type) == "array" and (.chapters | length) > 0 then
+                .chapters[]
+                | ((.start_time // 0) | floor) as $s
+                | (($s / 60) | floor) as $m
+                | ($s - $m * 60) as $sec
+                | "  " + ($m | tostring) + ":" + (if $sec < 10 then "0" else "" end) + ($sec | tostring) + "  " + (.title // "")
+            else empty end')
+        [[ -n "$chapters_txt" ]] && printf '\nChapters:\n%s\n' "$chapters_txt"
+
+        [[ -n "$description" ]] && printf '\nDescription:\n%s\n' "$description"
+        ;;
+    esac
+    exit 0
+}
+
+# The ONE json3 -> segments transform. json3 (YouTube's own JSON caption format) is asked
+# for by name precisely so this stays a jq program: VTT/SRT would need a timeline parser in
+# awk, and the point of --sub-format json3 is that the timing is already structured.
+#
+# Three shapes in a real json3 file have to be dropped, and all three are dropped by the
+# SAME two filters rather than by naming them (verified against both a human-authored and
+# an auto-generated track):
+#   1. the leading window-definition event  -> no "segs" key at all
+#   2. auto-caption rollup events (aAppend) -> their only seg is "\n", so it cleans to ""
+#   3. style markup inside a cue            -> gsub'd out, then collapsed whitespace
+# Filtering on the CLEANED TEXT being empty, instead of on `aAppend == 1`, is deliberate:
+# it drops the rollup markers we have seen while keeping any hypothetical aAppend event
+# that actually carries words. The trailing consecutive-dedup is insurance on top.
+#
+# Auto tracks carry word-level segs (each with its own tOffsetMs); joining them with no
+# separator is correct because YouTube puts the leading space INSIDE each seg's utf8.
+JQ_TRANSCRIPT='
+def clean: gsub("<[^>]*>"; "") | gsub("[[:space:]]+"; " ") | sub("^ +"; "") | sub(" +$"; "");
+[ .events[]?
+  | select(has("segs"))
+  | { start:    ((.tStartMs // 0) / 1000),
+      duration: ((.dDurationMs // 0) / 1000),
+      text:     ([.segs[]? | .utf8 // ""] | join("") | clean) }
+  | select(.text != "") ]
+| reduce .[] as $s ([]; if ((length > 0) and (.[-1].text == $s.text)) then . else . + [$s] end)
+'
+
+# Fetch a video's caption track and hand it over as text an agent can put straight in a
+# prompt, or as a structured envelope. Read-only: nothing plays, no mpv, no state file.
+#
+# ONE yt-dlp call does both halves of the job, which is the whole reason this verb is
+# cheap. The flag combination is load-bearing and each piece was picked against a measured
+# alternative:
+#   --write-subs --write-auto-subs   ask for human captions AND auto ones in one pass;
+#                                    yt-dlp prefers the human track when both exist.
+#   --no-simulate                    REQUIRED. --print alone implies --simulate, and a
+#                                    simulating yt-dlp writes no subtitle file at all. The
+#                                    same trap sinks --dump-json: it implies simulate too,
+#                                    so "dump the metadata and write the subs" is not a
+#                                    thing one invocation can do without this flag.
+#   --print %(id)s, %(subtitles)j    the id for the envelope, and the HUMAN-caption dict
+#                                    (one line, ~15 KB) purely to answer is_auto: the
+#                                    written file's language tag is either a key in it
+#                                    (human) or it is not (auto). automatic_captions is
+#                                    deliberately NOT printed - with YouTube's machine
+#                                    translations it runs to 940 languages / 3.2 MB.
+#   --sub-format json3               see JQ_TRANSCRIPT.
+#   -o <dir>/%(id)s.%(ext)s          yt-dlp splices the language in, so the file lands as
+#                                    <id>.<lang>.json3 - that name is how the language and
+#                                    the human/auto answer are recovered.
+#
+# Language selection is a PRIORITY CHAIN, not a single tag: yt-dlp writes a file for every
+# candidate it can satisfy, and the first candidate in the caller's own order that actually
+# landed wins. So the default chain returns English when it exists and Chinese/Japanese
+# when it does not, in one round trip and with no "which languages exist" query first.
+resolve_transcript() {
+    local langs="$SUB_LANG"
+    [[ -n "$langs" ]] || langs="$SUB_LANG_CHAIN"
+
+    # Captions are content: they live inside the 0700 scratch dir for the seconds they
+    # exist, never in a world-readable /tmp path. The process EXIT trap already removes it.
+    ensure_scratch
+    local dir="$SCRATCH_DIR/transcript"
+    mkdir -p "$dir" 2>/dev/null || true
+
+    local cmd=(yt-dlp --skip-download --no-simulate)
+    if ((${#YT_COOKIE_ARGS[@]} > 0)); then
+        cmd+=("${YT_COOKIE_ARGS[@]}")
+    fi
+    cmd+=(
+        --write-subs --write-auto-subs
+        --sub-langs "$langs"
+        --sub-format json3
+        --print "%(id)s"
+        --print "%(subtitles)j"
+        -o "$dir/%(id)s.%(ext)s"
+        --no-warnings --quiet
+        "$TARGET_URL"
+    )
+
+    # stderr is captured rather than discarded so a failure can be classified into the same
+    # reason enum the resolve and search paths use, instead of being reported as a generic
+    # "no captions" when the real answer is 429 / private video / no network.
+    local out rc=0
+    out=$("${cmd[@]}" 2>"$ERR_FILE") || rc=$?
+
+    local vid subs_json
+    vid=$(printf '%s\n' "$out" | sed -n 1p)
+    subs_json=$(printf '%s\n' "$out" | sed -n 2p)
+
+    if [[ -z "$vid" ]]; then
+        transcript_fail "$(classify_yt_dlp_error "$(cat "$ERR_FILE" 2>/dev/null)" "$rc")"
+    fi
+
+    # Pick the first candidate the caller asked for that yt-dlp actually wrote. Comma split
+    # by parameter expansion, not IFS+set --: this is inside a function with its own args.
+    local pick="" lang="" rest="$langs" cand
+    while [[ -n "$rest" ]]; do
+        cand="${rest%%,*}"
+        if [[ "$rest" == *,* ]]; then rest="${rest#*,}"; else rest=""; fi
+        [[ -n "$cand" ]] || continue
+        if [[ -f "$dir/$vid.$cand.json3" ]]; then
+            pick="$dir/$vid.$cand.json3"
+            lang="$cand"
+            break
+        fi
+    done
+    # Fallback for a tag yt-dlp normalised on the way out (asking for `zh` can land
+    # `zh-Hans`): take whatever single track did arrive rather than calling it a miss.
+    if [[ -z "$pick" ]]; then
+        local f base
+        for f in "$dir"/*.json3; do
+            [[ -f "$f" ]] || continue
+            pick="$f"
+            base="${f##*/}"
+            base="${base%.json3}"
+            lang="${base#"$vid".}"
+            break
+        done
+    fi
+
+    # No file written is the miss signal, NOT the exit status: yt-dlp exits 0 for a language
+    # that simply does not exist on the video (verified), and non-zero only when something
+    # else went wrong - which the branch above already reported.
+    if [[ -z "$pick" ]]; then
+        if ((rc != 0)); then
+            transcript_fail "$(classify_yt_dlp_error "$(cat "$ERR_FILE" 2>/dev/null)" "$rc")"
+        fi
+        transcript_fail "no_subtitles_available"
+    fi
+
+    # is_auto from the printed human-caption dict: the track's language is a key there, or
+    # it came from the automatic side. `NA` is yt-dlp's rendering of an absent field.
+    local is_auto=true
+    if [[ -n "$subs_json" && "$subs_json" != "NA" ]]; then
+        if printf '%s' "$subs_json" | jq -e --arg l "$lang" 'has($l)' >/dev/null 2>&1; then
+            is_auto=false
+        fi
+    fi
+
+    local segments
+    segments=$(jq -c "$JQ_TRANSCRIPT" "$pick" 2>/dev/null) || segments=""
+    # A track that parses to nothing is a miss, not an empty success: an agent handed
+    # {"text":""} would summarise silence and never learn the captions were unusable.
+    if [[ -z "$segments" || "$segments" == "[]" ]]; then
+        transcript_fail "no_subtitles_available"
+    fi
+
+    # -j vs -J is the SAME split the search path already publishes (§14/§22): -j is the
+    # lean projection, -J is the same envelope at full fidelity - a strict SUPERSET, so an
+    # agent that widens -j to -J keeps every field it was already reading.
+    #
+    # What -j drops is `segments`, and it is dropped because it is the SAME WORDS TWICE:
+    # measured on a 444-cue auto track, the envelope is 52,698 bytes of which `text` is
+    # 16,917 and `segments` is 35,647 carrying that identical 16,917 bytes of text plus its
+    # timings. Dropping it is a 3.1x cut with zero information loss for the summarise-this
+    # case this verb exists for. `chars` and `segment_count` stay so the lean form is still
+    # self-describing: a caller can budget context, and knows what -J would add, without
+    # fetching it.
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        local full=false
+        [[ "$OUTPUT_MODE" == "json_full" ]] && full=true
+        jq -nc --arg engine "$ENGINE_NAME" --arg id "$vid" --arg url "$TARGET_URL" --arg lang "$lang" \
+            --argjson is_auto "$is_auto" --argjson segments "$segments" \
+            --argjson full "$full" \
+            '($segments | map(.text) | join(" ")) as $text
+             | {status: "ok", engine: $engine, id: $id, url: $url, lang: $lang, is_auto: $is_auto,
+                chars: ($text | length), segment_count: ($segments | length), text: $text}
+             + (if $full then {segments: $segments} else {} end)'
+    else
+        # Same string the envelope's `text` carries, so the two output modes can never
+        # disagree about what the transcript says.
+        printf '%s' "$segments" | jq -r 'map(.text) | join(" ")'
+    fi
+    exit 0
+}
+
+# The one place --transcript reports a miss, so the text and JSON shapes cannot drift.
+# Mirrors resolve_info: machine callers get {status:"error", ...} and exit 1, humans get a
+# sentence on stderr. `reason` is the shared enum, never prose.
+transcript_fail() {
+    local reason=$1
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        jq -nc --arg engine "$ENGINE_NAME" --arg url "$TARGET_URL" --arg reason "$reason" \
+            '{status: "error", engine: $engine, url: $url, reason: $reason}'
+        exit 1
+    fi
+    case "$reason" in
+    no_subtitles_available) die "no captions available for: $TARGET_URL" ;;
+    *) die "could not fetch captions ($reason) for: $TARGET_URL" ;;
+    esac
+}
+
+# ==============================================================================
+# 5. CLI
+# ==============================================================================
+
+print_usage() {
+    cat <<'EOF'
+yt-resolve — the YouTube resolve engine: a handle becomes bytes (non-interactive)
+
+Usage:
+  yt-resolve [-f MODE] [-S SORT] [-j|-J] -- <video-id | URL>
+  yt-resolve --info [-j|-J] -- <video-id | URL>
+  yt-resolve --transcript [--sub-lang L] [-j|-J] -- <video-id | URL>
+
+The handle is either a YouTube URL or an 11-character video id (what `yt-search -j`
+returns as results[].id). Knowing that shape is this engine's job, not the player's.
+
+Options:
+  -f MODE  Playback mode the format is chosen for: audio | video | fast | ascii | viz
+           (default: audio). The MODE -> yt-dlp format table lives here, not in ut-play.
+  -S SORT  yt-dlp format-sort override (--format-sort)
+  -j       JSON envelope (see below)
+  -J       Full raw yt-dlp record
+  --info   Metadata only (title, channel, chapters, description) — nothing is resolved
+  --transcript  Caption track as clean text, ready to drop into a prompt
+  --sub-lang L  Caption language(s): a comma-separated PRIORITY CHAIN
+                (default: en,zh-Hans,zh,ja)
+  --color MODE  auto | always | never (default: auto)
+  -h       This help
+  -V       Print the suite version
+
+Resolve JSON (-j): {"status","engine","id","url","title","duration","mode","format",
+                    "stream_urls":[...],"http_headers":{...},"retried"}
+  stream_urls is VIDEO FIRST: element 0 is what a player opens, element 1 (present only
+  when the format merged two streams) is its separate audio track.
+  http_headers is a REQUIRED key (possibly {}) — the headers the URLs must be fetched with.
+
+Info JSON (--info -j): {status,engine,id,title,url,channel,uploader,upload_date,duration,
+                        duration_fmt,view_count,like_count,live_status,description,chapters}
+Transcript JSON (--transcript -j): {status,engine,id,url,lang,is_auto,chars,segment_count,text}
+
+Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp failure (see .reason)
+
+To search: yt-search <query>   ·   To play: ut-play <id|URL>
+EOF
+}
+
+has_format=0
+positional=()
+while (($#)); do
+    case "$1" in
+    -h | --help)
+        print_usage
+        exit 0
+        ;;
+    -V | --version)
+        # Answered before ANY dependency gate: a version is the first thing a bug report
+        # needs, and needing yt-dlp installed to find out which version you have is
+        # backwards.
+        printf 'yt-resolve %s\n' "$YT_VERSION"
+        exit 0
+        ;;
+    -j | --json)
+        has_format=1
+        OUTPUT_MODE="json"
+        shift
+        ;;
+    -J | --json-full)
+        has_format=1
+        OUTPUT_MODE="json_full"
+        shift
+        ;;
+    -l | --list)
+        has_format=1
+        OUTPUT_MODE="list"
+        shift
+        ;;
+    --info)
+        ACTION="info"
+        shift
+        ;;
+    --transcript | --subtitles)
+        ACTION="transcript"
+        shift
+        ;;
+    --sub-lang=* | --sub-langs=*)
+        SUB_LANG="${1#*=}"
+        shift
+        ;;
+    --sub-lang | --sub-langs)
+        [[ $# -ge 2 ]] || { echo "yt-resolve: $1 requires a value" >&2; exit 1; }
+        SUB_LANG="$2"
+        shift 2
+        ;;
+    --color=*)
+        COLOR_MODE="${1#*=}"
+        shift
+        ;;
+    --color)
+        [[ $# -ge 2 ]] || { echo "yt-resolve: $1 requires a value" >&2; exit 1; }
+        COLOR_MODE="$2"
+        shift 2
+        ;;
+    -f | --format-mode)
+        [[ $# -ge 2 ]] || { echo "yt-resolve: $1 requires a value" >&2; exit 1; }
+        PLAYBACK_MODE=$(normalize_playback_mode "$2")
+        shift 2
+        ;;
+    -S)
+        [[ $# -ge 2 ]] || { echo "yt-resolve: $1 requires a value" >&2; exit 1; }
+        FORMAT_SORT="$2"
+        shift 2
+        ;;
+    # The gate. Resolution neither plays nor tracks a player, and it does not search:
+    # a caller holding the wrong verb is told which one it wants (SPEC-system.md §13).
+    -d | --detach | --status | --stop | --set-volume | --id | --all | --volume)
+        echo "yt-resolve: $1 is a playback flag — use ut-play for playback" >&2
+        exit 1
+        ;;
+    -n | -m | -M | -s)
+        echo "yt-resolve: $1 is a search flag — use yt-search for searching" >&2
+        exit 1
+        ;;
+    --)
+        shift
+        # `--` stops FLAG parsing, not argument validation: a handle beginning with '-'
+        # must survive, and a second handle is still an error. SPEC-system.md §6.
+        while (($#)); do
+            positional+=("$1")
+            shift
+        done
+        break
+        ;;
+    -*)
+        echo "yt-resolve: unknown flag '$1' (resolve flags: -f -S -j -J --info --transcript)" >&2
+        exit 1
+        ;;
+    *)
+        positional+=("$1")
+        shift
+        ;;
+    esac
+done
+
+if ((${#positional[@]} == 0)); then
+    echo "yt-resolve: a video id or URL is required (see 'yt-resolve -h')" >&2
+    exit 1
+fi
+if ((${#positional[@]} > 1)); then
+    echo "yt-resolve: takes exactly one video id or URL (got ${#positional[@]})" >&2
+    exit 1
+fi
+TARGET="${positional[0]}"
+
+# The default output is prose; -j/-J/-l override.
+((has_format)) || OUTPUT_MODE="list"
+
+if ! validate_enum "$COLOR_MODE" auto always never; then
+    die "--color must be one of: auto, always, never"
+fi
+# Validate the language list HERE rather than inside the fetch so a typo costs no network
+# round trip; the value reaches yt-dlp as one argv element, so this is a contract check,
+# not a quoting one.
+if [[ -n "$SUB_LANG" ]]; then
+    [[ "$ACTION" == "transcript" ]] || die "--sub-lang applies only to --transcript"
+    [[ "$SUB_LANG" =~ ^[A-Za-z0-9][A-Za-z0-9_,.-]*$ ]] ||
+        die "--sub-lang takes a comma-separated list of language tags (e.g. en or zh-Hans,en)"
+fi
+
+normalize_target "$TARGET"
+
+require_deps yt-dlp jq
+
+case "$ACTION" in
+info) resolve_info ;;
+transcript) resolve_transcript ;;
+*) resolve_stream ;;
+esac
+exit 0

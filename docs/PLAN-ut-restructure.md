@@ -1,6 +1,6 @@
 # PLAN-ut-restructure —— 拆成「播放器 + 可扩展搜索引擎」
 
-**状态：A、B-1 已落地（2026-08-23）。下一步 B-2。**
+**状态：A、B-1、B-2 已落地（2026-08-23）。下一步 B-3。**
 决定见 `ROADMAP.md` D9 / D10；证据见 `RESEARCH-bilibili-engine.md`。
 本文件**自带进度**，每项落地即更新，最后一项落地后删除，契约并入 `SPEC-system.md`。
 
@@ -8,8 +8,8 @@
 |---|---|---|
 | A | 核心改名 `shell/yt` → `shell/ut-play`（零代码搬移） | ☑ 2026-08-23 |
 | B-1 | `yt-search` 独立成引擎（搜索与播放路径零耦合，非破坏性） | ☑ 2026-08-23 |
-| B-2 | `yt-resolve` 独立 **+** 播放器改走 resolve（耦合的一步，ytdl_hook 退场） | ☐ 下一步 |
-| B-3 | 合并与删除：`yt-play` 删除，`ut-play` 上 PATH | ☐ |
+| B-2 | `yt-resolve` 独立 **+** 播放器改走 resolve（耦合的一步，ytdl_hook 退场） | ☑ 2026-08-23 |
+| B-3 | 合并与删除：`yt-play` 删除，`ut-play` 上 PATH | ☐ 下一步 |
 | C | `bili-search` / `bili-resolve` | ☐ |
 | D | `ut-tui` 引擎注册表 + 切源键 | ☐ |
 | E | 文档同步 + `verify-suite` 四阶段（含 phase 4 真发声） | ☐ |
@@ -237,7 +237,7 @@ tests/contract.sh                 -l 直调核心；四入口版本循环（原�
 （原 46 + 新增 2）· `YT_TEST_LIFECYCLE=1 lifecycle.sh` **13/13** 零孤儿 mpv ·
 `tui_pane.sh` **13/13**。
 
-### B-2. `yt-resolve` 独立 + 播放器改走 resolve ☐
+### B-2. `yt-resolve` 独立 + 播放器改走 resolve ☑ 2026-08-23
 
 **这两件事必须同一步做**：`format_for_mode` · cookie 块 · PO-token 探测
 （`have_probe_tools:480` / `probe_media_fetchable:493` / `play_url_with_probe:528`）·
@@ -258,9 +258,78 @@ tests/contract.sh                 -l 直调核心；四入口版本循环（原�
 - `detach_title_updater` 是否还需要存在（标题现在由 resolve envelope 直接给）
 - §3.4 的三件接手，五种播放模式逐个验
 
-退路见 §3.4。
+退路见 §3.4。**没有用到** —— 五种模式一次全切通过。
 
-### B-3. 合并与删除（destructive step，最后且最小）☐
+#### 实际做的（与计划的出入，逐条）
+
+**1. `detach` 的延迟：计划里没有的一个真问题，解法反而删掉了一个函数。**
+若父进程先调 resolve 再拉 mpv，`-d` 会从 0.04 s 变成 ~3 s —— 而这正是 `yt-tui` 的热路径。
+保留 re-exec、**让子进程去调 resolve**：父进程照旧秒回，子进程拿到 envelope 后把 `title`
+与 `format` 补进自己的 state 文件（`patch_player_meta`，靠 `YT_PLAYER_ID` 找到记录、靠
+pid 匹配自守）。于是 §8 那个悬而未决的问题有了答案：**`detach_title_updater` 整个删除**，
+且是净赚 —— 少一次 `yt-dlp --print title` 往返，少一个要重定向 fd 的后台任务。
+父进程写 `format: null` / `title: null`，子进程回填。实测 `--status` 一两秒后两者都在。
+
+**2. 引擎令牌 `youtube` → `yt`（名字即命令前缀）。**
+`ut-play --engine yt` 直接拼出 `yt-resolve`，零注册表 —— 否则 `ut-play` 与（D 步的）
+`ut-tui` 各要一张 `youtube→yt` 映射表。B-1 刚加的 `engine` 字段随之改值，改在这里最便宜。
+
+**3. resolve envelope 只发 `stream_urls`（数组），不发 §3.2 草稿里的单值 `stream_url`。**
+两个键是同一事实两处；数组形态也正好是今天 `--get-url -j` 已有的形状，契约不变量更稳。
+排序**视频在前**（jq 稳定排序按 `vcodec`），播放器只认下标：0 给 mpv，1 给 `--audio-file`。
+
+**4. envelope 多两个键：`title`/`duration` 与 `retried`。**
+前者是 detach 回填与 `--force-media-title` 的来源（`ytdl_hook` 退场后 OSD 否则会显示一串
+googlevideo 路径）；后者让播放 envelope 的 `retried` 继续说真话 —— 探测搬进引擎后播放器
+自己看不见这件事了。§3.2 的草稿两者都没写。
+
+**5. 一次 yt-dlp 调用，不是两次。**
+`--dump-single-json -f FMT` 同时给出 URL、`http_headers`、`title`、`duration`；探测直接
+拿这份记录去 curl，不再像老代码那样先 `yt-dlp -g` 再让 mpv 又抽一次。**抽取次数 3 → 2。**
+
+**6. 退出码：resolve 失败 floor 到 2。**
+yt-dlp 对「视频不存在」退 1，而 1 是 usage。沿用 `yt-search` 已有的
+`rc <= 1 ? 2 : rc`。后果：`--get-url` 遇到失效视频从 1 变 2 —— 与 §15 的分类法一致，
+且 `--get-url` 本来就在 B-3 删除名单上。
+
+**7. `ut-play` 收「handle」而不是「URL」。**
+形状校验下放给引擎（§5 B-3 预告的语义提前到这里，因为不这样 `--engine` 没有意义）：
+播放器只拒绝「明显不是 handle」的东西 —— 空、或含空格（那是查询）。
+`yt-play "a query"` 仍然是 1（有空格），contract 不破。
+
+**8. 顺带修的：`ut-play` 的 `usage()` heredoc 没加引号**，`--transcript` 说明里的反引号
+被当命令执行，`ut-play --help` 一直往 stderr 吐三行 `command not found`（改造前就有）。
+改成 `<<'EOF'`。
+
+**9. 丢掉的一件事（已接受）：无 curl 时的 play-fail-replay 回退。**
+老代码在没有 curl 时靠「播失败→去 cookie 重播」兜底，而那个重试住在播放器里 —— 现在的
+播放器不知道 cookie 是什么。`yt-resolve` 无 curl 时不探测、直接用首选客户端。
+交集很窄（无 curl **且** 有 cookie **且** 该视频撞 PO-token 墙），写在 `probe_raw` 的注释里。
+
+**10. `--http-header-fields-append` 落在 mpv 的 argv 上，`ps` 可见。**
+YouTube 引擎只回 UA/Accept/Accept-Language/Sec-Fetch-Mode，无凭据。已在 `run_mpv` 与
+`SPEC §14` 写明：**引擎不得在 `http_headers` 里回 Cookie / Authorization**。
+若将来某个引擎必须回，正解是把选项写进 0700 state dir 里的 mpv config 用 `--include=`。
+
+#### 验收
+
+`bash -n` 五脚本 · 五入口 `--version` 一致 · shellcheck：`ut-play` 的基线只减不增
+（三条反引号 note 随 #8 消失），`yt-resolve` 只有与 `yt-search` 同款的 SC2016/SC2329 info。
+
+- `contract.sh` **58/58**（原 48 + 新增 10：resolve envelope 键集/单行/收裸 id/拒非 id/
+  拒 `-d`/拒 `-n`，未注册引擎→1、引擎名校验→1，失效 id→2 且带 reason，版本五入口）
+- `YT_TEST_LIFECYCLE=1 lifecycle.sh` **13/13**，零孤儿 mpv，detach 仍 0 s 返回
+- `tui_pane.sh` **13/13**
+- **五种播放模式逐个真跑**：audio（coreaudio 出声、位置推进）· video（tmux exit 0）·
+  fast（exit 0）· ascii（tct 逐帧、exit 0）· viz（showwaves 逐帧、exit 0）
+- **分离音视频真跑**：`jNQXAC9IVRw` 默认 `bv*+ba/b` 出两条流，用 ut-play 生成的原样 argv
+  跑 mpv（`--vo=null --ao=null`）→ 两条轨道都在、A-V 同步、exit 0
+- **直播 / HLS 真跑**：`rFZHOHl-L8A` 解析出 m3u8，mpv 直接开、exit 0 —— 清单再解析
+  不需要我们接手，ffmpeg 原生处理
+- **`--force-media-title` / `--no-ytdl` / `--audio-file` / header 拼装**：用一个假 mpv
+  记录 argv 逐模式核对
+
+### B-3. 合并与删除（destructive step，最后且最小）☐ 下一步
 
 `yt-play` 是门禁壳，`ut-play` 是实现。**引擎搬走之后这两层就该合并**：`ut-play` 里只剩
 一个动词，也就没有「绕过门禁去调核心」这件事可防了 —— 而那正是 CLAUDE.md 当初把核心挡在
@@ -274,13 +343,12 @@ PATH 之外的唯一理由。
   `--info` / `--transcript` → `yt-resolve`；`lifecycle.sh` 同理
 - 每个删除前 grep-gate（A→E 方法论 C 步）
 
-**一处契约会真的变（已论证并接受）：** 今天 `yt-play "a query"` 退出码 1，靠的是「参数
-必须长得像 YouTube URL」这条**引擎专属**的门禁。B 之后 `ut-play` 收的是**媒体 id 或 URL**
-（`BV1FPjy6TEiE`、`dQw4w9WgXcQ` 都不是 URL 形状），播放器不该认识任何一个站的 id 长相 ——
-形状校验只能下放给 `<engine>-resolve`。后果：瞎写的 id 从 **usage 错误（1）** 变成
-**resolve 失败（2+）**。退出码分类法本身不破（2+ = 传递的工具失败），但
-`contract.sh:89`（`yt-play bare query` → 1）要改写成「无法解析的 id → 2+ 且 envelope 带
-reason」。搜索标志 `-n` / `-s` 在 `ut-play` 里仍然是 1（未知标志），不变。
+**一处契约会真的变（已论证并接受）——「ut-play 收 handle」这半已在 B-2 落地**，
+因为不下放形状校验，`--engine` 就没有意义。今天 `ut-play` 只拒绝「明显不是 handle」的
+输入（空、含空格），瞎写的 11 位 id 是 **resolve 失败（2+）且 envelope 带 reason**，
+已由 `contract.sh` 的「dead id is 2+, not 1」两条钉住。`yt-play "a query"` 仍是 1
+（含空格），因为 `yt-play` 自己那道「必须像 URL」的门禁还在 —— **B-3 要做的就是删掉它**。
+搜索标志 `-n` / `-s` 在 `ut-play` 里仍然是 1（未知标志），不变。
 
 ### C. `bili-search` / `bili-resolve` ☐
 
@@ -340,14 +408,14 @@ README + 各 `usage()`。然后 `verify-suite` 四阶段，**phase 4 必须真�
 
 ## 8. 已知风险
 
-- **B-2 是行为可能真变的一步**：抽取责任从 mpv 转到我们。除 PO-token / cookie 回退外，
-  **分离音视频的 EDL 合成与直播 / HLS 再解析**是 ytdl_hook 免费给、现在要自己写的两件
-  （§3.4）。退路：video 模式暂留老路。
+- ~~**B-2 是行为可能真变的一步**~~ —— 已过。EDL 合成塌成 mpv 的 `--audio-file` 一个
+  参数；直播 / HLS **不需要再解析**（ffmpeg 原生开 m3u8）。退路未动用。唯一真丢的是
+  无 curl 机器上的 play-fail-replay（B-2 实录 #9）。
 - **B 一次动三个文件的身份**（`yt-play` 删除、`yt-search` 由壳变引擎、`ut-play` 上 PATH）。
   缓解就是 B-1 / B-2 / B-3 的拆分本身，且拆分线是**耦合度**而非文件数：
   B-1 搬零耦合的搜索、B-2 搬与播放路径耦合的 resolve（搬移与切换同步做，否则必然重复）、
   B-3 只做删除。**destructive step 最后且最小**（A→E 方法论）。
-- **`detach_title_updater` 的去留在 B-2 才能定**：它存在只因搜索不给标题。若 resolve
-  envelope 直接给标题，这个后台回填整个消失；若直播场景仍需要，它留在 `yt-resolve`。
+- ~~**`detach_title_updater` 的去留在 B-2 才能定**~~ —— 已定：**删除**。标题由 resolve
+  envelope 给，detached 子进程自己回填（B-2 实录 #1）。
 - **C 步的 WBI 与风控没有上游文档可跟**（`bilibili-API-collect` 2026-01 已归档）。
 - **B 站音质门槛**依赖 `SESSDATA`，走现有 cookie 通道；**任何 cookie 内容都不得落进 `players/`**。

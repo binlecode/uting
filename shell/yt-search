@@ -43,9 +43,11 @@ else
     YT_VERSION="unknown"
 fi
 
-# The engine's own name, as it appears in the envelope. This is what lets a caller route a
-# result back to the right `<engine>-resolve` without pattern-matching the URL.
-ENGINE_NAME="youtube"
+# The engine's own name, as it appears in the envelope AND as the command prefix its two
+# executables carry. Name == prefix is deliberate: it lets `ut-play --engine yt` find
+# `yt-resolve` by string concatenation, with no name->command registry to keep in sync in
+# both the player and the TUI. docs/PLAN-ut-restructure.md §2.2.
+ENGINE_NAME="yt"
 
 # ==============================================================================
 # 1. SETTINGS

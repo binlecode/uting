@@ -12,23 +12,36 @@ one earns it, and the one-fact-one-section rule then holds across the family. Wh
 document is NOT: a proposal (`DESIGN-<topic>.md`), the sequencing (`ROADMAP.md`), or work
 in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 
-- Core engine: `shell/ut-play` (single source of truth, non-interactive)
-- Narrow headless verbs: `shell/yt-search`, `shell/yt-play`
+- Player (source-agnostic): `shell/ut-play` — plays, and owns the detached lifecycle
+- YouTube engine (a pair): `shell/yt-search` (query → results), `shell/yt-resolve`
+  (handle → stream URL + headers, plus `--info` / `--transcript`)
+- Narrow headless verb: `shell/yt-play` (gates flags, execs the player; retires at B-3)
 - Interactive UI: `shell/yt-tui` (owned glue over the verbs; no extra deps)
 - Caller-facing surface: each verb's own `-h`/`--help` · Orientation: `README.md`
-- Runtime deps: `yt-dlp`, `jq` (search); `mpv` (playback); `curl` optional (§8.2).
-  No fzf / TUI framework — only foundational primitives.
+- Runtime deps: `yt-dlp`, `jq` and (optionally) `curl` in the ENGINES; `mpv` + `jq` in the
+  player; `nc` for `--set-volume`. No fzf / TUI framework — only foundational primitives.
 
-> **Restructure in flight (2026-08-23).** Two things below this line are behind the code,
-> both by design (`docs/PLAN-ut-restructure.md`): the core file was renamed `shell/yt` →
-> `shell/ut-play` (step A), so a bare `yt` in prose or in a process diagram still means that
-> player; and **search has left it for the `yt-search` engine** (step B-1), which now owns
-> the search yt-dlp call, the cookie decision and the duration formatter, declares
-> `engine`/`status` in its envelope, and merged its former gating wrapper. The player's old
-> D2 contract (bare `yt "query"` → list) is gone with it, and the version now lives in
-> `shell/VERSION`. Names, diagrams and §13's gating model are redrawn together in step E —
-> the §6.1 invocation stack changes shape again at B-2 (mpv stops running yt-dlp itself),
-> so redrawing it now and again then would be drawing it twice.
+> **Restructure in flight (2026-08-23).** Several things below this line are behind the
+> code, all by design (`docs/PLAN-ut-restructure.md`). Names, diagrams and §13's gating
+> model are redrawn together in step E, once the shape stops moving; §14 below is the
+> exception — a contract is stated when it lands, never later. What has already changed:
+>
+> - **Step A** — the core file was renamed `shell/yt` → `shell/ut-play`, so a bare `yt` in
+>   prose or in a process diagram still means that player. The version moved to
+>   `shell/VERSION`.
+> - **Step B-1** — search left for the `yt-search` engine, which owns the search yt-dlp
+>   call, the cookie decision and the duration formatter, declares `engine`/`status` in its
+>   envelope, and merged its former gating wrapper. The player's old D2 contract (bare
+>   `yt "query"` → list) went with it.
+> - **Step B-2** — extraction left for `shell/yt-resolve`, and **mpv no longer runs yt-dlp
+>   at all**: the player passes `--no-ytdl` and opens a direct URL the engine resolved. So
+>   §5's seam table, §6.1's invocation stack, §8.1's mode→format table and §8.2's probe all
+>   describe work that now happens one process further out, in the engine. `--get-url`,
+>   `--info` and `--transcript` are `exec`-forwarded to `yt-resolve` and are its verbs now.
+>   The engine token in every envelope is `yt`, not `youtube`: the name IS the command
+>   prefix, which is what lets the player find `yt-resolve` without a registry.
+> - Still true everywhere: the exit-code taxonomy, the lifecycle semantics, and one line
+>   per `-j` envelope.
 
 The document flows: **I. System architecture → II. Functional structure →
 III. Modular API → IV. Supported workflows → V. Aligned best practice.**
@@ -1889,6 +1902,38 @@ stream); `view_count` can be `null` too. On failure the envelope is instead
 `{status:"error", query, count:0, results:[], reason}` with the same `reason` enum as
 playback, and the exit code is 2+ (§7/§15).
 
+Resolve envelope (`<engine>-resolve -j -f MODE -- <handle>`) — **new at PLAN step B-2**:
+```json
+{ "status":"ok", "engine":"yt", "id":"dQw4w9WgXcQ",
+  "url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+  "title":"…", "duration":213, "mode":"audio", "format":"ba/b",
+  "stream_urls":["https://rr2---sn-….googlevideo.com/videoplayback?…"],
+  "http_headers":{"User-Agent":"…","Accept-Language":"…"},
+  "retried":false }
+```
+This is the whole vocabulary the player has for "what am I playing", and every key is
+load-bearing:
+
+- **`stream_urls` is an array, VIDEO FIRST.** One element for a single stream; two when the
+  engine's format merged a video-only and an audio-only track, in which case element 1 is
+  the audio. The player joins them with mpv's `--audio-file` — the EDL synthesis
+  `ytdl_hook` used to do for free (§8.1).
+- **`http_headers` is a REQUIRED key**, possibly `{}`. This closes the hole the old
+  `--get-url` left open: a bare stream URL is not enough to fetch on a host that checks
+  `Referer` or pins a `User-Agent`, and the player has no way to invent them. An engine
+  must NOT return a credential header here — the player puts these on mpv's argv, where
+  `ps` can read them.
+- **`format`** is the format string the engine actually used. The player records it in the
+  player state file verbatim and never reads it: `bv*+ba/b` is a yt-dlp expression and the
+  player does not know that language.
+- **`retried`** = the engine fell back to an anonymous client (§8.2). The player relays it
+  into the playback envelope's `retried`; it no longer observes it.
+- **`engine`** = the token that is also the command prefix, so a caller holding a search
+  result can reach the matching resolver by concatenation (`yt` → `yt-resolve`).
+- Failure → `{status:"error", engine, url, mode, reason}` with the same `reason` enum as
+  playback and **exit 2+** — floored to 2, because yt-dlp exits 1 for an unavailable video
+  and 1 is reserved for usage errors.
+
 Playback status (`yt-play -j <url>`):
 ```json
 { "status":"ok"|"error", "url":"…", "mode":"audio",
@@ -1903,6 +1948,15 @@ grouped with `forbidden` — 403 says these credentials never work, 429 says not
 YouTube's limiter within a handful of calls) but playback and search could always reach it,
 reporting `unknown` — the one reason a caller cannot act on.
 
+**The enum is the shared fact; the classifiers are not.** Since B-2 there are three readers
+of it and they live in different files on purpose: `yt-search` and `yt-resolve` each carry a
+`classify_yt_dlp_error` that knows extractor wording (*video unavailable*, *requested
+format*, *sign in to confirm*), and `ut-play` carries a much smaller
+`classify_playback_error` that knows only mpv — transport failures and rc 130. A resolve
+that fails is classified once, by the half that can read the wording, and the player replays
+that verdict rather than re-deriving it from prose. **No member may be added by any of the
+three that this section does not already list.**
+
 Lifecycle / resolve:
 ```
    -d       : {status:"started", id, pid, url, mode, started_at, title:null, sock, log}
@@ -1911,7 +1965,9 @@ Lifecycle / resolve:
                players:[{id,pid,url,mode,volume,paused,position,duration,title,started_at}…],
                failed:[{id,url,mode,started_at,ended_at,exit_code,reason}…]}
               empty arrays when nothing playing / nothing failed (still exit 0)
-              title is null for the first ~3s after a detach, then the async updater fills it
+              title is null for the first second or two after a detach: the detached CHILD
+              resolves (the parent must return in milliseconds) and patches `title` and
+              `format` into its own record from the resolve envelope the moment it has one
               volume, paused, position and duration are read LIVE off the player's socket in
               ONE round trip (§9.3). volume falls back to the recorded launch/--set-volume
               value; the other three are null when the socket could not be asked or the
@@ -1929,11 +1985,11 @@ Lifecycle / resolve:
    --stop   : {status:"stopped", id, stopped:bool}   (single target)
             | {status:"stopped", scope:"all", stopped:bool}   (--all)
             | {status:"ambiguous", …}                (2+ players, no --id; exit 4)
-   --get-url: {status,url,mode,format,stream_urls:[…]}
-   --info   : {status,id,title,url,channel,uploader,upload_date,duration,duration_fmt,
+   --get-url: the resolve envelope above, verbatim (the player forwards, it does not shape)
+   --info   : {status,engine,id,title,url,channel,uploader,upload_date,duration,duration_fmt,
               view_count,like_count,live_status,description,chapters} ; -J = raw record
-              chapters = [{start_time,end_time,title}] | null ; error → {status,url,reason}
-   --transcript : {status:"ok", id, url, lang, is_auto, chars, segment_count, text}
+              chapters = [{start_time,end_time,title}] | null ; error → {status,engine,url,reason}
+   --transcript : {status:"ok", engine, id, url, lang, is_auto, chars, segment_count, text}
               -J = the SAME envelope plus segments:[{start,duration,text}…] (seconds) —
               a strict superset, the same relation search's -J has to its -j (a caller
               that widens never loses a field it was already reading).

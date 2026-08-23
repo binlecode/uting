@@ -71,6 +71,11 @@ jq_ok() {
     echo $?
 }
 
+# A short, permanent, caption-bearing public video: the one handle every engine-contract
+# check below resolves. Chosen for being 19 seconds long — nothing here plays it, but a
+# resolve that accidentally starts a download costs a second rather than a minute.
+MEDIA_ID="jNQXAC9IVRw"
+
 echo "── search envelope ────────────────────────────────────────────────"
 report "search -j envelope" 0 \
     "$(jq_ok '.query and .count and (.results|length==3)' shell/yt-search -j -n 3 -- lofi)"
@@ -78,13 +83,43 @@ report "search -j envelope" 0 \
 # result back to the matching <engine>-resolve without pattern-matching its URL, so a new
 # engine that forgets the field breaks routing rather than merely looking different.
 report "search -j names its engine" 0 \
-    "$(jq_ok '.status=="ok" and .engine=="youtube"' shell/yt-search -j -n 2 -- lofi)"
+    "$(jq_ok '.status=="ok" and .engine=="yt"' shell/yt-search -j -n 2 -- lofi)"
 report "search -J has raw id" 0 \
     "$(jq_ok '.results[0]|has("id")' shell/yt-search -J -n 2 -- lofi)"
 # Was an open R8 drift (26 lines for -n 3); fixed, so it is a hard check now — a "known"
 # label on a passing behaviour is how a real regression gets waved through later.
 report "search -j is one line" 1 \
     "$(shell/yt-search -j -n 2 -- lofi | wc -l | tr -d ' ')"
+
+echo "── resolve envelope: the half that turns a handle into bytes ──────"
+# Every key the PLAYER reads. A new engine that renames one, or omits http_headers, breaks
+# playback in a way no other check here would notice: the search half would still look fine.
+# http_headers is asserted PRESENT rather than non-empty — {} is a legal answer, absent is not.
+report "resolve -j envelope" 0 \
+    "$(jq_ok '.status=="ok" and .engine=="yt" and (.stream_urls|length)>0
+              and has("http_headers") and (.http_headers|type)=="object"
+              and has("title") and has("format") and has("retried")' \
+        shell/yt-resolve -j -- "$MEDIA_ID")"
+report "resolve -j is one line" 1 \
+    "$(shell/yt-resolve -j -- "$MEDIA_ID" | wc -l | tr -d ' ')"
+# The id is what search hands over; accepting it is what makes the two halves a pair.
+report "resolve takes a bare id"  0 "$(rc shell/yt-resolve -j -- "$MEDIA_ID")"
+# Shape validation lives in the ENGINE now — the player cannot tell a good id from a bad one.
+report "resolve rejects a non-id" 1 "$(rc shell/yt-resolve -j -- "not an id")"
+report "resolve rejects -d"       1 "$(rc shell/yt-resolve -d -- "$MEDIA_ID")"
+report "resolve rejects -n"       1 "$(rc shell/yt-resolve -n 5 -- "$MEDIA_ID")"
+
+echo "── the player's engine seam ───────────────────────────────────────"
+# A mistyped engine must be a USAGE error. If it fell into 2+ an agent would read it as
+# "the tool failed, retry later" and retry a name that will never exist.
+report "unknown engine is usage"  1 "$(rc shell/ut-play --engine nope -- "$MEDIA_ID")"
+report "engine name is validated" 1 "$(rc shell/ut-play --engine ../evil -- "$MEDIA_ID")"
+# A well-formed id that resolves to nothing is a PROPAGATED tool failure (2+), not usage,
+# and it must still say why. This is the semantic B-2 bought by moving the shape check down.
+report "dead id is 2+, not 1"     2 "$(rc shell/ut-play -j -- AAAAAAAAAAA)"
+report "dead id keeps its reason" 0 \
+    "$(jq_ok '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' \
+        shell/ut-play -j -- AAAAAAAAAAA)"
 
 echo "── rejections (1 = usage error) ───────────────────────────────────"
 report "core no args"             1 "$(rc /bin/bash shell/ut-play)"
@@ -248,8 +283,8 @@ rm -f "$SD/players"/ctest_*.json "$SD"/mpv-ctest_*.log
 rm -rf "$SD/players/dead"
 
 echo "── version and the non-TTY refusal ────────────────────────────────"
-report "one version, four entry points" 1 \
-    "$(for c in ut-play yt-search yt-play yt-tui; do shell/$c --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
+report "one version, five entry points" 1 \
+    "$(for c in ut-play yt-search yt-resolve yt-play yt-tui; do shell/$c --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
 report "yt-tui refuses a non-TTY" 1 "$(shell/yt-tui </dev/null >/dev/null 2>&1; echo $?)"
 
 echo

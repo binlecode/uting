@@ -79,7 +79,7 @@ Options:
   --stop    Stop a detached player (--id ID), or all (--all)
   -j        JSON output (one line): {status,url,mode,exit_code,reason,retried}
             for playback; {status,...} for --status/--stop/--get-url/--info/--set-volume
-  -J        Full raw yt-dlp record (with --info)
+  -J        Full raw yt-dlp record (with --info / --get-url)
   -h        This help
   -V        Print the suite version
 
@@ -93,18 +93,24 @@ Lifecycle JSON:
                 duration,title,started_at}...],failed:[{id,url,mode,started_at,ended_at,
                 exit_code,reason}...]}
                 volume/paused/position/duration are read live from the player, null when it
-                could not be asked; title lands a few seconds after -d; failed lists players
+                could not be asked; title lands once the player has resolved (a second or
+                two after -d); failed lists players
                 that died on their own (newest first, max 8, nothing over an hour old)
   --stop        {status:"stopped",id,stopped} | {status:"stopped",scope:"all",stopped}
   --set-volume  {status:"ok",id,volume} | {status:"not_playing"}
                 | {status:"ambiguous",players:[...]} | {status:"error",reason:"ipc_failed"}
-Info JSON (--info -j): {status,id,title,url,channel,uploader,upload_date,duration,
+Get-url JSON (--get-url -j): the resolve engine's own envelope, verbatim —
+                       {status,engine,id,url,title,duration,mode,format,stream_urls[],
+                       http_headers{},retried}. http_headers is always present (possibly
+                       empty): a stream URL alone is not enough to fetch on every host.
+Info JSON (--info -j): {status,engine,id,title,url,channel,uploader,upload_date,duration,
                        duration_fmt,view_count,like_count,live_status,description,chapters}
-Transcript JSON (--transcript -j): {status,id,url,lang,is_auto,chars,segment_count,text}
+Transcript JSON (--transcript -j): {status,engine,id,url,lang,is_auto,chars,segment_count,text}
   -J = the same envelope plus segments[{start,duration,text}] in seconds (superset of -j)
   no captions / fetch failure -> {status:"error",url,reason} and exit 1
 
-To search for something to play, use: yt-search <query>
+--info / --transcript / --get-url are handled by the resolve engine (yt-resolve); this
+verb forwards them unchanged. To search for something to play, use: yt-search <query>
 EOF
 }
 

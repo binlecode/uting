@@ -28,11 +28,15 @@ sets for you.
 
 ## What it is
 
-- **`yt`** — the engine. Never interactive, never prompts. Drives yt-dlp and mpv, owns the detached
-  player lifecycle (id / pid / socket / lock / state dir / reap), and defines the contract.
-- **`yt-search`, `yt-play`** — narrow verb wrappers over the engine, deliberately single-purpose
-  with mutually exclusive flags rejected up front, because that is what makes them safe for a small
-  model to call.
+- **`ut-play`** — the player. Source-agnostic: it drives mpv, owns the detached player lifecycle
+  (id / pid / socket / lock / state dir / reap), and defines the contract. It never searches and
+  never extracts, so it knows nothing about YouTube.
+- **`yt-search` + `yt-resolve`** — the YouTube *engine*, a pair. Search turns a query into results;
+  resolve turns a result id (or a URL) into a direct stream URL plus the HTTP headers it must be
+  fetched with, and also answers `--info` and `--transcript`. Everything site-specific lives here:
+  the yt-dlp calls, the cookie decision, the format-per-mode table. Adding a source is adding a pair.
+- **`yt-play`** — a narrow verb wrapper over the player, deliberately single-purpose with mutually
+  exclusive flags rejected up front, because that is what makes it safe for a small model to call.
 - **`yt-tui`** — the human face. Self-rendered list and focus card, live filter, pagination that
   reflows against the measured chrome, three playback states, en/zh chrome, ASCII fallback, themes.
   No TUI framework, no fzf.
@@ -53,6 +57,8 @@ scope decision rather than a gap. The TUI's job ends at: find it, play it, watch
 - **macOS first.** Linux is not currently usable: the stock netcat has no `-U`, which the mpv IPC
   path needs.
 - `yt-dlp`, `jq`, `mpv`, `nc` (BSD netcat ships with macOS). `curl` is an optional soft dependency.
+  They are not all needed by all of it: `yt-dlp` (+ optional `curl`) belongs to the engines, `mpv`
+  and `nc` to the player, `jq` to both.
 - bash 3.2 — the version macOS ships. The suite is written to that floor on purpose; see
   `docs/SPEC-system.md` §28.
 
@@ -71,20 +77,22 @@ two agent-facing wrappers under their own names:
 
 ```sh
 ln -s "$PWD/shell/yt-tui"    ~/bin/ytt
-ln -s "$PWD/shell/yt-search" ~/bin/yt-search
-ln -s "$PWD/shell/yt-play"   ~/bin/yt-play
+ln -s "$PWD/shell/yt-search"  ~/bin/yt-search
+ln -s "$PWD/shell/yt-resolve" ~/bin/yt-resolve
+ln -s "$PWD/shell/yt-play"    ~/bin/yt-play
 ```
 
 The older `yts` / `ytp` spellings are **deprecated**. Nothing in the suite reads its own
 `argv[0]`, so an existing `~/bin/yts` keeps working — it is simply no longer a documented
 name, and one name per command is the point.
 
-`yt` itself is reached through a path relative to the wrappers and is deliberately **not** put on
-PATH — it is internal, and `yt` is far too generic a name to occupy.
+`ut-play` itself is reached through a path relative to the wrappers and is deliberately **not** put
+on PATH yet — it is still internal while the restructure is in flight. It goes on PATH, and
+`yt-play` goes away, at `docs/PLAN-ut-restructure.md` step B-3.
 
 `ytt --version` (or `-V`) answers before any dependency check, so it works on a machine that has
-not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. All four
-entry points report the same number: it is declared once, in the core.
+not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. All five
+entry points report the same number: it is declared once, in `shell/VERSION`.
 
 ## Keys
 
@@ -103,7 +111,7 @@ directly.
 |---|---|
 | `tests/assert_pane.py` | Layout invariants on a captured pane: nothing exceeds the pane width (measured in cells), every row's title starts on the same column, the duration rail is right-flush at exactly the pane width, and the boundary rail is full width in both its static and its live form. |
 | `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that can do what the real one will not do on cue: answer out of order (`--reverse`), report a property as null (`--null pause`), start out paused (`--paused`), interleave async events, walk the clock, and never close its side of the socket. Every IPC rule in the read path exists because of one of these shapes. |
-| `tests/contract.sh` | The CLI contract, asserted by running it: the search envelope, every documented rejection, `--transcript` both ways, the lifecycle verbs, the live `--status` read (against the mock, over a real socket), the tombstone record for a player that died unasked, and the exit-code taxonomy. |
+| `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, `--transcript` both ways, the lifecycle verbs, the live `--status` read (against the mock, over a real socket), the tombstone record for a player that died unasked, and the exit-code taxonomy. |
 | `tests/tui_pane.sh` | The TUI against a real terminal (tmux): layout at four geometries plus the chrome variants, redraw-on-resize with no keypress, the in-place repaint rule (a keypress emits no screen-clear), and the fetch spinner actually turning. Starts no playback. |
 | `tests/lifecycle.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, `Starting` → `Playing` flipping on the tick with no keypress, and zero orphan mpv at the end. Starts real players at `--volume 0`, so it is gated behind `YT_TEST_LIFECYCLE=1`. |
 
