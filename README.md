@@ -37,6 +37,14 @@ sets for you.
   resolve turns a result id (or a URL) into a direct stream URL plus the HTTP headers it must be
   fetched with, and also answers `--info` and `--transcript`. Everything site-specific lives here:
   the yt-dlp calls, the cookie decision, the format-per-mode table. Adding a source is adding a pair.
+- **`bili-search` + `bili-resolve`** — the Bilibili *engine*, the second pair, and the proof that
+  the sentence above is true: neither the player nor the TUI changed a line to admit it. Its two
+  halves use **different primitives** — search talks HTTP through `curl` because yt-dlp's Bilibili
+  search returns no metadata at all, resolve shells out to `yt-dlp` because reimplementing this
+  site's request signing and stream selection would be a thousand lines to redo what a dependency
+  already maintains. The seam between an engine and the player is the **envelope**, never the tool
+  behind it. There is no `--transcript` here: the site has no captions, and an engine says what it
+  cannot do by not having the verb.
 - **`yt-tui`** — the human face. Self-rendered list and focus card, live filter, pagination that
   reflows against the measured chrome, three playback states, en/zh chrome, ASCII fallback, themes.
   No TUI framework, no fzf.

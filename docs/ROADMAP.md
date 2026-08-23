@@ -309,8 +309,8 @@ PyPI、**同领域**的 GitHub 同名仓库。
   与音源有关的只有**抽取**。按这条线切：
 
   ```
-        ut-tui  ──持有引擎注册表──┬── yt-search   / yt-resolve     (yt-dlp)
-           │                      └── bili-search / bili-resolve   (curl + WBI)
+        ut-tui  ──持有引擎注册表──┬── yt-search   / yt-resolve     (yt-dlp · yt-dlp)
+           │                      └── bili-search / bili-resolve   (curl · yt-dlp)
            └── ut-play   生命周期 · mpv · envelope · players/ · 退出码
                          不认识任何一个站；播放时回调 <engine>-resolve
   ```
@@ -331,6 +331,27 @@ PyPI、**同领域**的 GitHub 同名仓库。
   GitHub 同名 全空**；光杆 `ut` 全占（npm/PyPI/crates + `boost-ext/ut` 1438★），短名 `utt` 也被占
   （npm/PyPI + `larose/utt` 349★）。**因此人机面没有短名** —— 想短由用户自建 alias，不随包发第二个名字。
   引擎命令保留音源自身的名字（`yt-*` / `bili-*`），因为它们本来就该说明自己是哪个站。
+
+
+- **D11 —— B 站引擎按「操作」分原语：搜索走 curl，解流走 yt-dlp**（2026-08-23 实测定，取代
+  `RESEARCH-bilibili-engine.md` R3 的「搜索也走 yt-dlp」）。
+
+  R3 当初撤回「直连」的三条理由（法务、无上游可跟、`buvid3` 不够 production-grade）指向的是
+  **自建一个完整客户端**：签名、选流、CDN、风控绕过。那一整块现在归 yt-dlp —— `bili-resolve`
+  一次 `yt-dlp -J` 就拿到直链 + header + title + duration（2.7s），**本仓没有一行 WBI 签名、
+  没有 playurl 端点、没有 key 轮换缓存**。
+
+  但**搜索那一格 yt-dlp 走不通**，实测（2026-08-23）：`--flat-playlist` 一次请求 0.9s 却
+  **零元数据**（`BiliBiliSearchIE` 只 yield URL 与 aid）；完整抽取则因该站音乐结果绝大多数是
+  多 P 合集而**逐 P 递归**，N=10 超过 120s 未完成。直连 `search/type` 一次请求 0.71s 拿全字段。
+
+  所以分界不在站点，在**操作** —— 与 R6 同一条原则。落进本仓的 B 站知识因此是
+  **一个公开端点 + 一个 Referer + 一个本地生成的随机 buvid3**，不含任何认证机制；登录态只经
+  `--cookies-from-browser` 到 yt-dlp。`buvid3` 是正确性要求而非优化：不带它，连续六次搜索里三次
+  412（带则 6/6 通过），而 `<uuid>infoc` 与「本地造」都是 yt-dlp 自己对每个 B 站请求做的事。
+
+  **重开条件**：若 yt-dlp 的 `BiliBiliSearchIE` 对齐 `SoundcloudSearchIE` 的元数据透传（上游
+  patch，`RESEARCH` §2.6），搜索那一格就该改回 yt-dlp，本仓的 HTTP 路径整个删掉。
 
 ---
 

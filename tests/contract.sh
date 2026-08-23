@@ -6,7 +6,8 @@
 # wrong verb, a bare query where a URL belongs, two actions at once, a selector with no
 # action), the read-only --transcript verb both ways, the idle lifecycle, the tombstone
 # record for a player that died unasked, --version, the non-TTY refusal, and the failure
-# taxonomy — 1 is usage, 2 is a tool that failed.
+# taxonomy — 1 is usage, 2 is a tool that failed, and the two engines' envelopes agreeing
+# key for key.
 #
 # This replaced a skill that carried the same commands as prose for an agent to copy out by
 # hand. That version rotted silently: it listed a resident socket server as a check (it hangs
@@ -166,6 +167,65 @@ report "no captions -> error"     0 \
     "$(jq_ok '.status=="error" and .reason=="no_subtitles_available"' shell/yt-resolve --transcript -j -- "$BARE")"
 report "no captions exit"         1 "$(rc shell/yt-resolve --transcript -j -- "$BARE")"
 
+echo "── the second engine: the same envelope, or the split is a fiction ─"
+# A permanent, single-part music video on the second site. Single-part matters: a handle
+# that is a 50-track collection resolves to part one, which is correct but makes a title
+# assertion depend on which part that is.
+BILI_ID="BV1mL411E7Fb"
+
+# THE check the engine split exists for. Two engines are only interchangeable if a caller
+# cannot tell which one answered, so the assertion is on the KEY SETS THEMSELVES rather
+# than on a list of names written out twice: a field renamed, added or dropped in EITHER
+# engine fails here, including one added to yt-search years from now and forgotten on the
+# other side. Nothing else in this file would notice — each engine's own checks would still
+# pass, and playback would break only for the engine nobody happened to run.
+YT_S=$(shell/yt-search -j -n 2 -- lofi 2>/dev/null)
+BILI_S=$(shell/bili-search -j -n 2 -- 音乐 2>/dev/null)
+report "search envelopes agree" \
+    "$(printf '%s' "$YT_S" | jq -Sc 'keys' 2>/dev/null)" \
+    "$(printf '%s' "$BILI_S" | jq -Sc 'keys' 2>/dev/null)"
+report "search result keys agree" \
+    "$(printf '%s' "$YT_S" | jq -Sc '.results[0]|keys' 2>/dev/null)" \
+    "$(printf '%s' "$BILI_S" | jq -Sc '.results[0]|keys' 2>/dev/null)"
+YT_R=$(shell/yt-resolve -j -- "$MEDIA_ID" 2>/dev/null)
+BILI_R=$(shell/bili-resolve -j -- "$BILI_ID" 2>/dev/null)
+report "resolve envelopes agree" \
+    "$(printf '%s' "$YT_R" | jq -Sc 'keys' 2>/dev/null)" \
+    "$(printf '%s' "$BILI_R" | jq -Sc 'keys' 2>/dev/null)"
+
+report "bili-search names its engine" 0 \
+    "$(jq_ok '.status=="ok" and .engine=="bili"' shell/bili-search -j -n 2 -- 音乐)"
+report "bili-search -j is one line" 1 \
+    "$(shell/bili-search -j -n 2 -- 音乐 | wc -l | tr -d ' ')"
+# The site sends duration as "MM:SS" with unbounded minutes ("222:28"), which every surface
+# above would silently mis-sort and mis-render as a string. It is parsed in the engine, so
+# the assertion is that what leaves the engine is a NUMBER.
+report "bili duration is seconds" 0 \
+    "$(jq_ok '[.results[].duration]|length>0 and all(type=="number")' shell/bili-search -j -n 5 -- 音乐)"
+# Titles arrive as search-result HTML (<em class="keyword">) and entity-escaped. Markup that
+# survives into a title is counted by the width layer, which reflows every row wrongly.
+report "bili titles carry no markup" 0 \
+    "$(jq_ok '[.results[].title]|all((test("<") or test("&[a-z#]+;"))|not)' shell/bili-search -j -n 10 -- 周杰伦)"
+
+report "bili-resolve takes a BV id" 0 "$(rc shell/bili-resolve -j -- "$BILI_ID")"
+report "bili-resolve rejects a non-id" 1 "$(rc shell/bili-resolve -j -- "not an id")"
+# This site's CDN checks Referer: the bare stream URL answers 403 and the same URL with
+# these headers answers 206 (measured). An empty http_headers here is a silently unplayable
+# engine, which is exactly the contract hole the key was added to close.
+report "bili resolve sends a Referer" 0 \
+    "$(jq_ok '.http_headers|has("Referer")' shell/bili-resolve -j -- "$BILI_ID")"
+# Capability differs per engine and is stated, not faked: this site's videos carry no
+# caption track, so the verb is absent rather than always answering "none".
+report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcript -- "$BILI_ID")"
+# -S on a search that resolves no format takes a value it cannot act on.
+report "bili-search rejects -S" 1 "$(rc shell/bili-search -S abr -- 音乐)"
+report "bili-search rejects -d" 1 "$(rc shell/bili-search -d -- 音乐)"
+# The player routes by NAME, and the name is the command prefix — the whole reason the
+# lookup is a string concatenation instead of a registry.
+report "ut-play routes to the bili engine" 0 \
+    "$(jq_ok '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' \
+        shell/ut-play --engine bili -j -- BV1111111111)"
+
 echo "── failure taxonomy: 2 is a tool failure, never 1 ─────────────────"
 # An unreachable proxy is the cheapest deliberate network failure, and it works offline too.
 NOPROXY="http://127.0.0.1:1"
@@ -289,8 +349,8 @@ rm -f "$SD/players"/ctest_*.json "$SD"/mpv-ctest_*.log
 rm -rf "$SD/players/dead"
 
 echo "── version and the non-TTY refusal ────────────────────────────────"
-report "one version, four entry points" 1 \
-    "$(for c in ut-play yt-search yt-resolve yt-tui; do shell/$c --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
+report "one version, six entry points" 1 \
+    "$(for c in ut-play yt-search yt-resolve bili-search bili-resolve yt-tui; do shell/$c --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
 report "yt-tui refuses a non-TTY" 1 "$(shell/yt-tui </dev/null >/dev/null 2>&1; echo $?)"
 
 echo

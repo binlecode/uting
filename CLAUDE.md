@@ -4,16 +4,16 @@ This file is the single source of truth for repository guidelines, used by Claud
 
 ## Project Overview
 
-**uting** (u-ting / 你听) — an agent-first YouTube engine with a terminal face. A four-script bash suite: search YouTube through `yt-dlp`, play it through `mpv` detached from the terminal, and keep controlling it — from a TUI if you are a human, from a single-line JSON contract if you are a program.
+**uting** (u-ting / 你听) — an agent-first media engine with a terminal face. A six-script bash suite: search a source, play it through `mpv` detached from the terminal, and keep controlling it — from a TUI if you are a human, from a single-line JSON contract if you are a program. Two sources ship today (YouTube, Bilibili); a third is a new pair of scripts and no change anywhere else.
 
 The suite is exposed **directly** to shell-capable agents with no MCP wrapper, so the **CLI contract itself** (argv, exit codes, output shape, process lifecycle) *is* the product and the safety boundary. Every design choice follows from that. Full rationale: `docs/SPEC-system.md`.
 
-**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `ytt` (the human surface) and `ut-play`/`yt-search`/`yt-resolve` (the agent surface) onto their own PATH.
+**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `ytt` (the human surface) and `ut-play`/`yt-search`/`yt-resolve`/`bili-search`/`bili-resolve` (the agent surface) onto their own PATH.
 
 ## Runtime Environment (Required)
 
 - **bash 3.2** — macOS's frozen system `/bin/bash`. This is a deliberate floor, not an accident: zero install step, identical behavior under macOS, Linux, containers, CI, and cron/launchd. Do **not** raise it, and do **not** hardcode a Homebrew bash path. See the portability contract below — it is a hard rule.
-- Runtime deps, all external and unvendored: `yt-dlp`, `jq`, `mpv`, `nc` (BSD netcat, stock on macOS). `curl` is an optional soft dep for the play-time client probe.
+- Runtime deps, all external and unvendored: `yt-dlp`, `jq`, `mpv`, `nc` (BSD netcat, stock on macOS), `curl`. `curl` is required by `bili-search` (it IS that engine's transport) and optional elsewhere — the YouTube play-time client probe.
 - **macOS first.** Linux is not currently usable: stock netcat has no `-U`, which the mpv IPC path needs. Do not "fix" Linux support by adding a dependency — that decision is gated in `docs/ROADMAP.md` §9.
 - Verification rigs need `tmux` (the two `.sh` sweeps) and `python3` (`assert_pane.py`, `mpv_ipc_mock.py`). **No `pip install`**: a suite that depends only on primitives should not need a Python terminal emulator to test itself. Nothing in `tests/` is needed at runtime.
 - There is **no** build step, no venv, no lockfile, and no CI. The checks below are run by hand — that is the whole reason they are written out — with two of them gated locally by git hooks:
@@ -27,13 +27,14 @@ git config core.hooksPath .githooks   # RUN ONCE PER CLONE — fresh clones have
 ## Build, Test, and Development Commands
 
 ```sh
-bash -n shell/ut-play shell/yt-search shell/yt-resolve shell/yt-tui  # syntax check — run before EVERY commit
+bash -n shell/ut-play shell/yt-search shell/yt-resolve shell/bili-search shell/bili-resolve shell/yt-tui  # syntax check — run before EVERY commit
 /bin/bash shell/yt-search -j -n 5 -- "lofi hip hop"           # exercise on the 3.2 floor, explicitly
 shell/yt-tui "lofi hip hop"                                   # interactive; needs a real TTY on stdin AND stdout
 shell/ut-play --help                                          # the player's own help (it is on PATH)
+shell/bili-search -j -n 5 -- "周杰伦"                          # the second engine, same envelope
 shell/yt-tui --version                                        # answers before any dependency gate
 
-tests/contract.sh                                             # the CLI contract, 30+ checks
+tests/contract.sh                                             # the CLI contract, 75 checks
 tests/tui_pane.sh                                             # the TUI via tmux; starts no playback
 YT_TEST_LIFECYCLE=1 tests/lifecycle.sh                        # detached players; gated, silent
 python3 tests/assert_pane.py <capture.txt> <pane_width> [list|card]
@@ -49,25 +50,29 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
 | `shell/ut-play` | **The player** (1.6k lines) — play + detached-playback lifecycle, non-interactive, never prompts. Owns the player lifecycle (id / pid / socket / lock / state dir / reap), the JSON envelope and the exit-code taxonomy, and **its own flag gate** (the `yt-play` wrapper merged in at `docs/PLAN-ut-restructure.md` step B-3: with search and extraction gone to the engines there is one verb left here, so there is no bypass left to defend against). **Source-agnostic** — it does not search, does not extract, and carries no yt-dlp call, cookie decision or format string. It asks an engine, by name: `--engine yt` → `yt-resolve` |
 | `shell/yt-search` | **The YouTube engine, half one** (560 lines) — query → result envelope. Owns its own yt-dlp call, cookie decision, result shaping and duration formatter, and its own flag gate. Zero playback or lifecycle logic |
 | `shell/yt-resolve` | **The YouTube engine, half two** (960 lines) — handle → `{stream_urls[], http_headers{}, title, duration, format}`, plus `--info` and `--transcript`. Owns the PO-token probe, the cookie decision, the mode→format table and the yt-dlp error vocabulary. Every site-specific fact in the suite lives in this file or in `yt-search`; adding a source is adding a pair like it |
+| `shell/bili-search` | **The Bilibili engine, half one** (658 lines) — query → result envelope, over `curl` + `jq`. It talks HTTP rather than shelling out to yt-dlp because yt-dlp's Bilibili search returns **no metadata at all** (flat) and recurses into every part of every collection (non-flat, >120s for 10 results). Sends no credential: one public endpoint, a Referer, and a locally generated random `buvid3` |
+| `shell/bili-resolve` | **The Bilibili engine, half two** (747 lines) — handle → the same resolve envelope, over `yt-dlp`. No request signing, no stream selection, no CDN logic: that is a thousand lines to redo what the dependency maintains. Owns the BV/av handle shapes, the cookie decision, the mode→format table. No `--transcript` — the site has no captions, and an engine states a missing capability by not having the verb |
 | `shell/VERSION` | The suite version, declared once — a one-line data file, not a shell variable. The player and the engines are independent executables sharing no library, so a variable in any one of them would make the others ask *it* for the version — the wrong dependency direction for a player that must not know its engines |
 | `shell/yt-tui` | The human face (2.8k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
 | `tests/assert_pane.py` | Layout invariants on a captured pane, measured in **cells** (east-asian-width), not characters: nothing exceeds the pane width, titles start on one column, the duration rail is right-flush |
 | `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that does what the real one will not do on cue: answer out of order, report a property null, interleave async events, walk the clock, never close its side |
 
-**Dependency graph — one layer, four peers. Site knowledge exists ONLY in the engine pair, playback ONLY in the player:**
+**Dependency graph — one layer, six peers. Site knowledge exists ONLY in an engine pair, playback ONLY in the player. An engine's two halves need not use the same primitive: the seam is the ENVELOPE, not the tool behind it:**
 
 ```
-  ~/bin/yt-search  → shell/yt-search ──► yt-dlp · jq              (engine: query → results)
-  ~/bin/yt-resolve → shell/yt-resolve ─► yt-dlp · jq · curl       (engine: handle → stream URL + headers)
-  ~/bin/ut-play    → shell/ut-play ────► <engine>-resolve -j ──► mpv · jq · nc   (player)
-  ~/bin/ytt        → shell/yt-tui ─────► (yt-search -j → render → ut-play -d -j)
+  ~/bin/yt-search    → shell/yt-search ───► yt-dlp · jq            (engine: query → results)
+  ~/bin/yt-resolve   → shell/yt-resolve ──► yt-dlp · jq · curl     (engine: handle → stream URL + headers)
+  ~/bin/bili-search  → shell/bili-search ─► curl · jq              (engine: query → results)
+  ~/bin/bili-resolve → shell/bili-resolve ► yt-dlp · jq            (engine: handle → stream URL + headers)
+  ~/bin/ut-play      → shell/ut-play ─────► <engine>-resolve -j ──► mpv · jq · nc   (player)
+  ~/bin/ytt          → shell/yt-tui ──────► (yt-search -j → render → ut-play -d -j)
 ```
 
 The player never runs yt-dlp and mpv never runs it either (`--no-ytdl` + a direct URL): **one extraction, and we make it.** The engine name IS the command prefix, which is what lets the player find `yt-resolve` with a string concatenation instead of a registry.
 
 Each script locates its siblings by a path **relative to its own resolved script location** (self-resolving symlink chain, `cd -P`/`pwd -P` — bash 3.2 has no `readlink -f`), so the checkout can live anywhere and needs no `bin/` entry to work.
 
-**Primitives sit behind seams** (`docs/SPEC-system.md` §5), and the seams are now split by file: `mpv` behind `run_mpv()` in `ut-play` (single play seam) plus the `mpv_supports_vo()` capability probe; `yt-dlp` only in the engines (`fetch_results` in `yt-search`; `resolve_stream`, `resolve_info`, `resolve_transcript`, `probe_media_fetchable` in `yt-resolve`); `jq` pervasive. Keep new primitive calls inside the existing seams — and a yt-dlp call in `ut-play` or an mpv call in an engine is a layering violation, not a seam.
+**Primitives sit behind seams** (`docs/SPEC-system.md` §5), and the seams are now split by file: `mpv` behind `run_mpv()` in `ut-play` (single play seam) plus the `mpv_supports_vo()` capability probe; `yt-dlp` only in the engines (`fetch_results` in `yt-search`; `resolve_stream`, `resolve_info`, `resolve_transcript`, `probe_media_fetchable` in `yt-resolve`; `dump_once`, `resolve_info` in `bili-resolve`); the Bilibili HTTP seam is `fetch_page_once` in `bili-search`, the only place in the suite that builds a request by hand; `jq` pervasive. Keep new primitive calls inside the existing seams — and a yt-dlp call in `ut-play` or an mpv call in an engine is a layering violation, not a seam.
 
 **Governing principle: correctness is added *down* — in the player if it is about playback, in the engine if it is about a site — so every surface inherits it, never *up* in a UI.** A fix in `yt-tui` that `ut-play` could have made is a bug in the wrong file.
 
@@ -215,7 +220,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 ## Coding Style & Naming Conventions
 
 - Match the surrounding style: 4-space indentation, `snake_case` functions, `UPPER_SNAKE` globals, `local` for everything inside a function, `set -euo pipefail` semantics respected (see the arithmetic rule above).
-- **One name per command.** `ut-play`, `yt-search`, `yt-resolve`, `yt-tui` are the canonical identity — help text, errors, docs, and (for the three agent-facing verbs) the PATH entry itself. `ytt` is the single deliberate short form, because `yt-tui` is the one command a human types by hand; `yts`/`ytp` are deprecated. Never add a second name for an existing command.
+- **One name per command.** `ut-play`, `yt-search`, `yt-resolve`, `bili-search`, `bili-resolve`, `yt-tui` are the canonical identity — help text, errors, docs, and (for the five agent-facing verbs) the PATH entry itself. `ytt` is the single deliberate short form, because `yt-tui` is the one command a human types by hand; `yts`/`ytp` are deprecated. Never add a second name for an existing command.
 - Per-request choices are **flags**; set-once tuning is an **environment variable** (`YT_*`) — this keeps each verb's flag surface narrow enough for a small model to call safely. Do not add a flag for something a user sets once.
 - Never add a runtime dependency. The suite's differentiator is that it depends only on primitives everyone already has.
 - Prefer small, incremental edits in the existing scripts over refactors that move logic between files.

@@ -1,6 +1,6 @@
 # PLAN-ut-restructure —— 拆成「播放器 + 可扩展搜索引擎」
 
-**状态：A、B-1、B-2、B-3 已落地（2026-08-23）。B 全部完成，下一步 C。**
+**状态：A、B-1、B-2、B-3、C 已落地（2026-08-23）。下一步 D。**
 决定见 `ROADMAP.md` D9 / D10；证据见 `RESEARCH-bilibili-engine.md`。
 本文件**自带进度**，每项落地即更新，最后一项落地后删除，契约并入 `SPEC-system.md`。
 
@@ -10,8 +10,8 @@
 | B-1 | `yt-search` 独立成引擎（搜索与播放路径零耦合，非破坏性） | ☑ 2026-08-23 |
 | B-2 | `yt-resolve` 独立 **+** 播放器改走 resolve（耦合的一步，ytdl_hook 退场） | ☑ 2026-08-23 |
 | B-3 | 合并与删除：`yt-play` 删除，`ut-play` 上 PATH | ☑ 2026-08-23 |
-| C | `bili-search` / `bili-resolve` | ☐ 下一步 |
-| D | `ut-tui` 引擎注册表 + 切源键 | ☐ |
+| C | `bili-search` / `bili-resolve` | ☑ 2026-08-23 |
+| D | `ut-tui` 引擎注册表 + 切源键 | ☐ 下一步 |
 | E | 文档同步 + 三个 rig（`tests/contract.sh`、`tests/tui_pane.sh`、`YT_TEST_LIFECYCLE=1 tests/lifecycle.sh` —— 最后一个真发声） | ☐ |
 
 ---
@@ -26,7 +26,8 @@
    生命周期语义（launch → status → stop，幂等 stop，歧义即 4）。这是 D3 冻结的东西。
    （**唯一例外**见 §5 B-3 的「一处契约会真的变」，已论证并接受。）
 2. **`-j` 永远单行。**
-3. **bash 3.2 地板**不变；**不新增运行时依赖**（`bili-*` 只用已有的 curl / jq / openssl）。
+3. **bash 3.2 地板**不变；**不新增运行时依赖**（`bili-*` 只用已有的 curl / jq / yt-dlp —— C 步
+   落地后 `openssl` 也不需要了，见该步「WBI 那一半是重造」）。
 4. **`players/` 只有一个所有者**（`ut-play`），`--status` / `--stop --all` 必须看见所有引擎起的播放器。
 
 ---
@@ -419,15 +420,125 @@ detach 子进程各一处），移走会让「播放时覆盖 format-sort」无�
   就是 `dQw4w9WgXcQ`。resolve envelope 里已经有归一化后的 `url`，子进程回填 `title`/`format`
   时可以顺手回填它 —— 但那是 `--status` 契约里一个字段的语义变化，同样单独决定。
 
-### C. `bili-search` / `bili-resolve` ☐ 下一步
+### C. `bili-search` / `bili-resolve` ☑ 2026-08-23
 
-- `bili-search`：`curl` 打 `/x/web-interface/search/type`（`buvid3` + UA + Referer）→ jq 整形。
-  必做的三件数据清洗：剥 `<em class="keyword">`；`"MM:SS"`（分钟无上限）转秒；`play` → `view_count`。
-- `bili-resolve`：WBI 签名（`openssl dgst -md5` + `sort` + `jq -rR @uri`）→ `/x/player/wbi/playurl`
-  → DASH 里挑音频 → 输出 `stream_url` + `http_headers:{Referer}`。
-- **WBI 必须有固定向量单测**（纯函数、无网络，`bilibili-tui/src/api/wbi.rs` 有两条官方样例可抄）。
-  这是 rigs-only 规则的合法例外：它测的不是渲染或协议，是确定性变换。
-- 风控：HTTP 412 / `code:-352` 归入 `network`（可重试），**不新增 reason 枚举成员**。
+`shell/bili-search`（658 行，curl + jq）与 `shell/bili-resolve`（745 行，yt-dlp + jq）。
+`ut-play` 与 `yt-tui` **一行未改** —— 这是 D9 要证明的那件事，现在被证明了。
+
+#### 本步与计划的最大分歧：WBI 那一半是重造，不是工作
+
+原文写的是「`bili-resolve`：WBI 签名（`openssl dgst -md5` + `sort` + `jq -rR @uri`）→
+`/x/player/wbi/playurl` → DASH 里挑音频」，并要求为 WBI 写固定向量单测。**实测推翻了它**：
+
+```
+yt-dlp -J --no-playlist -f ba/b <BV>      2.7s → title · duration · format_id · 直链 · http_headers
+```
+
+一次调用就是整个 resolve envelope。手写那条要额外承担签名、DASH 三源合并、CDN 选点 —— 正是
+`RESEARCH-bilibili-engine.md` §3.6 那笔约 2500 行的账，而且**签名是认证机制**，落进本仓正是
+§2.5 反对的东西。于是 **WBI、`playurl` 端点、key 轮换缓存、以及那条固定向量单测，全部不存在**。
+`openssl` 不再是这一步的依赖。
+
+#### 与 RESEARCH 的关系：R3 是对的一半，不是全对
+
+`RESEARCH` §2.5 撤回了「直连」，R3 写成「B 站搜索走 yt-dlp，不直连」。**搜索那一半实测走不通**
+（2026-08-23，本机）：
+
+| 路径 | 请求数 / 耗时 | 元数据 |
+|---|---|---|
+| `yt-dlp --flat-playlist` + Referer | 1 / 0.9s | **零**（只有 av id） |
+| `yt-dlp` 完整抽取 N=10 | N+1 / **>120s 未完成** | 头部结果全是合集，yt-dlp **逐 P 递归** |
+| `curl` 打 `search/type` | 1 / **0.71s** | bvid·title·author·duration·play·pubdate 全有 |
+
+所以落地形态是**按操作分**，不是按站分：**搜索用 curl，解流用 yt-dlp**。这恰好把 R3 的三条理由
+各自放在它成立的地方 —— 法务与维护面最重的是「认证机制 + 完整客户端」，而那整块现在归 yt-dlp；
+搜索那一格落进本仓的是**一个公开端点 + 一个 Referer**，不含任何认证机制。
+
+**R3 从未蒸馏进 `ROADMAP.md`**，而 D9 的图里写着 `(curl + WBI)`，本计划 §C 抄的是图里那行 —— 这
+是本次唯一一次两份文档互相矛盾并差点造成返工。已在 ROADMAP 修正（见 D9 与 R3 条）。
+
+#### 落地的形状
+
+| | `bili-search` | `bili-resolve` |
+|---|---|---|
+| 原语 | `curl` + `jq` | `yt-dlp` + `jq` |
+| 凭据 | **无**（不读浏览器 profile，不带账号 cookie） | `--cookies-from-browser`（默认 chrome） |
+| 动词 | 搜索 | 解流 + `--info` |
+| 缺席的动词 | `-S`（无格式可排） | `--transcript`（该站无字幕轨） |
+
+- **envelope 与 yt 引擎逐键相同**，由 `tests/contract.sh` 的三条键集比对守着（见下）。
+- `-n` 跨页（站方每页 20），`MAX_PAGES=10` 封顶 —— 请求数是这台主机上的稀缺资源。
+- 三种数据形状按 RESEARCH §3.2.3 的护栏落在**引擎里**：剥 `<em class="keyword">` 与实体反转义
+  （`&amp;` 必须最后解，否则 `&amp;lt;` 会被凭空变成 `<`）；`"MM:SS"` 分钟无上限**且秒位不补零**
+  （实测同一响应里同时有 `222:28` / `416:0` / `682:4`）；`play` → `view_count`。
+- `live_status` 恒为 `null` 而不是站方的 `live_status: 0` —— 这是 `search_type=video`，那个字段
+  不是本套件 is_live 的语义，照抄会让渲染层画出站方没有声明的状态。键仍在（§3.1）。
+- 412 / `-352` 归入 `network`（可重试），**未新增 reason 枚举成员**。两层都判（HTTP 状态 + body
+  里的 `code`），只读第一层会把限流报成「成功但零结果」。
+
+#### 又一处偏离：buvid3 要送，而且是正确性要求
+
+RESEARCH §2.5(3) 反对 `uuidgen + infoc`，理由是「不是 production-grade」。实测（2026-08-23，
+连续六次搜索）：
+
+```
+无 cookie     : 200 200 412 412 412 200
+带稳定 buvid3 : 200 200 200 200 200 200
+```
+
+**没有它这个引擎一半时间是坏的。** 它不是凭据 —— 是本进程自己生成、退出即丢的随机设备 id，无账号
+无 token，而且 `<uuid>infoc` 这个写法与「本地造而不向服务端要」都是 **yt-dlp 自己对每个 B 站请求
+做的事**，没有发明任何站点知识。一进程一个、跨页复用（P6 落点）。另加**一次**退避重试，只对
+`network` 类重试 —— 限流是突发型的，412 后面常常紧跟 200。
+
+#### 契约与安全
+
+- `http_headers` 第一次真正承重：**裸直链 403，带 envelope 里的 header 206**（实测）。D9 说要顺带
+  关掉的那个洞，到这一步才有站点去证明它。
+- `JQ_STREAMS` 里**剥掉 `Cookie` / `Authorization` / `Set-Cookie`**。播放器会把每个 header 变成
+  mpv 的 `--http-header-fields-append=`，而 mpv 的 argv 在 `ps` 里全机可见 —— 今天该站的记录里
+  只有 UA/Accept/Referer 那五个，这道过滤是防将来 extractor 变更把登录态变成泄漏。
+- **没有 PO-token 探测**。它是 googlevideo 专属补丁，照抄等于每次播放对一台会限流的主机多打一次
+  HTTP，去回答一个不可能出错的问题。新引擎继承的是**契约**，不是另一个引擎的补丁（P7 落点）。
+
+#### 验证
+
+`tests/contract.sh` 61 → **75 条**，新增一节。核心是三条**键集比对**而不是把字段名再写一遍：
+
+```
+search envelopes agree    ["count","engine","query","results","status"]
+search result keys agree  ["channel","duration","duration_fmt","id","live_status","title","url","view_count"]
+resolve envelopes agree   ["duration","engine","format","http_headers","id","mode","retried","status","stream_urls","title","url"]
+```
+
+这样将来在**任一**引擎上改名/增删字段都会红，包括几年后给 `yt-search` 加一个字段却忘了另一边。
+其余：duration 是 number（不是 `"MM:SS"` 字符串）、title 无残留标记、resolve 带 Referer、
+`--transcript` / `-S` / `-d` 的拒绝、`ut-play --engine bili` 路由。
+
+全量：contract **75/75** · tui_pane **13/13** · lifecycle **13/13 零孤儿** · 六入口一版本 ·
+`bash -n` 六文件 · shellcheck 新增两条 info，与既有引擎同类（jq prelude 的 SC2016、trap 调用的
+SC2329）。端到端实跑 `ut-play --engine bili -d`：0s 返回、title 回填、position 前进、mpv 之下无
+yt-dlp、`--stop --all` 后零孤儿。
+
+另外两条矩阵项顺手关掉：**五种模式在 B 站全解得出**（video/fast/ascii 各 2 条流，正是
+`--audio-file` 合成那条路；该站是纯 DASH，所以 `fast` 也落在合成分支 —— 格式串没说谎，只是这里
+并不更快），以及**两站播放器同列**：`-d` 各起一个，`--status` 两个都在且都在前进，`--stop --all`
+一起清空，零孤儿 —— §1 不变量 4 得证。
+
+**唯一未验**：真发声，以及 B 站的 video 模式**播放**（解流已过）。position 从 0 走到 15
+（duration 210、`paused:false`）已经证明字节在流动并被解码；「声音到没到扬声器」是 mpv 与系统的
+性质，不是引擎的 —— 留给 E 步。
+
+#### 发现但未做
+
+- **`bili-search` 的 `-n` 与客户端过滤相乘不直观**：`-n 20 -M 900` 是「取 20 条再筛」，得到 2 条，
+  而不是「筛出 20 条」。`yt-search` 同语义，所以这是既有行为不是新问题 —— 但该站头部天然是长合集
+  （实测前八条全是 174–845 分钟的合集），使它在这里比在 YouTube 上刺眼得多。属 P4。
+- **不存在的 BV 落进 `unknown`**：yt-dlp 对它吐的是 `An extractor error has occurred. (caused by
+  KeyError('bvid'))` —— 一次内部崩溃，不是稳定措辞。按 `KeyError('bvid')` 去匹配就是匹配实现细节，
+  正是分类器注释里明令不做的事，所以保守留在 `unknown`。已删除/地域受限的走 `unavailable`（实测）。
+- **音频区 `/audio/au<id>` 未接**（RESEARCH R5：`song.lyric` 可复用字幕管线）。`normalize_target`
+  只认 BV / av / URL；`au` 是另一套 extractor，未实测，不做假能力。
 
 ### D. `ut-tui` ☐
 
@@ -445,16 +556,16 @@ README + 各 `usage()`。然后跑三个 rig，**`tests/lifecycle.sh` 必须真�
 
 ## 6. 验证矩阵（新增项）
 
-| 检查 | 抓什么 production 失败 |
-|---|---|
-| 引擎契约一致性：对每个 `<engine>`，`-search -j` 与 `-resolve -j` 的 envelope 键集与类型 | 新引擎悄悄改了字段名 / 少了 `http_headers`，调用方对不上 |
-| `ut-play --engine X` 对未注册引擎 → 退出码 1 + 可读错误 | 拼错引擎名时退出码落进 2+，agent 误判为工具失败 |
-| 无法解析的媒体 id → 退出码 2+ 且 `-j` envelope 带 reason | B-3 换来的新语义静默退化成 exit 1 或裸 stderr |
-| WBI 固定向量单测 | 签名算法改错，只在真实请求时才发现 |
-| B 站直链 + `--http-header-fields` 能被 mpv 打开 | Referer 拼装写错 → 403，但只在 B 站上暴露 |
-| 五种播放模式各起一次（B-2 之后） | EDL / `--audio-file=` 接手写错，只在 video 侧暴露 |
-| `-d` 起 YouTube 与 B 站各一个 → `--status` 两个都在 → `--stop --all` 清空 | 生命周期被引擎污染 / `players/` 出现第二个所有者 |
-| 三个可执行文件 `--version` 一致（读同一个 `VERSION`） | 版本声明重新长成多份 |
+| 检查 | 抓什么 production 失败 | 状态 |
+|---|---|---|
+| 引擎契约一致性：对每个 `<engine>`，`-search -j` 与 `-resolve -j` 的 envelope 键集与类型 | 新引擎悄悄改了字段名 / 少了 `http_headers`，调用方对不上 | ☑ C：三条键集比对进 `contract.sh` |
+| `ut-play --engine X` 对未注册引擎 → 退出码 1 + 可读错误 | 拼错引擎名时退出码落进 2+，agent 误判为工具失败 | ☑ B-3 |
+| 无法解析的媒体 id → 退出码 2+ 且 `-j` envelope 带 reason | B-3 换来的新语义静默退化成 exit 1 或裸 stderr | ☑ B-3 / C |
+| ~~WBI 固定向量单测~~ | ~~签名算法改错，只在真实请求时才发现~~ | **作废** —— C 步没有 WBI，解流归 yt-dlp |
+| B 站直链 + `--http-header-fields` 能被 mpv 打开 | Referer 拼装写错 → 403，但只在 B 站上暴露 | ☑ C：裸链 403 / 带 header 206 实测 + `contract.sh` 断言 Referer 在 |
+| 五种播放模式各起一次（B-2 之后） | EDL / `--audio-file=` 接手写错，只在 video 侧暴露 | ◐ C：B 站五模式**解流**全过（video/fast/ascii 各 2 条流 = 合成那条路）；**播放**只跑过 audio，留给 E |
+| `-d` 起 YouTube 与 B 站各一个 → `--status` 两个都在 → `--stop --all` 清空 | 生命周期被引擎污染 / `players/` 出现第二个所有者 | ☑ C：两个都在、都在前进、一起停、零孤儿 |
+| 六个入口 `--version` 一致（读同一个 `VERSION`） | 版本声明重新长成多份 | ☑ C |
 
 ---
 

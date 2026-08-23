@@ -1,0 +1,747 @@
+#!/usr/bin/env bash
+# bili-resolve — the Bilibili RESOLVE ENGINE: a media handle -> direct stream URL(s) plus
+# the HTTP headers needed to fetch them, and the read-only metadata verb that shares the
+# same extractor. Agent-facing.
+#
+# The other half of the bilibili engine pair (`bili-search` + `bili-resolve`); the player
+# (`ut-play`) is source-agnostic and knows neither. Everything Bilibili-specific about
+# turning a handle into bytes lives here: the yt-dlp invocation, the cookie decision, the
+# format-per-mode table, and the handle shapes this site uses. It has NO playback,
+# lifecycle, or mpv logic and never starts a process that outlives it.
+#
+# WHY THIS HALF SHELLS OUT TO yt-dlp WHILE ITS SIBLING TALKS HTTP. The reason is the
+# mirror image of the one in bili-search, and it is measured, not preferred: yt-dlp is
+# BETTER than a hand-written client here and WORSE there. One `yt-dlp -J` on a Bilibili
+# video returns, in 2.7s, the DASH stream URL, the headers it must be fetched with, the
+# title and the duration — the whole resolve envelope. Doing that by hand means the WBI
+# request signature, DASH stream selection across three sources, and CDN choice; a native
+# Bilibili TUI spends roughly 2500 lines on exactly that, and this file would be
+# reimplementing an authentication mechanism our own dependency already maintains.
+# So: no signing code, no playurl endpoint, no key rotation cache.
+#
+# It also puts login on the right side of the line. An account gets higher-quality audio,
+# and cookies reach yt-dlp through --cookies-from-browser — a channel that already exists
+# and that the HTTP half never touches. docs/PLAN-ut-restructure.md §C.
+set -euo pipefail
+# Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). SPEC-system.md §28.
+
+# Resolve this script's OWN symlink chain before looking for its siblings — see the same
+# block in yt-search for why `cd -P`/`pwd -P` and a hand-rolled loop (bash 3.2 has no
+# `readlink -f`).
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+    _link=$(readlink "$_self")
+    case "$_link" in
+    /*) _self="$_link" ;;
+    *)  _self="$(dirname "$_self")/$_link" ;;
+    esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
+
+# THE version of the whole suite, declared once — in a data file, not in code. See the same
+# block in bili-search / yt-resolve / ut-play. CLAUDE.md § one fact, one place.
+if [[ -r "$SCRIPT_DIR/VERSION" ]]; then
+    YT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
+else
+    YT_VERSION="unknown"
+fi
+
+# The engine's own name, as it appears in the envelope AND as the command prefix its two
+# executables carry. docs/PLAN-ut-restructure.md §2.2.
+ENGINE_NAME="bili"
+
+# ==============================================================================
+# 1. SETTINGS
+# ==============================================================================
+
+: "${BILI_COOKIE_BROWSER:=chrome}"
+: "${BILI_AUDIO_FORMAT:=ba/b}"
+# Highest quality video+audio. This can start slower than a progressive stream.
+: "${BILI_VIDEO_FORMAT:=bv*+ba/b}"
+# Optional fast-start format for interactive playback.
+: "${BILI_VIDEO_FORMAT_FAST:=b[height<=720]/bv*[height<=720]+ba/b}"
+
+# Cookies (login) are ON by default (browser: chrome). On this site they buy AUDIO QUALITY
+# rather than access: an account — more so a premium one — is offered Hi-Res / Dolby /
+# lossless renditions that an anonymous client is not, and this suite's main use is
+# listening. Public videos resolve fine without them, so an absent profile degrades to
+# anonymous rather than failing.
+# Set BILI_COOKIE_BROWSER=none to force anonymous-only (skips the keychain read).
+BILI_COOKIE_ARGS=()
+if [[ -n "${BILI_COOKIE_BROWSER:-}" && "$BILI_COOKIE_BROWSER" != "none" ]]; then
+    browser_exists=0
+    case "$BILI_COOKIE_BROWSER" in
+    chrome|chromium|brave)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            if [[ -d "$HOME/Library/Application Support/Google/Chrome" || -d "$HOME/Library/Application Support/BraveSoftware" || -d "$HOME/Library/Application Support/Chromium" ]]; then
+                browser_exists=1
+            fi
+        else
+            if [[ -d "$HOME/.config/google-chrome" || -d "$HOME/.config/chromium" || -d "$HOME/.config/BraveSoftware" ]]; then
+                browser_exists=1
+            fi
+        fi
+        ;;
+    safari)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Safari" ]] && browser_exists=1
+        fi
+        ;;
+    firefox)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Firefox" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.mozilla/firefox" ]] && browser_exists=1
+        fi
+        ;;
+    edge)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Microsoft Edge" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/microsoft-edge" ]] && browser_exists=1
+        fi
+        ;;
+    opera)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/com.operasoftware.Opera" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/opera" ]] && browser_exists=1
+        fi
+        ;;
+    vivaldi)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Vivaldi" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/vivaldi" ]] && browser_exists=1
+        fi
+        ;;
+    *)
+        browser_exists=0
+        ;;
+    esac
+
+    if ((browser_exists)); then
+        BILI_COOKIE_ARGS=(--cookies-from-browser "$BILI_COOKIE_BROWSER")
+    fi
+fi
+
+ACTION="stream"      # stream | info
+PLAYBACK_MODE="audio"
+FORMAT_SORT=""
+FORMAT_FLAG=""       # which of -f / -S was actually given (gate: stream resolution only)
+COLOR_MODE="auto"
+OUTPUT_MODE="list"   # list (prose) | json | json_full
+TARGET=""            # the handle as the caller typed it
+TARGET_URL=""        # the watch URL it normalises to
+FMT=""               # the yt-dlp format string the mode resolves to
+
+# Glyph fallback shares ONE switch with yt-tui (YT_ASCII, legacy alias YT_TUI_ASCII).
+MUSIC_CHAR="♫"
+case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
+1 | true | yes | on) MUSIC_CHAR="" ;;
+"")
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *UTF-8* | *utf-8* | *UTF8* | *utf8*) ;;
+    *) MUSIC_CHAR="" ;;
+    esac
+    ;;
+esac
+
+# ==============================================================================
+# 2. HELPERS
+# ==============================================================================
+
+die() {
+    local red='' reset=''
+    case "${COLOR_MODE:-auto}" in
+    always)
+        red=$'\033[31m'
+        reset=$'\033[0m'
+        ;;
+    auto)
+        if [[ -t 2 ]]; then
+            red=$'\033[31m'
+            reset=$'\033[0m'
+        fi
+        ;;
+    never) ;;
+    esac
+    echo "${red}Error:${reset} $*" >&2
+    exit 1
+}
+
+validate_enum() {
+    local value=$1
+    shift
+    local allowed
+    for allowed in "$@"; do
+        if [[ "$value" == "$allowed" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+require_cmd() {
+    local cmd=$1
+    command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
+}
+
+require_deps() {
+    local cmd
+    for cmd in "$@"; do
+        require_cmd "$cmd"
+    done
+}
+
+# The ONE implementation of duration formatting: seconds -> "[Nd ]HHh:MMm:SSs". Each engine
+# carries its own copy — they are independent executables sharing no library — and the
+# shared fact is the FORMAT, stated once in docs/SPEC-system.md §7.
+JQ_PRELUDE='
+def p2: tostring | if length < 2 then "0" + . else . end;
+def fmt_dur:
+  if type != "number" then null
+  else (. | floor) as $t
+    | ($t / 86400 | floor) as $d
+    | (($t % 86400) / 3600 | floor) as $h
+    | (($t % 3600) / 60 | floor) as $m
+    | ($t % 60) as $s
+    | (if $d > 0 then "\($d)d " else "" end) + "\($h | p2)h:\($m | p2)m:\($s | p2)s"
+  end;
+'
+
+# Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
+# caller can branch on `reason` instead of string-matching raw extractor wording. The ENUM
+# is the shared fact and lives in docs/SPEC-system.md §14. No member may be added here that
+# the enum does not already have; `unknown` is the conservative default.
+#
+# The site-specific half is the last two patterns. HTTP 412 and the body code -352 are how
+# this host says "rate limited", and they land in `network` — the member that already means
+# RETRYABLE — for the same reason 429 does on the yt-dlp side: `forbidden` would tell a
+# caller these credentials never work, which is the wrong instruction for a wait-and-retry.
+classify_yt_dlp_error() {
+    local text=$1 rc=$2
+    if ((rc == 130)); then
+        echo "stopped_by_user"
+        return
+    fi
+    if grep -qiE 'HTTP Error 412|[^0-9-]-352[^0-9]|risk control|Precondition Failed' <<<"$text"; then
+        echo "network"
+        return
+    fi
+    if grep -qiE 'HTTP Error 403|[^a-z]403[^0-9]|Forbidden' <<<"$text"; then
+        echo "forbidden"
+        return
+    fi
+    if grep -qiE 'may be deleted or geo-restricted|Video unavailable|Private video|has been removed|no longer available|does not exist|paid video|premium|大会员|需要登录' <<<"$text"; then
+        echo "unavailable"
+        return
+    fi
+    if grep -qiE 'Requested format is not available|No video formats|requested format|only images are available' <<<"$text"; then
+        echo "format_unavailable"
+        return
+    fi
+    if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out|HTTP Error 429|Too Many Requests|Unable to download (webpage|API page|JSON metadata)' <<<"$text"; then
+        echo "network"
+        return
+    fi
+    echo "unknown"
+}
+
+# This process's own scratch dir: 0700, created lazily, removed however we exit. Lazily
+# because -h / -V must answer without touching the filesystem, and process-level rather
+# than a function `local` because the EXIT trap runs after the function has returned.
+# 0700 rather than a bare /tmp path because the captured yt-dlp stderr can name a cookie
+# database. `players/` has exactly one owner (ut-play) and it is not this file.
+SCRATCH_DIR=""
+ERR_FILE=""
+cleanup_scratch() {
+    [[ -n "$SCRATCH_DIR" ]] && rm -rf "$SCRATCH_DIR" 2>/dev/null
+    return 0
+}
+trap cleanup_scratch EXIT
+
+ensure_scratch() {
+    [[ -n "$SCRATCH_DIR" ]] && return 0
+    SCRATCH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/bili-resolve.XXXXXX") || die "cannot create a scratch directory"
+    chmod 700 "$SCRATCH_DIR" 2>/dev/null || true
+    ERR_FILE="$SCRATCH_DIR/yt-dlp.err"
+    : >"$ERR_FILE"
+}
+
+normalize_playback_mode() {
+    case "$1" in
+    audio | ba) echo "audio" ;;
+    video | bv) echo "video" ;;
+    fast | fst) echo "fast" ;;
+    ascii | asc) echo "ascii" ;;
+    viz | waves | wave) echo "viz" ;;
+    *) die "-f must be one of: audio, video, fast, ascii, viz, waves, ba, bv, fst, asc, wave" ;;
+    esac
+}
+
+# The yt-dlp format string a playback mode resolves to. This table is the reason format
+# selection belongs to the engine and not the player: `bv*+ba/b` is a yt-dlp expression,
+# and the player must never learn to read one. ut-play sends a MODE and gets back bytes.
+format_for_mode() {
+    case "$1" in
+    video) echo "$BILI_VIDEO_FORMAT" ;;
+    fast) echo "$BILI_VIDEO_FORMAT_FAST" ;;
+    ascii) echo "$BILI_VIDEO_FORMAT" ;;
+    *) echo "$BILI_AUDIO_FORMAT" ;; # audio, viz
+    esac
+}
+
+# A handle is either a URL or one of this site's two id spellings. Knowing those shapes is
+# ENGINE knowledge — precisely what the player gave up when it stopped being a YouTube
+# tool — so the check lives here, and a bad handle is an EXTRACTION failure the player
+# reports as 2+, never a usage error.
+#
+# BV is the modern spelling ("BV" + 10 base58-ish characters) and is what bili-search
+# returns as results[].id; av<digits> is the legacy numeric one, still served and still
+# what `arcurl` uses. A full URL passes through untouched so a query string survives —
+# `?p=7` selects a part of a multi-part video, and that is the caller's choice to make.
+normalize_target() {
+    local t=$1
+    case "$t" in
+    http://* | https://*)
+        TARGET_URL="$t"
+        ;;
+    www.* | bilibili.com/* | m.bilibili.com/* | b23.tv/*)
+        TARGET_URL="https://$t"
+        ;;
+    BV*)
+        [[ "$t" =~ ^BV[A-Za-z0-9]{10}$ ]] ||
+            die "'$t' is not a BV id (expected BV followed by 10 characters)"
+        TARGET_URL="https://www.bilibili.com/video/$t"
+        ;;
+    av[0-9]*)
+        [[ "$t" =~ ^av[0-9]+$ ]] ||
+            die "'$t' is not a Bilibili handle (expected a BV id, an av id, or a URL)"
+        TARGET_URL="https://www.bilibili.com/video/$t"
+        ;;
+    *)
+        die "'$t' is neither a Bilibili URL nor a BV/av id (to search, run bili-search)"
+        ;;
+    esac
+}
+
+# ==============================================================================
+# 3. STREAM RESOLUTION
+# ==============================================================================
+
+# ONE yt-dlp call answers the whole question: the media URL(s) for the selected format, the
+# per-format http_headers that must accompany them, and the title/duration the player needs
+# for its OSD and its state record. --dump-single-json runs format selection, so
+# `requested_formats` is present exactly when the selection merged two streams.
+#
+# --no-playlist is load-bearing HERE in a way it is not on the sibling engine: this site's
+# music results are overwhelmingly multi-part collections, and a search result that is a
+# 50-track compilation would otherwise expand into 50 extractions. With it, the handle
+# resolves to part one in 2.7s (measured). A caller that wants another part says so in the
+# URL (`?p=7`).
+dump_once() {
+    local cmd=(yt-dlp --dump-single-json --no-playlist -f "$FMT")
+    [[ -n "$FORMAT_SORT" ]] && cmd+=(--format-sort "$FORMAT_SORT")
+    (($#)) && cmd+=("$@")
+    cmd+=(--no-warnings --quiet "$TARGET_URL")
+    "${cmd[@]}" 2>>"$ERR_FILE"
+}
+
+# Project a raw yt-dlp record down to [ {url, http_headers} ], VIDEO FIRST. jq's sort is
+# stable, so a merge keeps yt-dlp's own ordering within each class and an audio-only
+# selection stays a one-element list. The player reads position, not codec: element 0 is
+# what mpv opens, element 1 (when present) is its --audio-file.
+#
+# Credential-bearing headers are STRIPPED. The player turns every header in this object
+# into an mpv `--http-header-fields-append=` argument, and mpv's argv is visible in `ps` to
+# every process on the machine — so a Cookie carrying this account's SESSDATA would be
+# world-readable for as long as playback lasts. This site's records were measured to carry
+# only User-Agent / Accept / Accept-Language / Sec-Fetch-Mode / Referer, so today the
+# filter removes nothing; it is here so that a future extractor change cannot quietly turn
+# a login into a leak. CLAUDE.md § security.
+JQ_STREAMS='
+def safe_headers:
+  (. // {}) | with_entries(select(.key | ascii_downcase
+                                       | . != "cookie" and . != "authorization" and . != "set-cookie"));
+[ if (.requested_formats | type) == "array"
+  then (.requested_formats[] | {url: .url, http_headers: (.http_headers | safe_headers), vcodec: (.vcodec // "none")})
+  else {url: .url, http_headers: (.http_headers | safe_headers), vcodec: (.vcodec // "none")}
+  end
+]
+| map(select(.url != null))
+| sort_by(if .vcodec == "none" then 1 else 0 end)
+'
+
+# The resolve envelope (docs/SPEC-system.md §14) — the same one yt-resolve emits, key for
+# key, because the player must not be able to tell which engine answered. `format` is the
+# format STRING this engine actually used; the player records it verbatim and never reads
+# it. `http_headers` is a REQUIRED key, empty object when none — and on this site it is
+# never empty in practice: the CDN checks Referer, and a bare URL 403s where the same URL
+# with a Referer answers 206. That is the contract hole this key exists to close.
+emit_stream() {
+    local raw=$1 retried=$2
+    local retried_json=false
+    ((retried)) && retried_json=true
+
+    if [[ "$OUTPUT_MODE" == "json_full" ]]; then
+        printf '%s\n' "$raw" | jq -c '.'
+        return 0
+    fi
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        printf '%s\n' "$raw" | jq -c \
+            --arg engine "$ENGINE_NAME" --arg mode "$PLAYBACK_MODE" --arg format "$FMT" \
+            --argjson retried "$retried_json" \
+            "($JQ_STREAMS) as \$s
+             | {status: \"ok\", engine: \$engine,
+                id: (.id // null), url: (.webpage_url // null),
+                title: (.title // null), duration: (.duration // null),
+                mode: \$mode, format: \$format,
+                stream_urls: [\$s[].url],
+                http_headers: (\$s[0].http_headers // {}),
+                retried: \$retried}"
+        return 0
+    fi
+    # Prose: the stream URLs, one per line — what a human piping this into another tool
+    # wants. Note that on this site such a URL is NOT usable on its own; the headers from
+    # -j have to go with it.
+    printf '%s' "$raw" | jq -r "$JQ_STREAMS | .[].url"
+}
+
+# Report a resolve that produced nothing usable. Exit code follows the suite taxonomy: 2+
+# is a PROPAGATED tool failure and 1 is reserved for usage, so a yt-dlp status of 0 or 1 is
+# FLOORED to 2 — yt-dlp exits 1 for an unavailable video, and letting that through would
+# make "this video is gone" indistinguishable from "you called me wrong".
+resolve_fail() {
+    local rc=$1 reason
+    reason=$(classify_yt_dlp_error "$(cat "$ERR_FILE" 2>/dev/null)" "$rc")
+    ((rc <= 1)) && rc=2
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        jq -nc --arg engine "$ENGINE_NAME" --arg url "$TARGET_URL" \
+            --arg mode "$PLAYBACK_MODE" --arg reason "$reason" \
+            '{status: "error", engine: $engine, url: $url, mode: $mode, reason: $reason}'
+    else
+        echo "bili-resolve: could not resolve a stream for $TARGET_URL ($reason)" >&2
+    fi
+    exit "$rc"
+}
+
+# Cookies are ON by default because on this site they buy audio quality. If the cookie
+# attempt FAILS — a locked profile, a denied keychain, an expired session — the anonymous
+# client is tried before giving up, because a public video plays either way and losing the
+# Hi-Res rendition beats losing the track.
+#
+# There is deliberately NO fetch probe here, and its absence is the point. yt-resolve
+# test-fetches its resolved URL because a googlevideo link missing its proof-of-origin
+# token resolves fine and then 403s at play time — a YouTube-specific defect, patched with
+# a YouTube-specific anonymous client. This site has no such failure mode, so inheriting
+# the probe would mean one extra HTTP round trip per play against a host that rate-limits,
+# to answer a question that cannot come out wrong. A new engine inherits the CONTRACT, not
+# the other engine's workarounds.
+resolve_stream() {
+    ensure_scratch
+    FMT=$(format_for_mode "$PLAYBACK_MODE")
+
+    local raw_c="" rc_c=0 raw_a="" rc_a=0
+
+    if ((${#BILI_COOKIE_ARGS[@]} > 0)); then
+        raw_c=$(dump_once "${BILI_COOKIE_ARGS[@]}") || rc_c=$?
+        if ((rc_c == 0)) && [[ -n "$raw_c" ]]; then
+            emit_stream "$raw_c" 0
+            return 0
+        fi
+        raw_a=$(dump_once) || rc_a=$?
+        if ((rc_a == 0)) && [[ -n "$raw_a" ]]; then
+            emit_stream "$raw_a" 1
+            return 0
+        fi
+        # The COOKIE attempt's status is reported, not the fallback's: it is the one that
+        # describes what the caller asked for.
+        resolve_fail "$rc_c"
+    fi
+
+    # Anonymous-only (BILI_COOKIE_BROWSER=none, or no profile on this machine).
+    raw_a=$(dump_once) || rc_a=$?
+    if ((rc_a == 0)) && [[ -n "$raw_a" ]]; then
+        emit_stream "$raw_a" 0
+        return 0
+    fi
+    resolve_fail "$rc_a"
+}
+
+# ==============================================================================
+# 4. METADATA VERB (read-only: nothing plays, no mpv, no state file)
+# ==============================================================================
+
+# Rich metadata WITHOUT playing, mirroring `yt-resolve --info` field for field so a caller
+# does not branch on which engine answered. -j projects a lean schema (the raw record
+# carries ~40 fields of formats and thumbnails that are pure token ballast for a headless
+# caller); -J returns the full raw record; the default is a readable text block.
+resolve_info() {
+    ensure_scratch
+    local cmd=(yt-dlp --dump-single-json --no-playlist --skip-download)
+    if ((${#BILI_COOKIE_ARGS[@]} > 0)); then
+        cmd+=("${BILI_COOKIE_ARGS[@]}")
+    fi
+    cmd+=(--no-warnings --quiet "$TARGET_URL")
+
+    local raw rc=0
+    raw=$("${cmd[@]}" 2>"$ERR_FILE") || rc=$?
+
+    if ((rc != 0)) || [[ -z "$raw" ]]; then
+        local reason
+        reason=$(classify_yt_dlp_error "$(cat "$ERR_FILE" 2>/dev/null)" "$rc")
+        if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+            jq -nc --arg engine "$ENGINE_NAME" --arg url "$TARGET_URL" --arg reason "$reason" \
+                '{status: "error", engine: $engine, url: $url, reason: $reason}'
+            exit 1
+        fi
+        die "could not fetch metadata for: $TARGET_URL ($reason)"
+    fi
+
+    # Same jq prelude as search, so --info and search can never drift on this format.
+    local duration_fmt
+    duration_fmt=$(printf '%s' "$raw" | jq -r "$JQ_PRELUDE (.duration | fmt_dur) // empty")
+
+    case "$OUTPUT_MODE" in
+    json_full)
+        printf '%s\n' "$raw" | jq -c '.'
+        ;;
+    json)
+        # `channel` falls back to `uploader`: this extractor fills the uploader field and
+        # leaves channel null on some records, and the envelope's shape must not depend on
+        # which. live_status is passed through as whatever the record says, or null.
+        printf '%s\n' "$raw" | jq -c --arg engine "$ENGINE_NAME" --arg df "$duration_fmt" '{
+            status: "ok",
+            engine: $engine,
+            id, title,
+            url: .webpage_url,
+            channel: (.channel // .uploader // null),
+            uploader: (.uploader // null),
+            upload_date: (.upload_date // null),
+            duration, duration_fmt: (if $df == "" then null else $df end),
+            view_count: (.view_count // null),
+            like_count: (.like_count // null),
+            live_status: (.live_status // null),
+            description: (.description // null),
+            chapters: (if (.chapters | type) == "array"
+                       then [.chapters[] | {start_time, end_time, title}]
+                       else null end)
+        }'
+        ;;
+    *)
+        local title channel upload_date view_count like_count webpage_url description
+        title=$(printf '%s' "$raw" | jq -r '.title // "(untitled)"')
+        channel=$(printf '%s' "$raw" | jq -r '.channel // .uploader // "?"')
+        upload_date=$(printf '%s' "$raw" | jq -r '.upload_date // "?"')
+        view_count=$(printf '%s' "$raw" | jq -r '.view_count // "?"')
+        like_count=$(printf '%s' "$raw" | jq -r '.like_count // "?"')
+        webpage_url=$(printf '%s' "$raw" | jq -r '.webpage_url // empty')
+        description=$(printf '%s' "$raw" | jq -r '.description // ""')
+
+        if [[ -n "$MUSIC_CHAR" ]]; then printf '%s %s\n' "$MUSIC_CHAR" "$title"; else printf '%s\n' "$title"; fi
+        printf '  - channel: %s\n' "$channel"
+        printf '  - uploaded: %s\n' "$upload_date"
+        [[ -n "$duration_fmt" ]] && printf '  - duration: %s\n' "$duration_fmt"
+        printf '  - views: %s   likes: %s\n' "$view_count" "$like_count"
+        [[ -n "$webpage_url" ]] && printf '  - url: %s\n' "$webpage_url"
+
+        local chapters_txt
+        chapters_txt=$(printf '%s' "$raw" | jq -r '
+            if (.chapters | type) == "array" and (.chapters | length) > 0 then
+                .chapters[]
+                | ((.start_time // 0) | floor) as $s
+                | (($s / 60) | floor) as $m
+                | ($s - $m * 60) as $sec
+                | "  " + ($m | tostring) + ":" + (if $sec < 10 then "0" else "" end) + ($sec | tostring) + "  " + (.title // "")
+            else empty end')
+        [[ -n "$chapters_txt" ]] && printf '\nChapters:\n%s\n' "$chapters_txt"
+
+        [[ -n "$description" ]] && printf '\nDescription:\n%s\n' "$description"
+        ;;
+    esac
+    exit 0
+}
+
+# ==============================================================================
+# 5. CLI
+# ==============================================================================
+
+print_usage() {
+    cat <<'EOF'
+bili-resolve — the Bilibili resolve engine: a handle becomes bytes (non-interactive)
+
+Usage:
+  bili-resolve [-f MODE] [-S SORT] [-j|-J] -- <BV id | av id | URL>
+  bili-resolve --info [-j|-J] -- <BV id | av id | URL>
+
+The handle is a Bilibili URL, a BV id (what `bili-search -j` returns as results[].id), or
+the legacy av id. Knowing those shapes is this engine's job, not the player's.
+
+Options:
+  -f MODE  Playback mode the format is chosen for: audio | video | fast | ascii | viz
+           (default: audio). The MODE -> yt-dlp format table lives here, not in ut-play.
+  -S SORT  yt-dlp format-sort override (--format-sort)
+  -j       JSON envelope (see below)
+  -J       Full raw yt-dlp record
+  --info   Metadata only (title, channel, description) — nothing is resolved
+  --color MODE  auto | always | never (default: auto)
+  -h       This help
+  -V       Print the suite version
+
+Resolve JSON (-j): {"status","engine","id","url","title","duration","mode","format",
+                    "stream_urls":[...],"http_headers":{...},"retried"}
+  Identical to yt-resolve's envelope, key for key.
+  http_headers is REQUIRED and on this site it MATTERS: the CDN checks Referer, and a bare
+  stream URL answers 403 where the same URL with these headers answers 206.
+
+Info JSON (--info -j): {status,engine,id,title,url,channel,uploader,upload_date,duration,
+                        duration_fmt,view_count,like_count,live_status,description,chapters}
+
+There is no --transcript: this site's videos carry no caption track for yt-dlp to fetch
+(measured: subtitles {} and automatic_captions absent), and a verb that always answers
+"none" is worse than a verb that says it does not exist.
+
+A multi-part video resolves to PART ONE. Most music results here are multi-hour
+collections, so this is the useful default; to pick another part, pass the URL with ?p=N.
+
+Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp failure (see .reason)
+
+Environment:
+  BILI_COOKIE_BROWSER      Browser profile cookies are read from (default: chrome;
+                           "none" for anonymous). On this site login buys audio QUALITY —
+                           an account is offered renditions an anonymous client is not.
+  BILI_AUDIO_FORMAT        Format for audio/viz modes (default: ba/b)
+  BILI_VIDEO_FORMAT        Format for video/ascii modes (default: bv*+ba/b)
+  BILI_VIDEO_FORMAT_FAST   Format for fast mode
+
+To search: bili-search <query>   ·   To play: ut-play --engine bili <BV id>
+EOF
+}
+
+has_format=0
+positional=()
+while (($#)); do
+    case "$1" in
+    -h | --help)
+        print_usage
+        exit 0
+        ;;
+    -V | --version)
+        # Answered before ANY dependency gate: a version is the first thing a bug report
+        # needs, and needing yt-dlp installed to find out which version you have is
+        # backwards.
+        printf 'bili-resolve %s\n' "$YT_VERSION"
+        exit 0
+        ;;
+    -j | --json)
+        has_format=1
+        OUTPUT_MODE="json"
+        shift
+        ;;
+    -J | --json-full)
+        has_format=1
+        OUTPUT_MODE="json_full"
+        shift
+        ;;
+    -l | --list)
+        has_format=1
+        OUTPUT_MODE="list"
+        shift
+        ;;
+    --info)
+        ACTION="info"
+        shift
+        ;;
+    # Named rather than swept up by the unknown-flag arm: a caller reaching for captions is
+    # holding a reasonable expectation (the sibling engine has them), and the useful answer
+    # is why this site cannot serve it — not "unknown flag".
+    --transcript | --subtitles | --sub-lang | --sub-langs | --sub-lang=* | --sub-langs=*)
+        echo "bili-resolve: this site's videos carry no caption track — there is no ${1%%=*} verb here" >&2
+        exit 1
+        ;;
+    --color=*)
+        COLOR_MODE="${1#*=}"
+        shift
+        ;;
+    --color)
+        [[ $# -ge 2 ]] || { echo "bili-resolve: $1 requires a value" >&2; exit 1; }
+        COLOR_MODE="$2"
+        shift 2
+        ;;
+    -f | --format-mode)
+        [[ $# -ge 2 ]] || { echo "bili-resolve: $1 requires a value" >&2; exit 1; }
+        FORMAT_FLAG="$1"
+        PLAYBACK_MODE=$(normalize_playback_mode "$2")
+        shift 2
+        ;;
+    -S)
+        [[ $# -ge 2 ]] || { echo "bili-resolve: $1 requires a value" >&2; exit 1; }
+        FORMAT_FLAG="$1"
+        FORMAT_SORT="$2"
+        shift 2
+        ;;
+    # The gate. Resolution neither plays nor tracks a player, and it does not search:
+    # a caller holding the wrong verb is told which one it wants (SPEC-system.md §13).
+    -d | --detach | --status | --stop | --set-volume | --id | --all | --volume)
+        echo "bili-resolve: $1 is a playback flag — use ut-play for playback" >&2
+        exit 1
+        ;;
+    -n | -m | -M | -s)
+        echo "bili-resolve: $1 is a search flag — use bili-search for searching" >&2
+        exit 1
+        ;;
+    --)
+        shift
+        # `--` stops FLAG parsing, not argument validation: a handle beginning with '-'
+        # must survive, and a second handle is still an error. SPEC-system.md §6.
+        while (($#)); do
+            positional+=("$1")
+            shift
+        done
+        break
+        ;;
+    -*)
+        echo "bili-resolve: unknown flag '$1' (resolve flags: -f -S -j -J --info)" >&2
+        exit 1
+        ;;
+    *)
+        positional+=("$1")
+        shift
+        ;;
+    esac
+done
+
+if ((${#positional[@]} == 0)); then
+    echo "bili-resolve: a BV id, av id or URL is required (see 'bili-resolve -h')" >&2
+    exit 1
+fi
+if ((${#positional[@]} > 1)); then
+    echo "bili-resolve: takes exactly one BV id, av id or URL (got ${#positional[@]})" >&2
+    exit 1
+fi
+TARGET="${positional[0]}"
+
+# The default output is prose; -j/-J/-l override.
+((has_format)) || OUTPUT_MODE="list"
+
+if ! validate_enum "$COLOR_MODE" auto always never; then
+    die "--color must be one of: auto, always, never"
+fi
+# -f / -S pick a FORMAT, and only stream resolution resolves one. Next to --info they
+# would be accepted and quietly do nothing, which is precisely what a gating layer exists
+# to reject rather than ignore (SPEC-system.md §13).
+if [[ -n "$FORMAT_FLAG" && "$ACTION" != "stream" ]]; then
+    die "$FORMAT_FLAG selects a stream format — it does not apply to --$ACTION"
+fi
+
+normalize_target "$TARGET"
+
+require_deps yt-dlp jq
+
+case "$ACTION" in
+info) resolve_info ;;
+*) resolve_stream ;;
+esac
+exit 0

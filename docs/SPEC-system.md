@@ -1,11 +1,11 @@
 # SPEC-system — uting, system scope
 
-`yt` · `yt-search` · `yt-play` · `yt-tui` — a YouTube search + terminal-playback CLI
-suite, designed as much for **LLM/agent callers** as for humans. This is the
-**code-synced spec**: architecture, functional structure, module contract, supported
-workflows, and the rationale behind them, kept in step with the code on every change that
-touches architecture or a contract. Each fact lives in ONE section; everything else points
-at it.
+`ut-play` · `yt-search` · `yt-resolve` · `bili-search` · `bili-resolve` · `yt-tui` — a
+search + terminal-playback CLI suite, designed as much for **LLM/agent callers** as for
+humans. This is the **code-synced spec**: architecture, functional structure, supported
+workflows, the module contract, and the rationale behind them, kept in step with the code
+on every change that touches architecture or a contract. Each fact lives in ONE section;
+everything else points at it.
 
 Scope is `system` — the whole suite. A per-surface `SPEC-<scope>.md` splits out only when
 one earns it, and the one-fact-one-section rule then holds across the family. What this
@@ -15,6 +15,8 @@ in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 - Player (source-agnostic): `shell/ut-play` — plays, and owns the detached lifecycle
 - YouTube engine (a pair): `shell/yt-search` (query → results), `shell/yt-resolve`
   (handle → stream URL + headers, plus `--info` / `--transcript`)
+- Bilibili engine (a pair): `shell/bili-search`, `shell/bili-resolve` (`--info`; this site
+  serves no captions, so there is no `--transcript` half)
 - Interactive UI: `shell/yt-tui` (owned glue over the verbs; no extra deps)
 - Caller-facing surface: each verb's own `-h`/`--help` · Orientation: `README.md`
 - Runtime deps: `yt-dlp`, `jq` and (optionally) `curl` in the ENGINES; `mpv` + `jq` in the
@@ -47,6 +49,17 @@ in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 >   1 — so §10's resolve-only verb and §12's player spec belong to `yt-resolve` now, and the
 >   player's own flag surface is exactly: `-f -S -d -j -l --engine --volume --status --stop
 >   --set-volume --id --all --color -h -V`. `-J` went with the verbs that used it.
+>
+> - **Step C** — a **second engine** exists: `bili-search` + `bili-resolve` (Bilibili).
+>   Nothing in the player or the TUI changed to admit it, which was the whole point of the
+>   split. Three facts it establishes, all of which §4/§5/§12/§14 will state properly at E:
+>   an engine's two halves may use **different primitives** (this one's search half talks
+>   HTTP via `curl`, its resolve half shells out to `yt-dlp`) — the seam is the ENVELOPE,
+>   not the tool behind it; an engine **declares its capabilities by which verbs exist**
+>   (there is no `--transcript` here because the site has no captions, rather than a verb
+>   that always answers "none"); and `http_headers` stopped being a theoretical key —
+>   this site's CDN answers **403 to a bare stream URL and 206 to the same URL with the
+>   envelope's headers**, measured, so the hole D9 closed is now load-bearing.
 > - Still true everywhere: the exit-code taxonomy, the lifecycle semantics, and one line
 >   per `-j` envelope.
 

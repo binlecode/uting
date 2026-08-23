@@ -22,7 +22,8 @@ import sys
 import pathlib
 
 FILES = [pathlib.Path(p) for p in (sys.argv[1:] or
-         ["shell/ut-play", "shell/yt-search", "shell/yt-resolve", "shell/yt-tui"])]
+         ["shell/ut-play", "shell/yt-search", "shell/yt-resolve",
+          "shell/bili-search", "shell/bili-resolve", "shell/yt-tui"])]
 DEF = re.compile(r'^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{')
 
 defs = {}
