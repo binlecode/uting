@@ -89,8 +89,12 @@ Playback error reason (JSON): forbidden | unavailable | format_unavailable |
   means the opposite — these credentials will not work, retrying will not help
 Lifecycle JSON:
   -d            {status:"started",id,pid,url,mode,started_at,title,sock,log}
-  --status      {status:"players",players:[{id,pid,url,mode,volume,title,started_at}...]}
-                volume is read live from the player; title lands a few seconds after -d
+  --status      {status:"players",players:[{id,pid,url,mode,volume,paused,position,
+                duration,title,started_at}...],failed:[{id,url,mode,started_at,ended_at,
+                exit_code,reason}...]}
+                volume/paused/position/duration are read live from the player, null when it
+                could not be asked; title lands a few seconds after -d; failed lists players
+                that died on their own (newest first, max 8, nothing over an hour old)
   --stop        {status:"stopped",id,stopped} | {status:"stopped",scope:"all",stopped}
   --set-volume  {status:"ok",id,volume} | {status:"not_playing"}
                 | {status:"ambiguous",players:[...]} | {status:"error",reason:"ipc_failed"}

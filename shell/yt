@@ -189,7 +189,10 @@ Output contracts (full schemas: macos/docs/SPEC-system.md §14):
             reason: forbidden|unavailable|format_unavailable|network|stopped_by_user|
                     unknown|null(ok)   (network also covers HTTP 429 rate limiting)
   -d -j     {status:"started", id, pid, url, mode, started_at, title, sock, log}
-  --status  {status:"players", players:[{id,pid,url,mode,volume,title,started_at}]}
+  --status  {status:"players", players:[{id,pid,url,mode,volume,paused,position,
+            duration,title,started_at}], failed:[{id,url,mode,started_at,ended_at,
+            exit_code,reason}]}   volume/paused/position/duration are read live off the
+            player (null = could not ask); failed lists players that died on their own
   --stop    {status:"stopped", id, stopped} | {status:"stopped", scope:"all", stopped}
   --set-vol {status:"ok", id, volume} | {status:"not_playing"} | {status:"ambiguous", …}
             | {status:"error", reason:"ipc_failed"}
@@ -701,22 +704,113 @@ ensure_state_dir() {
     chmod 700 "$STATE_DIR" "$PLAYERS_DIR" 2>/dev/null || true
 }
 
-# Live volume read straight off a player's IPC socket. The state file's `volume` is only
+# Live property read straight off a player's IPC socket. The state file's `volume` is only
 # what was recorded at launch or by the last --set-volume, so anything driving the socket
 # directly (yt-tui's 9/0 keys — see SPEC-system.md §9.3) moves the real value without
-# telling us; mpv is the source of truth. One cheap round trip (~10ms measured: `head`
-# closes the pipe and nc exits at once, so the -w1 timeout is never reached), soft-gated on
-# nc so --status keeps working with jq alone (§15). Echoes nothing when unavailable.
-live_volume() {
-    local sock=$1 reply
+# telling us; mpv is the source of truth. `pause` and the playback position are worse still:
+# the state file has never held them at all.
+#
+# ONE connection carries every property asked for — that is why this is a property list and
+# not four calls: --status pays the same single round trip it always did (~10ms measured; a
+# healthy mpv closes as soon as the reader breaks, so the -w1 timeout is never reached).
+# Soft-gated on nc so --status keeps working with jq alone (§15): no nc, no socket, no
+# output, and the caller reports nulls.
+#
+# Emits one "<request_id><US><value>" line per answer, in whatever order mpv sent them —
+# correlation is the CALLER's job and must be by request_id, never by line order: mpv
+# multiplexes async events into every client's stream (the rule do_set_volume already
+# carries). `\(.data)` stringifies a JSON null as the four characters "null", so a property
+# the player answered null keeps its slot and stays distinguishable from one it never
+# answered at all. `|| true` guards the pipeline: under set -euo pipefail an nc timeout or a
+# SIGPIPE from the caller breaking early is a non-zero status that would abort the script.
+#
+# `head -n $i` is load-bearing, not tidiness — it is what CLOSES the pipe. mpv answers every
+# command exactly once and jq has already dropped the id-less async events, so the i-th line
+# is the last one coming; head exiting there SIGPIPEs nc, which is how the read costs ~30ms
+# instead of the full `nc -w1` second against a peer that never closes its side (measured:
+# 1.11s -> 0.03s against tests/mpv_ipc_mock.py, which is exactly that peer). The caller
+# breaking its own read loop does NOT achieve this: nothing writes again to notice.
+live_props() {
+    local sock=$1
+    shift
     command -v nc >/dev/null 2>&1 || return 0
     [[ -S "$sock" ]] || return 0
-    reply=$(printf '{"command":["get_property","volume"],"request_id":1}\n' |
+    local prop i=0
+    local reqs=()
+    for prop in "$@"; do
+        i=$((i + 1))
+        reqs+=("$(printf '{"command":["get_property","%s"],"request_id":%d}' "$prop" "$i")")
+    done
+    ((${#reqs[@]})) || return 0
+    printf '%s\n' "${reqs[@]}" |
         nc -U -w1 "$sock" 2>/dev/null |
-        jq -r 'select(.request_id==1) | select(.error=="success") | .data' 2>/dev/null | head -1) || true
-    # mpv answers with a float (100.000000); report an integer, like --set-volume takes.
-    [[ "$reply" =~ ^[0-9]+ ]] || return 0
-    printf '%s' "${reply%.*}"
+        jq -r --unbuffered 'select(.request_id != null) | "\(.request_id)\u001f\(.data)"' 2>/dev/null |
+        head -n "$i" || true
+}
+
+# The policy half of the read above, shared by both --status output modes so the correlation
+# and the normalisation exist once. Sets four globals, each EMPTY when the player did not
+# answer (no nc, dead socket, property null) — empty becomes JSON null at the call site, and
+# the distinction matters: `false` means "playing", null means "could not ask".
+LP_VOLUME=""
+LP_PAUSED=""
+LP_POSITION=""
+LP_DURATION=""
+read_player_live() {
+    local sock=$1 rid val got=0 seen=0
+    LP_VOLUME=""
+    LP_PAUSED=""
+    LP_POSITION=""
+    LP_DURATION=""
+    # Breaking on the fourth answer is what keeps a WEDGED player cheap: a peer that never
+    # closes its side would otherwise charge the full `nc -w1` second per player. `seen`
+    # bounds the loop so a chatty one cannot hold --status open either.
+    while IFS=$'\037' read -r rid val; do
+        seen=$((seen + 1))
+        case "$rid" in
+        1) LP_VOLUME="$val"; got=$((got + 1)) ;;
+        2) LP_PAUSED="$val"; got=$((got + 1)) ;;
+        3) LP_POSITION="$val"; got=$((got + 1)) ;;
+        4) LP_DURATION="$val"; got=$((got + 1)) ;;
+        *) ;; # an async event; not one of ours
+        esac
+        ((got >= 4 || seen >= 16)) && break
+    done < <(live_props "$sock" volume pause time-pos duration)
+    # mpv answers with floats (100.000000, 83.437000); report integers, the unit the rest of
+    # the contract speaks — --set-volume takes one, and the search envelope's `duration` is
+    # integer seconds. A value that is not a number (including the literal "null") is dropped.
+    [[ "$LP_VOLUME" =~ ^[0-9]+ ]] && LP_VOLUME="${LP_VOLUME%.*}" || LP_VOLUME=""
+    [[ "$LP_POSITION" =~ ^[0-9]+ ]] && LP_POSITION="${LP_POSITION%.*}" || LP_POSITION=""
+    [[ "$LP_DURATION" =~ ^[0-9]+ ]] && LP_DURATION="${LP_DURATION%.*}" || LP_DURATION=""
+    [[ "$LP_PAUSED" == "true" || "$LP_PAUSED" == "false" ]] || LP_PAUSED=""
+    return 0
+}
+
+# The last thing a DETACHED child says, written to its own stdout — i.e. as the final line
+# of the log the launch envelope already handed the caller. Without it a detached player that
+# dies leaves nothing behind at all: `-d -j` returned {"status":"started"} + exit 0 long
+# before the failure, reap_dead_players then deletes the record AND the log, and `--status`
+# goes empty — indistinguishable from a track that simply finished. The reaper cannot fill
+# that gap on its own: it has no exit code, and "played fine" and "failed for a reason we do
+# not recognise" are the same text in a log (classify_playback_error answers `unknown` to
+# both). The child is the only process that knows rc, so the child writes the epitaph.
+#
+# Nothing is written on success, so a normal finish leaves no trace — this is an error
+# record, not listening history (a ROADMAP.md §0 non-goal), and that distinction is enforced
+# here rather than promised in prose. A player killed by --stop dies with its process group
+# and never reaches this line, which is the same rule from the other direction.
+detached_epitaph() {
+    local rc=$1 reason ended_at
+    [[ -n "${YT_DETACHED_LOG:-}" ]] || return 0
+    ((rc == 0 || rc == 130)) && return 0
+    # Same taxonomy every other surface publishes (§14) — the reason a caller branches on
+    # must not depend on which verb produced it. The tail bound keeps a long mpv log from
+    # becoming an argument the classifier has to grep in full.
+    reason=$(classify_playback_error "$(tail -c 4000 "$YT_DETACHED_LOG" 2>/dev/null)" "$rc")
+    ended_at=$(date -u +%FT%TZ 2>/dev/null || echo unknown)
+    jq -nc --argjson rc "$rc" --arg reason "$reason" --arg ended_at "$ended_at" \
+        '{yt_event: "exit", rc: $rc, reason: $reason, ended_at: $ended_at}' 2>/dev/null || true
+    return 0
 }
 
 # Per-instance derived paths. Functions, not constants, since they key off the id;
@@ -791,10 +885,12 @@ detach_play() {
     # is exported into the child's environment so its run_mpv adds --input-ipc-server.
     # Job-control chatter is routed away from stdout so -j output stays one JSON line.
     # YT_DETACHED tells the child's run_mpv there is no terminal to draw on (quiet mpv,
-    # no stderr filter). -S is forwarded like --volume so a format-sort override isn't
-    # silently lost on the detached path; `--` guards a URL that begins with a dash.
+    # no stderr filter); YT_DETACHED_LOG hands it the path its own stdout goes to, which is
+    # all detached_epitaph needs to read back what mpv said before classifying its own death.
+    # -S is forwarded like --volume so a format-sort override isn't silently lost on the
+    # detached path; `--` guards a URL that begins with a dash.
     set -m
-    YT_IPC_SOCK="$sock" YT_DETACHED=1 nohup bash "$SELF" -f "$PLAYBACK_MODE" \
+    YT_IPC_SOCK="$sock" YT_DETACHED=1 YT_DETACHED_LOG="$log" nohup bash "$SELF" -f "$PLAYBACK_MODE" \
         ${VOLUME:+--volume "$VOLUME"} ${FORMAT_SORT:+-S "$FORMAT_SORT"} -- "$url" >"$log" 2>&1 &
     pid=$!
     set +m
@@ -919,6 +1015,9 @@ reap_dead_players() {
             LIVE_PLAYER_IDS+=("$id")
             LIVE_PLAYER_PIDS+=("$pid")
         else
+            # Read the epitaph BEFORE the log goes: this is the only moment both the record
+            # and the log still exist, and a failure that is not captured here is gone.
+            [[ -n "$id" ]] && record_player_death "$id" "$f"
             rm -f "$f" 2>/dev/null || true
             [[ -n "$id" ]] && rm -f "$(player_sock "$id")" "$(player_log "$id")" 2>/dev/null || true
         fi
@@ -975,37 +1074,122 @@ resolve_target() {
     fi
 }
 
+# Turn a dead player's last log line into a tombstone under players/dead/, so `--status` can
+# answer "it stopped, and here is why" instead of going silently empty (see detached_epitaph
+# for why the child, not this function, decides rc). Failures ONLY: no epitaph — a normal
+# finish, a --stop that took the whole process group down, a truncated log, a kill -9 — means
+# no tombstone. Silence is reported as silence; a death is never inferred.
+record_player_death() {
+    local id=$1 f=$2 log ev rc reason ended_at dead
+    log=$(player_log "$id")
+    [[ -f "$log" ]] || return 0
+    ev=$(tail -n 1 "$log" 2>/dev/null | jq -c 'select(.yt_event == "exit")' 2>/dev/null) || ev=""
+    [[ -n "$ev" ]] || return 0
+    IFS=$'\037' read -r rc reason ended_at < <(
+        printf '%s' "$ev" | jq -r '[(.rc // 0), (.reason // "unknown"), (.ended_at // "unknown")] | join("\u001f")' 2>/dev/null
+    ) || return 0
+    [[ "$rc" =~ ^[0-9]+$ ]] && ((rc != 0)) || return 0
+
+    # No -p: reap_dead_players only reaches here with PLAYERS_DIR already present, and -p
+    # would apply the mode to the deepest component only (the SC2174 note at ensure_state_dir).
+    dead="$PLAYERS_DIR/dead"
+    [[ -d "$dead" ]] || mkdir -m 700 "$dead" 2>/dev/null || return 0
+    # Only the fields that answer "which launch was this, and what happened to it" — the
+    # socket, log and format paths described a process that no longer exists.
+    jq -c --argjson exit_code "$rc" --arg reason "$reason" --arg ended_at "$ended_at" \
+        '{id, url, mode, started_at, ended_at: $ended_at, exit_code: $exit_code, reason: $reason}' \
+        "$f" >"$dead/$id.json.tmp" 2>/dev/null &&
+        mv -f "$dead/$id.json.tmp" "$dead/$id.json" 2>/dev/null ||
+        rm -f "$dead/$id.json.tmp" 2>/dev/null || true
+    prune_dead_players
+    return 0
+}
+
+# Two bounds, both enforced on disk rather than at render time, so the directory cannot grow
+# into a history nobody asked for: nothing older than an hour, and never more than 8 records.
+# `find -mmin` is stock on macOS and Linux alike; the count cap reuses jq's sort so "oldest"
+# means the same thing here as it does in the output.
+DEAD_KEEP=8
+prune_dead_players() {
+    local dead="$PLAYERS_DIR/dead" files=() extra x
+    [[ -d "$dead" ]] || return 0
+    find "$dead" -name '*.json' -mmin +60 -delete 2>/dev/null || true
+    files=("$dead"/*.json)
+    [[ -e "${files[0]}" ]] || return 0
+    ((${#files[@]} > DEAD_KEEP)) || return 0
+    extra=$(jq -sr --argjson keep "$DEAD_KEEP" \
+        'sort_by(.ended_at) | reverse | .[$keep:] | .[].id' "${files[@]}" 2>/dev/null) || return 0
+    while IFS= read -r x; do
+        [[ -n "$x" ]] && rm -f "$dead/$x.json" 2>/dev/null || true
+    done <<<"$extra"
+    return 0
+}
+
+# The read side of the same directory: newest first, capped, as a JSON array in FAILED_JSON.
+# Always a valid array — `failed` is a key that is ALWAYS present in the --status envelope,
+# because a key that appears only when something went wrong is harder to consume than an
+# empty one (a caller would have to distinguish "no failures" from "old version").
+FAILED_JSON='[]'
+collect_failed_players() {
+    local dead="$PLAYERS_DIR/dead" files=()
+    FAILED_JSON='[]'
+    [[ -d "$dead" ]] || return 0
+    files=("$dead"/*.json)
+    # The glob is unexpanded when the directory is empty; test the first element rather than
+    # the count, and skip the prune entirely — the common case must cost no fork at all.
+    [[ -e "${files[0]}" ]] || return 0
+    prune_dead_players
+    files=("$dead"/*.json)
+    [[ -e "${files[0]}" ]] || return 0
+    FAILED_JSON=$(jq -sc --argjson keep "$DEAD_KEEP" \
+        'sort_by(.ended_at) | reverse | .[0:$keep]' "${files[@]}" 2>/dev/null) || FAILED_JSON='[]'
+    [[ -n "$FAILED_JSON" ]] || FAILED_JSON='[]'
+    return 0
+}
+
 # List ALL live detached players (reaping dead ones). Always exits 0 (an agent polling
 # status must not see a non-zero exit as failure); empty set is still a success.
-# `volume` is reported LIVE (queried off the player's socket) with the value recorded in
-# the state file as the fallback: the record only knows about launch --volume and
-# --set-volume, so a client driving the socket itself (yt-tui's 9/0 keys) would otherwise
-# make --status lie. live_volume() is a no-op without nc, keeping the jq-only dep contract.
+# `volume`, `paused`, `position` and `duration` are reported LIVE (one round trip per player
+# off its IPC socket, see read_player_live) rather than from the state file: the record only
+# knows about launch --volume and --set-volume, so a client driving the socket itself
+# (yt-tui's 9/0 keys) would make `volume` lie — and it has never held the other three at all.
+# `volume` keeps the recorded value as its fallback; the other three are null when unread,
+# which is NOT the same as false/0 ("could not ask" vs "playing at zero"). read_player_live
+# is a no-op without nc, keeping the jq-only dep contract.
 do_status() {
     reap_dead_players
+    collect_failed_players
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         local n=${#LIVE_PLAYER_FILES[@]}
         if ((n)); then
-            local i vol parts=()
+            local i parts=()
             for ((i = 0; i < n; i++)); do
-                vol=$(live_volume "$(player_sock "${LIVE_PLAYER_IDS[$i]}")")
-                parts+=("$(jq -c --argjson live "${vol:-null}" \
-                    '{id, pid, url, mode, volume: ($live // .volume), title, started_at}' \
+                read_player_live "$(player_sock "${LIVE_PLAYER_IDS[$i]}")"
+                parts+=("$(jq -c \
+                    --argjson live "${LP_VOLUME:-null}" \
+                    --argjson paused "${LP_PAUSED:-null}" \
+                    --argjson position "${LP_POSITION:-null}" \
+                    --argjson duration "${LP_DURATION:-null}" \
+                    '{id, pid, url, mode, volume: ($live // .volume),
+                      paused: $paused, position: $position, duration: $duration,
+                      title, started_at}' \
                     "${LIVE_PLAYER_FILES[$i]}")")
             done
             # -sc: one line, like the empty branch below and every other envelope. The
             # pretty form only ever showed up with a player present, i.e. exactly when a
             # caller is polling this.
-            printf '%s\n' "${parts[@]}" | jq -sc '{status: "players", players: .}'
+            printf '%s\n' "${parts[@]}" |
+                jq -sc --argjson failed "$FAILED_JSON" '{status: "players", players: ., failed: $failed}'
         else
-            echo '{"status":"players","players":[]}'
+            jq -nc --argjson failed "$FAILED_JSON" '{status: "players", players: [], failed: $failed}'
         fi
     else
         if ((${#LIVE_PLAYER_FILES[@]})); then
-            local f id pid mode started_at url title volume vol_suffix
+            local f id pid mode started_at url title volume vol_suffix pause_suffix
             for f in "${LIVE_PLAYER_FILES[@]}"; do
                 vol_suffix=""
+                pause_suffix=""
                 # One jq call for the structural fields (never contain tabs/newlines) via
                 # @tsv, instead of five separate per-field forks. title stays on its own
                 # jq -r so a title with an embedded tab/newline round-trips byte-for-byte
@@ -1014,19 +1198,30 @@ do_status() {
                     jq -r '[.id, .pid, .mode, .started_at, .url] | @tsv' "$f" 2>/dev/null
                 ) || true
                 title=$(jq -r '.title // empty' "$f" 2>/dev/null || true)
-                volume=$(live_volume "$(player_sock "$id")")
+                read_player_live "$(player_sock "$id")"
+                volume="$LP_VOLUME"
                 [[ -n "$volume" ]] || volume=$(jq -r '.volume // empty' "$f" 2>/dev/null || true)
                 [[ -n "$volume" ]] && vol_suffix=", volume $volume"
+                # Only `paused` joins the human line: a person reading this wants to know why
+                # it went quiet. The position pair stays JSON-only — the human who wants a
+                # playhead has `ytt`, which draws one, and this line is already long.
+                [[ "$LP_PAUSED" == "true" ]] && pause_suffix=", paused"
                 if [[ -n "$title" ]]; then
-                    printf "playing (id %s, pid %s, mode %s%s, since %s): %s\n  %s\n" \
-                        "$id" "$pid" "$mode" "$vol_suffix" "$started_at" "$title" "$url"
+                    printf "playing (id %s, pid %s, mode %s%s%s, since %s): %s\n  %s\n" \
+                        "$id" "$pid" "$mode" "$vol_suffix" "$pause_suffix" "$started_at" "$title" "$url"
                 else
-                    printf "playing (id %s, pid %s, mode %s%s, since %s): %s\n" \
-                        "$id" "$pid" "$mode" "$vol_suffix" "$started_at" "$url"
+                    printf "playing (id %s, pid %s, mode %s%s%s, since %s): %s\n" \
+                        "$id" "$pid" "$mode" "$vol_suffix" "$pause_suffix" "$started_at" "$url"
                 fi
             done
         else
             echo "idle (nothing playing)"
+        fi
+        # After the live list, not instead of it: a player can have failed while another is
+        # still playing. Same wording as the JSON `failed` entries, one line each.
+        if [[ "$FAILED_JSON" != "[]" ]]; then
+            jq -r '.[] | "failed (id \(.id), mode \(.mode), \(.reason), exit \(.exit_code), ended \(.ended_at)): \(.url)"' \
+                <<<"$FAILED_JSON" 2>/dev/null || true
         fi
     fi
     exit 0
@@ -1957,8 +2152,14 @@ if ((IS_URL)); then
         play_url_json "$QUERY" "$PLAYBACK_MODE" || rc=$?
         exit "$rc"
     fi
-    play_url_directly "$QUERY"
-    exit 0
+    # rc is captured rather than left to set -e so the DETACHED child gets one line of
+    # epilogue before it goes (detached_epitaph is a no-op for every other caller — a
+    # foreground play has a terminal to have already shown the error on). The exit status is
+    # unchanged either way: set -e would have exited with exactly this rc.
+    rc=0
+    play_url_directly "$QUERY" || rc=$?
+    detached_epitaph "$rc"
+    exit "$rc"
 fi
 
 # =-----------------------------------------------------------------------------
