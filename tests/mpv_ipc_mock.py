@@ -18,6 +18,8 @@ of order, or to stall, on cue.
                test cannot tell a frozen pane from a correct repaint.
   --vol N      starting volume; set_property volume is applied and appended to --log, which
                is how "9/0 moved the real value, not just the display" is checked.
+  --paused     start with pause=true, i.e. a player somebody else parked. --status and the
+               TUI banner must both report that without having been told.
   --log PATH   where set_property writes land.
 
 The peer NEVER closes its side. That is the point of the default configuration: `nc -U -w1`
@@ -44,8 +46,11 @@ T0 = time.time()
 NOISY = "--noisy" in args
 NULLS = {opt("--null", "")}
 LOG = opt("--log", "/dev/null")
+# pause is a BOOLEAN, and it is the reason set_property below no longer coerces to float:
+# `set_property pause true` used to crash this peer, so the one shape the pause contract
+# needs — a player paused by somebody else — could not be produced at all.
 VALS = {"time-pos": 61.5, "duration": 245.0, "percent-pos": 25.1,
-        "volume": float(opt("--vol", "55"))}
+        "volume": float(opt("--vol", "55")), "pause": "--paused" in args}
 try: os.unlink(sock_path)
 except FileNotFoundError: pass
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.bind(sock_path); s.listen(5)
@@ -81,7 +86,7 @@ def serve(c):
                 pos = VALS["time-pos"] + (time.time() - T0)
                 data = pos if cmd[1] == "time-pos" else 100.0 * pos / VALS["duration"]
         elif cmd and cmd[0] == "set_property":
-            VALS[cmd[1]] = float(cmd[2])
+            VALS[cmd[1]] = cmd[2] if isinstance(cmd[2], bool) else float(cmd[2])
             with open(LOG, "a") as lg: lg.write("set %s=%s\n" % (cmd[1], cmd[2]))
         pending.append((json.dumps({"data": data, "request_id": rid, "error": "success"}) + "\n").encode())
         if not REVERSE: flush_replies()
