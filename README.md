@@ -103,10 +103,13 @@ proves; run any of them directly.
 | `tests/tui_screen.py` | Drives the TUI in a pty and asserts on the **screen** — a pyte cell grid, after `\033[K` / `\033[J` / CHA have been applied. This is what claims like "pause repaints exactly one row, and no frame blanks the screen" are counted from (`changed_rows`, `ed_count`). |
 | `tests/pty_drive.py` | Asserts on the **stream and its timing** — spinner frames actually arriving, `Starting` → `Playing` flipping with no keypress, the 1 s tick stopping when it should, exit codes on the cancel paths. |
 | `tests/assert_pane.py` | Layout invariants on a captured pane: nothing exceeds the pane width (measured in cells), every row's title starts on the same column, the duration rail is right-flush at exactly the pane width, and the boundary rail is full width in both its static and its live form. |
-| `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that can do what the real one will not do on cue: answer out of order (`--reverse`), report a property as null, interleave async events, walk the clock, and never close its side of the socket. Every IPC rule in the read path exists because of one of these shapes. |
+| `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that can do what the real one will not do on cue: answer out of order (`--reverse`), report a property as null (`--null pause`), start out paused (`--paused`), interleave async events, walk the clock, and never close its side of the socket. Every IPC rule in the read path exists because of one of these shapes. |
+| `tests/contract.sh` | The CLI contract, asserted by running it: the search envelope, every documented rejection, `--transcript` both ways, the lifecycle verbs, the live `--status` read (against the mock, over a real socket), the tombstone record for a player that died unasked, and the exit-code taxonomy. |
+| `tests/tui_pane.sh` | The TUI's layout at four geometries plus the chrome variants, the redraw-on-resize path with no keypress, and the in-place repaint rule (a keypress emits no screen-clear) — `assert_pane.py` applied as a sweep. |
 
-`tui_screen.py` needs `pyte` (`pip install pyte`); nothing else here has dependencies beyond the
-suite's own, and none of it is needed at runtime.
+`tui_screen.py` needs `pyte` (`pip install pyte`); `contract.sh` skips its live-read block
+without `python3` (it drives the mock). Nothing else here has dependencies beyond the suite's
+own, and none of it is needed at runtime.
 
 Two things these rigs learned the hard way, both of which cost a wrong green result first:
 

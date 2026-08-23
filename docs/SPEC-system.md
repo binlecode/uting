@@ -578,8 +578,38 @@ very latency the async backfill exists to remove. Measured after the fix: **0.03
      a polling agent must not read a non-ambiguous non-zero exit as failure. Every
      lifecycle call reaps players whose group is gone.
    • --set-volume / an ambiguous --stop exit 4 (did-not-take-effect; -j reason says why).
+   • a player that dies ON ITS OWN leaves a tombstone: --status reports it once in
+     failed[] instead of just going empty (see below).
    • state: ${TMPDIR:-/tmp}/yt-cli-$(id -u)/players/<id>.json (+ mpv-<id>.sock, mpv-<id>.log)
+            plus players/dead/<id>.json for the tombstones
 ```
+
+**The other half of the lifecycle: a player that dies unasked (`failed[]`).** `launch →
+status → stop` describes every path the caller drives. It said nothing about the path the
+caller does not drive, and that path was silent: `-d -j` returns `{"status":"started"}` and
+exit 0 long before yt-dlp resolves anything, so a private or removed video fails INSIDE the
+child; `reap_dead_players` then deleted the record and the log, and `--status` went empty —
+byte-identical to a track that finished normally. The reason existed only in a log that had
+just been deleted.
+
+Two pieces close it, and the split is forced by what each process knows:
+
+- **The child writes its own epitaph** (`detached_epitaph`). Only the child knows `rc`, and
+  `rc` is exactly what a log cannot show: "played fine" and "failed in a way we do not
+  recognise" are the same text to `classify_playback_error` (both `unknown`). The child's
+  stdout IS the log, so it appends one line —
+  `{"yt_event":"exit","rc":2,"reason":"unavailable","ended_at":"…"}` — with `reason` from the
+  shared taxonomy (§14), classified from the tail of the log it was handed as
+  `YT_DETACHED_LOG`. Nothing is written when `rc` is 0 or 130.
+- **The reaper turns it into a tombstone** (`record_player_death`), read at the one moment
+  both the record and the log still exist, and writes `players/dead/<id>.json`.
+
+The bounds are the contract, not politeness — they are what keeps this an error record rather
+than the listening history `ROADMAP.md` §0 rules out: **failures only** (a normal finish
+writes no epitaph; a `--stop` kills the process group before the child can write one — the
+same rule from the other side), **at most 8**, **nothing older than an hour**, and it lives
+in the state dir, so it dies with it. No epitaph means no tombstone: a truncated log or a
+`kill -9` is reported as silence rather than as an inferred death.
 
 **Async title backfill (why detach stays instant).** The title is the semantic handle a
 caller — a small model especially — uses to refer to what's playing ("is the Adagio still
@@ -664,11 +694,34 @@ exception to D8, so the socket path is *handed to the client* in the `-d -j` env
 an implementation detail — is where the JSON-RPC channel is sanctioned. Consequence for
 `--status`: the state file's `volume` only knows about launch `--volume` and `--set-volume`,
 so a client moving volume over the socket would make it lie. `--status` therefore reports
-**live** volume, read off the socket by `live_volume()` (one round trip, ~10ms measured —
-`head` closes the pipe so `nc` never reaches its `-w1` timeout), falling back to the
-recorded value. It is soft-gated on `nc`, keeping `--status`'s jq-only dependency (§15).
-Verified: two `0` presses in `yt-tui` moved a player launched at `--volume 0` to `10`, and
-`--status` reported `10` (it used to report `0` forever).
+**live** volume, falling back to the recorded value. It is soft-gated on `nc`, keeping
+`--status`'s jq-only dependency (§15). Verified: two `0` presses in `yt-tui` moved a player
+launched at `--volume 0` to `10`, and `--status` reported `10` (it used to report `0`
+forever).
+
+**Four properties, one round trip (`live_props` / `read_player_live`).** The same argument
+covers `pause`, `time-pos` and `duration`, only worse: the state file has never held them at
+all, so the socket was the *only* place they existed and only `yt-tui` was reading it. They
+are now part of the player record (§14), read by `live_props(sock, prop…)` — which sends the
+whole property list down ONE connection and emits `<request_id><US><value>` lines — and
+correlated by `read_player_live`, which both `--status` output modes share so the
+normalisation exists once. Three rules are load-bearing:
+
+- **Correlate by `request_id`, never by line order** — mpv interleaves async events into
+  every client's stream (the same rule `do_set_volume` carries).
+- **`head -n <count>` is what closes the pipe.** mpv answers each command exactly once and
+  `jq` has already dropped the id-less events, so the last expected line is where `head`
+  exits, SIGPIPEs `nc`, and ends the read. Measured against `tests/mpv_ipc_mock.py`, a peer
+  that never closes its side: **1.11s → 0.03s**. The caller breaking its own read loop does
+  NOT achieve this — nothing writes again to notice the reader is gone.
+- **`|| true` around the pipeline**, or `set -euo pipefail` turns an `nc` timeout into an
+  abort at the assignment.
+
+`null` and `false` are kept distinct throughout: `paused:false` means playing, `paused:null`
+means the question could not be asked (no `nc`, dead socket, no answer). Reporting `false`
+there would be a fabricated reading, which is the failure mode the live read exists to end.
+A useful side effect: `paused != null` is now the honest readiness probe for a freshly
+detached player — `volume` answers from the state file before mpv is even listening.
 
 **Handle = a monotonic token, not the pid (D9).** `new_player_id` mints the handle via
 `basename "$(mktemp "$PLAYERS_DIR/XXXXXX")"` — atomic and collision-free. This solves
@@ -1451,9 +1504,16 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     ultrawide window, the list passes nothing and uses the full width for its rows; passing
     the cap as an argument is what makes that asymmetry visible instead of looking like a
     lost line). `fetch_play_times` is the single `time-pos` / `duration` / `percent-pos`
-    fetch behind `PT_CUR` / `PT_TOTAL` / `PT_PCT`, including the live special case: both
-    player views had inlined the same three `nc | jq` pipelines and had already drifted, and
-    the live path used to fetch three round-trips per second only to discard them. The card's
+    fetch behind `PT_CUR` / `PT_TOTAL` / `PT_PCT`, and the single `pause` read behind
+    `CURRENT_PLAY_PAUSED`, including the live special case: both player views had inlined the
+    same three `nc | jq` pipelines and had already drifted, and the live path used to fetch
+    mpv's clock only to discard it (it describes the broadcast, not this listen). The live
+    path now asks for `pause` and nothing else — one property on one connection — because the
+    pause chrome was the one thing that path got WRONG for free: `toggle_pause` flips a local
+    flag, so anything else driving the socket (`yt-play`, an agent's own `nc`, a second TUI)
+    left the banner asserting a state the player had left. The local flip stays — it is what
+    repaints the banner on the keypress rather than up to a second later — and the tick's
+    read corrects it. Optimism, then truth. The card's
     divider rail is built by `repeat_glyph` and cached on `(width, glyph mode)` instead of
     `printf '─%.0s' $(seq 1 "$cols")` — a fork, plus precisely the idiom `repeat_glyph` exists
     to replace, run twice so the Unicode rail could be thrown away in ASCII mode.
@@ -1703,11 +1763,21 @@ Lifecycle / resolve:
 ```
    -d       : {status:"started", id, pid, url, mode, started_at, title:null, sock, log}
               sock/log are handed over so a client never rebuilds the state-dir layout
-   --status : {status:"players", players:[{id,pid,url,mode,volume,title,started_at}…]}
-              empty array when nothing playing (still exit 0); one entry per live player
+   --status : {status:"players",
+               players:[{id,pid,url,mode,volume,paused,position,duration,title,started_at}…],
+               failed:[{id,url,mode,started_at,ended_at,exit_code,reason}…]}
+              empty arrays when nothing playing / nothing failed (still exit 0)
               title is null for the first ~3s after a detach, then the async updater fills it
-              volume is read LIVE off the player's socket (§9.3), falling back to the
-              recorded launch/--set-volume value; null only if neither is available
+              volume, paused, position and duration are read LIVE off the player's socket in
+              ONE round trip (§9.3). volume falls back to the recorded launch/--set-volume
+              value; the other three are null when the socket could not be asked or the
+              player answered null — null is "could not ask", NOT false/0. position and
+              duration are integer seconds and are null until mpv starts decoding (~8s on a
+              cold start); duration stays null for a live stream.
+              failed[] is the tombstone list — players that DIED on their own, newest first,
+              at most 8, nothing older than an hour (§9.2). reason is the shared playback
+              enum. A player that finished normally or was --stopped is never in it, so the
+              array is an error record and not listening history (ROADMAP.md §0).
    --set-volume : {status:"ok", id, volume}          (live-adjusted via mpv IPC socket)
                 | {status:"not_playing"}             (no target; exit 4)
                 | {status:"ambiguous", reason:"multiple_players", players:[{id,pid,title,url}…]}  (exit 4)
@@ -1794,8 +1864,8 @@ on-disk record read by jq, not an envelope.
    TTY  : yt-tui requires BOTH stdin and stdout (§11); the core never needs a TTY —
           it errors on empty input rather than prompting (D1/D3).
    deps : core needs yt-dlp jq mpv before search/play/geturl; --status/--stop need
-          only jq (--status uses nc opportunistically for live volume and degrades to
-          the recorded value without it), --set-volume needs jq+nc (nc gated lazily so a
+          only jq (--status uses nc opportunistically for the live read and degrades to
+          the recorded volume plus three nulls without it), --set-volume needs jq+nc (nc gated lazily so a
           bare search never demands it), and --info / --transcript need only yt-dlp+jq
           (all checked before the mpv gate). yt-tui needs only jq and the verbs. curl is an OPTIONAL soft dep for
           the play-time client probe (§8.2). BSD `nc -U` is stock on macOS; the Linux
@@ -1858,7 +1928,11 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
                   play_mode_url, have_probe_tools, probe_media_fetchable,
                   play_url_with_probe, play_url_directly,
                   play_url_json, classify_playback_error, format_for_mode
-     Lifecycle  : group_alive, stop_group, ensure_state_dir, live_volume,
+     Lifecycle  : group_alive, stop_group, ensure_state_dir, live_props (multi-property
+                  IPC read), read_player_live (correlate + normalise, shared by both
+                  --status modes), detached_epitaph (the child's last log line),
+                  record_player_death / prune_dead_players / collect_failed_players
+                  (tombstones, §9.2),
                   player_state/player_sock/player_log/player_lock_dir,
                   lock_player_state/unlock_player_state, new_player_id, detach_play,
                   detach_title_updater, reap_dead_players, resolve_target,
@@ -1881,7 +1955,8 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
      Input      : read_nav_input/read_query_input, utf8_complete + init_lead_tables
                   (one key per CHARACTER), tty_echo_off/tty_echo_restore,
                   cursor_hide/cursor_show
-     Player     : send_mpv_ipc, mpv_get_prop, fetch_play_times (one connection for pos/dur/pct),
+     Player     : send_mpv_ipc, mpv_get_prop, fetch_play_times (one connection for
+                  pos/dur/pct + pause; pause ALONE on the live path),
                   player_check_ready (core-idle → clears the Starting state, 20 s cap),
                   play_state_marks (playing/paused/starting → glyph+label+colour, both views),
                   toggle_pause, seek_relative, adjust_volume, stop_current_playback,
@@ -2533,17 +2608,18 @@ new-search/more-results instead of `n`/`m`; also corrected.
           the resulting state in the envelope could only be a guess. `--pause` /
           `--resume` are strictly better for a machine caller anyway: idempotent, with no
           read-modify-write race. Toggling stays a `yt-tui` keypress.
-      A prerequisite for any of them: `--status` has no `paused` field today, so an agent
-      that paused could not observe that it had — see `ROADMAP.md` §10 P0.
+      Their prerequisite is now MET: `--status` reports live `paused` (§9.3/§14), so an
+      agent that paused could observe that it had. The verbs stay blocked on the decision
+      above, not on observability.
     - Linux `nc -U` portability — macOS-primary tool; BSD `nc -U` is stock, GNU netcat
       variants differ (`ncat -U` works; `netcat-traditional` has no Unix-socket support).
       Accepted as a known gap, noted in a script comment rather than solved now.
 
 ## 27. Verification matrix
 
-**No *scratch* rig is named by path here, on purpose.** The exception is the four harnesses
+**No *scratch* rig is named by path here, on purpose.** The exception is the six harnesses
 that earned a permanent home and are committed under `tests/` — `tui_screen.py`,
-`pty_drive.py`, `assert_pane.py`, `mpv_ipc_mock.py` — which the root README describes by name
+`pty_drive.py`, `assert_pane.py`, `mpv_ipc_mock.py`, `contract.sh`, `tui_pane.sh` — which the root README describes by name
 because a contributor cannot run what nothing points at. Everything else this suite has been
 verified with is a throwaway under a `tmp/` the repo does not track (`.gitignore`:
 `**/tmp/`), so citing one of those by path is a promise the checkout cannot keep — it resolves on exactly one machine, until that
@@ -2611,6 +2687,25 @@ the part of a rig worth keeping.
    Live volume: yt-tui 9/0 on a --volume 0 player → --status reports the
                 moved value (not the stale launch value); from 98, three 0 presses stop
                 at 100 and never reach mpv's own 130 ceiling
+   Live read  : the four properties in ONE round trip (§9.3), driven against the IPC mock
+                over a real socket: replies out of order land in the right slots
+                (--reverse), a property answered null renders JSON null and NOT false
+                (--null pause), async events interleaved change nothing (--noisy), and a
+                peer that never closes its side costs 0.03s rather than the full nc -w1
+                second (1.11s before `head -n <count>` closed the pipe). Against a real
+                player: an external `set_property pause true` over the socket shows up as
+                paused:true on the next --status, a dead socket reports paused/position/
+                duration null with volume falling back to the record, and with `nc` off
+                PATH --status still exits 0 with the same three nulls. position/duration
+                are null until mpv starts decoding (~8s cold) and duration stays null on a
+                live stream — the honest reading, not a fabricated 0
+   Death record: a detached player that dies unasked (`-d -j -- <bad id>`) is reported once
+                in --status failed[] with reason "unavailable" and exit_code 2, and
+                --status still exits 0. Boundaries, driven through the real verb with
+                fabricated state files: rc 0 (a normal finish) writes no tombstone, a log
+                with NO epitaph line (the kill -9 / --stop shape) writes none either, and
+                10 failures leave 8 on disk and 8 in the envelope, newest first. A real
+                --stop of a live player leaves failed[] empty and zero orphan mpv
    yt-tui     : (tmux PTY) Enter → background play + banner; Tab → card (live
                 time/progress via the envelope's sock) → Tab → list; Esc → list;
                 IPC: against real mpv the card's meta row shows a new reading on
