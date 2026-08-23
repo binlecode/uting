@@ -12,7 +12,7 @@
 | B-3 | 合并与删除：`yt-play` 删除，`ut-play` 上 PATH | ☑ 2026-08-23 |
 | C | `bili-search` / `bili-resolve` | ☐ 下一步 |
 | D | `ut-tui` 引擎注册表 + 切源键 | ☐ |
-| E | 文档同步 + `verify-suite` 四阶段（含 phase 4 真发声） | ☐ |
+| E | 文档同步 + 三个 rig（`tests/contract.sh`、`tests/tui_pane.sh`、`YT_TEST_LIFECYCLE=1 tests/lifecycle.sh` —— 最后一个真发声） | ☐ |
 
 ---
 
@@ -439,7 +439,7 @@ detach 子进程各一处），移走会让「播放时覆盖 format-sort」无�
 mpv 不再自己调 yt-dlp）**、§12 命令规格、§13 门禁模型（两层塌成一层）、§14 数据契约
 （加 resolve envelope）、§17 函数图、§27 验证矩阵。约 25 处光杆 `yt` 指核心的措辞一并清掉。
 `YT_VERSION` → `UT_VERSION`，`STATE_DIR` 的 `yt-cli-` 前缀可在此改。
-README + 各 `usage()`。然后 `verify-suite` 四阶段，**phase 4 必须真放一次 B 站音频**。
+README + 各 `usage()`。然后跑三个 rig，**`tests/lifecycle.sh` 必须真放一次 B 站音频**。
 
 ---
 

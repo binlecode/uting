@@ -60,7 +60,7 @@ uting 自己的入口（`yt-search` / `yt-play` / `--info` / `--transcript` / `y
 | 完整抽取 >120s（N=10）、单条 >100s | 计时实跑，**但在风控态下** | ⚠️ **实跑，非干净测量** |
 
 换句话说：**"B 站这条路能不能走通"有证据，"这套方案对不对"没有。** 前者是本文的贡献，
-后者要等 §5 的 A→E 一步步做出来，且 E 步的 `verify-suite` phase 4（audible）不可省。
+后者要等 §5 的 A→E 一步步做出来，且 E 步的 `tests/lifecycle.sh`（audible）不可省。
 
 ---
 
@@ -696,7 +696,7 @@ destructive 的一步放最后、最小，且先证明替代路径存在：
   C  接 -s/--source flag，让 yt-search / yt-tui 能选源。播放路径不改一行（§3.3）。
   D  时长第三种拼法、HTML 剥离、万/亿格式化 —— 全加在 core，不加在 yt-tui。
   E  文档同步（SPEC-system.md 的契约与函数图、README、usage()），
-     再跑一次 verify-suite，phase 4 audible 必须真放一次 B 站的音频。
+     再跑一次三个 rig，`tests/lifecycle.sh`（audible）必须真放一次 B 站的音频。
 ```
 
 **每一步都可停**。A 单独有价值（修的是通用缺陷），B 单独可验（headless），C 之后才有用户可见变化。
@@ -741,7 +741,7 @@ destructive 的一步放最后、最小，且先证明替代路径存在：
   造 `buvid3` 与向服务端要 `buvid3` 的风控强度差异。
 - **未实际放出声音**。本文证明了"URL 能取到、带 header 能连"，以及 ytdl_hook 的转发逻辑
   （`set_http_headers`，§3.3.2 已读源码，不再是推断），但**没有跑通一次真实播放**。
-  端到端仍需 `verify-suite` phase 4（audible）确认 —— 这是 §5 的 E 步不可省的原因。
+  端到端仍需 `tests/lifecycle.sh`（audible）确认 —— 这是 §5 的 E 步不可省的原因。
 - **只读了两个第三方实现**（`cliamp`、`bilibili-tui`）。`termusic` 的 NetEase/Migu/KuGou provider、
   `go-musicfox` 的 UnblockNeteaseMusic 未读。
 - **`cliamp` 的 provider 框架是 Go 的类型系统在撑**。搬到 bash 3.2 需要一个完全不同的等价物，

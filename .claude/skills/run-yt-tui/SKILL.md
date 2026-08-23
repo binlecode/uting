@@ -10,7 +10,8 @@ refuses a pipe and exits 1 (`yt-tui: needs a terminal`). Calling it with the Bas
 therefore proves nothing. Drive it inside tmux.
 
 Everything it calls (`yt-search`, `ut-play`) is the opposite: never interactive, never needs a
-TTY. Verify engine behavior with a plain Bash call — see the **verify-suite** skill.
+TTY. Verify engine behaviour with a plain Bash call, or run `tests/contract.sh`, which asserts
+the whole CLI contract that way.
 
 ## 1. Launch
 

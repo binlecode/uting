@@ -139,11 +139,21 @@ a pty running the actual script; a real mpv or the IPC mock over a real unix soc
 
 ### Minimum checks before every commit
 
-- `bash -n` on the core and all three wrappers.
-- Run the empty-argument and empty-array paths under `/bin/bash` explicitly (the 3.2 floor).
-- For any renderer change: `tests/tui_pane.sh` (it sweeps the geometries and the chrome variants, and calls `assert_pane.py` for each).
-- For any lifecycle change: `-d` twice → `--status` lists both → `--set-volume --id` → `--stop --id` → `--stop --all` → `--status` empty, and assert **zero orphan mpv** afterwards.
-- For any contract change: the `-j` envelope stays one line, and the exit code matches the taxonomy.
+**The three rigs in `tests/` ARE these checks.** There is no sweep document to follow: a check
+that only exists as prose for someone to copy out reports green by default, which is why the
+skill that used to hold this list was deleted. A new check goes in the rig, never in a doc.
+
+- `/bin/bash -n shell/*` — enforced by `.githooks/pre-commit` on staged content and by
+  `pre-push` on the worktree, so this is a backstop for a `--no-verify`, not a habit.
+- **Any contract or lifecycle change:** `tests/contract.sh` (it also drives the empty-argument
+  paths on the 3.2 floor, and the live `--status` read against the IPC mock).
+- **Any renderer change:** `tests/tui_pane.sh` — the geometry sweep, the chrome variants,
+  redraw-on-resize with no keypress, the in-place repaint rule, and the spinner; it calls
+  `assert_pane.py` for each geometry.
+- **Any change to the detached player:** `YT_TEST_LIFECYCLE=1 tests/lifecycle.sh`. It starts
+  real players (silent, `--volume 0`) and does not pass until `pgrep` is empty, so it is gated
+  and run deliberately.
+- The shellcheck baseline is a tracked count, not a clean bill — `docs/ROADMAP.md` §6.1.
 
 ## Safe-Evolution Methodology (how this suite is changed)
 
@@ -198,7 +208,6 @@ The live files:
 |---|---|
 | `run-yt-tui` | You need to *see* the TUI. It requires a real TTY on both stdin and stdout, so a Bash-tool call proves nothing — this covers the tmux drive, the pty-size trap, the ready markers, the keymap, and the detached-player cleanup a session kill does **not** do |
 | `capture-pane` | A terminal frame in `README.md` / `docs/SPEC-system.md` is stale. Capture → clean (`clean_capture.py`, which refuses a mid-fetch frame) → **prove with `tests/assert_pane.py`** → splice with a Python replace. Never hand-draw a frame |
-| `verify-suite` | Before a push, before a `YT_VERSION` bump, after touching the core / a wrapper / the renderer. The four-phase sweep this repo has instead of CI; phase 4 starts audible playback and is run deliberately |
 | `audit-conformance` | Periodically, not per-commit. Whole-suite scan against 12 rules (surface layering, DRY, bash 3.2, dead code, swallowed errors, contract and doc drift) → `docs/PLAN-conformance-YYYY-MM-DD.md`. Ships `fn_graph.py` (defs vs call sites across all four scripts) as a manual aid — **never** as a gate or a `tests/` member |
 
 A skill may propose a *structural detector as a manual aid*; it may never propose one as a test. The rigs-only mandate above binds skills too.

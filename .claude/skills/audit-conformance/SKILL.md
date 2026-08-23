@@ -141,7 +141,8 @@ TUI. The core may not read a `YT_TUI_*`-shaped knob; the TUI may not construct y
    ```
 
    Do not start a detached player as part of an audit — that is audible playback on someone's
-   machine. Lifecycle claims belong to the **verify-suite** skill, run deliberately.
+   machine. Lifecycle claims belong to `tests/lifecycle.sh`, which is gated behind
+   `YT_TEST_LIFECYCLE=1` and run deliberately.
 
 ---
 
