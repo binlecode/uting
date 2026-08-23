@@ -82,7 +82,7 @@ report "search -j is one line" 1 \
     "$(shell/yt-search -j -n 2 -- lofi | wc -l | tr -d ' ')"
 
 echo "── rejections (1 = usage error) ───────────────────────────────────"
-report "yt no args"               1 "$(rc /bin/bash shell/yt)"
+report "core no args"             1 "$(rc /bin/bash shell/ut-play)"
 report "yt-search no args"        1 "$(rc /bin/bash shell/yt-search)"
 report "yt-search --detach"       1 "$(rc shell/yt-search --detach -- x)"
 report "yt-search -f audio"       1 "$(rc shell/yt-search -f audio -- x)"
@@ -96,7 +96,7 @@ report "yt-play -- <query>"      1 "$(rc shell/yt-play -- "a query")"
 echo "── argv order: a flag-shaped query after -- is SEARCHED ───────────"
 # Not a player list: --status after -- is four characters of query text.
 report "yt -l -- --status searches" 0 \
-    "$(shell/yt -l -- --status 2>&1 | head -1 | grep -qv '^{' && echo 0 || echo 1)"
+    "$(shell/ut-play -l -- --status 2>&1 | head -1 | grep -qv '^{' && echo 0 || echo 1)"
 
 echo "── --transcript: read-only, so the gate and both envelopes are all ─"
 # The ok-path fixture must be a video that HAS captions and the error-path one must not:
@@ -239,7 +239,7 @@ rm -rf "$SD/players/dead"
 
 echo "── version and the non-TTY refusal ────────────────────────────────"
 report "one version, four entry points" 1 \
-    "$(for c in yt yt-search yt-play yt-tui; do shell/$c --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
+    "$(for c in ut-play yt-search yt-play yt-tui; do shell/$c --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
 report "yt-tui refuses a non-TTY" 1 "$(shell/yt-tui </dev/null >/dev/null 2>&1; echo $?)"
 
 echo

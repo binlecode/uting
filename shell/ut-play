@@ -129,7 +129,7 @@ fi
 
 usage() {
     cat <<EOF
-yt — the non-interactive core engine of the YT CLI suite (search / play / resolve /
+ut-play — the non-interactive core engine of the YT CLI suite (search / play / resolve /
 detached-playback lifecycle). This is the shared implementation the suite's three PATH
 surfaces delegate to, not itself an advertised command — prefer them (each has its own
 -h, and each gates the flags it cannot use):
@@ -2009,7 +2009,7 @@ while getopts ":n:m:M:s:f:S:dljJhV" opt; do
     # Answered before ANY dependency gate: a version is the first thing a bug report needs,
     # and needing yt-dlp installed to find out which version you have is backwards.
     V)
-        printf 'yt %s\n' "$YT_VERSION"
+        printf 'ut-play %s\n' "$YT_VERSION"
         exit 0
         ;;
     :)

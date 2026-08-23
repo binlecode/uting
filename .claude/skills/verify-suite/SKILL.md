@@ -22,7 +22,7 @@ observed numbers, and PASS/FAIL. Never report a skipped phase as passed; say it 
 ## Phase 1 — Syntax on the floor, and the shellcheck baseline (seconds, no side effects)
 
 ```bash
-/bin/bash -n shell/yt shell/yt-search shell/yt-play shell/yt-tui && echo "syntax OK"
+/bin/bash -n shell/ut-play shell/yt-search shell/yt-play shell/yt-tui && echo "syntax OK"
 ```
 
 `/bin/bash` explicitly, not `bash`: the floor is macOS's system 3.2 (`SPEC-system.md` §28) and
@@ -34,7 +34,7 @@ The shellcheck baseline is a **tracked count, not a clean bill** (`ROADMAP.md` �
 warnings — SC2128×5, SC2178×4, SC2034×3, SC2054×2, SC2174×1.
 
 ```bash
-shellcheck --severity=warning --format=gcc shell/yt shell/yt-search shell/yt-play shell/yt-tui | wc -l
+shellcheck --severity=warning --format=gcc shell/ut-play shell/yt-search shell/yt-play shell/yt-tui | wc -l
 ```
 
 Count in `gcc` format; the human format repeats each code in a footer and inflates a naive

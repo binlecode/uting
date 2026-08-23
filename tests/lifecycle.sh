@@ -30,6 +30,20 @@ ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
 bad() { fail=$((fail + 1)); FAILED="${FAILED}    ${1}"$'\n'; printf '  FAIL  %s\n' "$1"; }
 report() { if [ "$2" = "$3" ]; then ok "$1 ($3)"; else bad "$1: want $2, got $3"; fi; }
 
+# A detached launch returns the moment the child is forked -- that is the point of it -- so the
+# mpv IPC socket does not exist yet. Any check that MUTATES a player has to wait for the socket
+# or it asserts on `ipc_failed`/exit 4, which is the CORRECT answer to "talk to a player that is
+# not listening". Poll (bounded), never sleep a fixed guess: mpv's start is network-bound here
+# and has ranged from under a second to fifteen. Returns 1 on timeout so the caller can say so.
+wait_for_sock() {
+    local sock=$1 i
+    for i in $(seq 1 240); do
+        [ -S "$sock" ] && return 0
+        sleep 0.25
+    done
+    return 1
+}
+
 # Always stop everything, however this exits — a leaked player outlives the shell.
 cleanup() {
     tmux kill-session -t lc-tick 2>/dev/null
@@ -61,6 +75,10 @@ report "--status sees 2"   2 "$(shell/yt-play --status -j | jq '.players | lengt
 
 echo "── a selector-less mutation on 2 players is ambiguous -> exit 4 ───"
 report "--set-volume no --id" 4 "$(shell/yt-play --set-volume 40 -j >/dev/null 2>&1; echo $?)"
+# Ambiguity is decided before any IPC, so the check above needs no player listening. The
+# targeted ones below do -- wait for player 1's socket first (see wait_for_sock).
+sock1=$(printf '%s' "$o1" | jq -r '.sock // empty')
+wait_for_sock "$sock1" || bad "player 1's IPC socket never appeared -- the checks below are moot"
 report "--set-volume --id"    0 "$(shell/yt-play --set-volume 40 --id "$id1" -j >/dev/null 2>&1; echo $?)"
 # Only the targeted player moved: a mutation that leaks across players is the bug --id exists for.
 report "only the target moved" "40" \

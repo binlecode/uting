@@ -47,9 +47,9 @@
 
 | 文件 | 行数 | 角色 | 受众 |
 |---|---:|---|---|
-| `shell/yt` | 1965 | 引擎。yt-dlp 调用、jq prelude、时长格式、播放、脱离终端的播放器生命周期（id/pid/sock/lock/state dir、reap）、`--status`/`--stop`/`--set-volume`/`--get-url`/`--info`/`--transcript` | 机器（经壳调用） |
-| `shell/yt-search` | 148 | parse → gate → `exec yt` | agent tool call |
-| `shell/yt-play` | 249 | parse → gate → `exec yt` | agent tool call |
+| `shell/ut-play` | 2174 | 引擎。yt-dlp 调用、jq prelude、时长格式、播放、脱离终端的播放器生命周期（id/pid/sock/lock/state dir、reap）、`--status`/`--stop`/`--set-volume`/`--get-url`/`--info`/`--transcript` | 机器（经壳调用） |
+| `shell/yt-search` | 148 | parse → gate → `exec ut-play` | agent tool call |
+| `shell/yt-play` | 267 | parse → gate → `exec ut-play` | agent tool call |
 | `shell/yt-tui` | 2806 | 应用。自绘菜单、焦点卡片、宽度层、reflow、主题、中英 i18n、mpv IPC 客户端 | 人 |
 | `docs/SPEC-system.md` | 2745 | 架构 + 设计理由 + 验证矩阵（与代码同步的那一份） | 两者 |
 
@@ -302,7 +302,7 @@ PyPI、**同领域**的 GitHub 同名仓库。
 - **D8 —— 三件发布硬件先于任何公开动作**（§6.3）：`LICENSE`、rig 入库、`--version`。
 - **D9 —— 套件按「播放器 + 可扩展搜索引擎」重切，不按站点开命令**（2026-08-22 定，取代 D6 的命令名）。
 
-  起因是接入 B 站时实测出的三件事（`RESEARCH-bilibili-engine.md`）：`shell/yt` 里有三处**只对
+  起因是接入 B 站时实测出的三件事（`RESEARCH-bilibili-engine.md`）：核心（当时的 `shell/yt`）里有三处**只对
   YouTube 成立**的逻辑（PO-token 探测、`player_client=android`、`detach_title_updater` 存在只因
   搜索不给标题）；沿用 `-s/--source` flag 会把这三处原样继承给每一个新音源，并在四个函数里长出
   `if source ==` 树。真正与音源无关的是**播放器**（生命周期 / mpv / envelope / 退出码 / `players/`），

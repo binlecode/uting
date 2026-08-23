@@ -12,12 +12,18 @@ one earns it, and the one-fact-one-section rule then holds across the family. Wh
 document is NOT: a proposal (`DESIGN-<topic>.md`), the sequencing (`ROADMAP.md`), or work
 in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 
-- Core engine: `shell/yt` (single source of truth, non-interactive)
+- Core engine: `shell/ut-play` (single source of truth, non-interactive)
 - Narrow headless verbs: `shell/yt-search`, `shell/yt-play`
 - Interactive UI: `shell/yt-tui` (owned glue over the verbs; no extra deps)
 - Caller-facing surface: each verb's own `-h`/`--help` · Orientation: `README.md`
 - Runtime deps: `yt-dlp`, `jq` (search); `mpv` (playback); `curl` optional (§8.2).
   No fzf / TUI framework — only foundational primitives.
+
+> **Naming, in flight (2026-08-23).** The core file was renamed `shell/yt` → `shell/ut-play`
+> (`docs/PLAN-ut-restructure.md` step A). Below this line, a bare `yt` in prose or in a
+> process diagram still means that core. The names and the diagrams are redrawn in step E,
+> together — the invocation stack in §6.1 changes shape in step B (mpv stops running yt-dlp
+> itself), so redrawing it now and again then would be drawing it twice.
 
 The document flows: **I. System architecture → II. Functional structure →
 III. Modular API → IV. Supported workflows → V. Aligned best practice.**
@@ -2052,7 +2058,7 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
 ## 17. Function map & provenance
 
 ```
-   Core (shell/yt)
+   Core (shell/ut-play)
      Setup/util : usage, die, is_non_negative_int, validate_enum,
                   require_cmd/require_deps, mpv_supports_vo, normalize_playback_mode,
                   set_action, JQ_PRELUDE (jq p2/fmt_dur — the one duration formatter)

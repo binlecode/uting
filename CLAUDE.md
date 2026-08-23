@@ -27,10 +27,10 @@ git config core.hooksPath .githooks   # RUN ONCE PER CLONE — fresh clones have
 ## Build, Test, and Development Commands
 
 ```sh
-bash -n shell/yt shell/yt-search shell/yt-play shell/yt-tui   # syntax check — run before EVERY commit
+bash -n shell/ut-play shell/yt-search shell/yt-play shell/yt-tui  # syntax check — run before EVERY commit
 /bin/bash shell/yt-search -j -n 5 -- "lofi hip hop"           # exercise on the 3.2 floor, explicitly
 shell/yt-tui "lofi hip hop"                                   # interactive; needs a real TTY on stdin AND stdout
-shell/yt --help                                               # core help (core is internal, not on PATH)
+shell/ut-play --help                                          # core help (core is internal, not on PATH)
 shell/yt-tui --version                                        # answers before any dependency gate
 
 tests/contract.sh                                             # the CLI contract, 30+ checks
@@ -46,7 +46,7 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
 
 | File | Role |
 |------|------|
-| `shell/yt` | **CORE engine** (1.7k lines) — all search / play / resolve / lifecycle logic, non-interactive, never prompts. Owns the detached player lifecycle (id / pid / socket / lock / state dir / reap), the JSON envelope, the exit-code taxonomy, and `YT_VERSION`. **Not on PATH** and not symlinked into `bin/`: every caller goes through a narrow verb, and a PATH-exposed `yt` only invites bypassing the flag-gating the verbs exist to provide |
+| `shell/ut-play` | **CORE engine** (2.2k lines) — all search / play / resolve / lifecycle logic, non-interactive, never prompts. Owns the detached player lifecycle (id / pid / socket / lock / state dir / reap), the JSON envelope, the exit-code taxonomy, and `YT_VERSION`. **Not on PATH** and not symlinked into `bin/`: every caller goes through a narrow verb, and a PATH-exposed core only invites bypassing the flag-gating the verbs exist to provide. Renamed from `shell/yt` on 2026-08-23 (`docs/PLAN-ut-restructure.md` step A); it still holds the YouTube engine, which step B carves out |
 | `shell/yt-search` | Narrow headless verb — gates flags (rejects `-f` / `--detach` / a URL) and `exec`s the core. Short because the script *is* short |
 | `shell/yt-play` | Narrow headless verb — gates flags (rejects `-n` / `-s` / a bare query) and `exec`s the core. Owns the lifecycle verbs' argv surface (`--detach`, `--status`, `--stop`, `--set-volume`, `--get-url`, `--info`) |
 | `shell/yt-tui` | The human face (2.8k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
@@ -57,7 +57,7 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
 
 ```
   ~/bin/yt-search → shell/yt-search ─┐
-  ~/bin/yt-play   → shell/yt-play  ──┼─► exec shell/yt (core) ─► yt-dlp · mpv · jq
+  ~/bin/yt-play   → shell/yt-play  ──┼─► exec shell/ut-play (core) ─► yt-dlp · mpv · jq
   ~/bin/ytt       → shell/yt-tui ────┘   (via yt-search -j → render → yt-play -d -j)
 ```
 
@@ -214,7 +214,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 - One logical change per commit. Renderer changes come with the capture or the rig output that proves them.
 - `bash -n` on all four scripts before every commit; the relevant rig before every push.
 - **Always ask before `git push`.** Never force-push `main`.
-- There is no release process to run: the shell suite is not packaged (`docs/ROADMAP.md` D1). `YT_VERSION` in `shell/yt` is bumped deliberately, alone, when the contract or a user-visible surface changes — not once per commit.
+- There is no release process to run: the shell suite is not packaged (`docs/ROADMAP.md` D1). `YT_VERSION` in `shell/ut-play` is bumped deliberately, alone, when the contract or a user-visible surface changes — not once per commit.
 
 ## Security & Configuration Tips
 

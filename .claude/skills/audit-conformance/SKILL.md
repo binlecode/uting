@@ -49,7 +49,7 @@ and both are restated inline where they matter.
 |---|------|---------------|------------------|
 | R1 | **One-sided variable / flag** | A variable, flag, or env knob with only a write site or only a read site. A parsed flag that nothing consumes, an exported `YT_*` nothing reads, a state var set and never tested. | grep the bare name **and** the `${…}` form **and** `"$name"`; one side missing = candidate. Beware indirection: a var read only inside a `jq --arg`, a heredoc, or an `eval`-shaped string won't show in a bare-word grep — that is this rule's #1 false positive. |
 | R2 | **Redundant same-lifecycle state** | Two variables always assigned together and cleared together (e.g. a `CURRENT_PLAY_*` pair, a "have we drawn" flag beside the value it guards) — one concept wearing two names. | read the mutation sites; look for co-set / co-cleared pairs. |
-| R3 | **Logic in the wrong surface (layer back-edge)** | The suite's one hard layering rule: **`yt-tui` contains ZERO YouTube logic** and the wrappers contain ZERO search/play logic — they shape argv and delegate. A `yt-dlp` or `mpv` invocation, a format string, a cookie decision, or an IPC command construction anywhere but `shell/yt` is a back-edge. (`yt-tui` reading the mpv socket through the *documented* envelope field is not a violation; constructing yt-dlp argv is.) | `grep -n 'yt-dlp\|mpv ' shell/yt-tui shell/yt-search shell/yt-play` must be empty apart from dependency-check strings and comments — read each hit. |
+| R3 | **Logic in the wrong surface (layer back-edge)** | The suite's one hard layering rule: **`yt-tui` contains ZERO YouTube logic** and the wrappers contain ZERO search/play logic — they shape argv and delegate. A `yt-dlp` or `mpv` invocation, a format string, a cookie decision, or an IPC command construction anywhere but `shell/ut-play` is a back-edge. (`yt-tui` reading the mpv socket through the *documented* envelope field is not a violation; constructing yt-dlp argv is.) | `grep -n 'yt-dlp\|mpv ' shell/yt-tui shell/yt-search shell/yt-play` must be empty apart from dependency-check strings and comments — read each hit. |
 | R4 | **Duplication (DRY)** | Two carve-outs first, both deliberate: (a) each script must run standalone, so `die` / `print_usage` / `require_cmd` living in more than one file is **not** a finding; (b) the core's IPC property reader and `yt-tui`'s are intentionally separate and must not call each other — the TUI's is fire-and-forget, the core's confirms delivery and exits 4 (`PLAN-envelope-observability.md` §3). Otherwise: the same logic in ≥2 homes: a second duration formatter beside the core's `JQ_PRELUDE` `fmt_dur`, a re-implemented width/cell measurement, a copied jq filter, the same validation in a wrapper and the core. The governing principle is that correctness is added *down* in the core so every surface inherits it. | the function graph (Pass 0) for same-named or near-identical bodies across files; grep for duplicated jq programs and `printf` format strings. |
 | R5 | **bash 3.2 violation** | `declare -A`, `mapfile`/`readarray`, `${var,,}`/`${var^^}`, `${arr[-1]}`, `&>>`, `\|&`, `${!prefix@}`; an unguarded `"${arr[@]}"` on a possibly-empty array under `set -u`; a bare `((n += w))` **as a statement** under `set -e`; treating `read -rsn1` as one character rather than one byte; `LC_ALL=C [[ … ]]` (not valid bash at all). | the forbidden-idiom greps below, then **read** each array expansion and each `((…))` to classify statement vs test. The pre-commit hook blocks these on *added* lines; this rule sweeps what predates the hook. |
 | R6 | **Swallowed error** | `\|\| true`, `2>/dev/null`, or an empty branch on a path where the user must see the failure — a real fault rendered as an empty list, a `0`, or a blank field. A *deliberate* best-effort degrade is fine **if** it degrades visibly (`--:--`, `n/a`, `LIVE`) and never as a fake value. | `grep -n '|| true\|2>/dev/null' shell/*` then read every hit and ask what the user sees when it fires. |
@@ -65,7 +65,7 @@ and both are restated inline where they matter.
 ```
   primitives     yt-dlp · mpv · jq · nc          (external; called ONLY from the core)
         ↑
-  core           shell/yt                        (all search/play/resolve/lifecycle logic)
+  core           shell/ut-play                        (all search/play/resolve/lifecycle logic)
         ↑
   narrow verbs   shell/yt-search · shell/yt-play (gate flags, shape argv, exec the core)
         ↑
@@ -132,7 +132,7 @@ TUI. The core may not read a `YT_TUI_*`-shaped knob; the TUI may not construct y
    shell/yt-search --detach -- x; echo "exit=$?"    # 1 (gating)
    shell/yt-play "a query"; echo "exit=$?"          # 1 (not a URL)
    shell/yt-play -- "a query"; echo "exit=$?"       # ALSO must be 1 — check the -- path too
-   shell/yt >/dev/null; echo "exit=$?"              # 1 (empty query, D3)
+   shell/ut-play >/dev/null; echo "exit=$?"              # 1 (empty query, D3)
    shell/yt-tui </dev/null >/dev/null; echo "exit=$?"  # 1 (non-TTY refusal)
    ```
 
@@ -206,7 +206,7 @@ Scope: <path>   ·   Functions graphed: N   ·   Prior report folded: <file|none
 
 | rule | file:line | what | fix |
 |------|-----------|------|-----|
-| R3 | shell/yt-tui:NNN | … | move … down into shell/yt |
+| R3 | shell/yt-tui:NNN | … | move … down into shell/ut-play |
 
 ## This round — <one coherent theme>
 

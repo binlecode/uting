@@ -29,10 +29,10 @@ while [[ -L "$_self" ]]; do
     esac
 done
 SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
-if [[ -f "$SCRIPT_DIR/yt" ]]; then
-    IMPL="$SCRIPT_DIR/yt"
+if [[ -f "$SCRIPT_DIR/ut-play" ]]; then
+    IMPL="$SCRIPT_DIR/ut-play"
 else
-    echo "yt-play: cannot locate yt (core) next to $SCRIPT_DIR" >&2
+    echo "yt-play: cannot locate ut-play (core) next to $SCRIPT_DIR" >&2
     exit 1
 fi
 
