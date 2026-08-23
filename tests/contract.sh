@@ -220,6 +220,18 @@ report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcrip
 # -S on a search that resolves no format takes a value it cannot act on.
 report "bili-search rejects -S" 1 "$(rc shell/bili-search -S abr -- 音乐)"
 report "bili-search rejects -d" 1 "$(rc shell/bili-search -d -- 音乐)"
+# One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
+# which supports 1700+ sites — so a Bilibili URL resolved fine and came back labelled
+# `engine:"yt"`. It WORKED, which is why it went unnoticed, and it made the one field whose
+# job is routing a result back to its resolver into a field that lies. These two checks are
+# each other's mirror, because a rule only one engine follows is not a rule.
+report "yt-resolve refuses a bili URL" 1 \
+    "$(rc shell/yt-resolve -j -- https://www.bilibili.com/video/BV1mL411E7Fb)"
+report "bili-resolve refuses a yt URL" 1 \
+    "$(rc shell/bili-resolve -j -- "https://www.youtube.com/watch?v=$MEDIA_ID")"
+# The opposite failure is just as real: a host list tightened too far silently drops a
+# spelling users actually type. youtu.be is the one every share button produces.
+report "yt-resolve still takes youtu.be" 0 "$(rc shell/yt-resolve -j -- https://youtu.be/$MEDIA_ID)"
 # The player routes by NAME, and the name is the command prefix — the whole reason the
 # lookup is a string concatenation instead of a registry.
 report "ut-play routes to the bili engine" 0 \

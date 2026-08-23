@@ -300,15 +300,46 @@ format_for_mode() {
 #
 # BV is the modern spelling ("BV" + 10 base58-ish characters) and is what bili-search
 # returns as results[].id; av<digits> is the legacy numeric one, still served and still
-# what `arcurl` uses. A full URL passes through untouched so a query string survives —
-# `?p=7` selects a part of a multi-part video, and that is the caller's choice to make.
+# what `arcurl` uses. A URL on one of this engine's hosts passes through untouched so its
+# query string survives — `?p=7` selects a part of a multi-part video, and that is the
+# caller's choice to make. A URL from another site is a USAGE error (1), not an extraction
+# failure (2+): nothing was attempted and nothing is retryable.
+# The hostname a URL names — lowercased, with userinfo, port, path, query and fragment
+# removed. Lowercasing goes through `tr` because the parameter-expansion form for it is a
+# bash-4 feature and the floor here is 3.2; one fork per invocation.
+url_host() {
+    local h=$1
+    h="${h#*://}"
+    h="${h%%/*}"
+    h="${h%%\?*}"
+    h="${h%%#*}"
+    h="${h##*@}"
+    h="${h%%:*}"
+    printf '%s' "$h" | tr 'A-Z' 'a-z'
+}
+
+# Is this host THIS engine's? One engine, one site. An engine that resolves someone else's
+# URL is lying in the `engine` field, and that field's whole job is letting a caller route
+# a result back to the resolver that produced it. An explicit list rather than a substring
+# test: `*.bilibili.com` matches `m.bilibili.com` and refuses `evilbilibili.com`.
+is_own_host() {
+    case "$1" in
+    bilibili.com | b23.tv) return 0 ;;
+    *.bilibili.com | *.b23.tv) return 0 ;;
+    esac
+    return 1
+}
+
 normalize_target() {
-    local t=$1
+    local t=$1 host
     case "$t" in
     http://* | https://*)
+        host=$(url_host "$t")
+        is_own_host "$host" ||
+            die "'$host' is not a Bilibili host — this engine resolves Bilibili only (another site needs its own engine: ut-play --engine NAME)"
         TARGET_URL="$t"
         ;;
-    www.* | bilibili.com/* | m.bilibili.com/* | b23.tv/*)
+    bilibili.com/* | www.bilibili.com/* | m.bilibili.com/* | b23.tv/*)
         TARGET_URL="https://$t"
         ;;
     BV*)

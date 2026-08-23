@@ -60,6 +60,10 @@ in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 >   that always answers "none"); and `http_headers` stopped being a theoretical key —
 >   this site's CDN answers **403 to a bare stream URL and 206 to the same URL with the
 >   envelope's headers**, measured, so the hole D9 closed is now load-bearing.
+>   Its follow-on tightened both engines (ROADMAP D12): **`<engine>-resolve` accepts only
+>   its own site's hosts**, so §12's handle grammar now carries a host allowlist per engine
+>   and a URL from another site is a usage error (1), not an extraction failure. `yt-resolve`
+>   had been accepting any http(s) URL and labelling the result `engine:"yt"`.
 > - Still true everywhere: the exit-code taxonomy, the lifecycle semantics, and one line
 >   per `-j` envelope.
 

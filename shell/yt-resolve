@@ -300,16 +300,59 @@ format_for_mode() {
     esac
 }
 
-# A handle is either a URL or this engine's own media id. Knowing that a YouTube id is
-# exactly 11 characters of [A-Za-z0-9_-] is ENGINE knowledge — it is precisely what the
-# player gave up when it stopped being a YouTube tool, so the shape check lives here.
+# The hostname a URL names — lowercased, with userinfo, port, path, query and fragment
+# removed. Lowercasing goes through `tr` because the parameter-expansion form for it is a
+# bash-4 feature and the floor here is 3.2; it is one fork per invocation, not one per row,
+# so the cost is irrelevant.
+url_host() {
+    local h=$1
+    h="${h#*://}"
+    h="${h%%/*}"
+    h="${h%%\?*}"
+    h="${h%%#*}"
+    h="${h##*@}"
+    h="${h%%:*}"
+    printf '%s' "$h" | tr 'A-Z' 'a-z'
+}
+
+# Is this host THIS engine's? One engine, one site: an engine that resolves someone else's
+# URL is not being helpful, it is lying in the `engine` field — and that field's whole job
+# is letting a caller route a result back to the resolver that produced it.
+#
+# This check used to be absent, and its absence had a measurable consequence rather than a
+# theoretical one: `yt-resolve` accepted ANY http(s) URL and handed it to yt-dlp, which
+# supports 1700+ sites, so a Bilibili or Bandcamp URL resolved fine and came back labelled
+# `engine:"yt"`. It worked, which is exactly why it went unnoticed.
+#
+# An explicit list, not a substring test: `*.youtube.com` matches `music.youtube.com` and
+# refuses `evilyoutube.com`, which a bare `*youtube.com*` would wave through.
+is_own_host() {
+    case "$1" in
+    youtube.com | youtu.be | youtube-nocookie.com) return 0 ;;
+    *.youtube.com | *.youtu.be | *.youtube-nocookie.com) return 0 ;;
+    esac
+    return 1
+}
+
+# A handle is either a URL on one of this engine's hosts, or this engine's own media id.
+# Knowing that a YouTube id is exactly 11 characters of [A-Za-z0-9_-] is ENGINE knowledge —
+# it is precisely what the player gave up when it stopped being a YouTube tool, so both the
+# host list and the shape check live here.
+#
+# A URL from another site is a USAGE error (1), not an extraction failure (2+): nothing was
+# attempted and nothing is retryable — the caller named the wrong engine, the same mistake
+# `--engine nope` makes, and it scores the same.
 normalize_target() {
-    local t=$1
+    local t=$1 host
     case "$t" in
     http://* | https://*)
+        host=$(url_host "$t")
+        is_own_host "$host" ||
+            die "'$host' is not a YouTube host — this engine resolves YouTube only (another site needs its own engine: ut-play --engine NAME)"
         TARGET_URL="$t"
         ;;
-    www.* | youtube.com/* | m.youtube.com/* | music.youtube.com/* | youtu.be/*)
+    youtube.com/* | www.youtube.com/* | m.youtube.com/* | music.youtube.com/* | \
+        youtu.be/* | youtube-nocookie.com/* | www.youtube-nocookie.com/*)
         TARGET_URL="https://$t"
         ;;
     *)
