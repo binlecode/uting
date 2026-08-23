@@ -1,6 +1,6 @@
 # PLAN-ut-restructure —— 拆成「播放器 + 可扩展搜索引擎」
 
-**状态：A、B-1、B-2 已落地（2026-08-23）。下一步 B-3。**
+**状态：A、B-1、B-2、B-3 已落地（2026-08-23）。B 全部完成，下一步 C。**
 决定见 `ROADMAP.md` D9 / D10；证据见 `RESEARCH-bilibili-engine.md`。
 本文件**自带进度**，每项落地即更新，最后一项落地后删除，契约并入 `SPEC-system.md`。
 
@@ -9,8 +9,8 @@
 | A | 核心改名 `shell/yt` → `shell/ut-play`（零代码搬移） | ☑ 2026-08-23 |
 | B-1 | `yt-search` 独立成引擎（搜索与播放路径零耦合，非破坏性） | ☑ 2026-08-23 |
 | B-2 | `yt-resolve` 独立 **+** 播放器改走 resolve（耦合的一步，ytdl_hook 退场） | ☑ 2026-08-23 |
-| B-3 | 合并与删除：`yt-play` 删除，`ut-play` 上 PATH | ☐ 下一步 |
-| C | `bili-search` / `bili-resolve` | ☐ |
+| B-3 | 合并与删除：`yt-play` 删除，`ut-play` 上 PATH | ☑ 2026-08-23 |
+| C | `bili-search` / `bili-resolve` | ☐ 下一步 |
 | D | `ut-tui` 引擎注册表 + 切源键 | ☐ |
 | E | 文档同步 + `verify-suite` 四阶段（含 phase 4 真发声） | ☐ |
 
@@ -329,7 +329,7 @@ YouTube 引擎只回 UA/Accept/Accept-Language/Sec-Fetch-Mode，无凭据。已�
 - **`--force-media-title` / `--no-ytdl` / `--audio-file` / header 拼装**：用一个假 mpv
   记录 argv 逐模式核对
 
-### B-3. 合并与删除（destructive step，最后且最小）☐ 下一步
+### B-3. 合并与删除（destructive step，最后且最小）☑ 2026-08-23
 
 `yt-play` 是门禁壳，`ut-play` 是实现。**引擎搬走之后这两层就该合并**：`ut-play` 里只剩
 一个动词，也就没有「绕过门禁去调核心」这件事可防了 —— 而那正是 CLAUDE.md 当初把核心挡在
@@ -350,7 +350,76 @@ PATH 之外的唯一理由。
 （含空格），因为 `yt-play` 自己那道「必须像 URL」的门禁还在 —— **B-3 要做的就是删掉它**。
 搜索标志 `-n` / `-s` 在 `ut-play` 里仍然是 1（未知标志），不变。
 
-### C. `bili-search` / `bili-resolve` ☐
+#### 实际做的（与计划的出入，逐条）
+
+**1. 门禁不是「搬过来」，是三条各自成立的规则。**
+`yt-play` 那道「参数必须像 URL」的门禁按计划**删除**（`ut-play` 侧 B-2 已收 handle）。真正
+值得留的是另外三条，都落在 `ut-play`：未知长标志（`--*` 全部在归一化循环里处理，落到 getopts
+只会得到没用的 `invalid option: --`）、搜索标志重定向（`-n`/`-m`/`-M`/`-s` → 指向 `yt-search`）、
+以及引擎动词**点名**。
+
+**2. `--info` / `--transcript` 不是「变成未知标志」，是点名报错。**
+计划只写「只在 `yt-resolve` 上」。静默的 `unknown flag` 会让调用方以为拼错了；现在
+`ut-play --info` 退 1 并说 `run 'yt-resolve --info -- <id|URL>'`。`--get-url` 同理，且它的
+文案说的是「用裸 `yt-resolve -j`」—— 因为解流本来就是裸调用，不是某个 flag。
+
+**3. `-J` 随三个动词一起离开 `ut-play`（计划未提）。**
+它只在 `--info`/`--transcript`/`--get-url` 的转发里被翻译成引擎的 `-J`；play envelope 没有
+raw record。留着就是一个被静默忽略的标志 —— 正是门禁存在的理由。`-J` 现在报错并指向
+`yt-resolve --info -J`。
+
+**4. 偏离计划：`-S` 保留在 `ut-play`。**
+§2.2 写「`-S` 不再出现在 `ut-play` 的 flag 面上」。但它是**纯透传**（`resolve_for_play` 与
+detach 子进程各一处），移走会让「播放时覆盖 format-sort」无处可设（没有对应的 `YT_*`）。
+播放器不解释这个串，只转发 —— 边界没破。
+
+**5. `yt-resolve` 接手 `--transcript` 的 flag 门禁。**
+`yt-play` 拒 `-f`/`-d`/`--volume` 与 `--transcript` 同用；`-d` 那半 `yt-resolve` 早有，`-f`/`-S`
+那半没有 —— 它们被接受然后**静默无效**。补上 `FORMAT_FLAG` 与一条「`-f`/`-S` 只属于解流」的
+校验，contract 里那两条检查随动词搬到引擎上。
+
+**6. `yt-search` 的拒绝表分流。**
+`--info`/`--transcript`/`--sub-lang` 从「playback flag → 用 ut-play」改为「另一半引擎 →
+用 yt-resolve」；`--get-url` 从表里消失（它不再存在于任何地方）。
+
+**7. `shell/yt-tui:39`** 的 `YT_PLAY` → `UT_PLAY`/`ut-play`（连同定位失败文案与 8 处注释），
+与删除同一 commit。顺带修两处 B-2 之后就不成立的注释：LOADING 态不再是「mpv 用 yt-dlp 解流」
+而是「子进程问引擎」，launch 失败也不再是「yt-dlp 失败」。
+
+**8. `.githooks/pre-push` 的四脚本列表里没有 `yt-resolve`（B-2 漏的）。**
+一并补上：否则一个语法坏掉的引擎可以直接推上去。`fn_graph.py` 的文件表同理。
+
+**9. 文档只改「会指向不存在的文件」的地方。** `CLAUDE.md`（文件表、依赖图、seam 段、一名一
+命令、`bash -n` 命令行、PATH 说明）、`README.md`（安装四行 + 一行迁移说明）、三个 skill 的命令、
+`SPEC-system.md` 顶部在途说明加 B-3 条 + §14 划掉 `--get-url`。**§4 拓扑图、§12 命令规格、
+§13 两层门禁模型的全量重画仍在 E** —— 在途说明已经声明了这笔债。
+
+#### 验收
+
+`bash -n` 四脚本（`/bin/bash` 显式）· 四入口一版本 · shellcheck 基线 15 → **14**（只减不增）
+
+- `contract.sh` **61/61**（原 58 + 新增 3：未知长标志退 1、`--get-url` 已退役、`--info` 归引擎）
+- `YT_TEST_LIFECYCLE=1 lifecycle.sh` **13/13**，零孤儿 mpv，detach 仍 0 s 返回
+- `tui_pane.sh` **13/13**
+- **九个 envelope 单行**（search `-j`/`-J`、resolve `-j`/`-J`、`--info`、`--transcript`、
+  `--status`、`--stop`、play 失败）
+- **调用栈实测**：父进程 0 s 返回 → 子进程 `yt-resolve -j -f audio` → 一次 `yt-dlp` →
+  `mpv --no-ytdl <直链> --http-header-fields-append=… --force-media-title=…`；
+  **mpv 之下没有 yt-dlp**，`title`/`format` 由子进程回填，停止后零孤儿
+- **边界扫描**：`ut-play` 内零 `yt-dlp`/cookie/站点字样（仅注释）；`yt-search`/`yt-resolve`
+  内零 `mpv`/`players/` 写入；`yt-tui` 内零两者。`fn_graph.py`：零无调用方函数
+
+#### 发现但未做（B-3 之外，等决定）
+
+- **`yt-search -S` 是空转标志**：它把 `--format-sort` 加到一个 `--flat-playlist
+  --dump-single-json --skip-download` 的调用上，而 flat 搜索根本不解析格式，envelope 里也没有
+  格式字段 —— 收一个值却不可能改变任何输出。删它是缩小 agent 面的净赚，但那是一次**契约变更**
+  （冻结面规则 4），所以单独决定，不夹带在 B-3 里。
+- **player record 的 `url` 可能是裸 id**：`ut-play -- dQw4w9WgXcQ` 之后 `--status` 的 `url`
+  就是 `dQw4w9WgXcQ`。resolve envelope 里已经有归一化后的 `url`，子进程回填 `title`/`format`
+  时可以顺手回填它 —— 但那是 `--status` 契约里一个字段的语义变化，同样单独决定。
+
+### C. `bili-search` / `bili-resolve` ☐ 下一步
 
 - `bili-search`：`curl` 打 `/x/web-interface/search/type`（`buvid3` + UA + Referer）→ jq 整形。
   必做的三件数据清洗：剥 `<em class="keyword">`；`"MM:SS"`（分钟无上限）转秒；`play` → `view_count`。

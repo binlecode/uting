@@ -8,7 +8,7 @@ This file is the single source of truth for repository guidelines, used by Claud
 
 The suite is exposed **directly** to shell-capable agents with no MCP wrapper, so the **CLI contract itself** (argv, exit codes, output shape, process lifecycle) *is* the product and the safety boundary. Every design choice follows from that. Full rationale: `docs/SPEC-system.md`.
 
-**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `ytt` (the human surface) and `yt-search`/`yt-play` (the agent surface) onto their own PATH.
+**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `ytt` (the human surface) and `ut-play`/`yt-search`/`yt-resolve` (the agent surface) onto their own PATH.
 
 ## Runtime Environment (Required)
 
@@ -22,15 +22,15 @@ The suite is exposed **directly** to shell-capable agents with no MCP wrapper, s
 git config core.hooksPath .githooks   # RUN ONCE PER CLONE — fresh clones have no hooks
 ```
 
-`.githooks/pre-commit` blocks a staged secret / cookie export, a **bash-4 idiom on an added line**, a staged shell script that does not parse under `/bin/bash -n`, and a force-added `tmp/` file. `.githooks/pre-push` blocks a force-push or deletion of `main` and a syntax error in any of the four scripts, and warns when a `v*` tag is pushed (the tag must match `YT_VERSION`). A direct push to `main` is **not** blocked — see the commit guidelines.
+`.githooks/pre-commit` blocks a staged secret / cookie export, a **bash-4 idiom on an added line**, a staged shell script that does not parse under `/bin/bash -n`, and a force-added `tmp/` file. `.githooks/pre-push` blocks a force-push or deletion of `main` and a syntax error in any of the four scripts, and warns when a `v*` tag is pushed (the tag must match `shell/VERSION`). A direct push to `main` is **not** blocked — see the commit guidelines.
 
 ## Build, Test, and Development Commands
 
 ```sh
-bash -n shell/ut-play shell/yt-search shell/yt-play shell/yt-tui  # syntax check — run before EVERY commit
+bash -n shell/ut-play shell/yt-search shell/yt-resolve shell/yt-tui  # syntax check — run before EVERY commit
 /bin/bash shell/yt-search -j -n 5 -- "lofi hip hop"           # exercise on the 3.2 floor, explicitly
 shell/yt-tui "lofi hip hop"                                   # interactive; needs a real TTY on stdin AND stdout
-shell/ut-play --help                                          # core help (core is internal, not on PATH)
+shell/ut-play --help                                          # the player's own help (it is on PATH)
 shell/yt-tui --version                                        # answers before any dependency gate
 
 tests/contract.sh                                             # the CLI contract, 30+ checks
@@ -46,27 +46,30 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
 
 | File | Role |
 |------|------|
-| `shell/ut-play` | **The player** (2.0k lines) — all search / play / resolve / lifecycle logic, non-interactive, never prompts. Owns the detached player lifecycle (id / pid / socket / lock / state dir / reap), the JSON envelope, the exit-code taxonomy, and `YT_VERSION`. **Not on PATH** and not symlinked into `bin/`: every caller goes through a narrow verb, and a PATH-exposed core only invites bypassing the flag-gating the verbs exist to provide. Renamed from `shell/yt` (`docs/PLAN-ut-restructure.md` step A); search left for `yt-search` at step B-1, and the remaining YouTube logic (`resolve_*`, the cookie block, the PO-token probe) leaves at B-2 |
-| `shell/yt-search` | **The YouTube search engine** (540 lines) — query → result envelope. Owns its own yt-dlp call, cookie decision, result shaping and duration formatter, and its own flag gate (the wrapper merged in at step B-1: with the engine split out there is no second caller left to gate against). Zero playback or lifecycle logic |
-| `shell/yt-play` | Narrow headless verb — gates flags (rejects `-n` / `-s` / a bare query) and `exec`s the core. Owns the lifecycle verbs' argv surface (`--detach`, `--status`, `--stop`, `--set-volume`, `--get-url`, `--info`) |
+| `shell/ut-play` | **The player** (1.6k lines) — play + detached-playback lifecycle, non-interactive, never prompts. Owns the player lifecycle (id / pid / socket / lock / state dir / reap), the JSON envelope and the exit-code taxonomy, and **its own flag gate** (the `yt-play` wrapper merged in at `docs/PLAN-ut-restructure.md` step B-3: with search and extraction gone to the engines there is one verb left here, so there is no bypass left to defend against). **Source-agnostic** — it does not search, does not extract, and carries no yt-dlp call, cookie decision or format string. It asks an engine, by name: `--engine yt` → `yt-resolve` |
+| `shell/yt-search` | **The YouTube engine, half one** (560 lines) — query → result envelope. Owns its own yt-dlp call, cookie decision, result shaping and duration formatter, and its own flag gate. Zero playback or lifecycle logic |
+| `shell/yt-resolve` | **The YouTube engine, half two** (960 lines) — handle → `{stream_urls[], http_headers{}, title, duration, format}`, plus `--info` and `--transcript`. Owns the PO-token probe, the cookie decision, the mode→format table and the yt-dlp error vocabulary. Every site-specific fact in the suite lives in this file or in `yt-search`; adding a source is adding a pair like it |
 | `shell/VERSION` | The suite version, declared once — a one-line data file, not a shell variable. The player and the engines are independent executables sharing no library, so a variable in any one of them would make the others ask *it* for the version — the wrong dependency direction for a player that must not know its engines |
 | `shell/yt-tui` | The human face (2.8k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
 | `tests/assert_pane.py` | Layout invariants on a captured pane, measured in **cells** (east-asian-width), not characters: nothing exceeds the pane width, titles start on one column, the duration rail is right-flush |
 | `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that does what the real one will not do on cue: answer out of order, report a property null, interleave async events, walk the clock, never close its side |
 
-**Dependency graph — search/play logic exists ONCE, in the core:**
+**Dependency graph — one layer, four peers. Site knowledge exists ONLY in the engine pair, playback ONLY in the player:**
 
 ```
-  ~/bin/yt-search → shell/yt-search ─────► yt-dlp · jq          (the YouTube search engine)
-  ~/bin/yt-play   → shell/yt-play  ─────► exec shell/ut-play ─► yt-dlp · mpv · jq
-  ~/bin/ytt       → shell/yt-tui ────────► (yt-search -j → render → yt-play -d -j)
+  ~/bin/yt-search  → shell/yt-search ──► yt-dlp · jq              (engine: query → results)
+  ~/bin/yt-resolve → shell/yt-resolve ─► yt-dlp · jq · curl       (engine: handle → stream URL + headers)
+  ~/bin/ut-play    → shell/ut-play ────► <engine>-resolve -j ──► mpv · jq · nc   (player)
+  ~/bin/ytt        → shell/yt-tui ─────► (yt-search -j → render → ut-play -d -j)
 ```
 
-Each wrapper locates the core by a path **relative to its own resolved script location** (self-resolving symlink chain, `cd -P`/`pwd -P` — bash 3.2 has no `readlink -f`), so the checkout can live anywhere and needs no `bin/` entry to work.
+The player never runs yt-dlp and mpv never runs it either (`--no-ytdl` + a direct URL): **one extraction, and we make it.** The engine name IS the command prefix, which is what lets the player find `yt-resolve` with a string concatenation instead of a registry.
 
-**Primitives sit behind seams** (`docs/SPEC-system.md` §5): `mpv` behind `run_mpv()` (single play seam) plus the `mpv_supports_vo()` capability probe; `yt-dlp` at ~5 named sites (`fetch_results`, `resolve_stream_url`, `resolve_info`, `probe_media_fetchable`, `detach_title_updater`); `jq` pervasive. Keep new primitive calls inside the existing seams.
+Each script locates its siblings by a path **relative to its own resolved script location** (self-resolving symlink chain, `cd -P`/`pwd -P` — bash 3.2 has no `readlink -f`), so the checkout can live anywhere and needs no `bin/` entry to work.
 
-**Governing principle: correctness is added *down* in the core, so every surface inherits it — never *up* in a UI.** A fix in `yt-tui` that the core could have made is a bug in the wrong file.
+**Primitives sit behind seams** (`docs/SPEC-system.md` §5), and the seams are now split by file: `mpv` behind `run_mpv()` in `ut-play` (single play seam) plus the `mpv_supports_vo()` capability probe; `yt-dlp` only in the engines (`fetch_results` in `yt-search`; `resolve_stream`, `resolve_info`, `resolve_transcript`, `probe_media_fetchable` in `yt-resolve`); `jq` pervasive. Keep new primitive calls inside the existing seams — and a yt-dlp call in `ut-play` or an mpv call in an engine is a layering violation, not a seam.
+
+**Governing principle: correctness is added *down* — in the player if it is about playback, in the engine if it is about a site — so every surface inherits it, never *up* in a UI.** A fix in `yt-tui` that `ut-play` could have made is a bug in the wrong file.
 
 ## Hard Rules
 
@@ -100,7 +103,7 @@ If a feature genuinely needs bash 4+, the honest move is `((BASH_VERSINFO[0] >= 
 
 ### 2. One fact, one place
 
-`docs/SPEC-system.md` is the code-synced spec and each fact lives in exactly ONE of its sections; everything else points at it. Do not restate a contract in the README, in `usage()`, and in the design doc — state it once and cross-reference. `YT_VERSION` is declared once, in the core; the wrappers and the TUI ask it and print their own name, so four entry points can never disagree.
+`docs/SPEC-system.md` is the code-synced spec and each fact lives in exactly ONE of its sections; everything else points at it. Do not restate a contract in the README, in `usage()`, and in the design doc — state it once and cross-reference. The version is declared once, in `shell/VERSION`; each entry point reads that file and prints its own name, so four entry points can never disagree.
 
 ### 3. Scratch stays under `tmp/`
 
@@ -203,7 +206,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 ## Coding Style & Naming Conventions
 
 - Match the surrounding style: 4-space indentation, `snake_case` functions, `UPPER_SNAKE` globals, `local` for everything inside a function, `set -euo pipefail` semantics respected (see the arithmetic rule above).
-- **One name per command.** `yt`, `yt-search`, `yt-play`, `yt-tui` are the canonical identity — help text, errors, docs, and (for the two agent-facing wrappers) the PATH entry itself. `ytt` is the single deliberate short form, because `yt-tui` is the one command a human types by hand; `yts`/`ytp` are deprecated. Never add a second name for an existing command.
+- **One name per command.** `ut-play`, `yt-search`, `yt-resolve`, `yt-tui` are the canonical identity — help text, errors, docs, and (for the three agent-facing verbs) the PATH entry itself. `ytt` is the single deliberate short form, because `yt-tui` is the one command a human types by hand; `yts`/`ytp` are deprecated. Never add a second name for an existing command.
 - Per-request choices are **flags**; set-once tuning is an **environment variable** (`YT_*`) — this keeps each verb's flag surface narrow enough for a small model to call safely. Do not add a flag for something a user sets once.
 - Never add a runtime dependency. The suite's differentiator is that it depends only on primitives everyone already has.
 - Prefer small, incremental edits in the existing scripts over refactors that move logic between files.

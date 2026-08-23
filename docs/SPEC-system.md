@@ -15,7 +15,6 @@ in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 - Player (source-agnostic): `shell/ut-play` — plays, and owns the detached lifecycle
 - YouTube engine (a pair): `shell/yt-search` (query → results), `shell/yt-resolve`
   (handle → stream URL + headers, plus `--info` / `--transcript`)
-- Narrow headless verb: `shell/yt-play` (gates flags, execs the player; retires at B-3)
 - Interactive UI: `shell/yt-tui` (owned glue over the verbs; no extra deps)
 - Caller-facing surface: each verb's own `-h`/`--help` · Orientation: `README.md`
 - Runtime deps: `yt-dlp`, `jq` and (optionally) `curl` in the ENGINES; `mpv` + `jq` in the
@@ -40,6 +39,14 @@ in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 >   `--info` and `--transcript` are `exec`-forwarded to `yt-resolve` and are its verbs now.
 >   The engine token in every envelope is `yt`, not `youtube`: the name IS the command
 >   prefix, which is what lets the player find `yt-resolve` without a registry.
+> - **Step B-3** — the `yt-play` gating wrapper is **deleted** and `ut-play` is the PATH
+>   entry for playback, holding its own gate. Two layers became one, so §13's two-tier
+>   gating model and §4's topology are now one tier of four peers. `--get-url` is **retired
+>   with no alias**: it was a second spelling of what a bare `yt-resolve` call is. `--info`
+>   and `--transcript` are no longer forwarded either — `ut-play` names the engine and exits
+>   1 — so §10's resolve-only verb and §12's player spec belong to `yt-resolve` now, and the
+>   player's own flag surface is exactly: `-f -S -d -j -l --engine --volume --status --stop
+>   --set-volume --id --all --color -h -V`. `-J` went with the verbs that used it.
 > - Still true everywhere: the exit-code taxonomy, the lifecycle semantics, and one line
 >   per `-j` envelope.
 
@@ -1934,7 +1941,7 @@ load-bearing:
   playback and **exit 2+** — floored to 2, because yt-dlp exits 1 for an unavailable video
   and 1 is reserved for usage errors.
 
-Playback status (`yt-play -j <url>`):
+Playback status (`ut-play -j -- <handle>`):
 ```json
 { "status":"ok"|"error", "url":"…", "mode":"audio",
   "exit_code":0, "reason":null, "retried":false }
@@ -1985,7 +1992,9 @@ Lifecycle / resolve:
    --stop   : {status:"stopped", id, stopped:bool}   (single target)
             | {status:"stopped", scope:"all", stopped:bool}   (--all)
             | {status:"ambiguous", …}                (2+ players, no --id; exit 4)
-   --get-url: the resolve envelope above, verbatim (the player forwards, it does not shape)
+   (--get-url was retired at B-3: resolving a stream URL is what a bare `yt-resolve` call
+    IS, and the player publishing a second spelling of it was one contract with two names.
+    --info / --transcript below are `yt-resolve` verbs — the player does not forward them.)
    --info   : {status,engine,id,title,url,channel,uploader,upload_date,duration,duration_fmt,
               view_count,like_count,live_status,description,chapters} ; -J = raw record
               chapters = [{start_time,end_time,title}] | null ; error → {status,engine,url,reason}

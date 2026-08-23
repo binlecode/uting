@@ -69,12 +69,11 @@ usage() {
 ut-play — the non-interactive PLAYER: play + detached-playback lifecycle. It is the
 source-agnostic half of the suite. It does not search, does not extract, and knows nothing
 about any one site: an ENGINE (a pair of executables, <engine>-search and <engine>-resolve)
-turns a handle into a stream URL, and this file plays it. Still reached through yt-play
-today, which gates the flags this surface cannot use:
+turns a handle into a stream URL, and this file plays it. It is the whole playback surface
+and it gates its own flags: no wrapper sits in front of it, and nothing else on PATH plays.
 
   yt-search   search -> text list or JSON        (the YouTube engine, half one)
-  yt-resolve  handle -> stream URL + headers     (the YouTube engine, half two)
-  yt-play     play / manage playback of a URL
+  yt-resolve  handle -> stream URL + headers, metadata, captions   (half two)
   yt-tui      interactive terminal browser (pick + play)
 
 A HANDLE is a URL or an engine media id (dQw4w9WgXcQ). Whether an id is well formed is the
@@ -86,10 +85,10 @@ Usage (everything after -- is the handle, so it may start with '-'):
   ut-play --status [-j]                                   list live detached players
   ut-play --stop [--id ID | --all] [-j]                   stop one player (or all)
   ut-play --set-volume N [--id ID] [-j]                   live volume on a detached player
-  ut-play --info [-j|-J] -- <id|URL>                      metadata only (-> the engine)
-  ut-play --transcript [--sub-lang L] [-j|-J] -- <id|URL> captions as text (-> the engine)
-  ut-play --get-url [-f mode] [-j] -- <id|URL>            stream URL(s) only (-> the engine)
   ut-play (no handle, no action)                          usage error; use yt-tui to browse
+
+Not here, by design: metadata, captions and stream URLs are extraction, so they are the
+engine's verbs — yt-resolve --info / --transcript / (bare) resolve. Searching is yt-search.
 
 Options:
   --engine N  Which engine resolves the handle (default: yt; set UT_DEFAULT_ENGINE).
@@ -104,23 +103,15 @@ Options:
               volume; change it live with --set-volume.
   -l          Prose output (default)
   -j          JSON output: one-line status JSON for play/lifecycle
-  -J          --info JSON with the full raw yt-dlp fields; with --transcript,
-              the same envelope plus the timed `segments` array
   -d          --detach: background playback; manage with --status/--stop/--set-volume
-  --transcript  Fetch the caption track and print it as clean text (read-only, nothing
-              plays). Handled by the engine; this verb only forwards. Alias: --subtitles
-  --sub-lang L  Caption language(s) for --transcript: a comma-separated priority chain,
-              first one the video actually has wins (default: en,zh-Hans,zh,ja).
-              Alias: --sub-langs
   --color M   auto|always|never (default: auto). No -c short form.
   -h          This help
   -V          Print the suite version (answered before any dependency check)
 
-Long-only flags: --engine --detach --status --stop --get-url --info --set-volume --id
-                 --all --transcript --sub-lang --json --json-full --list --color --volume
-                 (--help and --version also have short forms: -h, -V)
+Long-only flags: --engine --detach --status --stop --set-volume --id --all --json --list
+                 --color --volume  (--help and --version also have short forms: -h, -V)
 
-Output contracts (full schemas: macos/docs/SPEC-system.md §14):
+Output contracts (full schemas: docs/SPEC-system.md §14):
   play -j   {status, url, mode, exit_code, reason, retried}
             reason: forbidden|unavailable|format_unavailable|network|stopped_by_user|
                     unknown|null(ok)   (network also covers HTTP 429 rate limiting)
@@ -132,23 +123,11 @@ Output contracts (full schemas: macos/docs/SPEC-system.md §14):
   --stop    {status:"stopped", id, stopped} | {status:"stopped", scope:"all", stopped}
   --set-vol {status:"ok", id, volume} | {status:"not_playing"} | {status:"ambiguous", …}
             | {status:"error", reason:"ipc_failed"}
-  --get-url the engine's resolve envelope, verbatim:
-            {status, engine, id, url, title, duration, mode, format, stream_urls[],
-             http_headers{}, retried}
-  --info    {status, engine, id, title, url, channel, uploader, upload_date, duration,
-             duration_fmt, view_count, like_count, live_status, description, chapters}
-  --transcript {status, engine, id, url, lang, is_auto, chars, segment_count, text}
-             -J adds segments[{start,duration,text}] (seconds) — a strict SUPERSET of -j.
-             -j omits it on purpose: `segments` repeats the same words `text` already
-             carries, and dropping it is 3.1x smaller on a 444-cue track.
-             failure -> {status:"error", url, reason}; reason uses the enum above, plus
-             no_subtitles_available.
-  duration_fmt is null when the duration is unknown (e.g. a live stream).
 
 Exit codes: 0 ok · 1 usage/validation · 2+ propagated engine/mpv failure · 4 lifecycle
             call did not take effect (no such player / ambiguous / IPC failure)
 
-Playback keys (mpv, during a blocking 'yt <url>' playback):
+Playback keys (mpv, during a blocking 'ut-play -- <handle>' playback):
   _  toggle video track on/off        q  stop playback and exit
 
 Dependencies: mpv (playback) + jq; nc (--set-volume); an <engine>-resolve on PATH or next
@@ -924,7 +903,7 @@ detach_play() {
             '{status: "started", id: $id, pid: $pid, url: $url, mode: $mode, started_at: $started_at, title: null, sock: $sock, log: $log}'
     else
         printf "Detached playback started (id %s, pid %s, mode %s): %s\n" "$id" "$pid" "$PLAYBACK_MODE" "$url"
-        printf "  status: yt-play --status   stop: yt-play --stop --id %s   log: %s\n" "$id" "$log"
+        printf "  status: ut-play --status   stop: ut-play --stop --id %s   log: %s\n" "$id" "$log"
     fi
 }
 
@@ -1197,7 +1176,7 @@ do_stop() {
             if [[ "$OUTPUT_MODE" == "json" ]]; then
                 jq -nc --argjson players "$RESOLVE_PLAYERS_JSON" '{status: "ambiguous", reason: "multiple_players", players: $players}'
             else
-                echo "multiple players playing; specify --id or --all (see 'yt-play --status')" >&2
+                echo "multiple players playing; specify --id or --all (see 'ut-play --status')" >&2
             fi
             exit 4
         fi
@@ -1247,7 +1226,7 @@ do_set_volume() {
             fi
         else
             if [[ "$RESOLVE_ERR" == "ambiguous" ]]; then
-                echo "multiple players playing; specify --id (see 'yt-play --status')" >&2
+                echo "multiple players playing; specify --id (see 'ut-play --status')" >&2
             else
                 echo "nothing playing" >&2
             fi
@@ -1311,11 +1290,10 @@ OUTPUT_MODE="list"
 # Playback lifecycle / structured-output state.
 DETACH=0
 ENGINE="$UT_DEFAULT_ENGINE"  # which <engine>-resolve turns a handle into bytes
-ACTION=""            # "" (normal) | status | stop | geturl | info | set-volume | transcript
+ACTION=""            # "" (normal) | status | stop | set-volume
 ACTION_FLAG=""       # the flag that set ACTION, for conflict messages
 PLAYBACK_RETRIED=0   # relayed from the resolve envelope; surfaced in the playback JSON
 SET_VOLUME_ARG=""    # value from --set-volume N
-SUB_LANG=""          # value from --sub-lang, forwarded to the engine verbatim
 TARGET_ID=""         # value from --id (target a specific detached player)
 STOP_ALL=0           # --stop --all
 RESOLVED_ID=""       # resolve_target out-param: the resolved player id
@@ -1396,10 +1374,6 @@ while (($#)); do
         normalized_args+=("-j")
         shift
         ;;
-    --json-full)
-        normalized_args+=("-J")
-        shift
-        ;;
     --detach)
         normalized_args+=("-d")
         shift
@@ -1413,25 +1387,16 @@ while (($#)); do
         shift
         ;;
     --get-url)
-        set_action geturl --get-url
-        shift
+        # Retired, not renamed: resolving a stream URL is what a bare `yt-resolve` call IS,
+        # so the player forwarding a verb of its own was a second spelling of one contract.
+        die "--get-url is gone — resolve a stream URL with 'yt-resolve -j -- <id|URL>'"
         ;;
-    --info)
-        set_action info --info
-        shift
-        ;;
-    --transcript | --subtitles)
-        set_action transcript --transcript
-        shift
-        ;;
-    --sub-lang | --sub-langs)
-        [[ $# -ge 2 ]] || die "$1 requires a value"
-        SUB_LANG="$2"
-        shift 2
-        ;;
-    --sub-lang=* | --sub-langs=*)
-        SUB_LANG="${1#*=}"
-        shift
+    --info | --transcript | --subtitles | --sub-lang | --sub-langs \
+        | --sub-lang=* | --sub-langs=*)
+        # Extraction verbs, forwarded from here until the wrapper merge — and a forward is
+        # the copy the split exists to remove. Name the engine rather than reporting an
+        # unknown flag: the caller has the right suite, wrong half.
+        die "${1%%=*} is an engine verb — run 'yt-resolve ${1%%=*} -- <id|URL>' (metadata and captions are extraction)"
         ;;
     --set-volume)
         [[ $# -ge 2 ]] || die "--set-volume requires a value"
@@ -1457,6 +1422,13 @@ while (($#)); do
         STOP_ALL=1
         shift
         ;;
+    --*)
+        # Every long flag is handled in THIS loop (getopts below sees only short ones), so
+        # an unmatched one can never be valid — and left to fall through it reached getopts
+        # as `-`, which reported the useless "invalid option: --". The wrapper used to hold
+        # this arm; naming the real flags is the half of a gate that helps a caller recover.
+        die "unknown flag '$1' (play flags: -f -S -d -j -l --engine --volume --status --stop --set-volume --id --all --color)"
+        ;;
     *)
         normalized_args+=("$1")
         shift
@@ -1469,14 +1441,13 @@ else
     set --
 fi
 
-while getopts ":f:S:dljJhV" opt; do
+while getopts ":f:S:dljhV" opt; do
     case "$opt" in
     f) PLAYBACK_MODE=$(normalize_playback_mode "$OPTARG") ;;
     S) FORMAT_SORT="$OPTARG" ;;
     d) DETACH=1 ;;
     l) OUTPUT_MODE="list" ;;
     j) OUTPUT_MODE="json" ;;
-    J) OUTPUT_MODE="json_full" ;;
     h)
         usage
         exit 0
@@ -1491,6 +1462,12 @@ while getopts ":f:S:dljJhV" opt; do
         die "option -$OPTARG requires an argument"
         ;;
     \?)
+        # The gate the yt-play wrapper used to hold: a search flag here is a caller who
+        # picked the wrong verb, and "invalid option: -n" does not say which verb is right.
+        case "$OPTARG" in
+        n | m | M | s) die "-$OPTARG is a search flag — use yt-search for searching" ;;
+        J) die "-J (full raw record) is an engine flag — try 'yt-resolve --info -J'" ;;
+        esac
         die "invalid option: -$OPTARG"
         ;;
     esac
@@ -1539,10 +1516,8 @@ if [[ -n "${QUERY//[[:space:]]/}" && "$QUERY" != *[[:space:]]* ]]; then
     IS_HANDLE=1
 fi
 
-# --get-url / --info / --transcript / --detach all act on one specific piece of media.
-if [[ -n "$ACTION" && "$ACTION" != status && "$ACTION" != stop && "$ACTION" != set-volume ]] && ((! IS_HANDLE)); then
-    die "$ACTION_FLAG requires a video id or URL"
-fi
+# Every remaining ACTION (status / stop / set-volume) addresses a running PLAYER, not a
+# piece of media, so --detach is the only verb left that needs a handle.
 if ((DETACH)) && ((! IS_HANDLE)); then
     die "--detach requires a video id or URL"
 fi
@@ -1573,37 +1548,6 @@ if [[ "$ACTION" == "set-volume" ]]; then
     require_cmd nc
     do_set_volume "$SET_VOLUME_ARG" "${TARGET_ID:-}"
 fi
-# --get-url / --info / --transcript are ENGINE verbs: pure extraction, no player, no process,
-# no state file. The player FORWARDS rather than keeping a copy — a copy is exactly what the
-# split exists to remove — and forwards with `exec`, so the envelope, the stderr and the exit
-# code are the engine's own and this routing is three lines to delete when B-3 retires it.
-if [[ "$ACTION" == "info" || "$ACTION" == "transcript" || "$ACTION" == "geturl" ]]; then
-    engine_resolve_bin
-    engine_argv=()
-    case "$ACTION" in
-    info) engine_argv+=(--info) ;;
-    transcript)
-        engine_argv+=(--transcript)
-        if [[ -n "$SUB_LANG" ]]; then
-            engine_argv+=(--sub-lang "$SUB_LANG")
-        fi
-        ;;
-    geturl)
-        engine_argv+=(-f "$PLAYBACK_MODE")
-        if [[ -n "$FORMAT_SORT" ]]; then
-            engine_argv+=(-S "$FORMAT_SORT")
-        fi
-        ;;
-    esac
-    case "$OUTPUT_MODE" in
-    json) engine_argv+=(-j) ;;
-    json_full) engine_argv+=(-J) ;;
-    *) engine_argv+=(-l) ;;
-    esac
-    engine_argv+=(--color "$COLOR_MODE")
-    exec "$ENGINE_RESOLVE" "${engine_argv[@]}" -- "$QUERY"
-fi
-
 # yt-dlp is no longer a dependency of the PLAYER: extraction belongs to the engine, which
 # gates its own tools. What is left here is what actually plays and shapes output.
 require_deps jq mpv

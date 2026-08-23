@@ -4,7 +4,7 @@
 #
 # Delegates core jobs to headless binaries:
 #   search (network fetch) → yt-search -j <query>   (JSON envelope)
-#   play                   → yt-play -d -j -f MODE -- url  (ASYNCHRONOUS: detached background player)
+#   play                   → ut-play -d -j -f MODE -- url  (ASYNCHRONOUS: detached background player)
 #   filter (narrow rows)   → pure bash, no external tool
 #
 # yt-tui renders its OWN menu with dual switchable views:
@@ -16,7 +16,7 @@ set -euo pipefail
 # empty-array expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). §28.
 
 # Resolve this script's OWN symlink chain before looking for its siblings. The PATH entries
-# (yt-search / yt-play, and ytt for the TUI) are symlinks into a checkout that can live
+# (yt-search / ut-play, and ytt for the TUI) are symlinks into a checkout that can live
 # anywhere, so `dirname $0` is
 # the symlink's directory, not the code's. This walks the chain to the real file and takes ITS
 # directory — which is the one holding the rest of the suite.
@@ -34,14 +34,14 @@ while [[ -L "$_self" ]]; do
     esac
 done
 SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
-if [[ -x "$SCRIPT_DIR/yt-search" && -x "$SCRIPT_DIR/yt-play" ]]; then
+if [[ -x "$SCRIPT_DIR/yt-search" && -x "$SCRIPT_DIR/ut-play" ]]; then
     YT_SEARCH="$SCRIPT_DIR/yt-search"
-    YT_PLAY="$SCRIPT_DIR/yt-play"
-elif command -v yt-search >/dev/null 2>&1 && command -v yt-play >/dev/null 2>&1; then
+    UT_PLAY="$SCRIPT_DIR/ut-play"
+elif command -v yt-search >/dev/null 2>&1 && command -v ut-play >/dev/null 2>&1; then
     YT_SEARCH=$(command -v yt-search)
-    YT_PLAY=$(command -v yt-play)
+    UT_PLAY=$(command -v ut-play)
 else
-    echo "yt-tui: cannot locate yt-search / yt-play" >&2
+    echo "yt-tui: cannot locate yt-search / ut-play" >&2
     exit 1
 fi
 
@@ -200,7 +200,7 @@ done
 
 is_uint "$PAGE_OPT" && ((PAGE_OPT > 0)) || die "-p must be a positive integer"
 is_uint "$RESULT_N" && ((RESULT_N > 0)) || die "-n must be a positive integer"
-# Duration bounds and volume are forwarded verbatim (-m/-M to yt-search, --volume to yt-play),
+# Duration bounds and volume are forwarded verbatim (-m/-M to yt-search, --volume to ut-play),
 # so the core would reject them anyway — but only at the first fetch or the first Enter, where
 # it reads as "search failed" / a play that silently does not start. Same three checks the core
 # makes (yt's is_non_negative_int), up front, in the core's own wording.
@@ -208,7 +208,7 @@ is_uint "$MIN_DISP" || die "-m must be a non-negative integer"
 is_uint "$MAX_DISP" || die "-M must be a non-negative integer"
 ((MAX_DISP == 0 || MAX_DISP > MIN_DISP)) || die "-M must be greater than -m when both are set"
 case " ${SORT_CYCLE[*]} " in *" $SORT_FIELD "*) ;; *) die "-s must be one of: ${SORT_CYCLE[*]}" ;; esac
-# Playback is DETACHED here (yt-play -d), and a detached player has no terminal, so the
+# Playback is DETACHED here (ut-play -d), and a detached player has no terminal, so the
 # terminal-rendering modes (ascii/viz) cannot work — the core rejects them for -d. Validate
 # up front instead of letting an Enter fail silently. Same list the v key cycles.
 case " ${MODE_CYCLE[*]} " in *" $PLAY_MODE "*) ;; *) die "-f must be one of: ${MODE_CYCLE[*]} (ascii/viz need a terminal, which detached playback has none of)" ;; esac
@@ -225,7 +225,7 @@ fi
 require_cmd jq nc
 # The self-rendered menu reads keys from stdin and draws to stdout, so BOTH must be a real
 # terminal; refuse cleanly rather than hang/garble when piped (e.g. an agent).
-{ [[ -t 0 ]] && [[ -t 1 ]]; } || die "requires a terminal (interactive menu); use yt-search / yt-play headless"
+{ [[ -t 0 ]] && [[ -t 1 ]]; } || die "requires a terminal (interactive menu); use yt-search / ut-play headless"
 
 # ── Theme & Colors (init_theme): palette family + light/dark + protocol knobs ───────────
 # Minimalist palette, terminal-native: minimal/mono use ANSI 16 indexed codes only, so the
@@ -536,9 +536,11 @@ CURRENT_PLAY_DURATION=""
 CURRENT_PLAY_MODE=""
 CURRENT_PLAY_SOCK=""
 CURRENT_PLAY_PAUSED=0
-# Third state, between "launched" and "playing": the -d envelope comes back as soon as the core
-# has forked, but mpv still has to resolve the stream with yt-dlp and fill its cache, and that
-# window is seconds long on a cold URL. The banner used to claim "Playing" for all of it.
+# Third state, between "launched" and "playing": the -d envelope comes back as soon as the player
+# has forked, but the detached child still has to ask the engine to resolve the stream and let
+# mpv fill its cache, and that window is seconds long on a cold URL. (The extraction moved into
+# the child at PLAN step B-2; the window it opens is the same one, so this state still earns its
+# keep.) The banner used to claim "Playing" for all of it.
 CURRENT_PLAY_LOADING=0
 # A live stream has no meaningful position: mpv reports time-pos on the whole
 # broadcast-so-far timeline with duration = the live edge, so percent-pos sits at
@@ -780,7 +782,7 @@ card_divider() {
 #
 # The chrome's own glyphs are one such table, and they are safe to table because the suite's
 # glyph inventory is deliberately all text-presentation — "non-graphical". There is no emoji
-# anywhere in yt / yt-search / yt-play / yt-tui, so none of these characters can carry a
+# anywhere in ut-play / yt-search / yt-resolve / yt-tui, so none of these characters can carry a
 # U+FE0F and silently become a 2-cell emoji glyph behind the table's back. All 17 measured
 # at ONE cell (tmux over Ghostty, `tmux display-message -p '#{cursor_x}'`):
 #   Neutral EAW    ↵ ♫ ❚ ❯                      one cell in EVERY terminal
@@ -1041,7 +1043,7 @@ elapsed_since_play() {
 # this listen" is a fact about the fetch, not about a view.
 #
 # Pause is read here rather than tracked locally because the local value LIES: toggle_pause
-# flips CURRENT_PLAY_PAUSED, but anything else driving the same socket (yt-play, an agent's
+# flips CURRENT_PLAY_PAUSED, but anything else driving the same socket (ut-play, an agent's
 # own `nc -U`, a second TUI) moves the real state without telling us — the identical reason
 # the core reads `volume` off the socket instead of the state file (SPEC-system.md §9.3).
 # The local flip STAYS: it is what repaints the banner on the keypress instead of up to a
@@ -1326,7 +1328,7 @@ adjust_volume() {
     # is 130, so holding `0` reached a volume the rest of the suite's vocabulary says cannot
     # exist — the core's --set-volume 0-100 validation does not guard the socket path (§9.3).
     # Verified: a player launched at --volume 10 and pressed `0` twenty times reads 100 in
-    # `yt-play --status`, where the old `add` left it at 110. The extra round trip costs
+    # `ut-play --status`, where the old `add` left it at 110. The extra round trip costs
     # ~16 ms against a live player (see send_mpv_ipc).
     cur=$(mpv_get_prop volume)
     [[ -n "$cur" ]] || return 0
@@ -1456,7 +1458,7 @@ play_state_marks() {
 
 stop_current_playback() {
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
-        "$YT_PLAY" --stop --id "$CURRENT_PLAY_ID" -j >/dev/null 2>&1 || true
+        "$UT_PLAY" --stop --id "$CURRENT_PLAY_ID" -j >/dev/null 2>&1 || true
         clear_play_state
     fi
 }
@@ -2289,15 +2291,15 @@ play_selected() {
     # search's: it is the only place a launch failure's reason exists.
     local sock errfile rc=0 msg
     errfile=$(mktemp "${TMPDIR:-/tmp}/yt-tui-play-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/yt-tui-play-err.$$"
-    out=$("$YT_PLAY" -d -j -f "$PLAY_MODE" ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>"$errfile") || rc=$?
+    out=$("$UT_PLAY" -d -j -f "$PLAY_MODE" ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>"$errfile") || rc=$?
     msg=$(<"$errfile")
     rm -f "$errfile"
     if ((rc != 0)); then
         # Launch-time failures only, and that is the whole point of reporting them here: the
-        # detached path is async, so a yt-dlp failure INSIDE the child lands in the child's own
+        # detached path is async, so a resolve failure INSIDE the child lands in the child's own
         # log and the player simply exits — check_player_alive clears the chrome then, and this
-        # notice never fires. What reaches here is the core refusing to start (a rejected flag,
-        # a bad URL shape, no mpv).
+        # notice never fires. What reaches here is ut-play refusing to start (a rejected flag,
+        # a handle with whitespace in it, no mpv).
         msg=${msg##*$'\n'}                 # last line only; die can print context above it
         msg=${msg#Error: }                 # the core's own prefix, redundant under our label
         [[ -n "${msg//[[:space:]]/}" ]] || msg="playback failed"

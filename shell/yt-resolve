@@ -126,6 +126,7 @@ ANON_ARGS=(--extractor-args "youtube:player_client=android")
 ACTION="stream"      # stream | info | transcript
 PLAYBACK_MODE="audio"
 FORMAT_SORT=""
+FORMAT_FLAG=""       # which of -f / -S was actually given (gate: stream resolution only)
 COLOR_MODE="auto"
 OUTPUT_MODE="list"   # list (prose) | json | json_full
 TARGET=""            # the handle as the caller typed it
@@ -873,11 +874,13 @@ while (($#)); do
         ;;
     -f | --format-mode)
         [[ $# -ge 2 ]] || { echo "yt-resolve: $1 requires a value" >&2; exit 1; }
+        FORMAT_FLAG="$1"
         PLAYBACK_MODE=$(normalize_playback_mode "$2")
         shift 2
         ;;
     -S)
         [[ $# -ge 2 ]] || { echo "yt-resolve: $1 requires a value" >&2; exit 1; }
+        FORMAT_FLAG="$1"
         FORMAT_SORT="$2"
         shift 2
         ;;
@@ -935,6 +938,13 @@ if [[ -n "$SUB_LANG" ]]; then
     [[ "$ACTION" == "transcript" ]] || die "--sub-lang applies only to --transcript"
     [[ "$SUB_LANG" =~ ^[A-Za-z0-9][A-Za-z0-9_,.-]*$ ]] ||
         die "--sub-lang takes a comma-separated list of language tags (e.g. en or zh-Hans,en)"
+fi
+# The mirror of that check, and the other half of the gate ut-play used to hold for
+# --transcript: -f / -S pick a FORMAT, and only stream resolution resolves one. Next to
+# --info or --transcript they were accepted and quietly did nothing, which is precisely
+# what a gating layer exists to reject rather than ignore (SPEC-system.md §13).
+if [[ -n "$FORMAT_FLAG" && "$ACTION" != "stream" ]]; then
+    die "$FORMAT_FLAG selects a stream format — it does not apply to --$ACTION"
 fi
 
 normalize_target "$TARGET"

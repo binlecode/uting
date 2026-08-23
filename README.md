@@ -8,10 +8,10 @@ TUI if you are a human, from a single-line JSON contract if you are a program.
 ```sh
 ytt                                    # interactive: search, browse, play, control
 yt-search -j -n 25 -- "lofi hip hop"   # machine: one line of JSON out
-yt-play -d -j -- "<url>"               # machine: launch detached, get {id, pid, sock}
-yt-play --transcript -j -- "<url>"     # machine: captions as clean text + timed segments
-yt-play --status -j                    # machine: what is playing, where, how loud
-yt-play --stop --id <id> -j            # machine: stop it
+ut-play -d -j -- "<url>"               # machine: launch detached, get {id, pid, sock}
+yt-resolve --transcript -j -- "<url>"  # machine: captions as clean text + timed segments
+ut-play --status -j                    # machine: what is playing, where, how loud
+ut-play --stop --id <id> -j            # machine: stop it
 ```
 
 ## Status
@@ -30,13 +30,13 @@ sets for you.
 
 - **`ut-play`** — the player. Source-agnostic: it drives mpv, owns the detached player lifecycle
   (id / pid / socket / lock / state dir / reap), and defines the contract. It never searches and
-  never extracts, so it knows nothing about YouTube.
+  never extracts, so it knows nothing about YouTube. Deliberately single-purpose, with mutually
+  exclusive flags rejected up front and a flag that moved to an engine answered by naming that
+  engine — because that is what makes it safe for a small model to call.
 - **`yt-search` + `yt-resolve`** — the YouTube *engine*, a pair. Search turns a query into results;
   resolve turns a result id (or a URL) into a direct stream URL plus the HTTP headers it must be
   fetched with, and also answers `--info` and `--transcript`. Everything site-specific lives here:
   the yt-dlp calls, the cookie decision, the format-per-mode table. Adding a source is adding a pair.
-- **`yt-play`** — a narrow verb wrapper over the player, deliberately single-purpose with mutually
-  exclusive flags rejected up front, because that is what makes it safe for a small model to call.
 - **`yt-tui`** — the human face. Self-rendered list and focus card, live filter, pagination that
   reflows against the measured chrome, three playback states, en/zh chrome, ASCII fallback, themes.
   No TUI framework, no fzf.
@@ -73,25 +73,26 @@ cd uting
 ```
 
 For daily use, symlink onto your PATH — the TUI under the short name you type by hand, the
-two agent-facing wrappers under their own names:
+player and the engine halves under their own names:
 
 ```sh
-ln -s "$PWD/shell/yt-tui"    ~/bin/ytt
+ln -s "$PWD/shell/yt-tui"     ~/bin/ytt
+ln -s "$PWD/shell/ut-play"    ~/bin/ut-play
 ln -s "$PWD/shell/yt-search"  ~/bin/yt-search
 ln -s "$PWD/shell/yt-resolve" ~/bin/yt-resolve
-ln -s "$PWD/shell/yt-play"    ~/bin/yt-play
 ```
+
+Replacing an older `~/bin/yt-play`: that wrapper is gone, and `ut-play` is what it wrapped —
+`rm ~/bin/yt-play` and use the line above. Its `--info` / `--transcript` / `--get-url` verbs are
+the engine's now: `yt-resolve --info`, `yt-resolve --transcript`, and for a stream URL a bare
+`yt-resolve -j`.
 
 The older `yts` / `ytp` spellings are **deprecated**. Nothing in the suite reads its own
 `argv[0]`, so an existing `~/bin/yts` keeps working — it is simply no longer a documented
 name, and one name per command is the point.
 
-`ut-play` itself is reached through a path relative to the wrappers and is deliberately **not** put
-on PATH yet — it is still internal while the restructure is in flight. It goes on PATH, and
-`yt-play` goes away, at `docs/PLAN-ut-restructure.md` step B-3.
-
 `ytt --version` (or `-V`) answers before any dependency check, so it works on a machine that has
-not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. All five
+not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. All four
 entry points report the same number: it is declared once, in `shell/VERSION`.
 
 ## Keys

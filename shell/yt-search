@@ -482,8 +482,14 @@ while (($#)); do
         esac
         shift 2
         ;;
-    -f | -d | --detach | --status | --stop | --get-url | --info | --transcript | --subtitles | --sub-lang | --sub-langs | --set-volume | --id | --all)
+    -f | -d | --detach | --status | --stop | --set-volume | --id | --all)
         echo "yt-search: $1 is a playback flag — use ut-play for playback" >&2
+        exit 1
+        ;;
+    --info | --transcript | --subtitles | --sub-lang | --sub-langs)
+        # The other half of this engine, not the player: metadata and captions are
+        # extraction. --get-url is deliberately absent — it no longer exists anywhere.
+        echo "yt-search: $1 belongs to the other half of this engine — use yt-resolve $1" >&2
         exit 1
         ;;
     --)

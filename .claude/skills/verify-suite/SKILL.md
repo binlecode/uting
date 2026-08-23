@@ -22,19 +22,19 @@ observed numbers, and PASS/FAIL. Never report a skipped phase as passed; say it 
 ## Phase 1 — Syntax on the floor, and the shellcheck baseline (seconds, no side effects)
 
 ```bash
-/bin/bash -n shell/ut-play shell/yt-search shell/yt-play shell/yt-tui && echo "syntax OK"
+/bin/bash -n shell/ut-play shell/yt-search shell/yt-resolve shell/yt-tui && echo "syntax OK"
 ```
 
 `/bin/bash` explicitly, not `bash`: the floor is macOS's system 3.2 (`SPEC-system.md` §28) and
 a Homebrew bash 5 on PATH parses things 3.2 rejects. Then the class `bash -n` cannot see —
 runtime 3.2 behaviours — by driving the empty-argument paths, which `tests/contract.sh` also
-covers in phase 2 (`yt no args`, `yt-search no args`).
+covers in phase 2 (`ut-play no args`, `yt-search no args`).
 
 The shellcheck baseline is a **tracked count, not a clean bill** (`ROADMAP.md` §6.1): 15
 warnings — SC2128×5, SC2178×4, SC2034×3, SC2054×2, SC2174×1.
 
 ```bash
-shellcheck --severity=warning --format=gcc shell/ut-play shell/yt-search shell/yt-play shell/yt-tui | wc -l
+shellcheck --severity=warning --format=gcc shell/ut-play shell/yt-search shell/yt-resolve shell/yt-tui | wc -l
 ```
 
 Count in `gcc` format; the human format repeats each code in a footer and inflates a naive
@@ -57,7 +57,7 @@ idle lifecycle, one version across four entry points, and the non-TTY refusal.
 
 It also asserts the **one-line rule** (`SPEC-system.md` §14): every `-j`/`-J` payload on stdout
 is a single line. That class was broken in five places until 2026-08-22 — search `-j`/`-J`,
-`--info -j`/`-J`, `--get-url -j`, and `--status`, the last compact only while the player list
+`--info -j`/`-J`, the resolve envelope, and `--status`, the last compact only while the player list
 was *empty*, i.e. pretty exactly when something is polling it. If you add an envelope, add its
 `wc -l` check to the rig.
 
@@ -100,17 +100,17 @@ it will do before running it, use `--volume 0` so it is silent, and do not call 
 
 ```bash
 U1='https://www.youtube.com/watch?v=<id1>'; U2='https://www.youtube.com/watch?v=<id2>'
-o1=$(shell/yt-play -d -j --volume 0 -- "$U1")     # must return in ~0.03s, not after mpv starts
+o1=$(shell/ut-play -d -j --volume 0 -- "$U1")     # must return in ~0.03s, not after mpv starts
 echo "$o1" | jq -e '.id and .pid and .sock' >/dev/null; echo "detach envelope exit=$?"
-o2=$(shell/yt-play -d -j --volume 0 -- "$U2")
+o2=$(shell/ut-play -d -j --volume 0 -- "$U2")
 id1=$(echo "$o1" | jq -r .id)
 
-shell/yt-play --status -j | wc -l                  # 1 — the POPULATED envelope, only measurable here
-shell/yt-play --status -j | jq '.players | length' # 2
-shell/yt-play --set-volume 40 -j; echo "ambiguous exit=$? (want 4)"
-shell/yt-play --set-volume 40 --id "$id1" -j; echo "targeted exit=$? (want 0, see below)"
-shell/yt-play --stop --id "$id1" -j; echo "stop one exit=$? (want 0)"
-shell/yt-play --stop --all -j;       echo "stop all exit=$? (want 0)"
+shell/ut-play --status -j | wc -l                  # 1 — the POPULATED envelope, only measurable here
+shell/ut-play --status -j | jq '.players | length' # 2
+shell/ut-play --set-volume 40 -j; echo "ambiguous exit=$? (want 4)"
+shell/ut-play --set-volume 40 --id "$id1" -j; echo "targeted exit=$? (want 0, see below)"
+shell/ut-play --stop --id "$id1" -j; echo "stop one exit=$? (want 0)"
+shell/ut-play --stop --all -j;       echo "stop all exit=$? (want 0)"
 pgrep -fl 'mpv .*--input-ipc-server' || echo "no orphan mpv — PASS"
 ```
 
@@ -122,10 +122,12 @@ until exit 0 rather than sleeping a guess.
 
 Two properties worth measuring while a player runs, both of which have regressed before:
 
-- **Detach latency.** `time out=$(shell/yt-play -d -j -- URL)` returns in ~0.03 s. Slower means
-  the title updater is holding the captured pipe.
+- **Detach latency.** `time out=$(shell/ut-play -d -j -- URL)` returns in ~0.03 s. Slower means
+  the parent is waiting on the engine — resolution belongs to the detached CHILD, which
+  backfills `title`/`format` into the player record once it has the envelope.
 - **Log growth.** the detached `mpv-<id>.log` stays ~59 bytes with **zero** growth while
-  playing, and still records a real `ytdl_hook` ERROR when one occurs.
+  playing, and still records a real mpv ERROR when one occurs (there is no ytdl_hook any
+  more: the player passes `--no-ytdl` and opens the URL the engine resolved).
 
 For anything timing-sensitive prefer a **local synthetic source** (`av://lavfi:sine`) over
 YouTube — network throttling has corrupted a timing measurement here before (§25.1).

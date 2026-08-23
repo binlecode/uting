@@ -61,7 +61,7 @@ rc() { "$@" >/dev/null 2>&1; echo $?; }
 # jq_ok <jq-filter> <command...> — does the command's stdout satisfy the filter?
 # The output is captured FIRST and the filter applied to the variable, never piped straight
 # from the command: `set -o pipefail` makes a pipeline carry the LEFT side's status, so
-# `yt-play --transcript -j <no-captions> | jq -e …` reported jq's success as the command's
+# `yt-resolve --transcript -j <no-captions> | jq -e …` reported jq's success as the command's
 # exit 1. Both error-path checks below went red against correct behaviour that way.
 jq_ok() {
     local filter=$1; shift
@@ -126,12 +126,18 @@ report "core no args"             1 "$(rc /bin/bash shell/ut-play)"
 report "yt-search no args"        1 "$(rc /bin/bash shell/yt-search)"
 report "yt-search --detach"       1 "$(rc shell/yt-search --detach -- x)"
 report "yt-search -f audio"       1 "$(rc shell/yt-search -f audio -- x)"
-report "yt-play bare query"       1 "$(rc shell/yt-play "a query")"
-report "yt-play -n"               1 "$(rc shell/yt-play -n 5 -- URL)"
-report "yt-play two actions"      1 "$(rc shell/yt-play --status --stop)"
-report "yt-play selector alone"   1 "$(rc shell/yt-play --status --id X)"
-report "yt-play -d + action"      1 "$(rc shell/yt-play -d --stop)"
-report "yt-play -- <query>"      1 "$(rc shell/yt-play -- "a query")"
+report "ut-play bare query"       1 "$(rc shell/ut-play "a query")"
+report "ut-play -n"               1 "$(rc shell/ut-play -n 5 -- URL)"
+report "ut-play two actions"      1 "$(rc shell/ut-play --status --stop)"
+report "ut-play selector alone"   1 "$(rc shell/ut-play --status --id X)"
+report "ut-play -d + action"      1 "$(rc shell/ut-play -d --stop)"
+report "ut-play -- <query>"       1 "$(rc shell/ut-play -- "a query")"
+# The gating wrapper is gone, so these three are the checks that it took its gate with it
+# rather than dropping it: an unknown long flag must not reach getopts as a bare `-`, and
+# the two verbs that moved to the engine must name the engine instead of half-working.
+report "ut-play unknown long flag" 1 "$(rc shell/ut-play --json-full -- URL)"
+report "--get-url is retired"     1 "$(rc shell/ut-play --get-url -- URL)"
+report "--info is the engine's"   1 "$(rc shell/ut-play --info -- URL)"
 
 echo "── argv order: a flag-shaped query after -- is SEARCHED ───────────"
 # Not a player list: --status after -- is eight characters of query text. The check lives on
@@ -149,16 +155,16 @@ echo "── --transcript: read-only, so the gate and both envelopes are all ─
 # working code.
 CAPTIONED="https://www.youtube.com/watch?v=8S0FDjFBj8o"
 BARE="https://www.youtube.com/watch?v=n61ULEU7CO0"
-report "transcript rejects -f"    1 "$(rc shell/yt-play --transcript -f audio -- "$CAPTIONED")"
-report "transcript rejects -d"    1 "$(rc shell/yt-play --transcript -d -- "$CAPTIONED")"
+report "transcript rejects -f"    1 "$(rc shell/yt-resolve --transcript -f audio -- "$CAPTIONED")"
+report "transcript rejects -d"    1 "$(rc shell/yt-resolve --transcript -d -- "$CAPTIONED")"
 report "transcript envelope"      0 \
     "$(jq_ok '.status=="ok" and .id and .lang and .chars>0 and (.is_auto|type=="boolean") and (.text|length>0)' \
-        shell/yt-play --transcript -j -- "$CAPTIONED")"
+        shell/yt-resolve --transcript -j -- "$CAPTIONED")"
 report "transcript -J has segments" 0 \
-    "$(jq_ok '.segments[0]|has("start") and has("text")' shell/yt-play --transcript -J -- "$CAPTIONED")"
+    "$(jq_ok '.segments[0]|has("start") and has("text")' shell/yt-resolve --transcript -J -- "$CAPTIONED")"
 report "no captions -> error"     0 \
-    "$(jq_ok '.status=="error" and .reason=="no_subtitles_available"' shell/yt-play --transcript -j -- "$BARE")"
-report "no captions exit"         1 "$(rc shell/yt-play --transcript -j -- "$BARE")"
+    "$(jq_ok '.status=="error" and .reason=="no_subtitles_available"' shell/yt-resolve --transcript -j -- "$BARE")"
+report "no captions exit"         1 "$(rc shell/yt-resolve --transcript -j -- "$BARE")"
 
 echo "── failure taxonomy: 2 is a tool failure, never 1 ─────────────────"
 # An unreachable proxy is the cheapest deliberate network failure, and it works offline too.
@@ -172,11 +178,11 @@ report "network exit is 2 (text)" 2 \
     "$(http_proxy=$NOPROXY https_proxy=$NOPROXY rc shell/yt-search -n 2 -- lofi)"
 
 echo "── idle lifecycle: exit 0, ONE compact line, idempotent ───────────"
-report "--status exit"      0 "$(rc shell/yt-play --status -j)"
-report "--status one line"  1 "$(shell/yt-play --status -j | wc -l | tr -d ' ')"
-report "--status is empty"  0 "$(jq_ok '.players==[]' shell/yt-play --status -j)"
-report "--stop --all exit"  0 "$(rc shell/yt-play --stop --all -j)"
-report "--stop --all line"  1 "$(shell/yt-play --stop --all -j | wc -l | tr -d ' ')"
+report "--status exit"      0 "$(rc shell/ut-play --status -j)"
+report "--status one line"  1 "$(shell/ut-play --status -j | wc -l | tr -d ' ')"
+report "--status is empty"  0 "$(jq_ok '.players==[]' shell/ut-play --status -j)"
+report "--stop --all exit"  0 "$(rc shell/ut-play --stop --all -j)"
+report "--stop --all line"  1 "$(shell/ut-play --stop --all -j | wc -l | tr -d ' ')"
 
 # The four live fields are read off a real unix socket, so the peer is the one thing that
 # cannot be faked away — and mpv will not answer out of order, report a property null, or
@@ -217,30 +223,30 @@ else
     }
 
     mkplayer ctest_live --paused
-    report "paused is read live"    0 "$(jq_ok '[.players[]|select(.id=="ctest_live")][0].paused==true' shell/yt-play --status -j)"
-    report "position/duration live" 0 "$(jq_ok '[.players[]|select(.id=="ctest_live")][0]|.position==61 and .duration==245' shell/yt-play --status -j)"
-    report "volume beats the record" 0 "$(jq_ok '[.players[]|select(.id=="ctest_live")][0].volume==55' shell/yt-play --status -j)"
+    report "paused is read live"    0 "$(jq_ok '[.players[]|select(.id=="ctest_live")][0].paused==true' shell/ut-play --status -j)"
+    report "position/duration live" 0 "$(jq_ok '[.players[]|select(.id=="ctest_live")][0]|.position==61 and .duration==245' shell/ut-play --status -j)"
+    report "volume beats the record" 0 "$(jq_ok '[.players[]|select(.id=="ctest_live")][0].volume==55' shell/ut-play --status -j)"
     # A peer that never closes: three --status calls must not cost three nc timeouts.
     start=$SECONDS
-    shell/yt-play --status -j >/dev/null 2>&1
-    shell/yt-play --status -j >/dev/null 2>&1
-    shell/yt-play --status -j >/dev/null 2>&1
+    shell/ut-play --status -j >/dev/null 2>&1
+    shell/ut-play --status -j >/dev/null 2>&1
+    shell/ut-play --status -j >/dev/null 2>&1
     report "3 reads under 2s (pipe closes)" 1 "$([ $((SECONDS - start)) -lt 2 ] && echo 1 || echo 0)"
     rmplayer ctest_live
 
     mkplayer ctest_null --null pause
-    report "unanswered pause is null"  0 "$(jq_ok '[.players[]|select(.id=="ctest_null")][0].paused==null' shell/yt-play --status -j)"
+    report "unanswered pause is null"  0 "$(jq_ok '[.players[]|select(.id=="ctest_null")][0].paused==null' shell/ut-play --status -j)"
     rmplayer ctest_null
 
     mkplayer ctest_rev --reverse --noisy
-    report "out-of-order lands right" 0 "$(jq_ok '[.players[]|select(.id=="ctest_rev")][0]|.position==61 and .duration==245 and .volume==55' shell/yt-play --status -j)"
+    report "out-of-order lands right" 0 "$(jq_ok '[.players[]|select(.id=="ctest_rev")][0]|.position==61 and .duration==245 and .volume==55' shell/ut-play --status -j)"
     rmplayer ctest_rev
 
     # No peer at all: the socket is absent, so every live field is null and volume falls back
     # to the record — the degradation an agent must be able to tell from a real reading.
     mkplayer ctest_nosock --no-peer
     report "dead socket: nulls, not false" 0 \
-        "$(jq_ok '[.players[]|select(.id=="ctest_nosock")][0]|.paused==null and .position==null and .duration==null and .volume==7' shell/yt-play --status -j)"
+        "$(jq_ok '[.players[]|select(.id=="ctest_nosock")][0]|.paused==null and .position==null and .duration==null and .volume==7' shell/ut-play --status -j)"
     rmplayer ctest_nosock
 fi
 
@@ -264,27 +270,27 @@ mkfake() { # <id> <rc|""> [ended_at]   — a dead player, with or without an epi
     return 0
 }
 rm -rf "$SD/players/dead"
-report "failed[] always present"   0 "$(jq_ok '.failed|type=="array"' shell/yt-play --status -j)"
+report "failed[] always present"   0 "$(jq_ok '.failed|type=="array"' shell/ut-play --status -j)"
 mkfake ctest_ok 0
-report "normal finish: no tombstone" 0 "$(jq_ok '.failed==[]' shell/yt-play --status -j)"
+report "normal finish: no tombstone" 0 "$(jq_ok '.failed==[]' shell/ut-play --status -j)"
 mkfake ctest_mute ""
-report "no epitaph: no tombstone"  0 "$(jq_ok '.failed==[]' shell/yt-play --status -j)"
+report "no epitaph: no tombstone"  0 "$(jq_ok '.failed==[]' shell/ut-play --status -j)"
 mkfake ctest_bad 2
-report "death is reported once"    0 "$(jq_ok '[.failed[]|select(.id=="ctest_bad")]|length==1 and (.[0].reason=="unavailable") and (.[0].exit_code==2)' shell/yt-play --status -j)"
-report "--status still exits 0"    0 "$(rc shell/yt-play --status -j)"
-report "--status still one line"   1 "$(shell/yt-play --status -j | wc -l | tr -d ' ')"
+report "death is reported once"    0 "$(jq_ok '[.failed[]|select(.id=="ctest_bad")]|length==1 and (.[0].reason=="unavailable") and (.[0].exit_code==2)' shell/ut-play --status -j)"
+report "--status still exits 0"    0 "$(rc shell/ut-play --status -j)"
+report "--status still one line"   1 "$(shell/ut-play --status -j | wc -l | tr -d ' ')"
 i=0
 while [ "$i" -lt 10 ]; do mkfake "ctest_c$i" 2 "2026-01-01T00:00:0${i}Z"; i=$((i + 1)); done
-shell/yt-play --status -j >/dev/null 2>&1
-report "capped at 8 in the envelope" 8 "$(shell/yt-play --status -j | jq '.failed|length')"
+shell/ut-play --status -j >/dev/null 2>&1
+report "capped at 8 in the envelope" 8 "$(shell/ut-play --status -j | jq '.failed|length')"
 report "capped at 8 on disk"         8 "$(ls "$SD/players/dead" 2>/dev/null | wc -l | tr -d ' ')"
-report "newest kept"                 0 "$(jq_ok '.failed[0].id=="ctest_c9"' shell/yt-play --status -j)"
+report "newest kept"                 0 "$(jq_ok '.failed[0].id=="ctest_c9"' shell/ut-play --status -j)"
 rm -f "$SD/players"/ctest_*.json "$SD"/mpv-ctest_*.log
 rm -rf "$SD/players/dead"
 
 echo "── version and the non-TTY refusal ────────────────────────────────"
-report "one version, five entry points" 1 \
-    "$(for c in ut-play yt-search yt-resolve yt-play yt-tui; do shell/$c --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
+report "one version, four entry points" 1 \
+    "$(for c in ut-play yt-search yt-resolve yt-tui; do shell/$c --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
 report "yt-tui refuses a non-TTY" 1 "$(shell/yt-tui </dev/null >/dev/null 2>&1; echo $?)"
 
 echo

@@ -47,18 +47,18 @@ wait_for_sock() {
 # Always stop everything, however this exits — a leaked player outlives the shell.
 cleanup() {
     tmux kill-session -t lc-tick 2>/dev/null
-    shell/yt-play --stop --all -j >/dev/null 2>&1
+    shell/ut-play --stop --all -j >/dev/null 2>&1
     return 0
 }
 trap cleanup EXIT INT TERM
 
-shell/yt-play --stop --all -j >/dev/null 2>&1        # start from a clean slate
+shell/ut-play --stop --all -j >/dev/null 2>&1        # start from a clean slate
 
 echo "── detach returns BEFORE mpv is up ────────────────────────────────"
 # The envelope is the handle; if this waited for the player there would be nothing detached
 # about it. A slow return has meant the title updater holding the captured pipe.
 t0=$(date +%s)
-o1=$(shell/yt-play -d -j --volume 0 -- "$U1" 2>/dev/null)
+o1=$(shell/ut-play -d -j --volume 0 -- "$U1" 2>/dev/null)
 t1=$(date +%s)
 report "detach envelope" 0 \
     "$(printf '%s' "$o1" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
@@ -66,23 +66,23 @@ if [ $((t1 - t0)) -le 3 ]; then ok "detach returned in $((t1 - t0))s (<= 3)"
 else bad "detach took $((t1 - t0))s — is something holding the pipe?"; fi
 
 id1=$(printf '%s' "$o1" | jq -r '.id // empty')
-o2=$(shell/yt-play -d -j --volume 0 -- "$U2" 2>/dev/null)
+o2=$(shell/ut-play -d -j --volume 0 -- "$U2" 2>/dev/null)
 id2=$(printf '%s' "$o2" | jq -r '.id // empty')
 
 echo "── two players: the POPULATED envelope, one compact line ──────────"
-report "--status one line" 1 "$(shell/yt-play --status -j | wc -l | tr -d ' ')"
-report "--status sees 2"   2 "$(shell/yt-play --status -j | jq '.players | length')"
+report "--status one line" 1 "$(shell/ut-play --status -j | wc -l | tr -d ' ')"
+report "--status sees 2"   2 "$(shell/ut-play --status -j | jq '.players | length')"
 
 echo "── a selector-less mutation on 2 players is ambiguous -> exit 4 ───"
-report "--set-volume no --id" 4 "$(shell/yt-play --set-volume 40 -j >/dev/null 2>&1; echo $?)"
+report "--set-volume no --id" 4 "$(shell/ut-play --set-volume 40 -j >/dev/null 2>&1; echo $?)"
 # Ambiguity is decided before any IPC, so the check above needs no player listening. The
 # targeted ones below do -- wait for player 1's socket first (see wait_for_sock).
 sock1=$(printf '%s' "$o1" | jq -r '.sock // empty')
 wait_for_sock "$sock1" || bad "player 1's IPC socket never appeared -- the checks below are moot"
-report "--set-volume --id"    0 "$(shell/yt-play --set-volume 40 --id "$id1" -j >/dev/null 2>&1; echo $?)"
+report "--set-volume --id"    0 "$(shell/ut-play --set-volume 40 --id "$id1" -j >/dev/null 2>&1; echo $?)"
 # Only the targeted player moved: a mutation that leaks across players is the bug --id exists for.
 report "only the target moved" "40" \
-    "$(shell/yt-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.volume')"
+    "$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.volume')"
 
 echo "── Starting -> Playing flips on the tick, with NO keypress ────────"
 # The TUI polls the player once a second, so the banner must resolve on its own. Nothing is
@@ -106,10 +106,10 @@ if [ "$flip" = yes ]; then ok "banner reached Playing unprompted in ~$(echo "$i 
 else bad "banner never left Starting — the 1s tick is not resolving the state"; fi
 
 echo "── stop is targeted, then idempotent, and leaks nothing ───────────"
-report "--stop --id"       0 "$(shell/yt-play --stop --id "$id1" -j >/dev/null 2>&1; echo $?)"
-report "--stop --all"      0 "$(shell/yt-play --stop --all -j >/dev/null 2>&1; echo $?)"
-report "--stop --all again" 0 "$(shell/yt-play --stop --all -j >/dev/null 2>&1; echo $?)"
-report "no players left"   0 "$(shell/yt-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
+report "--stop --id"       0 "$(shell/ut-play --stop --id "$id1" -j >/dev/null 2>&1; echo $?)"
+report "--stop --all"      0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; echo $?)"
+report "--stop --all again" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; echo $?)"
+report "no players left"   0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
 
 sleep 1
 n=$(pgrep -f 'mpv .*--input-ipc-server' 2>/dev/null | wc -l | tr -d ' ')

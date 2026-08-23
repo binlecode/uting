@@ -9,7 +9,7 @@ description: Launch and drive the yt-tui terminal UI through tmux send-keys/capt
 refuses a pipe and exits 1 (`yt-tui: needs a terminal`). Calling it with the Bash tool
 therefore proves nothing. Drive it inside tmux.
 
-The engine (`yt`, `yt-search`, `yt-play`) is the opposite: never interactive, never needs a
+Everything it calls (`yt-search`, `ut-play`) is the opposite: never interactive, never needs a
 TTY. Verify engine behavior with a plain Bash call — see the **verify-suite** skill.
 
 ## 1. Launch
@@ -79,12 +79,12 @@ timeout 20 bash -c "until tmux capture-pane -t $S -p | grep -q 'Playing'; do sle
 # ALWAYS, at the end of any session that pressed Enter:
 tmux send-keys -t $S 'q'; sleep 1
 tmux kill-session -t $S 2>/dev/null
-shell/yt-play --stop --all -j     # {"status":"stopped","scope":"all","stopped":…}
+shell/ut-play --stop --all -j     # {"status":"stopped","scope":"all","stopped":…}
 pgrep -fl 'mpv .*--input-ipc-server' || echo "no orphan mpv"   # MUST be empty
 ```
 
 Launch with `--volume 0`-equivalent care if you are on speakers: the TUI has no launch
-volume flag, so press `9` a few times, or drive `shell/yt-play -d --volume 0` from the
+volume flag, so press `9` a few times, or drive `shell/ut-play -d --volume 0` from the
 engine side instead when you only need a player to exist.
 
 The banner walks `Starting` → `Playing` **with no keypress** (a poll, not a redraw trigger),

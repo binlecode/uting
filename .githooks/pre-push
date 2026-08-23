@@ -40,9 +40,9 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   esac
 done
 
-# Syntax gate on the four scripts as they stand in the worktree. Cheap, and it is the
+# Syntax gate on every script as it stands in the worktree. Cheap, and it is the
 # check the whole suite's correctness rests on — there is no CI behind this push.
-for f in shell/ut-play shell/yt-search shell/yt-play shell/yt-tui; do
+for f in shell/ut-play shell/yt-search shell/yt-resolve shell/yt-tui; do
   [ -f "$f" ] || continue
   if ! /bin/bash -n "$f" 2>/tmp/uting-push-syntax.$$; then
     {
