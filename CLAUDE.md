@@ -159,12 +159,13 @@ Principle: put the single destructive step last and smallest, prove its replacem
 
 ## SDLC & Architectural Documentation
 
-**Documents move through four stages, and the prefix says which one a file is in.** A doc that
+**Documents move through five stages, and the prefix says which one a file is in.** A doc that
 stops moving is a doc nobody trusts, so each stage names what ends it:
 
 | Stage | Prefix | What it holds | What ends it |
 |---|---|---|---|
-| design / research | `DESIGN-<topic>.md` | exploring an open question — options, measurements, trade-offs. Nothing here is decided | **distil it into future work** (a `ROADMAP.md` entry), then delete the doc. It is scaffolding, not an artifact |
+| research | `RESEARCH-<topic>.md` | surveying the world **outside** this repo — what comparable projects do, measured data, comparisons. Says nothing about what we will build | **distil it into future work** (a `ROADMAP.md` entry, or a `DESIGN-`), then delete the doc |
+| design | `DESIGN-<topic>.md` | exploring an open question about **this system** — options, trade-offs, measurements. Nothing here is decided | **distil it into future work** (a `ROADMAP.md` entry), then delete the doc. It is scaffolding, not an artifact |
 | roadmap | `ROADMAP.md` | the decided and the sequenced: positioning, non-goals, phases, and the conditions that would reopen a decision | nothing — it is the one doc that outlives a rewrite |
 | plan | `PLAN-<topic>.md` | one feature, ready to build: field names, flags, the verification matrix. Decided already, or it would still be a `DESIGN-`. **Tracks its own progress while the work is in flight** — the status line and per-item state are updated as things land | **delete on landing**, once its contract is in the spec |
 | code-synced spec | `SPEC-<scope>.md` | what the code actually is and why. Every fact in exactly ONE section | never; it is **kept in sync on every change that touches architecture or a contract** |

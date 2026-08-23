@@ -202,7 +202,7 @@ in a UI.**
 
 | Primitive | Role | Why foundational (not a client) | Seam (single swap point) |
 |---|---|---|---|
-| **yt-dlp** | extraction / search | de-facto standard; every client uses it | `fetch_results`, `resolve_stream_url`, `resolve_info`, `probe_media_fetchable`, `detach_title_updater` (~5 sites) |
+| **yt-dlp** | extraction / search | de-facto standard; every client uses it | `fetch_results`, `resolve_info`, `resolve_transcript`, `resolve_stream_url`, `probe_media_fetchable`, `detach_title_updater` (6 direct sites) **plus one INDIRECT site inside mpv** — see §6.1 |
 | **mpv** | playback | general scriptable player; alt = vlc/ffplay | `run_mpv()` (single play seam) + `mpv_supports_vo()` capability probe |
 | jq | JSON shaping | universal JSON tool | pervasive (search/JSON emit, lifecycle, `yt-tui` rows) |
 
@@ -212,7 +212,9 @@ sit outside it by necessity — `mpv_supports_vo()` asks mpv what terminal VOs i
 `play_viz_url` passes mpv's `--lavfi-complex` showwaves filter through `run_mpv`. **yt-dlp** is invoked at
 the ~5 sites above rather than one seam — but it is the extraction standard every client
 depends on, so replacing it isn't a realistic goal; the value is that each site is a
-plain `yt-dlp …` array, not buried in a third-party client. **jq** is pervasive. The
+plain `yt-dlp …` array, not buried in a third-party client. The seventh invocation is not
+ours at all: **mpv resolves the played stream by running yt-dlp itself** (§6.1), so the
+core's only channel to that call is `--ytdl-format` / `--ytdl-raw-options`. **jq** is pervasive. The
 in-list filter uses no primitive at all (§11).
 
 ---
@@ -295,6 +297,136 @@ flag would be swallowed into `QUERY` and silently ignored (a real past bug: it d
 `yt-search` into the old menu). Both wrappers collect option and positional tokens
 separately, emit `<flags> <positional>`, and delegate with a `--` guard so a query/URL
 beginning with `-` is safe.
+
+### 6.1 Invocation stack — which processes run, and where yt-dlp actually runs
+
+§6 above answers *"which function handles this argv"*. This answers *"which **processes** get
+spawned, and at which of them does yt-dlp run"*. The two views differ in one load-bearing
+way: **the core never resolves the stream that is played — mpv does, by running yt-dlp
+itself.** Everything downstream in this section follows from that.
+
+**A. Search and the read-only verbs — one process, exactly one yt-dlp**
+
+```
+   $ yt-search -j -- "lofi"                       $ yt-play --info -j -- <url>
+         │                                              │
+         │   exec  (the wrapper is REPLACED, not forked: the core's exit
+         │          code IS the wrapper's; nothing to forward)
+         ▼                                              ▼
+   ┌──────────────────────────────────────────────────────────────────┐
+   │ PROCESS 1 :  yt  (core)                                          │
+   │                                                                  │
+   │    fetch_results        ──►  yt-dlp "ytsearch<N>:<query>"   [#1] │
+   │    resolve_info         ──►  yt-dlp --dump-single-json      [#2] │
+   │    resolve_transcript   ──►  yt-dlp --skip-download …       [#3] │
+   │    resolve_stream_url   ──►  yt-dlp -g -f <fmt>             [#4] │
+   │            │                                                     │
+   │            └── jq ──►  single-line envelope on stdout            │
+   └──────────────────────────────────────────────────────────────────┘
+         one core process · exactly one yt-dlp per call · mpv never starts
+```
+
+**B. Detached playback — three processes, and the stack breaks twice**
+
+```
+   $ yt-play -d -j -- <url>
+         │   exec
+         ▼
+   ┌───────────────────────────────────────────────────────────────────────────┐
+   │ PROCESS 1 :  yt (core) — the RETURNING parent                             │
+   │    detach_play:  ensure_state_dir · new_player_id · lock_player_state     │
+   │         │                                                                 │
+   │         ├── nohup bash "$SELF" -f MODE -- <url> &     ◄─ BOUNDARY 1       │
+   │         │      a FRESH CORE PROCESS, not mpv directly. set -m + disown,   │
+   │         │      so the player survives this parent's exit (§9.1)           │
+   │         │                                                                 │
+   │         ├── detach_title_updater &                                        │
+   │         │      └── yt-dlp --print "%(title)s" --skip-download       [#5]  │
+   │         │      background sibling; patches players/<id>.json .title       │
+   │         │      under the lock, only while the pid still matches           │
+   │         │                                                                 │
+   │         └── emit {status:"started", id, pid, …}  and EXIT                 │
+   └───────────────────────────────────────────────────────────────────────────┘
+                        │
+                        ▼
+   ┌───────────────────────────────────────────────────────────────────────────┐
+   │ PROCESS 2 :  yt (core again, YT_DETACHED=1, YT_IPC_SOCK=<sock>)           │
+   │    play_url_directly → play_url_with_probe                                │
+   │         ├── no cookies ─────────────────────────────► probe SKIPPED       │
+   │         └── cookies + curl → probe_media_fetchable                        │
+   │                  yt-dlp -g  (with cookies)                          [#6]  │
+   │                  yt-dlp -g  (anonymous, only if #6 failed)          [#6'] │
+   │                  the resolved URL is DISCARDED — the probe only picks     │
+   │                  WHICH CLIENT mpv will be told to use (§8.2)              │
+   │         └── play_mode_url → run_mpv                                       │
+   │                  mpv --ytdl-format=<fmt> --ytdl-raw-options=<k=v,…>       │
+   │                      --input-ipc-server=<sock>  <PAGE URL>   ◄─ BOUNDARY 2│
+   └───────────────────────────────────────────────────────────────────────────┘
+                        │   mpv brings its own extractor
+                        ▼
+   ┌───────────────────────────────────────────────────────────────────────────┐
+   │ PROCESS 3 :  mpv                                                          │
+   │    player/lua/ytdl_hook.lua                                               │
+   │         ├── runs yt-dlp as a subprocess   ◄── THE resolution that is      │
+   │         │      page URL ─► direct media URL + http_headers    PLAYED [#7] │
+   │         └── set_http_headers()  ─► file-local-options/user-agent          │
+   │                                    file-local-options/http-header-fields  │
+   │                                    (whitelist: User-Agent + Cookie,       │
+   │                                     Referer, X-Forwarded-For — nothing    │
+   │                                     else is forwarded, and the whole      │
+   │                                     block is skipped if the caller        │
+   │                                     already set either option)            │
+   │    demux → decode → audio out;  serves JSON IPC on the unix socket        │
+   └───────────────────────────────────────────────────────────────────────────┘
+```
+
+**C. Lifecycle control — no yt-dlp, and no new mpv**
+
+```
+   $ yt-play --status -j    |    --set-volume 60 --id <id>    |    --stop --all
+         │   exec
+         ▼
+   ┌──────────────────────────────────────────────────────────────────┐
+   │ PROCESS 1 :  yt (core)                                           │
+   │    reap_dead_players → resolve_target                            │
+   │    read_player_live → live_props ──► nc -U <sock> ──┐            │
+   │    do_stop → stop_group ──► kill the process group  │            │
+   │         │                                            ▼           │
+   │         └── jq ──► envelope            (the ALREADY-RUNNING mpv) │
+   └──────────────────────────────────────────────────────────────────┘
+         no yt-dlp · no new mpv · one socket round-trip per player
+```
+
+`yt-tui` adds no fourth shape: it runs **A** (`yt-search -j`) and **B** (`yt-play -d -j`) as
+child processes, then talks to the player's socket with its own `nc -U` rather than going
+back through `yt-play` (§11).
+
+**The seven invocation sites**
+
+| # | Where | Command | Whose process | What the result is used for |
+|---|---|---|---|---|
+| 1 | `fetch_results` | `yt-dlp ytsearch<N>:…` | core | the search envelope |
+| 2 | `resolve_info` | `yt-dlp --dump-single-json` | core | the `--info` envelope |
+| 3 | `resolve_transcript` | `yt-dlp --skip-download` | core | caption file → text |
+| 4 | `resolve_stream_url` | `yt-dlp -g` | core | the `--get-url` envelope |
+| 5 | `detach_title_updater` | `yt-dlp --print "%(title)s"` | core (bg sibling) | `.title` in the player record |
+| 6 | `probe_media_fetchable` | `yt-dlp -g` (×1, ×2 on fallback) | detached child | **discarded** — only picks the client (§8.2) |
+| 7 | `ytdl_hook.lua` | `yt-dlp` | **mpv** | **the stream that is actually played** |
+
+**Three consequences worth stating plainly**
+
+1. **Site 7 is not ours.** The only channel from the core to it is `--ytdl-format` and
+   `--ytdl-raw-options`; the core cannot append arbitrary yt-dlp argv to the call that
+   matters. Anything a future extractor needs at play time has to fit through those two.
+2. **Headers reach mpv but not a `--get-url` caller.** Site 7's `http_headers` are applied
+   by `set_http_headers`, so playback of a CDN that demands a `Referer` works. Site 4 emits
+   the URL alone and the envelope has no field for headers (§10, §14) — so the same video
+   can play correctly and hand a caller a URL that the CDN refuses.
+3. **One detached play can run yt-dlp up to four times** (#5, #6, #6', #7), each an
+   independent extraction of the same video. #6/#6' are skipped without cookies or without
+   `curl`; #5 exists only because the core is handed a URL, never a title.
+
+---
 
 ## 7. Search subsystem
 
@@ -1938,7 +2070,8 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
                   lock_player_state/unlock_player_state, new_player_id, detach_play,
                   detach_title_updater, reap_dead_players, resolve_target,
                   do_status, do_stop, do_set_volume
-     Resolve    : resolve_stream_url (--get-url), resolve_info (--info)
+     Resolve    : resolve_stream_url (--get-url), resolve_info (--info),
+                  resolve_transcript / transcript_fail (--transcript)
    Wrappers     : yt-search, yt-play   (parse → gate → exec yt)
    Interactive  : yt-tui   (fetch_json → build_all_rows → load_rows → menu loop:
                   display_menu · read_nav_input · move_selection · play_selected ·

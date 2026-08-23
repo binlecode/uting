@@ -284,8 +284,9 @@ PyPI、**同领域**的 GitHub 同名仓库。
 - **D4 —— Go 的第一步只做 TUI**（`ytt` → Go），调用今天原封不动的 `yt-search` / `yt-play`。被否方案 —— 一次性
   全量移植：把生命周期语义和渲染器重写放进同一次变更，回归无法二分定位。
 - **D5 —— "core 是否也去 Go" 是独立的、条件触发的决定**（§9）。触发前 `yt` 保持 shell。
-- **D6 —— 发布名 `uting`（§3.1）；本机 PATH 为 `ytt`（人机面短名）+ `yt-search` / `yt-play`
-  （agent 面规范长名）。`yts` / `ytp` 弃用 —— 一个命令一个名字，短名只留给真会被手敲的那个。**
+- **D6 —— 发布名 `uting`（§3.1）**；`yts` / `ytp` 弃用 —— 一个命令一个名字。
+  ~~本机 PATH 为 `ytt` + `yt-search` / `yt-play`~~ **命令名已由 D9/D10 取代**：
+  `ut-tui` / `ut-play` / `yt-search` / `yt-resolve` / `bili-search` / `bili-resolve`。
 - **D7 —— Go 版只发一个二进制加子命令，绝不发三个通用名的可执行文件。**
 
   ```sh
@@ -295,9 +296,41 @@ PyPI、**同领域**的 GitHub 同名仓库。
   uting mcp          # 第三张脸，D5 触发后
   ```
 
-  **永不发布 `bin/yt`**（§5）。
+  **永不发布 `bin/yt`**（§5）。**D9 之后这张子命令表要重排**（`uting play` 之外还有 per-engine 的
+  search/resolve），具体形状留到 Go 真正开工时定 —— 它不影响 shell 版的重切。
 
 - **D8 —— 三件发布硬件先于任何公开动作**（§6.3）：`LICENSE`、rig 入库、`--version`。
+- **D9 —— 套件按「播放器 + 可扩展搜索引擎」重切，不按站点开命令**（2026-08-22 定，取代 D6 的命令名）。
+
+  起因是接入 B 站时实测出的三件事（`RESEARCH-bilibili-engine.md`）：`shell/yt` 里有三处**只对
+  YouTube 成立**的逻辑（PO-token 探测、`player_client=android`、`detach_title_updater` 存在只因
+  搜索不给标题）；沿用 `-s/--source` flag 会把这三处原样继承给每一个新音源，并在四个函数里长出
+  `if source ==` 树。真正与音源无关的是**播放器**（生命周期 / mpv / envelope / 退出码 / `players/`），
+  与音源有关的只有**抽取**。按这条线切：
+
+  ```
+        ut-tui  ──持有引擎注册表──┬── yt-search   / yt-resolve     (yt-dlp)
+           │                      └── bili-search / bili-resolve   (curl + WBI)
+           └── ut-play   生命周期 · mpv · envelope · players/ · 退出码
+                         不认识任何一个站；播放时回调 <engine>-resolve
+  ```
+
+  - **引擎 = 两个动词**：`search`（列表）与 `resolve`（id → 直链 + header）。加第三个音源只加一对
+    脚本，`ut-play` 与 `ut-tui` 一行不改。
+  - **四命令而非子命令**（否决 `yt search|resolve` 形式）：窄动词、flag 面窄，符合 D0 的 agent 取向；
+    `resolve` 实际只被 `ut-play` 调，暴露给模型的仍是 `*-search` + `ut-play`。
+  - **resolve 必须发生在播放时**，不能在搜索时：直链会过期，且 10 条结果只会用 1 条。
+  - **顺带修掉一个契约漏洞**：`resolve` 的 envelope 从第一天就带 `http_headers`，因此
+    `--get-url` 那个「裸 URL 无 Referer 即 403」的洞（B 站实测 403/206）随重切一并关闭。
+  - 契约**本体不变**（envelope schema、player record、退出码表、生命周期语义 = D3 冻结的那些）；
+    变的是命令名与新增一个 `resolve` 动词 —— 按 `CLAUDE.md` 属「deliberate, documented act」。
+  - 施工计划见 `docs/PLAN-ut-restructure.md`（自带进度，上线即删）。
+
+- **D10 —— 命令前缀 `ut-`（派生自发布名 `uting`），取代 D6 的 `ytt` / `yt-play`。**
+  六项筛查（§3 方法，2026-08-22）：`ut-play` / `ut-tui` / `ut-search` **PATH·brew·npm·PyPI·crates·
+  GitHub 同名 全空**；光杆 `ut` 全占（npm/PyPI/crates + `boost-ext/ut` 1438★），短名 `utt` 也被占
+  （npm/PyPI + `larose/utt` 349★）。**因此人机面没有短名** —— 想短由用户自建 alias，不随包发第二个名字。
+  引擎命令保留音源自身的名字（`yt-*` / `bili-*`），因为它们本来就该说明自己是哪个站。
 
 ---
 
