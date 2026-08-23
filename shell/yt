@@ -17,7 +17,7 @@ set -euo pipefail
 # THE version of the whole suite, declared once. The wrappers and the TUI do not carry their
 # own copy — they ask the core and print their own name in front of the answer, so a release
 # cannot ship a suite whose four entry points disagree about what they are.
-YT_VERSION="0.1.0"
+YT_VERSION="0.2.0"
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # Path to this script, used to re-exec a detached playback child (see detach_play).
 SELF="${BASH_SOURCE[0]}"
