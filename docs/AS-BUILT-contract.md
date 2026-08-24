@@ -302,9 +302,12 @@ about the same number. It is emitted so an item is field-for-field row-compatibl
 search result, which is what lets `uting` render a playlist through the same loader.
 
 **The state-error enum is its own, and deliberately not the playback one:**
-`not_found | exists | invalid_name | invalid_input | locked`. Nothing in a file store can be
-`format_unavailable`, and widening a taxonomy that three other readers branch on would be
-the wrong kind of sharing. Prose goes to stderr in both output modes; the envelope goes to
+`not_found | exists | invalid_name | invalid_input | locked | corrupt`. Nothing in a file
+store can be `format_unavailable`, and widening a taxonomy that three other readers branch
+on would be the wrong kind of sharing. `corrupt` covers both shapes of "this build cannot
+read that file": unparseable JSON, and a `schema` newer than the one this build understands
+(the field is written by every add and CHECKED on every read — a version nobody reads buys
+nothing). Prose goes to stderr in both output modes; the envelope goes to
 stdout under `-j` only, exactly as an engine reports an extraction failure.
 
 Lifecycle / resolve:
@@ -426,12 +429,16 @@ on-disk record read by jq, not an envelope.
         ambiguous target, or mpv IPC failure. The -j status/reason says which.
         Distinct from 1 (usage) and 2+ (propagated player failure). --stop treats
         "nothing playing" as idempotent success (exit 0); only ambiguity is exit 4.
-        ALSO ut-playlist, for the same meaning: a playlist held by another writer
-        (reason `locked`) — it fails rather than writing unlocked, because this store
-        is durable and an unlocked write can drop what the user just added. A store
-        verb naming something that does not exist is a usage error (1, `not_found`);
-        --del on a missing playlist is idempotent success (0, `deleted:false`), the
-        same rule as --stop with nothing playing.
+        ALSO ut-playlist, for the same meaning — the call was well formed and the
+        store could not answer: `locked` (held by another writer; it fails rather
+        than writing unlocked, because this store is durable and an unlocked write
+        can drop what the user just added), `not_found` (a verb naming a playlist
+        that is not there), `exists` (--rename onto a name already taken), and
+        `corrupt` (a file this build cannot read). 1 is left to mean what it means
+        everywhere else in the suite: the CALL was malformed — `invalid_name`,
+        `invalid_input` (bad stdin, an out-of-range --index). --del on a missing
+        playlist is idempotent success (0, `deleted:false`), the same rule as --stop
+        with nothing playing.
 
    TTY  : uting requires BOTH stdin and stdout (ARCHITECTURE.md §11). No other verb ever needs one —
           each errors on empty input rather than prompting (D1/D3).

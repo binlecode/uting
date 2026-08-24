@@ -2665,6 +2665,17 @@ open_playlist() {
     return 0
 }
 
+# The three keys that RE-FETCH a query (m / o / e) cannot run against a playlist, which has
+# no query behind it. One guard, called by all three: three copies of it drifted apart in
+# every earlier duplication this file has had (ARCHITECTURE.md's F11/F12), and the
+# no-shared-library trade that licenses copies BETWEEN the six commands does not license
+# them WITHIN one file.
+search_only() {
+    [[ "$LIST_SOURCE" == "search" ]] && return 0
+    store_notice "$S_PL_ACT:" "$S_PL_SEARCH_ONLY"
+    return 1
+}
+
 # List what is stored, then ask which one. A picker widget would be a second list renderer
 # in a file that already has one, and the prose --ls output is the store's own answer to
 # "what have I got" — printed, not re-rendered here.
@@ -2726,11 +2737,7 @@ new_search() {
 
 # ── MORE action (key: m) ────────────────────────────────────────────────────────────────
 more_results() {
-    # Search-only: it re-fetches the QUERY, and a playlist on screen has none.
-    if [[ "$LIST_SOURCE" != "search" ]]; then
-        store_notice "$S_PL_ACT:" "$S_PL_SEARCH_ONLY"
-        return 0
-    fi
+    search_only || return 0
     local prev="$RESULT_N" rc=0 page="$page_index" sel="$selected"
     RESULT_N=$(( RESULT_N + 25 ))
     printf '\n%s%s%s %s %s "%s" %s %s %s%s' \
@@ -2763,11 +2770,7 @@ more_results() {
 # would query one source under the other's label — the exact confusion the `engine` field
 # exists to prevent.
 cycle_engine() {
-    # Search-only: it re-fetches the QUERY, and a playlist on screen has none.
-    if [[ "$LIST_SOURCE" != "search" ]]; then
-        store_notice "$S_PL_ACT:" "$S_PL_SEARCH_ONLY"
-        return 0
-    fi
+    search_only || return 0
     if ((${#ENGINES[@]} < 2)); then
         return 0
     fi
@@ -2796,11 +2799,7 @@ cycle_engine() {
 }
 
 cycle_sort() {
-    # Search-only: it re-fetches the QUERY, and a playlist on screen has none.
-    if [[ "$LIST_SOURCE" != "search" ]]; then
-        store_notice "$S_PL_ACT:" "$S_PL_SEARCH_ONLY"
-        return 0
-    fi
+    search_only || return 0
     # The page/selection reset in apply_search_results is DELIBERATE here, unlike in
     # more_results: re-sorted rows put a different video under the old index, so keeping the
     # index would move the highlight to a track the user never selected.

@@ -448,7 +448,9 @@ echo '[{"engine":"bili","id":"BV1","url":"https://www.bilibili.com/video/BV1","t
 report "an array keeps its own engine"  0 "$(jq_ok '[.items[].engine]|unique==["bili","yt"]' $PL --show chill -j)"
 report "--show is ONE line"             1 "$($PL --show chill -j | wc -l | tr -d ' ')"
 report "duration_fmt derived on read"   0 "$(jq_ok '.items[0].duration_fmt=="00h:03m:33s" and (.items[1].duration_fmt==null)' $PL --show chill -j)"
-report "--show missing: 1, not_found"   1 "$(rc $PL --show nope)"
+# 4, not 1: the argv was well formed and the store had nothing to answer with — the same
+# split ut-play makes when --set-volume finds no player. 1 stays for a malformed call.
+report "--show missing: 4, not_found"   4 "$(rc $PL --show nope)"
 report "…and says so in the envelope"   0 "$(jq_ok '.status=="error" and .reason=="not_found"' $PL --show nope -j)"
 report "--rm out of range: 1"           1 "$(rc $PL --rm chill --index 9)"
 report "--rm removes exactly one"       0 "$(jq_ok '.count==2' $PL --rm chill --index 1 -j)"
@@ -458,15 +460,31 @@ report "--del missing: 0, deleted=false" 0 "$(jq_ok '.status=="ok" and .deleted=
 $PL --rename chill mellow -j >/dev/null 2>&1
 report "--rename moves the file"        0 "$(jq_ok '.playlists[0].name=="mellow" and .count==1' $PL --ls -j)"
 printf '%s' "$ENV_JSON" | $PL --add other -j >/dev/null 2>&1
-report "--rename onto a name: 1"        1 "$(rc $PL --rename other mellow)"
+report "--rename onto a name: 4"        4 "$(rc $PL --rename other mellow)"
 report "…with reason exists"            0 "$(jq_ok '.reason=="exists"' $PL --rename other mellow -j)"
 # The store round trip: its own --show output is accepted by --add, which is what copying
 # one list into another is.
 $PL --show mellow -j | $PL --add copy -j >/dev/null 2>&1
 report "a playlist envelope re-adds"    0 "$(jq_ok '.count==2' $PL --show copy -j)"
+# An unreadable file on disk. Before this, jq's parse error escaped as exit 5 with no
+# envelope at all under -j — the failure yt-search was fixed for, reintroduced in a second
+# command. --show fails (the question was about that list); --ls still answers (the question
+# was about the store, and one bad file must not hide the rest).
+printf '%s' '{ not json' > "$UT_STATE_DIR/playlists/wrecked.json"
+report "--show on a corrupt file: 4"    4 "$(rc $PL --show wrecked)"
+report "…with reason corrupt"           0 "$(jq_ok '.status=="error" and .reason=="corrupt"' $PL --show wrecked -j)"
+report "--ls survives a corrupt file"   0 "$(jq_ok '.status=="ok" and (.playlists|length)>0' $PL --ls -j)"
+# `schema` is WRITTEN by every add; this is the check that makes writing it worth anything.
+printf '%s' '{"schema":99,"name":"future","created_at":"x","updated_at":"x","count":0,"items":[]}' \
+    > "$UT_STATE_DIR/playlists/future.json"
+report "a newer schema is refused: 4"   4 "$(rc $PL --show future)"
+rm -f "$UT_STATE_DIR/playlists/wrecked.json" "$UT_STATE_DIR/playlists/future.json"
 report "a name with / is refused"       1 "$(rc $PL --del "a/b")"
 report "…with reason invalid_name"      0 "$(jq_ok '.reason=="invalid_name"' $PL --del "a/b" -j)"
 report "a selector with no verb: 1"     1 "$(rc $PL --show mellow --index 2)"
+# …including on the one verb that takes no name: the check used to live inside the branch
+# that does, so `--ls --index 3` exited 0 having silently ignored it.
+report "…--ls too, not just the named" 1 "$(rc $PL --ls --index 3)"
 report "two actions at once: 1"         1 "$(rc $PL --ls --show mellow)"
 report "a playback flag: 1"             1 "$(rc $PL --status)"
 report "a handle after --: 1"           1 "$(rc $PL -- "https://youtu.be/x")"

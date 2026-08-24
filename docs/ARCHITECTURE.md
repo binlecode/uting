@@ -2094,9 +2094,12 @@ Moved → `AS-BUILT-contract.md` §5.
    Store (shell/ut-playlist) — no site knowledge, no playback, jq only
      Setup/util : die, require_cmd, validate_enum, now_utc, print_usage, set_action,
                   fail (the state-error envelope: not_found | exists | invalid_name |
-                  invalid_input | locked — its OWN enum, §9.4), JQ_PRELUDE (fmt_dur)
+                  invalid_input | locked | corrupt — its OWN enum, §9.4), JQ_PRELUDE (fmt_dur)
      Store      : playlist_file/playlist_lock, ensure_store, validate_name,
-                  lock_playlist/release_lock (fails on timeout, steals a stale dir),
+                  read_playlist (the ONE reader: parse guard + schema gate, so jq's exit
+                  code can never become this command's),
+                  lock_playlist/release_lock (fails on timeout, steals a stale dir; holds a
+                  SET, because --rename locks source AND destination in a fixed order),
                   write_playlist (temp+mv), read_items (stdin → the item record; returns
                   through a GLOBAL because a command substitution would swallow its
                   error envelope in a subshell)
@@ -3012,11 +3015,14 @@ the part of a deleted harness worth keeping.
                 so the suite cannot write into a user's real playlists). A search envelope
                 keeps its engine tag through the store; a bare array keeps its OWN engine,
                 so one list holds both sources; duration_fmt is derived on read and null
-                when duration is; --show on a missing name is 1 + not_found (never an
+                when duration is; --show on a missing name is 4 + not_found (never an
                 empty list, which would be indistinguishable from an empty playlist);
                 --del on a missing name is idempotent 0 with deleted:false; --rename onto
-                an occupied name is 1 + exists; a name with `/` is refused; --index
-                without --rm is 1; a playback flag and a positional after `--` are both 1
+                an occupied name is 4 + exists; an unreadable file is 4 + corrupt on --show
+                but merely SKIPPED by --ls (one bad file must not hide the store), and a
+                schema newer than this build is 4 + corrupt; a name with `/` is refused;
+                --index without --rm is 1 on every verb including --ls; a playback flag and
+                a positional after `--` are both 1
                 naming the right verb; bad stdin is 1 AND emits the error envelope under
                 -j. Concurrency is DRIVEN, not argued: eight concurrent --add calls all
                 survive (with lock_playlist stubbed out the same loop leaves ONE item —

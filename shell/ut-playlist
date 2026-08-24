@@ -97,6 +97,17 @@ validate_enum() {
 # (forbidden|unavailable|…): nothing in a file store can be `format_unavailable`, and
 # widening a taxonomy three other readers branch on would be the wrong kind of sharing.
 # Members: not_found | exists | invalid_name | invalid_input | locked. AS-BUILT-contract.md §3.
+#
+# WHICH CODE EACH REASON CARRIES, and why it is not all 1. The suite reserves 1 for "the
+# argv was wrong" and 4 for "the request was well formed and did not take effect"
+# (AS-BUILT-contract.md §4) — the split `ut-play` already makes when `--set-volume` finds no
+# player (4) rather than calling the caller's flags bad. So:
+#
+#   1  invalid_name · invalid_input   the caller's own argv or stdin is malformed
+#   4  not_found · exists · locked    argv understood, store said no
+#
+# `--del` on a missing list stays 0 with `deleted:false`: the caller asked for an end state
+# and the end state holds, exactly as `--stop` does on a player that already exited.
 fail() {
     local code=$1 reason=$2 msg=$3
     echo "ut-playlist: $msg" >&2
@@ -149,10 +160,17 @@ ensure_store() {
 #   2. A lock older than a minute is STOLEN. The EXIT trap releases the lock on every
 #      normal death including `die`, so a stale dir means a SIGKILL — and a playlist that
 #      can never be written again is a worse failure than a torn write we have never seen.
-LOCK_HELD=""
+# A SET of held locks, not one: --rename writes a second playlist and has to hold that one
+# too (a concurrent `--add NEWNAME` was otherwise overwritten unlocked). Empty-array
+# expansion is guarded — a bare "${arr[@]}" on an empty array aborts under set -u on the
+# bash 3.2 floor.
+LOCKS_HELD=()
 release_lock() {
-    [[ -n "$LOCK_HELD" ]] && rmdir "$LOCK_HELD" 2>/dev/null
-    LOCK_HELD=""
+    local d
+    if ((${#LOCKS_HELD[@]})); then
+        for d in "${LOCKS_HELD[@]}"; do rmdir "$d" 2>/dev/null || true; done
+    fi
+    LOCKS_HELD=()
     return 0
 }
 trap release_lock EXIT
@@ -162,7 +180,7 @@ lock_playlist() {
     dir=$(playlist_lock "$1")
     for ((i = 0; i < 50; i++)); do
         if mkdir "$dir" 2>/dev/null; then
-            LOCK_HELD="$dir"
+            LOCKS_HELD+=("$dir")
             return 0
         fi
         sleep 0.1
@@ -171,7 +189,7 @@ lock_playlist() {
     if [[ -d "$dir" ]] && [[ -n "$(find "$dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]]; then
         rmdir "$dir" 2>/dev/null || true
         if mkdir "$dir" 2>/dev/null; then
-            LOCK_HELD="$dir"
+            LOCKS_HELD+=("$dir")
             return 0
         fi
     fi
@@ -185,6 +203,32 @@ write_playlist() {
     f=$(playlist_file "$name")
     printf '%s\n' "$json" >"$f.tmp.$$" || die "cannot write $f"
     mv -f "$f.tmp.$$" "$f" || { rm -f "$f.tmp.$$" 2>/dev/null || true; die "cannot persist $f"; }
+}
+
+# ONE reader for every verb that opens a playlist file, and the only place jq is pointed at
+# one. Before it existed the two READ verbs had no guard at all: a single unparseable file
+# aborted on set -e with jq's raw parse error, exit 5 — outside this command's own taxonomy —
+# and NO envelope under -j. That is the exact failure `yt-search` was fixed for (an agent
+# gets a jq parse error instead of a shape it can branch on); it must not come back through
+# a second command. The three write verbs had a guard each, spelled three times; this is it,
+# spelled once.
+#
+# It also spends the `schema` field. Writing a version nobody reads buys nothing — a file
+# from a future build would simply be misread as this one — so a schema this build does not
+# understand is refused here, once, for every verb.
+#
+# `corrupt` is a STORE failure, not a usage error: the argv was understood and the store
+# could not answer, which is the 4 side of the split stated at fail().
+PLAYLIST_SCHEMA_MAX=1
+PLAYLIST_JSON=""
+read_playlist() {
+    local f=$1 name=$2 schema
+    PLAYLIST_JSON=$(jq -c . "$f" 2>/dev/null) \
+        || fail 4 corrupt "playlist '$name' is not readable JSON: $f"
+    schema=$(printf '%s' "$PLAYLIST_JSON" | jq -r '.schema // 0' 2>/dev/null) || schema=0
+    [[ "$schema" =~ ^[0-9]+$ ]] || schema=0
+    ((schema <= PLAYLIST_SCHEMA_MAX)) \
+        || fail 4 corrupt "playlist '$name' was written by a newer uting (schema $schema; this build reads $PLAYLIST_SCHEMA_MAX)"
 }
 
 # The ONE duration formatter, as a jq prelude rather than a bash function — same reason the
@@ -255,11 +299,19 @@ read_items() {
 # 3. VERBS
 # ==============================================================================
 
+# --show NAME is a question about NAME, so NAME being unreadable IS the answer and it fails.
+# --ls is a question about the whole store, and there one bad file must not hide the rest:
+# unreadable files are skipped with a line on stderr (prose in both modes, like fail()) and
+# the listing still answers. Skipping silently would make the count a lie.
 do_ls() {
     ensure_store
     local files=() f
     for f in "$PLAYLISTS_DIR"/*.json; do
         [[ -e "$f" ]] || continue
+        if ! jq -e . "$f" >/dev/null 2>&1; then
+            echo "ut-playlist: skipping unreadable playlist file: $f" >&2
+            continue
+        fi
         files+=("$f")
     done
 
@@ -286,7 +338,8 @@ do_ls() {
 do_show() {
     ensure_store
     local f; f=$(playlist_file "$NAME")
-    [[ -f "$f" ]] || fail 1 not_found "no such playlist: $NAME"
+    [[ -f "$f" ]] || fail 4 not_found "no such playlist: $NAME"
+    read_playlist "$f" "$NAME"
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         # `duration_fmt` is DERIVED here, never stored: a stored copy would be a second
@@ -295,7 +348,7 @@ do_show() {
         # playlist through the same loader it renders a search with, and lets this output
         # be piped straight back into --add.
         jq -c "$JQ_PRELUDE"'{status: "ok", name, count: (.items | length),
-              items: (.items | map(. + {duration_fmt: (.duration | fmt_dur)}))}' "$f"
+              items: (.items | map(. + {duration_fmt: (.duration | fmt_dur)}))}' <<<"$PLAYLIST_JSON"
         return 0
     fi
     jq -r "$JQ_PRELUDE"'
@@ -304,7 +357,7 @@ do_show() {
          | "  [\(.key)] \(.value.title // "(untitled)")",
            "        \(.value.duration | fmt_dur // "--") - \(.value.engine)",
            "        \(.value.url)")
-    ' "$f"
+    ' <<<"$PLAYLIST_JSON"
 }
 
 do_add() {
@@ -317,9 +370,9 @@ do_add() {
     now=$(now_utc)
     added=$(printf '%s' "$items" | jq 'length')
     if [[ -f "$f" ]]; then
-        json=$(jq -c --argjson new "$items" --arg now "$now" \
-            '.items += $new | .updated_at = $now | .count = (.items | length)' "$f") \
-            || fail 1 invalid_input "playlist file is not readable JSON: $f"
+        read_playlist "$f" "$NAME"
+        json=$(printf '%s' "$PLAYLIST_JSON" | jq -c --argjson new "$items" --arg now "$now" \
+            '.items += $new | .updated_at = $now | .count = (.items | length)')
     else
         json=$(jq -nc --arg name "$NAME" --arg now "$now" --argjson new "$items" \
             '{schema: 1, name: $name, created_at: $now, updated_at: $now,
@@ -339,16 +392,17 @@ do_add() {
 do_rm() {
     ensure_store
     local f; f=$(playlist_file "$NAME")
-    [[ -f "$f" ]] || fail 1 not_found "no such playlist: $NAME"
+    [[ -f "$f" ]] || fail 4 not_found "no such playlist: $NAME"
     lock_playlist "$NAME"
+    read_playlist "$f" "$NAME"
     local len
-    len=$(jq '.items | length' "$f") || fail 1 invalid_input "playlist file is not readable JSON: $f"
+    len=$(printf '%s' "$PLAYLIST_JSON" | jq '.items | length')
     if ((INDEX >= len)); then
         fail 1 invalid_input "index $INDEX is out of range (playlist '$NAME' has $len items)"
     fi
     local json
-    json=$(jq -c --argjson i "$INDEX" --arg now "$(now_utc)" \
-        'del(.items[$i]) | .updated_at = $now | .count = (.items | length)' "$f")
+    json=$(printf '%s' "$PLAYLIST_JSON" | jq -c --argjson i "$INDEX" --arg now "$(now_utc)" \
+        'del(.items[$i]) | .updated_at = $now | .count = (.items | length)')
     write_playlist "$NAME" "$json"
     release_lock
 
@@ -387,15 +441,24 @@ do_rename() {
     local from to
     from=$(playlist_file "$NAME")
     to=$(playlist_file "$NEW_NAME")
-    [[ -f "$from" ]] || fail 1 not_found "no such playlist: $NAME"
+    [[ -f "$from" ]] || fail 4 not_found "no such playlist: $NAME"
     if [[ -f "$to" ]] && [[ "$NAME" != "$NEW_NAME" ]]; then
-        fail 1 exists "a playlist named '$NEW_NAME' already exists"
+        fail 4 exists "a playlist named '$NEW_NAME' already exists"
     fi
-    lock_playlist "$NAME"
+    # BOTH playlists, and in LEXICOGRAPHIC order. Locking only the source left the
+    # destination writable by a concurrent --add, which this then overwrote; taking them in
+    # a fixed order is what keeps two renames pointed at each other from deadlocking.
+    if [[ "$NAME" == "$NEW_NAME" ]]; then
+        lock_playlist "$NAME"
+    elif [[ "$NAME" < "$NEW_NAME" ]]; then
+        lock_playlist "$NAME"; lock_playlist "$NEW_NAME"
+    else
+        lock_playlist "$NEW_NAME"; lock_playlist "$NAME"
+    fi
+    read_playlist "$from" "$NAME"
     local json
-    json=$(jq -c --arg name "$NEW_NAME" --arg now "$(now_utc)" \
-        '.name = $name | .updated_at = $now' "$from") \
-        || fail 1 invalid_input "playlist file is not readable JSON: $from"
+    json=$(printf '%s' "$PLAYLIST_JSON" | jq -c --arg name "$NEW_NAME" --arg now "$(now_utc)" \
+        '.name = $name | .updated_at = $now')
     write_playlist "$NEW_NAME" "$json"
     [[ "$NAME" == "$NEW_NAME" ]] || rm -f "$from"
     release_lock
@@ -446,8 +509,10 @@ Storage: $UT_STATE_DIR/playlists/<name>.json
   may not start with '.', and are capped at 64 characters. On a case-insensitive
   filesystem (macOS default) two names differing only in case are the SAME playlist.
 
-Exit codes: 0 ok · 1 usage/validation (see .reason: not_found, exists, invalid_name,
-            invalid_input) · 4 locked by another process
+Exit codes: 0 ok
+            1 the call was malformed   (.reason: invalid_name, invalid_input)
+            4 the store said no        (.reason: not_found, exists, locked, corrupt)
+  --del on a playlist that is not there is 0 with deleted:false — the end state holds.
 
 This store holds no playback state: to play a list, hand it to the player —
   ut-playlist --show chill -j | ut-play -d --queue -
@@ -474,14 +539,17 @@ while (($#)); do
         [[ $# -ge 2 ]] || { echo "ut-playlist: $1 requires a value" >&2; exit 1; }
         COLOR_MODE="$2"; shift 2
         ;;
-    --ls | --playlists) set_action ls; shift ;;
-    --show | --add | --rm | --del | --delete)
+    # One spelling each. --playlists and --delete used to be accepted as second names for
+    # --ls and --del; a second official spelling is a second thing to keep in sync and it
+    # doubles the surface a small model has to choose from (CLAUDE.md, D10).
+    --ls) set_action ls; shift ;;
+    --show | --add | --rm | --del)
         [[ $# -ge 2 ]] || { echo "ut-playlist: $1 requires a playlist name" >&2; exit 1; }
         case "$1" in
         --show) set_action show ;;
         --add)  set_action add ;;
         --rm)   set_action rm ;;
-        *)      set_action del ;;
+        *)      set_action del ;;   # --del
         esac
         NAME="$2"; shift 2
         ;;
@@ -536,22 +604,31 @@ done
 [[ -n "$ACTION" ]] || { echo "ut-playlist: an action is required: --ls --show --add --rm --del --rename (see 'ut-playlist -h')" >&2; exit 1; }
 validate_enum "$COLOR_MODE" auto always never || die "--color must be one of: auto, always, never"
 
+# A selector with no action to select for. `ut-play` rejects the same shape (--id without
+# --stop/--set-volume); silently ignoring it would let a caller believe --add --index 3
+# inserted at a position. AS-BUILT-contract.md §2. Checked for EVERY verb — it used to live
+# inside the name-taking branch, so `--ls --index 3` alone escaped it and exited 0.
+if [[ "$ACTION" == "rm" ]]; then
+    [[ -n "$INDEX" ]] || { echo "ut-playlist: --rm requires --index N (0-based, from --show)" >&2; exit 1; }
+    [[ "$INDEX" =~ ^[0-9]+$ ]] || { echo "ut-playlist: --index must be a non-negative integer" >&2; exit 1; }
+elif [[ -n "$INDEX" ]]; then
+    echo "ut-playlist: --index belongs to --rm, not --$ACTION" >&2
+    exit 1
+fi
+
 require_cmd jq
 
 case "$ACTION" in
 ls) do_ls ;;
 show | add | rm | del | rename)
     validate_name "$NAME"
-    [[ "$ACTION" == "rename" ]] && validate_name "$NEW_NAME"
-    if [[ "$ACTION" == "rm" ]]; then
-        [[ -n "$INDEX" ]] || { echo "ut-playlist: --rm requires --index N (0-based, from --show)" >&2; exit 1; }
-        [[ "$INDEX" =~ ^[0-9]+$ ]] || { echo "ut-playlist: --index must be a non-negative integer" >&2; exit 1; }
-    elif [[ -n "$INDEX" ]]; then
-        # A selector with no action to select for. `ut-play` rejects the same shape
-        # (--id without --stop/--set-volume); silently ignoring it would let a caller
-        # believe --add --index 3 inserted at a position. AS-BUILT-contract.md §2.
-        echo "ut-playlist: --index belongs to --rm, not --$ACTION" >&2
-        exit 1
+    if [[ "$ACTION" == "rename" ]]; then
+        # Validate the NEW name with it in NAME's place: fail() reports the global, and an
+        # envelope that named the OLD playlist for a bad new name would send a caller to
+        # retry the wrong one.
+        _name_save="$NAME"; NAME="$NEW_NAME"
+        validate_name "$NEW_NAME"
+        NAME="$_name_save"
     fi
     "do_$ACTION"
     ;;
