@@ -8,7 +8,7 @@ This file is the single source of truth for repository guidelines, used by Claud
 
 The suite is exposed **directly** to shell-capable agents with no MCP wrapper, so the **CLI contract itself** (argv, exit codes, output shape, process lifecycle) *is* the product and the safety boundary. Every design choice follows from that. Full rationale: `docs/SPEC-system.md`.
 
-**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `uting` (the human surface) and `ut-play`/`yt-search`/`yt-resolve`/`bili-search`/`bili-resolve` (the agent surface) onto their own PATH. **No short name ships** (`docs/ROADMAP.md` D10) — the human face simply carries the project's own name, so `~/bin/uting` is a plain symlink with the same word at both ends; `ytt` was retired and is a user's own alias now.
+**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `uting` (the human surface) and `ut-play`/`yt-search`/`yt-resolve`/`bili-search`/`bili-resolve` (the agent surface) onto their own PATH. **No short name ships** (`docs/ROADMAP.md` D10) — the human face carries the project's own name, so `~/bin/uting` is a plain symlink with the same word at both ends. A user wanting a short form writes their own alias.
 
 ## Runtime Environment (Required)
 
@@ -36,6 +36,8 @@ shell/uting --version                                        # answers before an
 
 tests/contract.sh                                             # the CLI contract, 89 checks
 YT_TEST_LIFECYCLE=1 tests/lifecycle.sh                        # detached players; gated, silent
+tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
+tests/drive.sh -k Enter -w Playing                            # …including a real detached play
 python3 tests/mpv_ipc_mock.py --reverse                       # fake IPC peer for the awkward shapes
 ```
 
@@ -45,7 +47,7 @@ Each suite runs directly and says in its own docstring what it proves. Read the 
 
 | File | Role |
 |------|------|
-| `shell/ut-play` | **The player** (1.6k lines) — play + detached-playback lifecycle, non-interactive, never prompts. Owns the player lifecycle (id / pid / socket / lock / state dir / reap), the JSON envelope and the exit-code taxonomy, and **its own flag gate** (the `yt-play` wrapper merged in: with search and extraction gone to the engines there is one verb left here, so there is no bypass left to defend against — `docs/SPEC-system.md` §13). **Source-agnostic** — it does not search, does not extract, and carries no yt-dlp call, cookie decision or format string. It asks an engine, by name: `--engine yt` → `yt-resolve` |
+| `shell/ut-play` | **The player** (1.6k lines) — play + detached-playback lifecycle, non-interactive, never prompts. Owns the player lifecycle (id / pid / socket / lock / state dir / reap), the JSON envelope and the exit-code taxonomy, and **its own flag gate** (one verb, so there is no bypass to defend against — `docs/SPEC-system.md` §13). **Source-agnostic** — it does not search, does not extract, and carries no yt-dlp call, cookie decision or format string. It asks an engine, by name: `--engine yt` → `yt-resolve` |
 | `shell/yt-search` | **The YouTube engine, half one** (560 lines) — query → result envelope. Owns its own yt-dlp call, cookie decision, result shaping and duration formatter, and its own flag gate. Zero playback or lifecycle logic |
 | `shell/yt-resolve` | **The YouTube engine, half two** (1.0k lines) — handle → `{stream_urls[], http_headers{}, title, duration, format}`, plus `--info` and `--transcript`. Owns the PO-token probe, the cookie decision, the mode→format table and the yt-dlp error vocabulary. Every site-specific fact in the suite lives in this file or in `yt-search`; adding a source is adding a pair like it |
 | `shell/bili-search` | **The Bilibili engine, half one** (658 lines) — query → result envelope, over `curl` + `jq`. It talks HTTP rather than shelling out to yt-dlp because yt-dlp's Bilibili search returns **no metadata at all** (flat) and recurses into every part of every collection (non-flat, >120s for 10 results). Sends no credential: one public endpoint, a Referer, and a locally generated random `buvid3` |
@@ -126,7 +128,10 @@ Two files, one rule:
 | `tests/contract.sh` | the six commands' argv, exit codes and `-j` envelopes; the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux | none — run it before every commit |
 | `tests/lifecycle.sh` | detached players end to end (launch → status → mutate → stop → stop again), and that an engine's `http_headers` actually reach mpv | `YT_TEST_LIFECYCLE=1` — it starts real players |
 
-`tests/mpv_ipc_mock.py` is **not** a third suite: it is a fake **peer** that `contract.sh` drives, legitimate for the same reason a stubbed renderer is not — it produces socket shapes real mpv will not produce on cue (replies out of order, a property reported null, a side that never closes). **Fake the peer, never the thing under test.**
+Neither of the other two files in `tests/` is a suite, and neither asserts anything:
+
+- `tests/mpv_ipc_mock.py` is a fake **peer** that `contract.sh` drives, legitimate for the same reason a stubbed renderer is not — it produces socket shapes real mpv will not produce on cue (replies out of order, a property reported null, a side that never closes). **Fake the peer, never the thing under test.**
+- `tests/drive.sh` is a **driver**: it launches the TUI in tmux at a declared geometry, waits on the ready marker, optionally sends keys, and **always reaps the detached player** — which killing the tmux session does not do. Use it whenever a TUI change has to be driven rather than reasoned about.
 
 ### Harden before you extend
 
@@ -147,7 +152,7 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 
 ### Minimum checks before every commit
 
-**The two files in `tests/` ARE these checks.** A check that exists only as prose for someone to copy out reports green by default — which is why the skill that once held this list was deleted. A new check goes in the suite, never in a doc.
+**The two suites in `tests/` ARE these checks.** A check that exists only as prose for someone to copy out reports green by default. A new check goes in the suite, never in a doc — and a fixed command sequence goes in a script, never in prose.
 
 - `/bin/bash -n shell/*` — enforced by `.githooks/pre-commit` on staged content and by `pre-push` on the worktree, so this is a backstop for a `--no-verify`, not a habit.
 - **Any change at all:** `tests/contract.sh` (it also drives the empty-argument paths on the 3.2 floor, and the live `--status` read against the IPC mock).
@@ -156,7 +161,7 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 
 ## Safe-Evolution Methodology (how this suite is changed)
 
-The refactor that produced this architecture followed a staged, reversible order — reuse it for any structural change:
+Any structural change follows a staged, reversible order:
 
 ```
   A  Build the new path against the CURRENT tools and validate it in a tmux pty
@@ -201,27 +206,28 @@ The live files:
 
 ### Agent skills
 
-**Skills live in `.claude/skills/` — nowhere else.** Claude Code discovers project skills only there (plus `~/.claude/skills/` and plugins); a skill parked anywhere else is invisible and will simply never be invoked. Four exist:
+**Skills live in `.claude/skills/` — nowhere else.** Claude Code discovers project skills only there (plus `~/.claude/skills/` and plugins); a skill parked anywhere else is invisible and will simply never be invoked. **A skill is for work needing judgement; a fixed command sequence is a script.** Two exist:
 
 | Skill | Use it when |
 |---|---|
-| `run-uting` | You need to *see* the TUI. It requires a real TTY on both stdin and stdout, so a Bash-tool call proves nothing — this covers the tmux drive, the pty-size trap, the ready markers, the keymap, and the detached-player cleanup a session kill does **not** do |
 | `capture-pane` | A terminal frame in `README.md` / `docs/SPEC-system.md` is stale. Capture → clean (`clean_capture.py`, which refuses a mid-fetch frame) → **prove with the skill's own `assert_pane.py`** → splice with a Python replace. Never hand-draw a frame |
 | `audit-conformance` | Periodically, not per-commit. Whole-suite scan against 12 rules (surface layering, DRY, bash 3.2, dead code, swallowed errors, contract and doc drift) → `docs/PLAN-conformance-YYYY-MM-DD.md`. Ships `fn_graph.py` (defs vs call sites across all six scripts) as a manual aid — **never** as a gate or a `tests/` member |
 
 A skill may propose a *structural detector as a manual aid*; it may never propose one as a test. The functional-only mandate above binds skills too — and layout proving lives in `capture-pane`, deliberately outside the suite.
 
+**Driving the TUI is not a skill, it is `tests/drive.sh`.** Launching at a fixed geometry, polling the ready marker, sending keys and reaping the detached player are mechanical, and a mechanical sequence written as prose is a runner nobody executes the same way twice.
+
 ## Coding Style & Naming Conventions
 
 - Match the surrounding style: 4-space indentation, `snake_case` functions, `UPPER_SNAKE` globals, `local` for everything inside a function, `set -euo pipefail` semantics respected (see the arithmetic rule above).
-- **One name per command, and no second spelling of any of them.** `ut-play`, `yt-search`, `yt-resolve`, `bili-search`, `bili-resolve`, `uting` are the canonical identity — help text, errors, docs, and the PATH entry itself. The suite ships **no short form**: the TUI went `yt-tui` → `ut-tui` → `uting`, and `ytt` was retired on the way (D10 — the short names are taken on npm/PyPI/crates, and a second official spelling is a second thing to keep in sync). A user wanting one writes their own alias. `yts`/`ytp`/`ytt` and `ut-tui` are deprecated. Never add a second name for an existing command.
+- **One name per command, and no second spelling of any of them.** `ut-play`, `yt-search`, `yt-resolve`, `bili-search`, `bili-resolve`, `uting` are the canonical identity — help text, errors, docs, and the PATH entry itself. The suite ships **no short form** (D10 — the short names are taken on npm/PyPI/crates, and a second official spelling is a second thing to keep in sync). A user wanting one writes their own alias. Never add a second name for an existing command.
 - Per-request choices are **flags**; set-once tuning is an **environment variable** (`YT_*`) — this keeps each verb's flag surface narrow enough for a small model to call safely. Do not add a flag for something a user sets once.
 - Never add a runtime dependency. The suite's differentiator is that it depends only on primitives everyone already has.
 - Prefer small, incremental edits in the existing scripts over refactors that move logic between files.
 
 ## Commit & Pull Request Guidelines
 
-- **`main` is the working branch** — 54 commits, zero merges, single author. Commit straight to it for ordinary work; take a branch when the change is structural enough to want the staged A→E order below, or when it may need to be abandoned. No stacked branches.
+- **`main` is the working branch** — linear, no merges, single author. Commit straight to it for ordinary work; take a branch when the change is structural enough to want the staged A→E order below, or when it may need to be abandoned. No stacked branches.
 - Imperative, scoped commit subjects in the existing style — the file or surface first when it helps: `uting: stop Enter stalling a second in utf8_complete`, `add --version, declared once`, `docs: resync DESIGN with the detached-playback TUI`.
 - One logical change per commit. Renderer changes come with the proved capture (`capture-pane`) that shows them.
 - `bash -n` on all six scripts before every commit; `tests/contract.sh` before every push.

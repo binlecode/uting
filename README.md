@@ -151,11 +151,22 @@ no unit tier. Each file's header says what it proves; run either one directly.
 | `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the lifecycle verbs, the live `--status` read (against the mock, over a real socket), the tombstone record for a player that died unasked, the exit-code taxonomy, and the TUI booting / surviving a resize / leaving on `q` under tmux. |
 | `tests/lifecycle.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, and zero orphan mpv at the end. It also plays a real Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. Starts real players at `--volume 0`, so it is gated behind `YT_TEST_LIFECYCLE=1`. |
 
-`tests/mpv_ipc_mock.py` is not a third suite but a fake **peer** that `contract.sh` drives: it
-does what real mpv will not do on cue — answer out of order (`--reverse`), report a property
-null (`--null pause`), start paused, interleave async events, walk the clock, never close its
-side. Every IPC rule in the read path exists because of one of those shapes. Fake the peer,
-never the thing under test.
+Two more files in `tests/` are not suites and assert nothing. `tests/mpv_ipc_mock.py` is a
+fake **peer** that `contract.sh` drives: it does what real mpv will not do on cue — answer out
+of order (`--reverse`), report a property null (`--null pause`), start paused, interleave async
+events, walk the clock, never close its side. Every IPC rule in the read path exists because of
+one of those shapes. Fake the peer, never the thing under test.
+
+`tests/drive.sh` is a **driver** for the TUI, which needs a real tty and so cannot be run from
+a pipe. It launches tmux at a declared geometry, waits on the ready marker, optionally sends
+keys, dumps the frame, and **always reaps the detached player** — `Enter` starts mpv in its own
+process group, and killing the tmux session does not stop it.
+
+```sh
+tests/drive.sh -x 62 -y 20              # the reflow floor, frame dumped
+tests/drive.sh -k Enter -w Playing      # a real detached play, then cleaned up
+tests/drive.sh -i                       # attach and drive it by hand
+```
 
 `contract.sh` needs `tmux` for its TUI boot check and skips the live-read block without
 `python3`. There is no `pip install` step, and nothing here is needed at runtime.

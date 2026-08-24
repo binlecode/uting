@@ -3184,10 +3184,11 @@ the screen will not be caught by a test — only by the next doc capture.
 > fixtures**. Treat a single red run as inconclusive until it repeats; the durable fix is a
 > per-run state dir, which is not built yet.
 
-**No *scratch* check is named by path here, on purpose.** The exception is the three files
-that earned a permanent home and are committed under `tests/` — `contract.sh`, `lifecycle.sh`,
-`mpv_ipc_mock.py` — which the root README describes by name because a contributor cannot run
-what nothing points at. (Two pty-based rigs and then a tmux renderer rig preceded today's
+**No *scratch* check is named by path here, on purpose.** The exception is the four files
+that earned a permanent home and are committed under `tests/` — the two suites `contract.sh`
+and `lifecycle.sh`, the fake peer `mpv_ipc_mock.py`, and the TUI driver `drive.sh` (which
+asserts nothing and exists to reap the detached player a session kill leaves behind) — which
+the root README describes by name because a contributor cannot run what nothing points at. (Two pty-based rigs and then a tmux renderer rig preceded today's
 shape: a pty starting at 0×0 produced plausible-looking one-row frames — a wrong green — and
 tmux fixed that, but asserting on the picture at all is what finally went.) Everything else this suite has been
 verified with is a throwaway under a `tmp/` the repo does not track (`.gitignore`:
@@ -3482,3 +3483,66 @@ Rules for anyone editing these scripts:
 If a future feature genuinely needs bash 4+, the honest move is to assert
 `((BASH_VERSINFO[0] >= 4))` at the top with a `brew install bash` hint and let PATH
 provide it — never hardcode `/opt/homebrew/bin/bash` (breaks Intel macOS + Linux).
+
+## 29. Development workflow (how a unit of work moves through the repo)
+
+§24 is the template for a *structural* change; this section is the loop around it: which
+discipline each stage of ordinary work is bound to. The stages and their documents are
+defined in `CLAUDE.md` (the five-stage doc lifecycle, the testing hard rules, the commit
+guidelines) — this section states only the binding, which lives nowhere else. The
+disciplines are normative for the work itself; the agent skills that automate them (the
+maintainer's user-level set, and this repo's own `.claude/skills/`) are conveniences, and
+nothing in the checkout depends on their presence.
+
+```
+  idea ──► interrogate ──► pre-mortem ──► design ──► build ──► verify ──► land
+                │               │            │          │         │
+             DESIGN-          PLAN-       (§5 seams)  (§24 A-E  (suites, per
+             distilled      hardened                 if structural)  CLAUDE.md)
+```
+
+1. **An idea is interrogated before it is designed.** A feature or decision enters as an
+   adversarial interview, not a monologue: questions asked in dependency order, each with a
+   recommended answer; facts are looked up (in this repo, or run — §27's rule that a
+   contract claim is executed, not read), only decisions are asked. What settles is
+   distilled into a `DESIGN-` or `PLAN-` doc **before the conversation ends** — a decision
+   that lives only in a conversation does not exist.
+
+2. **A plan is pre-mortemed before it is built.** The plan text — alone, without its
+   authoring context — is handed to a cold reader who writes its failure retrospective:
+   the wrong assumption, the constraint that bit, the underestimated dependency, the
+   ignored early signal. Each preventive fix is accepted into the `PLAN-` doc or explicitly
+   rejected. The cold read matters: a critique from the session that wrote the plan
+   inherits the plan's assumptions.
+
+3. **Design speaks the seam vocabulary, and this repo's doctrine outranks generic
+   instinct.** Interfaces here are envelopes (§14), seams are §5's swap points, and depth
+   is judged by what a caller gets per fact they must learn. Explore alternatives (2–4
+   deliberately different shapes) before committing to one. Where generic design advice
+   points at a shared library or a mock, `CLAUDE.md`'s carve-outs win: six standalone
+   executables duplicate on purpose, and tests are functional only — real surfaces, no unit tier.
+
+4. **A build is incremental, or it is §24.** Small edits in place for ordinary work; the
+   A→E staged order the moment the change is structural (moves logic between files,
+   retires a path, adds a surface).
+
+5. **A bug gets a red loop before it gets a theory.** No hypothesis until one command
+   exists that goes red on the exact symptom — fast, deterministic, agent-runnable.
+   Harnesses live in `tmp/`; the regression check lands in whichever suite owns the surface
+   (CLAUDE.md's testing rules); the hypothesis that proved out is stated in the commit
+   message.
+
+6. **Research is cited or it is opinion.** Outside-world questions (a yt-dlp mechanism, a
+   dependency's roadmap) are answered against primary sources and land as
+   `docs/RESEARCH-<topic>.md` with each claim cited — then distilled into a ROADMAP entry
+   or `DESIGN-` and deleted, per the lifecycle.
+
+7. **A session ends by sorting its residue.** Durable state — settled decisions, work-in-
+   progress position — is written into the in-flight `PLAN-` doc before the session
+   closes; only conversation-shaped remainder (untested hunches, the next command to run)
+   goes to a `tmp/` handoff note. The dividing line: if it still has value after the next
+   session consumes it, it is not handoff content.
+
+8. **Accretion is audited, not watched for.** Diff review catches what a change
+   introduces; the whole-tree sweep (`/audit-conformance`, this repo's own skill) catches
+   what accumulates between changes. Its cadence and rules are its own file's.
