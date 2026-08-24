@@ -16,23 +16,19 @@ out here rather than left inside the skills.
 ## 1. The pipeline
 
 ```
- (research) ──► interrogate ──► plan ──────► pre-mortem ──► build ──► verify ──► land
-      │              │            │               │            │          │          │
-  RESEARCH-      answers        PLAN-           PLAN-      (§24 A-E   (the two   (checklist;
-  cited, then    settle into    authored;       hardened   if struct.)  suites)  as-built docs
-  distilled      the PLAN-      design happens                                   resynced,
-  + deleted                     HERE (B3)                                        PLAN- deleted)
+ (research) ──► plan ──────────► pre-mortem ──► build ──► verify ──► land
+      │           │                   │             │          │          │
+  RESEARCH-     PLAN- authored:     PLAN-       (§24 A-E   (the two   (checklist;
+  cited, then   interrogated (B1),  hardened    if struct.)  suites)  as-built docs
+  distilled     designed (B3)                                         resynced,
+  + deleted                                                           PLAN- deleted)
 
   ...and between units of work, on its own cadence: the whole-tree conformance audit.
 ```
 
-Design is an **activity inside the plan stage, not a doc class**: options and trade-offs are
-explored (B3's discipline) while the `PLAN-` is being authored, and what settles is written
-into it — there is no `DESIGN-` doc to distil and delete.
-
-The as-built docs are touched at exactly one stage: **land**. They describe what the code is,
-so they are resynced after the code stops moving — never written ahead of the build (that
-would make them a promise, which is the `PLAN-`'s job) and never edited mid-build.
+Interrogation (B1) and design (B3) are activities inside authoring the `PLAN-`, not stages
+of their own; the as-built docs are touched only at land. The stage definitions themselves
+live once, in `CLAUDE.md`.
 
 ## 2. The bindings (normative)
 

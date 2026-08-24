@@ -231,7 +231,7 @@ def clean_title:
 
 # Map an HTTP status + the response body's own `code` to the suite's stable reason taxonomy
 # so an agent caller can branch on `reason` instead of on Bilibili's numbers. The ENUM is
-# the shared fact and lives in docs/ARCHITECTURE.md §14 — no member may be added here that
+# the shared fact and lives in AS-BUILT-contract.md §3 — no member may be added here that
 # it does not already have.
 #
 # TWO LAYERS, BOTH CHECKED. This host says "no" in two different places: an HTTP status,
@@ -287,7 +287,7 @@ ensure_scratch() {
 # ==============================================================================
 
 # Report a search that produced nothing usable, in whichever shape the caller asked for.
-# Exit code follows the suite taxonomy: §15 reserves 1 for usage/validation, so a failure
+# Exit code follows the suite taxonomy: AS-BUILT-contract.md §4 reserves 1 for usage/validation, so a failure
 # to reach or parse the site is 2 — a caller branching on the exit code must be able to
 # tell "you called me wrong" from "the site did not answer".
 search_fail() {
@@ -416,7 +416,7 @@ fetch_results() {
     # `live_status` is null, not the raw `live_status: 0`. This search is search_type=video,
     # where that field is not the suite's is_live/was_live notion at all — carrying the 0
     # over would let a renderer draw a liveness state the site never claimed. A field this
-    # engine cannot know is null, and the key is still present (ARCHITECTURE.md §14).
+    # engine cannot know is null, and the key is still present (AS-BUILT-contract.md §3).
     FILTERED_JSON=$(jq "$JQ_PRELUDE $JQ_CLEAN_TITLE"'
         [ .[]
           | . + { id:         (.bvid // null),
@@ -514,7 +514,7 @@ EOF
 
 # Value-taking flags (consume the next token) vs boolean flags, restricted to the search
 # surface. Anything outside these is rejected — playback/lifecycle flags get a pointer to
-# ut-play so the caller learns the right tool instead of a bare error. ARCHITECTURE.md §13.
+# ut-play so the caller learns the right tool instead of a bare error. AS-BUILT-contract.md §2
 has_format=0
 query=()
 reject_url() {

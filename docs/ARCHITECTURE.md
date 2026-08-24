@@ -68,7 +68,7 @@ while costing portability. Conclusion: own the glue, depend only on primitives.
 **Where the ownership line now falls (D7).** It used to be "own the core"; since the
 player/engine split it is **own the seam**. Site knowledge is owned and confined to an
 engine pair; playback and lifecycle are owned and confined to the player; what crosses
-between them is a JSON envelope this document specifies (§14), not a function call.
+between them is a JSON envelope this document specifies (AS-BUILT-contract.md §3), not a function call.
 
 ## 3. Design decisions (index)
 
@@ -101,7 +101,7 @@ written `ROADMAP D9`, never a bare `D9`.
       that exec into it. There is no core: six peers, each self-gating, each owning
       its own primitive calls. What they share is the ENVELOPE, not code.     (§4)
   D8  uting composes the VERBS only — never an engine's internals, never mpv
-      except through the socket the player published.                        (§13)
+      except through the socket the player published.                        (AS-BUILT-contract.md §2)
   D9  Detached handle = a monotonic mktemp token, NOT the pid: the socket path is
       known before launch and it is immune to pid reuse; pid kept only for
       liveness. Runtime control (--set-volume) rides mpv's per-instance IPC. (§9.3)
@@ -120,7 +120,7 @@ written `ROADMAP D9`, never a bare `D9`.
       and no case arm anywhere in the player or the TUI.                       (§4)
   D13 An engine states a capability by HAVING the verb. `bili-resolve` has no
       --transcript because the site serves no captions — rather than a verb that
-      always answers "none", which a caller cannot distinguish from a bad day. (§12)
+      always answers "none", which a caller cannot distinguish from a bad day. (AS-BUILT-contract.md §1)
 ```
 
 ## 4. Command topology & file layout
@@ -243,7 +243,7 @@ makes the reason enum honest, because the call that can fail is a call we read t
 
 **An engine's two halves need not use the same primitive.** `bili-search` talks HTTP through
 `curl` while `bili-resolve` shells out to `yt-dlp`; the YouTube pair uses `yt-dlp` for both.
-The seam between a half and its caller is the ENVELOPE (§14), not the tool behind it — which
+The seam between a half and its caller is the ENVELOPE (AS-BUILT-contract.md §3), not the tool behind it — which
 is why the split is by *operation* rather than by site (ROADMAP D11).
 
 **yt-dlp is invoked at the sites in the table rather than one seam** — but it is the
@@ -260,7 +260,7 @@ primitive at all (§11).
 
 Each verb parses its own argv; nothing execs into anything else. The player's parse is the
 largest and is the one shown here — the engines use the same three-stage shape (long-option
-normalization → `getopts` → validation) with their own flag sets (§12).
+normalization → `getopts` → validation) with their own flag sets (AS-BUILT-contract.md §1).
 
 ```
    $ ut-play -d -j --engine yt -- "https://youtu.be/ID"
@@ -360,7 +360,7 @@ answer to the second half is short: **in the engine, exactly once, and we read i
 ```
 
 `yt-resolve --transcript` has the same shape (one `yt-dlp --skip-download --no-simulate`,
-§14). `bili-resolve` has no `--transcript` half at all (D13).
+AS-BUILT-contract.md §3). `bili-resolve` has no `--transcript` half at all (D13).
 
 **B. Playback — the player asks an engine, then plays a direct URL**
 
@@ -382,7 +382,7 @@ answer to the second half is short: **in the engine, exactly once, and we read i
    │  │    jq ──► {stream_urls[], http_headers{}, title, duration, …}    │     │
    │  └──────────────────────────────────────────────────────────────────┘     │
    │    reads the envelope; classifies a failure from the engine's `reason`,   │
-   │    never by re-reading yt-dlp prose (§14)                                 │
+   │    never by re-reading yt-dlp prose (AS-BUILT-contract.md §3)                                 │
    │         ▼                                                                 │
    │    run_mpv:  mpv --no-ytdl <stream_urls[0]>                               │
    │              [--audio-file=<stream_urls[1]> when the format merged]       │
@@ -459,14 +459,14 @@ disappeared with it.
    envelope and the player puts it on mpv's argv. The old `--get-url` handed out a bare URL
    with no field for headers, so the same video could play correctly and hand a caller a URL
    the CDN refused with 403 — measured on Bilibili, which is why the key is load-bearing
-   rather than theoretical (§14).
+   rather than theoretical (AS-BUILT-contract.md §3).
 3. **A detached play runs yt-dlp once, twice at worst** (#3, plus #4′ when the cookie'd
    client fails the probe) — down from four. mpv contributes none.
 
 ## 7. Search subsystem — a verb of the ENGINE
 
 Search is half of an engine (§4), so this section describes `yt-search`; `bili-search` is
-the same envelope over a different transport and is specified in §12. Everything below —
+the same envelope over a different transport and is specified in AS-BUILT-contract.md §1. Everything below —
 the single jq program, the internal `FILTERED_JSON` shape, the duration rules, the error
 contract — is what BOTH halves implement, and the two files each carry their own copy on
 purpose: an engine that shared a library with another engine would be a library the player
@@ -497,12 +497,12 @@ would eventually have to know about (§4).
 ```
 
 `engine` is in the envelope because a caller holding a result must be able to route it back
-to the resolver that understands it — `ut-play --engine <that value>` (§14, D12). It is the
+to the resolver that understands it — `ut-play --engine <that value>` (AS-BUILT-contract.md §3, D12). It is the
 field the host allowlist (ROADMAP D12) exists to keep honest.
 
 `print_list()` reads the **`FILTERED_JSON` variable**, not the emitted `-j` stream.
 Projection happens only at the emit point, so the JSON contract can change without
-touching that consumer. (Schemas → §14.)
+touching that consumer. (Schemas → AS-BUILT-contract.md §3.)
 
 **One jq program, not a per-entry loop.** Shaping used to run a bash `while read` loop that
 forked jq twice per entry, and `print_list` forked jq five times per row — 175 processes
@@ -528,9 +528,9 @@ entries as the flag implies.
 **Search has an error contract like every other surface.** A yt-dlp failure used to abort on
 `set -e` with raw stderr even under `-j`, handing an agent a jq parse error. `fetch_results`
 captures stderr, classifies it with the engine's own `classify_yt_dlp_error` (the enum is
-shared, the classifier is not — §14), and emits
+shared, the classifier is not — AS-BUILT-contract.md §3), and emits
 `{status:"error", engine, query, count:0, results:[], reason}` for `-j`/`-J` (prose: the captured
-stderr plus a `die`). Exit is 2+ — never 1, which §15 reserves for usage/validation.
+stderr plus a `die`). Exit is 2+ — never 1, which AS-BUILT-contract.md §4 reserves for usage/validation.
 
 ## 8. Playback subsystem
 
@@ -539,7 +539,7 @@ stderr plus a `die`). Exit is 2+ — never 1, which §15 reserves for usage/vali
 `-f MODE` is a player flag and travels to the engine unchanged; what a mode MEANS as a
 format string is site knowledge, so `format_for_mode()` lives in each `<engine>-resolve`,
 never in `ut-play`. The player never sees a format string except as an opaque value it
-records in the player file and never reads (§14).
+records in the player file and never reads (AS-BUILT-contract.md §3).
 
 ```
   MODE (player flag)   <engine>-resolve: format_for_mode()   ut-play: mpv option set
@@ -571,7 +571,7 @@ a header value containing a comma would split into two broken headers), the medi
 **Header values land on mpv's argv and are therefore visible in `ps`.** An engine must not
 return a credential header (`Cookie`, `Authorization`) in `http_headers`; the YouTube engine
 returns only `User-Agent` / `Accept` / `Accept-Language` / `Sec-Fetch-Mode`. This is a
-contract on engines, stated once here and once in §14.
+contract on engines, stated once here and once in AS-BUILT-contract.md §3.
 
 **Cookies are no longer an mpv concern at all.** They were passed through
 `--ytdl-raw-options` when mpv did the extracting; now the cookie decision belongs entirely to
@@ -661,7 +661,7 @@ YouTube's CDN serves streams that do not 403 on range requests.
 Implementation notes: `local YT_COOKIE_ARGS=()` shadows the global (bash dynamic
 scoping) so the chosen resolve drops cookies without touching the real setting; the verdict
 surfaces as `retried` in the RESOLVE envelope, and `ut-play` relays it into the playback
-envelope's `retried` rather than observing it (§14). Cost: one extra
+envelope's `retried` rather than observing it (AS-BUILT-contract.md §3). Cost: one extra
 resolve + 1-byte GET per play (two on a cookie-403 video). `curl` is a soft dependency —
 without it the probe is skipped and the old play-fail-replay retry runs (the error-dump
 regression reappears only there). `YT_COOKIE_BROWSER=none` forces anonymous-only (no
@@ -699,10 +699,10 @@ replays that verdict through the `yt_reason=` marker rather than re-deriving it 
 it would have to guess at; what it classifies itself is only what mpv can fail at with a URL
 already in hand: transport, and rc 130. `forbidden` stays reachable on both sides because a
 signed media URL can expire or be refused between resolve and open. **No member may be added
-by either classifier that §14 does not already list.**
+by either classifier that AS-BUILT-contract.md §3 does not already list.**
 
 `exit_code` is the real mpv exit status; the process exit code stays truthful (130 is
-normalized to 0 — an intentional stop). (Schema → §14.)
+normalized to 0 — an intentional stop). (Schema → AS-BUILT-contract.md §3.)
 
 ## 9. Detached playback lifecycle
 
@@ -832,7 +832,7 @@ Two pieces close it, and the split is forced by what each process knows:
   recognise" are the same text to `classify_playback_error` (both `unknown`). The child's
   stdout IS the log, so it appends one line —
   `{"yt_event":"exit","rc":2,"reason":"unavailable","ended_at":"…"}` — with `reason` from the
-  shared taxonomy (§14), classified from the tail of the log it was handed as
+  shared taxonomy (AS-BUILT-contract.md §3), classified from the tail of the log it was handed as
   `YT_DETACHED_LOG`. Nothing is written when `rc` is 0 or 130.
 - **The reaper turns it into a tombstone** (`record_player_death`), read at the one moment
   both the record and the log still exist, and writes `players/dead/<id>.json`.
@@ -875,7 +875,7 @@ that does not need this terminal. `uting` validates `-f` against the same list.
 without them in the envelope a client had to RECONSTRUCT the socket path from the player's
 private state layout — which `uting` did, hardcoding
 `$TMPDIR/uting-$(id -u)/mpv-<id>.sock` in a second script that would have broken silently
-if the player moved its state dir (§9.3). (Schemas → §14.)
+if the player moved its state dir (§9.3). (Schemas → AS-BUILT-contract.md §3.)
 
 ### 9.3 Runtime IPC control (`--set-volume`)
 
@@ -935,14 +935,14 @@ an implementation detail — is where the JSON-RPC channel is sanctioned. Conseq
 `--status`: the state file's `volume` only knows about launch `--volume` and `--set-volume`,
 so a client moving volume over the socket would make it lie. `--status` therefore reports
 **live** volume, falling back to the recorded value. It is soft-gated on `nc`, keeping
-`--status`'s jq-only dependency (§15). Verified: two `0` presses in `uting` moved a player
+`--status`'s jq-only dependency (AS-BUILT-contract.md §4). Verified: two `0` presses in `uting` moved a player
 launched at `--volume 0` to `10`, and `--status` reported `10` (it used to report `0`
 forever).
 
 **Four properties, one round trip (`live_props` / `read_player_live`).** The same argument
 covers `pause`, `time-pos` and `duration`, only worse: the state file has never held them at
 all, so the socket was the *only* place they existed and only `uting` was reading it. They
-are now part of the player record (§14), read by `live_props(sock, prop…)` — which sends the
+are now part of the player record (AS-BUILT-contract.md §3), read by `live_props(sock, prop…)` — which sends the
 whole property list down ONE connection and emits `<request_id><US><value>` lines — and
 correlated by `read_player_live`, which both `--status` output modes share so the
 normalisation exists once. Three rules are load-bearing:
@@ -1016,7 +1016,7 @@ a ceiling (~≤1s/call): mpv holds the socket open, so `nc` may sit until `-w1` 
 follow-on event arrives after the reply — fine for human-driven adjust, not for a tight
 loop. Linux `nc -U` differs and is an accepted known gap (§26). `nc` is gated lazily at
 dispatch (`require_cmd nc`), never in global `require_deps`, so a bare `yt <query>` search
-never demands it (§15).
+never demands it (AS-BUILT-contract.md §4).
 
 **References (mpv IPC).**
 
@@ -1075,7 +1075,7 @@ of their own, never a looser host check.
 
 `stream_urls` is **video first**: element 0 is what a player opens, element 1 — present only
 when the chosen format merged two streams — is its separate audio track. `http_headers` is
-**required, possibly `{}`**. Full schema and the reasoning for both: §14.
+**required, possibly `{}`**. Full schema and the reasoning for both: AS-BUILT-contract.md §3.
 
 ### 10.1 Metadata-only (`--info`)
 
@@ -1112,7 +1112,7 @@ extractor's variance.
 
 `yt-resolve --transcript` fetches a caption track and cleans it into text that can be dropped
 straight into a prompt. Envelope, the `-j`/`-J` split, and the one-yt-dlp-call constraint:
-§14, which is also where the `no_subtitles_available` reason is specified.
+AS-BUILT-contract.md §3, which is also where the `no_subtitles_available` reason is specified.
 
 **Bilibili serves no captions, so `bili-resolve` has no `--transcript` at all** — the flag is
 not accepted and the help does not list it. This is the capability rule in the small: an
@@ -1194,7 +1194,7 @@ with fewer than two engines it returns immediately and the affordance is not dra
 ```
 
 - **PLAY is asynchronous & non-blocking via `ut-play -d -j --engine`.** The engine is taken
-  from the search envelope, never left to the player's default (§13). `play_selected` reads
+  from the search envelope, never left to the player's default (AS-BUILT-contract.md §2). `play_selected` reads
   `id`/`pid`/**`sock`** out of that envelope in one `jq` pass and never rebuilds the socket
   path itself (§9.3). Playback launches in an
   independent, detached process group so `uting` retains full terminal control. Audio
@@ -1672,7 +1672,7 @@ with fewer than two engines it returns immediately and the affordance is not dra
     Three keys were also **missing from the one view whose job is to write keys down**:
     `9/0` volume, `Space` pause and `[ ]` seek are all handled by the menu loop's universal
     case, so they always worked here — the card's hint block and the banner's short-terminal
-    fallback both documented volume and pause, and §12.4 and §18 documented all three, which
+    fallback both documented volume and pause, and AS-BUILT-contract.md §1.4 and §18 documented all three, which
     is what makes their absence a gap rather than a decision. They cluster at the end beside
     `s`, being the playback keys in a list otherwise about moving and searching. The seek keys
     print as `[ ]`, **not** `[/]`: `/` is this line's "or" separator (`9/0`, `↑/↓`), but these
@@ -1943,419 +1943,27 @@ with fewer than two engines it returns immediately and the affordance is not dra
   without a TTY.
 
 ---
-
 # Part III — Modular API (the contract surface)
 
+**Moved:** the whole contract surface — command specifications, the gating model, the JSON
+data contracts, the exit-code table and the configuration surface — now lives in
+`docs/AS-BUILT-contract.md`, the frozen surface of ROADMAP D3/D13. The section numbers
+below are kept as tombstones so old citations still resolve.
+
 ## 12. Command specifications
+Moved → `AS-BUILT-contract.md` §1.
 
-Six peers, three shapes: the player, an engine's two halves, and the UI. Every one of them
-parses its own argv and holds its own gate (§4) — there is no core to delegate to.
-
-### 12.1 `ut-play` — the player (source-agnostic, non-interactive)
-
-- **Owns:** playback, the detached lifecycle, the playback envelope, the exit-code taxonomy,
-  `players/`. **Owns no site knowledge:** no yt-dlp call, no cookie decision, no format
-  string, no id shape.
-- **Flags:** `-f -S -d -j -l -h -V` + long `--engine --volume --detach --json --list
-  --status --stop --set-volume --id --all --color --help --version`. Color is `--color`
-  only (no `-c`); `-S` is the format-sort override (no `-F`) and is forwarded to the engine
-  verbatim. `--` ends option parsing: everything after it is the handle (§6). At most one
-  action per call; `--id`/`--all` belong to `--stop`/`--set-volume`; `-d` combines with
-  neither an action nor `-f ascii|viz`.
-- **Behavior:**
-  ```
-   ut-play -- <handle>          play (prose)      ut-play -j -- <handle>   playback JSON
-   ut-play -d -- <handle>       detach; concurrent players OK
-   ut-play --status             list players      ut-play --set-volume N [--id ID]
-   ut-play --stop [--id ID | --all]               stop one/all (--id from --status)
-   ut-play                      → usage error naming yt-search / uting (D3)
-   ut-play -- "some query"      → usage error naming yt-search (whitespace ⇒ not a handle)
-  ```
-- **Engine selection:** `--engine NAME`, defaulting to `UT_DEFAULT_ENGINE` (default `yt`).
-  The name is the command prefix; an unknown one exits 1 naming it (§4). **v1 does no URL
-  sniffing** — `uting` always knows the engine because it did the search, and an agent
-  playing a bare URL says which engine it is. Sniffing (engines declaring URL patterns) is
-  deferred until a third engine makes it worth a registry.
-- **Gate arms that name the right verb** (what the deleted wrapper's rejections became):
-  `-n`/`-m`/`-M`/`-s` → "that is a search flag — use yt-search"; `-J` → "that is an engine
-  flag — try `yt-resolve --info -J`"; `--info`/`--transcript`/`--sub-lang` → "that is an
-  engine verb"; `--get-url` → the `yt-resolve -j` call that replaced it; any other unknown
-  long flag → the list of play flags.
-
-### 12.2 `<engine>-search` — an engine's half one
-
-- **Owns:** one site's query path, its own transport, its own cookie decision, its own
-  result shaping and duration formatter, its own gate. **Zero playback or lifecycle logic.**
-- **Flags:** `-n -m -M -s -S -l -j -J --color -h -V`. Positional: a QUERY. A URL is
-  rejected, pointing at `ut-play` — including after `--`, which is where the check has to be
-  re-applied because `--` stops flag parsing, not argument validation.
-- **Envelope:** `{status, engine, query, count, results[]}`, one line (§14).
-- **Today:** `yt-search` (yt-dlp) and `bili-search` (curl + jq). Same envelope, different
-  transport — the seam is the envelope, not the tool (ROADMAP D11).
-
-### 12.3 `<engine>-resolve` — an engine's half two
-
-- **Owns:** the handle grammar and host allowlist, the mode→format table, the cookie
-  decision, the site's read-only verbs, the yt-dlp error vocabulary.
-- **Flags:** `-f -S -j -J --color -h -V` + the verbs it has: `--info` (both engines),
-  `--transcript --sub-lang` (`yt-resolve` only, D13).
-- **Behavior:** §10. Non-own-site host → usage error (1).
-- **Capability by presence (D13):** what an engine cannot do, it does not have a verb for.
-
-### 12.4 `uting` — interactive terminal UI
-
-- Surface: `uting [--engine NAME] [-n N] [-m S] [-M S] [-s field] [-f audio|video|fast]
-  [--volume N] [-p ROWS] [--color auto|always|never] [query]` — search-shaping flags
-  forwarded to `<engine>-search`; `-f`/`--volume` playback settings forwarded to `ut-play`
-  on every play; `-p` rows/page; rejects all else. `--volume` is launch-time only (no live
-  cycle key, unlike `-f`'s `v` — see §26). Query optional (prompts if absent). Requires a
-  TTY on both stdin and stdout, `jq`, and the sibling verbs.
-  `-f` is validated against `audio|video|fast`: playback is detached, and `ascii`/`viz`
-  need a terminal (§9.2).
-  Keys: arrows nav/page · Enter non-blocking play · `Tab`/`p` toggle the two views ·
-  `Esc` back to list · `Space` pause · `[`/`]` seek ∓10s · `9`/`0` volume · `s` stop ·
-  `v` cycle mode (audio→video→fast) · `e` switch source (hidden with one engine) ·
-  `l` switch chrome language (en↔zh, any view) · `t` cycle palette family (any view) ·
-  `n` new search · `m` more results · `o` sort · `/` filter · `q` quit.
-
-## 13. Gating model — one tier, six self-gating verbs
-
-There is **no wrapper tier**. Each verb accepts only its own surface and points the caller at
-the correct tool on a cross-flag; that is what keeps the contracts non-overlapping now that
-nothing sits between a caller and an implementation.
-
-```
-   <engine>-search                            ut-play
-   ─────────────────────────────────         ─────────────────────────────────
-   allow: -n -m -M -s -S -l -j -J            allow: -f -S -d -j -l --engine --volume
-          --color -h -V                             --status --stop --set-volume
-                                                    --id --all --color -h -V
-   reject (→ "use ut-play"):                  reject (→ "use yt-search"):
-          -f -d --detach --status                   -n -m -M -s
-          --stop --set-volume --id --all      reject (→ "use <engine>-resolve"):
-   reject (→ "use <engine>-resolve"):                --info --transcript --sub-lang
-          --info --transcript                       --get-url  -J
-   positional: a QUERY (reject URLs)         positional: a HANDLE (reject whitespace)
-   default: inject -l if no -l/-j/-J         handle required unless
-                                             --status/--stop/--set-volume
-   both: `--` ends flags; the positional check is RE-APPLIED after it
-```
-
-**`--` stops FLAG parsing, not argument validation.** Each verb re-applies its positional
-check inside its own `--` drain loop, because that check is the verb's whole point. The
-lesson is paid for: `yt-play -- "some query"` once walked past the "not a URL" rejection
-that `yt-play "some query"` gave, reached the core, and ran a SEARCH — printing a prose list
-or, under `-j`, a full search envelope from the verb whose contract said it plays URLs. A
-gate that only guards the spelling without `--` is not a gate. The rule survived the wrapper
-that taught it: `ut-play` applies the whitespace test to whatever follows `--`, and
-`<engine>-search` applies `reject_url` to every token after it.
-
-**Why the gate stopped being a layer (D7, retired).** The old model was one core plus two
-wrappers, and the gate was the wrapper's reason to exist: the core implemented a wide
-polymorphic surface (`yt "query"` searched, `yt <url>` played) and the wrapper's job was to
-guarantee which half a caller reached. Once search moved to `<engine>-search` and extraction
-to `<engine>-resolve`, the player had exactly one verb left — there is no other operation
-for a bypass to reach, so there is nothing left for a layer to defend. What the wrapper
-contributed that was worth keeping is its ERROR TEXT, and that is what its arms became
-(§12.1).
-
-**Why `uting` composes the verbs, never their internals (D8).** `fetch_json` parses the
-search envelope, and `<engine>-search`'s URL rejection is what makes "`-j` = search
-envelope" unconditional — a URL pasted into the TUI's `n` (new search) prompt must not
-become anything but a rejected search. The TUI also passes `--engine` **explicitly, taken
-from the envelope's own `engine` field**, never letting `ut-play`'s default decide: with two
-engines installed, that default would send the second engine's URL to the first engine's
-resolver, which since ROADMAP D12 is a hard usage error instead of the silent mislabel it
-used to be. The one sanctioned exception to D8 is the mpv socket (§9.3), whose path the
-player publishes in the `-d -j` envelope precisely so a client may use it.
+## 13. Gating model
+Moved → `AS-BUILT-contract.md` §2.
 
 ## 14. Data contracts (JSON schemas)
-
-Search envelope (`<engine>-search -j`):
-```json
-{ "status":"ok", "engine":"yt", "query": "lofi", "count": 25,
-  "results": [ { "id":"…", "title":"…", "url":"https://www.youtube.com/watch?v=…",
-    "channel":"…", "duration":213, "duration_fmt":"00h:03m:33s",
-    "view_count":12345, "live_status":"not_live" } ] }
-```
-`-j` = the 8 result fields above (high-signal, ~4× smaller than the raw ~23-field yt-dlp
-entry). `-J`/`--json-full` = same envelope, `results` holds every raw field.
-`duration` and `duration_fmt` are **`null` together** when the duration is unknown (a live
-stream); `view_count` can be `null` too. On failure the envelope is instead
-`{status:"error", engine, query, count:0, results:[], reason}` with the same `reason` enum as
-playback, and the exit code is 2+ (§7/§15).
-
-- **`engine` is a REQUIRED key of every engine envelope** — search, resolve, `--info`,
-  `--transcript`, and each of their error shapes. It is the token that is also the command
-  prefix, so a caller holding a result reaches the matching resolver by concatenation
-  (`yt` → `yt-resolve`) and `uting` can pass `ut-play --engine <that value>` without a
-  mapping table. **This is the field the host allowlist protects** (§10, ROADMAP D12): a
-  resolver that accepted another site's URL would emit its own name here and the routing
-  claim would be false. Every engine emits its own name from one constant (`ENGINE_NAME`)
-  rather than deriving it, so the envelope and the filename cannot disagree.
-- **`status` is a REQUIRED key too**, `"ok"` or `"error"` — so a caller can branch on one
-  field before it looks at anything else, in every envelope the suite writes.
-- **Both keys are engine-level, not YouTube-level:** `bili-search` emits the identical
-  envelope with `engine:"bili"`. A third engine that omitted either would be
-  indistinguishable from a truncated read.
-
-Resolve envelope (`<engine>-resolve -j -f MODE -- <handle>`):
-```json
-{ "status":"ok", "engine":"yt", "id":"dQw4w9WgXcQ",
-  "url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  "title":"…", "duration":213, "mode":"audio", "format":"ba/b",
-  "stream_urls":["https://rr2---sn-….googlevideo.com/videoplayback?…"],
-  "http_headers":{"User-Agent":"…","Accept-Language":"…"},
-  "retried":false }
-```
-This is the whole vocabulary the player has for "what am I playing", and every key is
-load-bearing:
-
-- **`stream_urls` is an array, VIDEO FIRST.** One element for a single stream; two when the
-  engine's format merged a video-only and an audio-only track, in which case element 1 is
-  the audio. The player joins them with mpv's `--audio-file` — the EDL synthesis
-  `ytdl_hook` used to do for free (§8.1).
-- **`http_headers` is a REQUIRED key**, possibly `{}`. This closes the hole the old
-  `--get-url` left open: a bare stream URL is not enough to fetch on a host that checks
-  `Referer` or pins a `User-Agent`, and the player has no way to invent them. An engine
-  must NOT return a credential header here — the player puts these on mpv's argv, where
-  `ps` can read them.
-- **`format`** is the format string the engine actually used. The player records it in the
-  player state file verbatim and never reads it: `bv*+ba/b` is a yt-dlp expression and the
-  player does not know that language.
-- **`retried`** = the engine fell back to an anonymous client (§8.2). The player relays it
-  into the playback envelope's `retried`; it no longer observes it.
-- **`engine`** = the token that is also the command prefix, so a caller holding a search
-  result can reach the matching resolver by concatenation (`yt` → `yt-resolve`).
-- Failure → `{status:"error", engine, url, mode, reason}` with the same `reason` enum as
-  playback and **exit 2+** — floored to 2, because yt-dlp exits 1 for an unavailable video
-  and 1 is reserved for usage errors.
-
-Playback status (`ut-play -j -- <handle>`) — the player's envelope, and the only one with no
-`engine` key: the player is source-agnostic and the handle it echoes back is whatever it was
-given (§4).
-```json
-{ "status":"ok"|"error", "url":"…", "mode":"audio",
-  "exit_code":0, "reason":null, "retried":false }
-```
-`reason` enum: `forbidden | unavailable | format_unavailable | network |
-stopped_by_user | unknown | null(ok)`. **`network` covers HTTP 429 rate limiting** as well
-as connectivity: both are retryable, which is the only branch a caller takes on it, so 429
-did not earn a new enum member in a contract three verbs publish. It is deliberately NOT
-grouped with `forbidden` — 403 says these credentials never work, 429 says not right now.
-`--transcript` is what surfaced this (it fetches a caption file per language and can trip
-YouTube's limiter within a handful of calls) but playback and search could always reach it,
-reporting `unknown` — the one reason a caller cannot act on.
-
-**The enum is the shared fact; the classifiers are not.** Since B-2 there are three readers
-of it and they live in different files on purpose: `yt-search` and `yt-resolve` each carry a
-`classify_yt_dlp_error` that knows extractor wording (*video unavailable*, *requested
-format*, *sign in to confirm*), and `ut-play` carries a much smaller
-`classify_playback_error` that knows only mpv — transport failures and rc 130. A resolve
-that fails is classified once, by the half that can read the wording, and the player replays
-that verdict rather than re-deriving it from prose. **No member may be added by any of the
-three that this section does not already list.**
-
-Lifecycle / resolve:
-```
-   -d       : {status:"started", id, pid, url, mode, started_at, title:null, sock, log}
-              sock/log are handed over so a client never rebuilds the state-dir layout
-   --status : {status:"players",
-               players:[{id,pid,url,mode,volume,paused,position,duration,title,started_at}…],
-               failed:[{id,url,mode,started_at,ended_at,exit_code,reason}…]}
-              empty arrays when nothing playing / nothing failed (still exit 0)
-              title is null for the first second or two after a detach: the detached CHILD
-              resolves (the parent must return in milliseconds) and patches `title` and
-              `format` into its own record from the resolve envelope the moment it has one
-              volume, paused, position and duration are read LIVE off the player's socket in
-              ONE round trip (§9.3). volume falls back to the recorded launch/--set-volume
-              value; the other three are null when the socket could not be asked or the
-              player answered null — null is "could not ask", NOT false/0. position and
-              duration are integer seconds and are null until mpv starts decoding (~8s on a
-              cold start); duration stays null for a live stream.
-              failed[] is the tombstone list — players that DIED on their own, newest first,
-              at most 8, nothing older than an hour (§9.2). reason is the shared playback
-              enum. A player that finished normally or was --stopped is never in it, so the
-              array is an error record, NOT the listening history feature (ROADMAP D14/P4),
-              which gets its own durable store — this one lives in $TMPDIR and is bounded.
-   --set-volume : {status:"ok", id, volume}          (live-adjusted via mpv IPC socket)
-                | {status:"not_playing"}             (no target; exit 4)
-                | {status:"ambiguous", reason:"multiple_players", players:[{id,pid,title,url}…]}  (exit 4)
-                | {status:"error", reason:"ipc_failed"}   (dead/missing socket; exit 4)
-   --stop   : {status:"stopped", id, stopped:bool}   (single target)
-            | {status:"stopped", scope:"all", stopped:bool}   (--all)
-            | {status:"ambiguous", …}                (2+ players, no --id; exit 4)
-   (--get-url was retired at B-3: resolving a stream URL is what a bare `yt-resolve` call
-    IS, and the player publishing a second spelling of it was one contract with two names.
-    --info / --transcript below are `yt-resolve` verbs — the player does not forward them.)
-   --info   : {status,engine,id,title,url,channel,uploader,upload_date,duration,duration_fmt,
-              view_count,like_count,live_status,description,chapters} ; -J = raw record
-              chapters = [{start_time,end_time,title}] | null ; error → {status,engine,url,reason}
-   --transcript : {status:"ok", engine, id, url, lang, is_auto, chars, segment_count, text}
-              -J = the SAME envelope plus segments:[{start,duration,text}…] (seconds) —
-              a strict superset, the same relation search's -J has to its -j (a caller
-              that widens never loses a field it was already reading).
-              text is the segment texts joined by a space — the SAME string the default
-              (prose) mode prints, so the two output modes cannot drift.
-              `segments` is absent from -j because it is the same words TWICE: on a
-              444-cue auto track the full envelope is 52,732 bytes, of which `text` is
-              16,916 and `segments` is 35,647 carrying that identical text plus its
-              timings. -j is 17,074 bytes — 3.1x smaller, no information lost for the
-              summarise-this case the verb exists for (§22, token efficiency). `chars`
-              and `segment_count` keep the lean form self-describing: a caller can budget
-              context and knows what -J would add without fetching it.
-              The raw json3 document is deliberately NOT what -J returns: it carries no
-              status/lang/is_auto, so widening would LOSE fields — the one thing the -J
-              contract never does anywhere else in this suite.
-              lang is the track that was actually written, which is the first entry of the
-              --sub-lang priority chain the video turned out to have.
-              is_auto = the track came from YouTube's auto-generated captions rather than
-              a human-authored one; decided from the printed human-caption dict, not from
-              the file (manual and auto land under the same name).
-              error → {status:"error", engine, url, reason} with exit 1, mirroring --info
-              (engine, like everywhere else, is required). reason
-              is the shared enum plus `no_subtitles_available`, which also covers a track
-              that parses to zero usable cues (an empty transcript is a miss, not an
-              empty success — a caller handed {"text":""} would summarise silence).
-```
-
-**Why `--transcript` is one yt-dlp call.** `--print` implies `--simulate`, and a simulating
-yt-dlp writes no subtitle file — so `--no-simulate` is what lets a single invocation both
-write the captions and report the metadata needed to describe them. (`--dump-json` carries
-the same implication, which is why it cannot be the vehicle here: it is the natural-looking
-recipe that silently produces no captions at all.) The printed field is `%(subtitles)j`
-alone — `%(automatic_captions)j` runs to 940 languages / 3.2 MB on a popular video once
-YouTube's machine translations are counted, and the human dict's keys already answer
-`is_auto`. Captions are requested as `--sub-format json3` so the cleanup stays a jq program:
-json3 carries the timing as structured fields, where VTT/SRT would need a timeline parser.
-Three shapes get dropped — the leading window-definition event (no `segs`), auto-caption
-rollup events (`aAppend`, whose only seg is `"\n"`), and inline style markup — and all three
-fall out of the same two filters: cleaned text, then drop the empties. Filtering on the
-cleaned text rather than on `aAppend == 1` is deliberate: it removes every rollup marker
-observed while keeping any `aAppend` event that actually carries words.
-
-**Wrong-engine handles are a USAGE error, not an envelope.** `<engine>-resolve` given a URL
-whose host is not its own site's exits **1** with a message on stderr and writes no envelope
-at all — nothing was attempted and nothing is retryable, so it is the same class as
-`--engine nope` and must not be confused with an extraction failure (2+) that a caller might
-retry. This is a contract on every engine, present and future: the host allowlist is an
-explicit list per engine (§10), never a substring match. The bare-id path is the same rule
-in the other direction — an id that does not match this engine's shape is also 1.
-
-**One envelope, one line.** Every `-j` / `-J` payload the suite writes to stdout is a single
-line of JSON — search, resolve, `--info`, `--transcript`, `-d`, `--status`, `--stop`,
-`--set-volume`, and every error shape above. That is what makes the output usable as NDJSON:
-a caller can read one line, parse it, and be done, without a streaming parser or a brace
-counter. It also makes `-J` a *strict superset of `-j`* in shape as well as in fields.
-
-The rule was violated for a long time by the two oldest read verbs. Search emitted 26 lines
-for `-j -n 3` and 76 for `-J`, `--info -j` emitted 16, the resolve verb (then spelled
-`--get-url`) was pretty too, and
-`--status` was compact only while the player list was **empty** — it pretty-printed as soon
-as a player existed, i.e. exactly when something is polling it. Every one of those was a bare
-`jq` where the lifecycle verbs had always used `jq -nc`; the fix was `-c` at five sites
-(`emit_search_json` ×2, `resolve_info`, `emit_stream`, the `--status` `jq -s`). The
-state files under `players/` are *not* covered by this rule and stay pretty — they are an
-on-disk record read by jq, not an envelope.
+Moved → `AS-BUILT-contract.md` §3.
 
 ## 15. Exit codes, TTY, dependencies
-
-```
-   0    success; also --status/--stop (always); 130 normalized (SIGINT; clean q already exits 0)
-   1    usage/validation error (die), a verb's flag-gating rejection, uting's non-TTY
-        refusal, conflicting actions, no handle (D3), a handle with whitespace in it,
-        --id/--all outside a lifecycle verb, -d with an action or with -f ascii|viz,
-        an unknown --engine, a URL whose host is not this engine's (§10/§14),
-        --info / --transcript fetch failure (incl. no_subtitles_available)
-   2+   propagated yt-dlp / mpv / HTTP failure (playback, resolve -j, SEARCH failure —
-        search reports 2 even when yt-dlp exits 1, so a tool failure is never confused
-        with 1). A handle the engine cannot resolve lands HERE, not in 1: the player
-        cannot judge an id's shape, so "bad id" is an extraction outcome (§6).
-   4    --set-volume / --stop: did not take effect — no such player, no player,
-        ambiguous target, or mpv IPC failure. The -j status/reason says which.
-        Distinct from 1 (usage) and 2+ (propagated player failure). --stop treats
-        "nothing playing" as idempotent success (exit 0); only ambiguity is exit 4.
-
-   TTY  : uting requires BOTH stdin and stdout (§11). No other verb ever needs one —
-          each errors on empty input rather than prompting (D1/D3).
-   deps : they are per-FILE now, which is the point of the split —
-          ut-play      : jq + mpv to play; --status/--stop need only jq (--status uses
-                         nc opportunistically for the live read and degrades to the
-                         recorded volume plus three nulls without it); --set-volume
-                         needs jq+nc (nc gated lazily so a plain play never demands it).
-                         It needs NO yt-dlp and no curl.
-          yt-search / yt-resolve / bili-resolve : yt-dlp + jq. curl is an OPTIONAL soft
-                         dep of yt-resolve, for the client probe (§8.2).
-          bili-search  : curl + jq — curl is REQUIRED here; it is the transport.
-          uting        : jq, plus the verbs it composes.
-          BSD `nc -U` is stock on macOS; the Linux netcat `-U` gap is a known,
-          documented limitation (§26 / script comment).
-   -V   : every entry point answers it BEFORE any dependency gate, reading shell/VERSION
-          and printing its own name — needing yt-dlp installed to learn your version is
-          backwards, and six executables must not be able to disagree (§4).
-```
+Moved → `AS-BUILT-contract.md` §4.
 
 ## 16. Configuration surface
-
-Per-request choices are flags; set-once tuning is environment variables — deliberately
-kept out of flags to keep each verb's flag surface narrow.
-
-```
-   Flags (per call):  -n -m -M -s -f -S -l -j -J -d -h -V --color --theme --engine
-                      --detach --status --stop --info --transcript --sub-lang
-                      --set-volume --id --all --volume
-   Env (set once):    UT_DEFAULT_ENGINE   (default yt) = which engine --engine defaults
-                        to. Read by BOTH ut-play and uting, deliberately the same
-                        variable: a user who picks a default source once should not
-                        have to pick it again per surface. uting falls back to the
-                        first installed engine when the name is not present.
-                      YT_COOKIE_BROWSER   (default chrome = login on; "none" = anon-only)
-                        — read by each ENGINE, never by the player.
-                      YT_AUDIO_FORMAT (ba)  YT_VIDEO_FORMAT (bv*+ba/b)
-                      YT_VIDEO_FORMAT_FAST  — the mode→format table's values; they live
-                        with the table, i.e. in each <engine>-resolve.
-                      YT_ASCII_VO (tct)  YT_MPV_INPUT_CONF  — player-side, mpv knobs.
-                      YT_ASCII (1 = ASCII glyph fallbacks; auto-on for a non-UTF-8 locale;
-                        read by the player and uting — legacy alias YT_TUI_ASCII).
-                        Covers the WHOLE glyph set: ♫ ● ○ ❯ · ▶ ❚❚ • … → — ↑/↓ ←/→ ↵ ▘▝▗▖
-                        and the bar/rail runs. Verified by asserting a rendered pane
-                        holds no non-ASCII beyond the label text.
-                      YT_LANG (en|zh) = language of uting's menu chrome; default zh
-                        under a zh* locale, English otherwise. Help output, errors and
-                        the card's field labels stay English in both.
-                      YT_THEME (minimal|mono|catppuccin|tokyonight|nord|gruvbox|
-                        onedark) = uting palette family (§11: one accent + one status
-                        hue; community themes are 24-bit only under COLORTERM=truecolor).
-                        --theme beats env; the t key cycles it live at runtime.
-                      YT_BG (auto|light|dark) = background mode; auto chain:
-                        $COLORFGBG → OSC 11 query → dark. Light = the theme's own light
-                        variant (minimal swaps cyan for blue).
-                      YT_SYNC (0|1|auto) = synchronized redraws (DCS 1q/2q; auto: on,
-                        off under tmux).
-                      YT_BRAND (=1: header wordmark in math sans-serif bold, §11 glyph
-                        section; opt-in, ASCII mode wins).
-                      NO_COLOR (=1: --color auto renders plain; explicit --color wins).
-   Internal (set by the player for its own detached child, not a user knob):
-                      YT_IPC_SOCK (per-player mpv IPC socket)  YT_DETACHED (=1: no
-                      terminal, so quiet mpv + no stderr filter)  YT_PLAYER_ID (which
-                      record the child backfills title/format into, §9.1)
-   Test-only:         YT_TEST_LIFECYCLE (=1 arms tests/lifecycle.sh, which starts real
-                      players; unset it and the suite skips rather than making noise)
-   (color MODE is the --color flag, NOT an env var — the scripts hardcode
-    COLOR_MODE=auto at startup and only --color changes it, so a COLOR_MODE env
-    value is never read. Theme and background ARE env-read: YT_THEME / YT_BG.)
-```
-
-**The `YT_` prefix is historical and deliberately not churned.** The suite is `uting` and
-the new engine knob is `UT_DEFAULT_ENGINE`, but renaming a dozen working variables would
-break every user's shell profile to buy consistency in a doc. New knobs use `UT_`; existing
-ones keep `YT_`.
-
-Cookie handling: `YT_COOKIE_BROWSER` is presence-checked per platform (does the
-browser's profile dir exist); if absent, extraction runs without cookies rather than
-breaking. Reading a browser's cookie DB while it is running can yield a locked read and
-silently degrade to unauthenticated extraction — closing the browser is the workaround.
-**Only engines read it**, so the player has no cookie code path to leak one.
+Moved → `AS-BUILT-contract.md` §5.
 
 ## 17. Function map & provenance
 
@@ -2387,7 +1995,7 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
                   engine's own copy of the one duration formatter)
      yt-search  : classify_yt_dlp_error
      bili-search: classify_http_error, search_fail, ensure_buvid (locally generated
-                  random cookie — a correctness requirement, not an optimisation, §12),
+                  random cookie — a correctness requirement, not an optimisation, AS-BUILT-contract.md §1),
                   fetch_page_once (the ONLY hand-built HTTP request in the suite),
                   fetch_page
 
@@ -2439,7 +2047,7 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
 engine. A shared library would be a seventh file that every engine — and therefore,
 transitively, the player looking for an engine — would have to know about; the split's whole
 claim is that an engine is a self-contained pair you can drop in. What must NOT diverge is
-the ENVELOPE, and that is pinned by §14 and by `tests/contract.sh` running the same
+the ENVELOPE, and that is pinned by AS-BUILT-contract.md §3 and by `tests/contract.sh` running the same
 assertions against both engines, rather than by shared code.
 
 Not every helper is listed — `print_usage`, `die`, `is_uint` and the other one-line guards
@@ -2489,7 +2097,7 @@ whole width layer are net-new.
 ```
 
 Another source is the same three lines with `bili-search`; nothing else changes, which is
-what the `engine` field is for (§14). Getting it wrong is loud rather than silent: a
+what the `engine` field is for (AS-BUILT-contract.md §3). Getting it wrong is loud rather than silent: a
 Bilibili URL sent to `yt-resolve` exits 1 saying so (§10).
 
 ## 20. Agent — compose without playing (resolve)
@@ -2505,7 +2113,7 @@ Bilibili URL sent to `yt-resolve` exits 1 saying so (§10).
 **Take the headers with the URL.** A bare stream URL is not enough on a host that checks
 `Referer` or pins a `User-Agent` — measured: Bilibili's CDN answers 403 to the URL alone and
 206 to the same URL with these headers. The old `--get-url` had no field for them, which is
-the hole this envelope closes (§14).
+the hole this envelope closes (AS-BUILT-contract.md §3).
 
 ```
    # Read-only metadata and captions are engine verbs too:
@@ -2574,7 +2182,7 @@ exit 4) exit 0 so a polling loop never misreads a normal state as failure.
              duplicated per engine ON PURPOSE (§17): a shared library would be a file
              every engine, and transitively the player, would have to know about, which
              is exactly the coupling the split removed. The ENVELOPE is what must not
-             diverge, and §14 plus a check stated over every DISCOVERED engine is what
+             diverge, and AS-BUILT-contract.md §3 plus a check stated over every DISCOVERED engine is what
              holds it — engine #3 is covered the day it lands.
 ```
 
@@ -2647,8 +2255,8 @@ hope.
                                              envelope, exit 2+ (§7)
    Query that looks like a flag becomes an   `--` ends option parsing in EVERY verb, and
    action                                    each re-applies its positional check after
-                                             it (§6, §13)
-   An engine invents a new reason value      the enum is §14's and is closed; three
+                                             it (§6, AS-BUILT-contract.md §2)
+   An engine invents a new reason value      the enum is AS-BUILT-contract.md §3's and is closed; three
                                              classifiers implement it, none may extend it
    Client moves volume behind --status'      --status reads volume live off the socket,
    back                                      recorded value only as fallback (§9.3)
@@ -2656,7 +2264,7 @@ hope.
    clobber the same <id>.json              serializes the two temp+mv patches; the
                                            backfill additionally pid-guards (§9.3)
    A credential header reaches mpv's argv  engines must not put Cookie/Authorization in
-   (visible in ps)                         http_headers; stated in §8.1 and §14
+   (visible in ps)                         http_headers; stated in §8.1 and AS-BUILT-contract.md §3
    Stale socket after SIGKILL'd mpv          [[ -S sock ]] test → ipc_failed, never hangs
    nc waits full -w1 if the peer does not  request_id filter + head -1; a HEALTHY mpv
    close (a wedged mpv, not a healthy one)   closes on half-close, so a call is ~0.016s.
@@ -2704,7 +2312,7 @@ reaching `set -e` from a place that reads like an expression, not a command. See
 list at the end of this section. F2's *reporting* half — a failed Enter that was a
 survivable no-op with no message — shipped in batch D, in the same "press any key" style as
 the `n`/`m`/`o` failures, which is why it was batched with F7. **Correction, kept because a fix
-was very nearly built on it:** the reason cannot come from the envelope's `reason`. The §14
+was very nearly built on it:** the reason cannot come from the envelope's `reason`. The AS-BUILT-contract.md §3
 taxonomy belongs to the *blocking* play path; for a synchronous `-d` failure the player `die`s
 with prose on **stderr** and emits nothing on stdout (verified: `ut-play -d -j -f ascii --
 <url>` → rc 1, empty stdout). uting captures that stderr, the way `fetch_json` already does
@@ -3090,7 +2698,7 @@ new-search/more-results instead of `n`/`m`; also corrected.
   IPC worked (`time-pos` `30.47 → 20.47 → 10.45 → 20.43` across `[ [ ]`), so neither the
   binding nor the wire was at fault: mpv was sitting on the caller's tty and winning the race
   for the byte. See §9.1 for the mechanism (`set -m` suppressing bash's automatic `/dev/null`)
-  and the `lsof` evidence. Worth recording that the keys had been in **§12.4 and §18 all
+  and the `lsof` evidence. Worth recording that the keys had been in **AS-BUILT-contract.md §1.4 and §18 all
   along** — the design documented three keys the UI never told anyone about, and once they were
   added to the hint block the collision surface with mpv became visible.
 - **Correction, kept because two further defects were nearly filed on it.** This pass first
@@ -3121,14 +2729,14 @@ new-search/more-results instead of `n`/`m`; also corrected.
   not intended for thousands of results.
 - **URL sniffing in the player** — `ut-play` never guesses which engine a bare URL belongs
   to; the caller says (`--engine`), and `uting` always knows because it did the search.
-  Deferred until a third engine makes a pattern registry worth its weight (§12.1).
+  Deferred until a third engine makes a pattern registry worth its weight (AS-BUILT-contract.md §1.1).
 - **A shared engine library** — deliberately not built; the duplication is the price of an
   engine being a self-contained pair (§23).
 - No MCP wrapper (§1). No third-party media-client dependency (§2).
 - Runtime volume control on DETACHED players IS supported (`--set-volume N [--id ID]`,
-  §9.2/§14): each detached mpv runs with `--input-ipc-server=mpv-<id>.sock`, and
+  §9.2/AS-BUILT-contract.md §3): each detached mpv runs with `--input-ipc-server=mpv-<id>.sock`, and
   `do_set_volume` sends one `set_property volume` command over that per-instance socket.
-  `nc -U` is gated lazily so a bare search never pays for it (§15). `--volume N` remains
+  `nc -U` is gated lazily so a bare search never pays for it (AS-BUILT-contract.md §4). `--volume N` remains
   the launch-time STARTING volume; `--set-volume` adjusts it live thereafter.
   Deliberately still OUT of scope:
     - Live volume for FOREGROUND playback — it has a real TTY, so mpv's own volume keys
@@ -3156,7 +2764,7 @@ new-search/more-results instead of `n`/`m`; also corrected.
           the resulting state in the envelope could only be a guess. `--pause` /
           `--resume` are strictly better for a machine caller anyway: idempotent, with no
           read-modify-write race. Toggling stays a `uting` keypress.
-      Their prerequisite is now MET: `--status` reports live `paused` (§9.3/§14), so an
+      Their prerequisite is now MET: `--status` reports live `paused` (§9.3/AS-BUILT-contract.md §3), so an
       agent that paused could observe that it had. The verbs stay blocked on the decision
       above, not on observability.
     - Linux `nc -U` portability — macOS-primary tool; BSD `nc -U` is stock, GNU netcat
@@ -3226,13 +2834,13 @@ the part of a deleted harness worth keeping.
                 -d --stop → rejected; -d -f ascii|viz → rejected
    Player     : ut-play (no args) → D3 error; ut-play "a query" and ut-play -- "a query"
                 → 1, naming yt-search; invalid --color rejected
-   Gating     : one tier, six self-gating verbs (§13). <engine>-search rejects
+   Gating     : one tier, six self-gating verbs (AS-BUILT-contract.md §2). <engine>-search rejects
                 -f/--detach/URL (URL rejection re-applied after `--`); ut-play rejects
                 -n/-s/bare-query. Three checks exist specifically to prove the deleted
                 wrapper took its gate WITH it rather than dropping it: an unknown long
                 flag (`--json-full`) exits 1 instead of reaching getopts as a bare `-`,
                 `--get-url` exits 1 as retired, and `--info` exits 1 naming the engine
-   Envelopes  : every -j/-J payload is ONE line (§14) — search -j/-J, a zero-result search,
+   Envelopes  : every -j/-J payload is ONE line (AS-BUILT-contract.md §3) — search -j/-J, a zero-result search,
                 --info -j/-J, --get-url -j, -d -j, --status with 0 AND with 2 players,
                 --stop, an ambiguous --set-volume — measured with `| wc -l`, and each still
                 parses with the same fields (jq -e on .query/.count/.results[0], .status)

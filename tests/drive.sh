@@ -16,7 +16,7 @@
 #      EXIT trap is the whole reason it exists.
 #
 # The keymap it can send lives in README.md (§Keys) and the YT_* knobs in
-# docs/ARCHITECTURE.md §16 — this file restates neither.
+# AS-BUILT-contract.md §5 — this file restates neither.
 #
 # Portability: bash 3.2 (macOS system bash). Needs tmux; jq only for the cleanup report.
 #

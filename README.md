@@ -193,6 +193,9 @@ Lessons these paid for, every one of which produced a wrong result first:
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture, every non-obvious decision and why, plus the
   verification matrix.
+- [`docs/AS-BUILT-contract.md`](docs/AS-BUILT-contract.md) — the frozen CLI contract: envelopes, exit codes,
+  lifecycle semantics, and the checklist for adding an engine.
+- [`docs/AS-BUILT-workflow.md`](docs/AS-BUILT-workflow.md) — how a unit of work moves through this repo.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — positioning and non-goals, the naming survey, the OSS
   readiness assessment, and the conditions under which the core would move to Go.
 

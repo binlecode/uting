@@ -220,7 +220,7 @@ def fmt_dur:
 # Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
 # caller can branch on `reason` instead of string-matching raw extractor wording (which is
 # not a contract and drifts across versions). The ENUM is the shared fact and lives in
-# docs/ARCHITECTURE.md §14 — this is one of the two yt-dlp-side readers of it (yt-search
+# AS-BUILT-contract.md §3 — this is one of the two yt-dlp-side readers of it (yt-search
 # carries the other); the player carries its own, much smaller, mpv-side reader. No member
 # may be added here that the enum does not already have. `unknown` is the conservative
 # default — never guess a cause we did not positively identify.
@@ -436,7 +436,7 @@ probe_raw() {
     [[ "$code" == 2* ]]
 }
 
-# The resolve envelope (docs/ARCHITECTURE.md §14). `format` is the format STRING this
+# The resolve envelope (AS-BUILT-contract.md §3). `format` is the format STRING this
 # engine actually used — the player records it verbatim and never reads it. `http_headers`
 # is a REQUIRED key, empty object when none: it closes the hole where --get-url handed
 # back a bare URL that a Referer-checking host would 403.
@@ -768,7 +768,7 @@ resolve_transcript() {
         transcript_fail "no_subtitles_available"
     fi
 
-    # -j vs -J is the SAME split the search path already publishes (§14/§22): -j is the
+    # -j vs -J is the SAME split the search path already publishes (AS-BUILT-contract.md §3/§22): -j is the
     # lean projection, -J is the same envelope at full fidelity - a strict SUPERSET, so an
     # agent that widens -j to -J keeps every field it was already reading.
     #
@@ -928,7 +928,7 @@ while (($#)); do
         shift 2
         ;;
     # The gate. Resolution neither plays nor tracks a player, and it does not search:
-    # a caller holding the wrong verb is told which one it wants (ARCHITECTURE.md §13).
+    # a caller holding the wrong verb is told which one it wants (AS-BUILT-contract.md §2).
     -d | --detach | --status | --stop | --set-volume | --id | --all | --volume)
         echo "yt-resolve: $1 is a playback flag — use ut-play for playback" >&2
         exit 1
@@ -985,7 +985,7 @@ fi
 # The mirror of that check, and the other half of the gate ut-play used to hold for
 # --transcript: -f / -S pick a FORMAT, and only stream resolution resolves one. Next to
 # --info or --transcript they were accepted and quietly did nothing, which is precisely
-# what a gating layer exists to reject rather than ignore (ARCHITECTURE.md §13).
+# what a gating layer exists to reject rather than ignore (AS-BUILT-contract.md §2).
 if [[ -n "$FORMAT_FLAG" && "$ACTION" != "stream" ]]; then
     die "$FORMAT_FLAG selects a stream format — it does not apply to --$ACTION"
 fi

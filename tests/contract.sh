@@ -143,7 +143,7 @@ report "--info is the engine's"   1 "$(rc shell/ut-play --info -- URL)"
 echo "── argv order: a flag-shaped query after -- is SEARCHED ───────────"
 # Not a player list: --status after -- is eight characters of query text. The check lives on
 # yt-search because that is where searching lives now; the player has no search branch left
-# to confuse a flag-shaped token with (docs/ARCHITECTURE.md §13).
+# to confuse a flag-shaped token with (AS-BUILT-contract.md §2).
 report "yt-search -- --status searches" 0 \
     "$(shell/yt-search -l -- --status 2>&1 | head -1 | grep -qv '^{' && echo 0 || echo 1)"
 # The other half of that split: a non-URL positional is no longer a search, it is a usage
@@ -192,6 +192,19 @@ BILI_R=$(shell/bili-resolve -j -- "$BILI_ID" 2>/dev/null)
 report "resolve envelopes agree" \
     "$(printf '%s' "$YT_R" | jq -Sc 'keys' 2>/dev/null)" \
     "$(printf '%s' "$BILI_R" | jq -Sc 'keys' 2>/dev/null)"
+# --info gets the same parity treatment: it is the third envelope both engines publish
+# (AS-BUILT-contract.md §3), and nothing else here would notice a field renamed on one
+# side. The ok/engine assertion is what keeps the key comparison from passing vacuously —
+# two ERROR envelopes agree on their keys too.
+YT_I=$(shell/yt-resolve --info -j -- "$MEDIA_ID" 2>/dev/null)
+BILI_I=$(shell/bili-resolve --info -j -- "$BILI_ID" 2>/dev/null)
+report "info -j is ok and named" 0 \
+    "$(printf '%s' "$YT_I" | jq -e '.status=="ok" and .engine=="yt"' >/dev/null 2>&1; echo $?)"
+report "info envelopes agree" \
+    "$(printf '%s' "$YT_I" | jq -Sc 'keys' 2>/dev/null)" \
+    "$(printf '%s' "$BILI_I" | jq -Sc 'keys' 2>/dev/null)"
+report "--info -j is one line" 1 \
+    "$(shell/yt-resolve --info -j -- "$MEDIA_ID" | wc -l | tr -d ' ')"
 
 report "bili-search names its engine" 0 \
     "$(jq_ok '.status=="ok" and .engine=="bili"' shell/bili-search -j -n 2 -- 音乐)"
@@ -201,7 +214,7 @@ report "bili-search -j is one line" 1 \
 # above would silently mis-sort and mis-render as a string. It is parsed in the engine, so
 # the assertion is that what leaves the engine is a NUMBER — never the raw string.
 #
-# `null` is ALLOWED and is not a miss: §7/§14 make duration/duration_fmt null together when the
+# `null` is ALLOWED and is not a miss: §7/AS-BUILT-contract.md §3 make duration/duration_fmt null together when the
 # row has no duration, and this endpoint does return such rows intermittently (observed: one
 # null among five, on a result set the site swapped in between two identical requests). An
 # earlier `all(type=="number")` here failed on exactly those runs and read as flaky — it was
@@ -307,6 +320,11 @@ report "--status one line"  1 "$(shell/ut-play --status -j | wc -l | tr -d ' ')"
 report "--status is empty"  0 "$(jq_ok '.players==[]' shell/ut-play --status -j)"
 report "--stop --all exit"  0 "$(rc shell/ut-play --stop --all -j)"
 report "--stop --all line"  1 "$(shell/ut-play --stop --all -j | wc -l | tr -d ' ')"
+# --stop treats an empty set as idempotent success; --set-volume must NOT — there is no
+# volume it could have set, so this is the did-not-take-effect class (4), and the envelope
+# names the why so a caller can tell it from ambiguity (AS-BUILT-contract.md §3/§4).
+report "idle --set-volume is 4"   4 "$(rc shell/ut-play --set-volume 50 -j)"
+report "idle --set-volume says why" 0 "$(jq_ok '.status=="not_playing"' shell/ut-play --set-volume 50 -j)"
 
 # The four live fields are read off a real unix socket, so the peer is the one thing that
 # cannot be faked away — and mpv will not answer out of order, report a property null, or

@@ -80,6 +80,11 @@ report "--status sees 2"   2 "$(shell/ut-play --status -j | jq '.players | lengt
 
 echo "── a selector-less mutation on 2 players is ambiguous -> exit 4 ───"
 report "--set-volume no --id" 4 "$(shell/ut-play --set-volume 40 -j >/dev/null 2>&1; echo $?)"
+# --stop takes the same ambiguity rule (AS-BUILT-contract.md §3): with 2 players and no
+# selector it must refuse with 4 AND stop nothing — a --stop that guessed would kill the
+# wrong listener's audio, which no exit code repairs.
+report "--stop no --id"       4 "$(shell/ut-play --stop -j >/dev/null 2>&1; echo $?)"
+report "ambiguous --stop stopped nothing" 2 "$(shell/ut-play --status -j | jq '.players | length')"
 # Ambiguity is decided before any IPC, so the check above needs no player listening. The
 # targeted ones below do -- wait for player 1's socket first (see wait_for_sock).
 sock1=$(printf '%s' "$o1" | jq -r '.sock // empty')

@@ -47,7 +47,7 @@ Each suite runs directly and says in its own docstring what it proves. Read the 
 
 | File | Role |
 |------|------|
-| `shell/ut-play` | **The player** (1.6k lines) — play + detached-playback lifecycle, non-interactive, never prompts. Owns the player lifecycle (id / pid / socket / lock / state dir / reap), the JSON envelope and the exit-code taxonomy, and **its own flag gate** (one verb, so there is no bypass to defend against — `docs/ARCHITECTURE.md` §13). **Source-agnostic** — it does not search, does not extract, and carries no yt-dlp call, cookie decision or format string. It asks an engine, by name: `--engine yt` → `yt-resolve` |
+| `shell/ut-play` | **The player** (1.6k lines) — play + detached-playback lifecycle, non-interactive, never prompts. Owns the player lifecycle (id / pid / socket / lock / state dir / reap), the JSON envelope and the exit-code taxonomy, and **its own flag gate** (one verb, so there is no bypass to defend against — `docs/AS-BUILT-contract.md` §2). **Source-agnostic** — it does not search, does not extract, and carries no yt-dlp call, cookie decision or format string. It asks an engine, by name: `--engine yt` → `yt-resolve` |
 | `shell/yt-search` | **The YouTube engine, half one** (560 lines) — query → result envelope. Owns its own yt-dlp call, cookie decision, result shaping and duration formatter, and its own flag gate. Zero playback or lifecycle logic |
 | `shell/yt-resolve` | **The YouTube engine, half two** (1.0k lines) — handle → `{stream_urls[], http_headers{}, title, duration, format}`, plus `--info` and `--transcript`. Owns the PO-token probe, the cookie decision, the mode→format table and the yt-dlp error vocabulary. Every site-specific fact in the suite lives in this file or in `yt-search`; adding a source is adding a pair like it |
 | `shell/bili-search` | **The Bilibili engine, half one** (658 lines) — query → result envelope, over `curl` + `jq`. It talks HTTP rather than shelling out to yt-dlp because yt-dlp's Bilibili search returns **no metadata at all** (flat) and recurses into every part of every collection (non-flat, >120s for 10 results). Sends no credential: one public endpoint, a Referer, and a locally generated random `buvid3` |
@@ -115,7 +115,7 @@ If a feature genuinely needs bash 4+, the honest move is `((BASH_VERSINFO[0] >= 
 
 ### 4. The contract is frozen surface
 
-The single-line JSON envelope, the player record, the exit-code table (0 ok / 1 usage / 2+ propagated tool failure / 4 didn't take effect), and the lifecycle semantics (launch → status → stop, idempotent stop, ambiguity → 4) are the one thing that survives any rewrite (`docs/ROADMAP.md` D3). Changing them is a deliberate, documented act — never a side effect of a feature.
+The single-line JSON envelope, the player record, the exit-code table (0 ok / 1 usage / 2+ propagated tool failure / 4 didn't take effect), and the lifecycle semantics (launch → status → stop, idempotent stop, ambiguity → 4) are the one thing that survives any rewrite (`docs/ROADMAP.md` D3). The whole frozen surface is stated in `docs/AS-BUILT-contract.md`. Changing it is a deliberate, documented act — never a side effect of a feature.
 
 ## Testing Guidelines (HARD RULE — enforced at review)
 
@@ -202,8 +202,9 @@ things not done, with nowhere to record that three of five now are. The stage ne
 
 The live files:
 
-- `docs/ARCHITECTURE.md` — architecture, every non-obvious decision and why, the function map, the data contracts, the risk/defect register, and the verification matrix. **Kept in sync on every PR that touches architecture or a contract.**
-- `docs/AS-BUILT-workflow.md` — the development process: which discipline each stage of work is bound to (interrogate → pre-mortem → design → build → verify → land, plus the periodic audit), and the worked walkthrough. The disciplines are normative; the agent skills that automate them are conveniences the checkout does not depend on.
+- `docs/ARCHITECTURE.md` — architecture, every non-obvious decision and why, the function map, the risk/defect register, and the verification matrix. **Kept in sync on every PR that touches architecture or a contract.**
+- `docs/AS-BUILT-contract.md` — the frozen CLI contract (ROADMAP D3/D13): command surfaces, gates, every `-j`/`-J` envelope and error shape, exit codes, the configuration surface, and the add-an-engine checklist. The one doc a third-engine author or a port needs.
+- `docs/AS-BUILT-workflow.md` — the development process: which discipline each stage of work is bound to (plan → pre-mortem → build → verify → land, plus the periodic audit), and the worked walkthrough. The disciplines are normative; the agent skills that automate them are conveniences the checkout does not depend on.
 - `docs/ROADMAP.md` — positioning and non-goals, the naming survey, the OSS-readiness assessment, and the conditions under which the core would move to Go. Consult §0 before adding a feature. **In scope (D14/D15, P4):** queue, playlist management, listening history — to be built in the SHELL version, not deferred to a Go rewrite. **Favourites is NOT a feature** (it is a playlist with a fixed name — one capability, one spelling). A downloader and channel subscriptions are unscheduled. What did NOT change: this is still not a general-purpose local/MPD player, and every one of those features must ship an **agent surface** (a verb plus a `-j` envelope) alongside its keybinding — a TUI-only feature is half a feature here. MCP remains a non-goal, gated by §9.
 - `docs/PLAN-*.md` — whatever is ready to build or in flight, with its progress recorded inline. Empty is a valid state.
 - One repo, one README: there is deliberately no `tests/README.md` — the two suites are described in the root README's `## Tests` section and in their own docstrings.

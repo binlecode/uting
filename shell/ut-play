@@ -37,7 +37,7 @@ SELF="${BASH_SOURCE[0]}"
 # and only by that name — it carries no table of sites, no URL sniffing, and no idea what a
 # format string looks like. Name == command prefix is what keeps the lookup a string
 # concatenation instead of a registry the player and the TUI would both have to hold.
-# Per-call override: --engine. docs/ARCHITECTURE.md §12.1.
+# Per-call override: --engine. AS-BUILT-contract.md §1.1
 : "${UT_DEFAULT_ENGINE:=yt}"
 
 YT_MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar --no-video)
@@ -111,7 +111,7 @@ Options:
 Long-only flags: --engine --detach --status --stop --set-volume --id --all --json --list
                  --color --volume  (--help and --version also have short forms: -h, -V)
 
-Output contracts (full schemas: docs/ARCHITECTURE.md §14):
+Output contracts (full schemas: AS-BUILT-contract.md §3):
   play -j   {status, url, mode, exit_code, reason, retried}
             reason: forbidden|unavailable|format_unavailable|network|stopped_by_user|
                     unknown|null(ok)   (network also covers HTTP 429 rate limiting)
@@ -294,7 +294,7 @@ resolve_media() {
     RESOLVED_TITLE=$(printf '%s' "$out" | jq -r '.title // ""' 2>/dev/null) || RESOLVED_TITLE=""
     RESOLVED_FORMAT=$(printf '%s' "$out" | jq -r '.format // ""' 2>/dev/null) || RESOLVED_FORMAT=""
     # The anonymous-client fallback is now the ENGINE's decision, so `retried` is relayed
-    # rather than observed — but it is still the playback envelope's field (§14).
+    # rather than observed — but it is still the playback envelope's field (AS-BUILT-contract.md §3).
     if printf '%s' "$out" | jq -e '.retried == true' >/dev/null 2>&1; then
         PLAYBACK_RETRIED=1
     fi
@@ -391,7 +391,7 @@ run_mpv() {
     #
     # These land on mpv's argv and are therefore visible in `ps`. An engine must not return
     # a credential header (Cookie / Authorization) here; the YouTube engine returns only
-    # User-Agent / Accept / Accept-Language / Sec-Fetch-Mode. ARCHITECTURE.md §14.
+    # User-Agent / Accept / Accept-Language / Sec-Fetch-Mode. AS-BUILT-contract.md §3
     if ((${#RESOLVED_HEADER_ARGS[@]})); then
         mpv_cmd+=("${RESOLVED_HEADER_ARGS[@]}")
     fi
@@ -531,7 +531,7 @@ play_url_directly() {
 # This is the PLAYER's half of that job and it only knows mpv. The yt-dlp wordings — video
 # unavailable, requested format, sign in to confirm — left with the extraction; they reach a
 # caller as the ENGINE's own reason, replayed here from the marker play_url_directly logs
-# rather than re-derived from prose. The ENUM is the shared fact (docs/ARCHITECTURE.md §14),
+# rather than re-derived from prose. The ENUM is the shared fact (AS-BUILT-contract.md §3),
 # and no member may appear here that it does not already have. `unknown` is the conservative
 # default — we never guess a specific cause we didn't positively identify.
 classify_playback_error() {
@@ -554,7 +554,7 @@ classify_playback_error() {
     fi
     # 429 lands in `network`, not `unknown`: it is a transport-level, RETRYABLE refusal, and
     # `network` is the enum member that already means "try again later". Adding a
-    # `rate_limited` member instead would grow a contract three verbs publish (§14) for no
+    # `rate_limited` member instead would grow a contract three verbs publish (AS-BUILT-contract.md §3) for no
     # branch a caller would take differently. It is grouped here rather than with `forbidden`
     # (403) deliberately — 403 means these credentials never work, 429 means not right now.
     if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out|HTTP Error 429|Too Many Requests' <<<"$text"; then
@@ -674,7 +674,7 @@ ensure_state_dir() {
 # ONE connection carries every property asked for — that is why this is a property list and
 # not four calls: --status pays the same single round trip it always did (~10ms measured; a
 # healthy mpv closes as soon as the reader breaks, so the -w1 timeout is never reached).
-# Soft-gated on nc so --status keeps working with jq alone (§15): no nc, no socket, no
+# Soft-gated on nc so --status keeps working with jq alone (AS-BUILT-contract.md §4): no nc, no socket, no
 # output, and the caller reports nulls.
 #
 # Emits one "<request_id><US><value>" line per answer, in whatever order mpv sent them —
@@ -764,7 +764,7 @@ detached_epitaph() {
     local rc=$1 reason ended_at
     [[ -n "${YT_DETACHED_LOG:-}" ]] || return 0
     ((rc == 0 || rc == 130)) && return 0
-    # Same taxonomy every other surface publishes (§14) — the reason a caller branches on
+    # Same taxonomy every other surface publishes (AS-BUILT-contract.md §3) — the reason a caller branches on
     # must not depend on which verb produced it. The tail bound keeps a long mpv log from
     # becoming an argument the classifier has to grep in full.
     reason=$(classify_playback_error "$(tail -c 4000 "$YT_DETACHED_LOG" 2>/dev/null)" "$rc")
@@ -1211,7 +1211,7 @@ do_stop() {
 # Adjust volume on a detached player via mpv's per-instance JSON IPC socket. One-shot:
 # open, send, read the matching ack, close, exit (stateless-per-call). Exit 4 for any
 # "did not take effect" (no such/no player, ambiguous, or IPC failure); the -j
-# status/reason carries the why. See ARCHITECTURE.md §14/§15.
+# status/reason carries the why. See AS-BUILT-contract.md §3/AS-BUILT-contract.md §4.
 do_set_volume() {
     local n=$1 want_id=$2
     is_non_negative_int "$n" || die "--set-volume must be a non-negative integer"

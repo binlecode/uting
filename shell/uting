@@ -2374,7 +2374,7 @@ press_any_key() {
 #
 # The reason exists ONLY on the core's stderr. `die` writes prose there and exits 1 whatever -j
 # asked for, so a synchronous -d failure puts nothing on stdout — there is no envelope field to
-# read it out of. §14's `reason` taxonomy belongs to the BLOCKING play path, which uting never
+# read it out of. AS-BUILT-contract.md §3's `reason` taxonomy belongs to the BLOCKING play path, which uting never
 # takes. Not colored: C_YELLOW is retired (see the palette block), and the n/m/o failures next
 # to it print plain too.
 play_failed_notice() {

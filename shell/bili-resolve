@@ -213,7 +213,7 @@ def fmt_dur:
 
 # Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
 # caller can branch on `reason` instead of string-matching raw extractor wording. The ENUM
-# is the shared fact and lives in docs/ARCHITECTURE.md §14. No member may be added here that
+# is the shared fact and lives in AS-BUILT-contract.md §3 No member may be added here that
 # the enum does not already have; `unknown` is the conservative default.
 #
 # The site-specific half is the last two patterns. HTTP 412 and the body code -352 are how
@@ -405,7 +405,7 @@ def safe_headers:
 | sort_by(if .vcodec == "none" then 1 else 0 end)
 '
 
-# The resolve envelope (docs/ARCHITECTURE.md §14) — the same one yt-resolve emits, key for
+# The resolve envelope (AS-BUILT-contract.md §3) — the same one yt-resolve emits, key for
 # key, because the player must not be able to tell which engine answered. `format` is the
 # format STRING this engine actually used; the player records it verbatim and never reads
 # it. `http_headers` is a REQUIRED key, empty object when none — and on this site it is
@@ -714,7 +714,7 @@ while (($#)); do
         shift 2
         ;;
     # The gate. Resolution neither plays nor tracks a player, and it does not search:
-    # a caller holding the wrong verb is told which one it wants (ARCHITECTURE.md §13).
+    # a caller holding the wrong verb is told which one it wants (AS-BUILT-contract.md §2).
     -d | --detach | --status | --stop | --set-volume | --id | --all | --volume)
         echo "bili-resolve: $1 is a playback flag — use ut-play for playback" >&2
         exit 1
@@ -762,7 +762,7 @@ if ! validate_enum "$COLOR_MODE" auto always never; then
 fi
 # -f / -S pick a FORMAT, and only stream resolution resolves one. Next to --info they
 # would be accepted and quietly do nothing, which is precisely what a gating layer exists
-# to reject rather than ignore (ARCHITECTURE.md §13).
+# to reject rather than ignore (AS-BUILT-contract.md §2).
 if [[ -n "$FORMAT_FLAG" && "$ACTION" != "stream" ]]; then
     die "$FORMAT_FLAG selects a stream format — it does not apply to --$ACTION"
 fi
