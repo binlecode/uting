@@ -34,16 +34,82 @@ while [[ -L "$_self" ]]; do
     esac
 done
 SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
-if [[ -x "$SCRIPT_DIR/yt-search" && -x "$SCRIPT_DIR/ut-play" ]]; then
-    YT_SEARCH="$SCRIPT_DIR/yt-search"
+if [[ -x "$SCRIPT_DIR/ut-play" ]]; then
     UT_PLAY="$SCRIPT_DIR/ut-play"
-elif command -v yt-search >/dev/null 2>&1 && command -v ut-play >/dev/null 2>&1; then
-    YT_SEARCH=$(command -v yt-search)
+elif command -v ut-play >/dev/null 2>&1; then
     UT_PLAY=$(command -v ut-play)
 else
-    echo "yt-tui: cannot locate yt-search / ut-play" >&2
+    echo "yt-tui: cannot locate ut-play" >&2
     exit 1
 fi
+
+# THE ENGINE REGISTRY — discovered, not listed. The suite's whole claim is that adding a
+# source is adding a PAIR of scripts and changing nothing else; a hardcoded list of engine
+# names in this file would make that claim false at the third source, and it would be false
+# in the one place nobody looks, because the TUI would still run and simply not offer the
+# new one.
+#
+# So an engine is anything that presents BOTH halves: `<name>-search` and `<name>-resolve`.
+# Requiring the pair is not pedantry — a lone `-search` would list results the player cannot
+# then resolve, i.e. a source that looks browsable and is not.
+#
+# Sibling directory first, then PATH, which is the same precedence `ut-play` uses to find a
+# resolver: a bare checkout runs with nothing installed, and an installed suite still works
+# from anywhere. PATH is scanned only when the checkout yields nothing, so the ordinary case
+# costs one glob.
+ENGINES=()
+engine_seen() {
+    local e
+    for e in ${ENGINES[@]+"${ENGINES[@]}"}; do
+        if [[ "$e" == "$1" ]]; then return 0; fi
+    done
+    return 1
+}
+scan_engines() {
+    local dir=$1 f name
+    # An unmatched glob expands to the pattern itself (no `nullglob` on the 3.2 floor), and
+    # the -x test then rejects it, so no guard is needed.
+    for f in "$dir"/*-search; do
+        [[ -x "$f" ]] || continue
+        name=${f##*/}
+        name=${name%-search}
+        [[ -x "$dir/$name-resolve" ]] || continue
+        engine_seen "$name" || ENGINES+=("$name")
+    done
+    return 0
+}
+scan_engines "$SCRIPT_DIR"
+if ((${#ENGINES[@]} == 0)); then
+    _saved_ifs=$IFS
+    IFS=:
+    for _pdir in $PATH; do
+        [[ -n "$_pdir" && -d "$_pdir" ]] && scan_engines "$_pdir"
+    done
+    IFS=$_saved_ifs
+    unset _saved_ifs _pdir
+fi
+if ((${#ENGINES[@]} == 0)); then
+    echo "yt-tui: no engine found — need a <name>-search and <name>-resolve pair beside this file or on PATH" >&2
+    exit 1
+fi
+
+# Resolve ONE engine's search half, by name, with the same sibling-then-PATH precedence.
+# `<name>-search` is a string concatenation, not a table lookup: the engine name IS the
+# command prefix, which is exactly what lets this file hold no registry of its own.
+engine_search_bin() {
+    if [[ -x "$SCRIPT_DIR/$1-search" ]]; then
+        printf '%s\n' "$SCRIPT_DIR/$1-search"
+        return 0
+    fi
+    command -v "$1-search" 2>/dev/null
+}
+
+# Which engine this session starts on. The SAME variable ut-play reads, not a second one:
+# a user who set a default source once should not have to set it again per surface.
+: "${UT_DEFAULT_ENGINE:=yt}"
+ENGINE="$UT_DEFAULT_ENGINE"
+engine_seen "$ENGINE" || ENGINE="${ENGINES[0]}"
+ENGINE_SEARCH=""
 
 print_usage() {
     cat <<'EOF'
@@ -54,11 +120,15 @@ Usage:
 
 With no query, prompts for one (interactive). Requires a terminal.
 
-Search options (forwarded to yt-search):
+Search options (forwarded to <engine>-search):
   -n NUM    Number of results to fetch (default: 25)
   -m SEC    Minimum duration in seconds
   -M SEC    Maximum duration in seconds
   -s FIELD  Sort field: relevance | view_count | duration (default: relevance)
+  --engine NAME  Which source to search. Defaults to UT_DEFAULT_ENGINE (the same variable
+            ut-play reads), falling back to the first one installed. An engine is a
+            <name>-search + <name>-resolve PAIR found beside this file or on PATH — nothing
+            here lists them, so whatever is installed is what the e key offers.
 
 Menu options:
   -f MODE   Playback mode (default: audio): audio | video | fast
@@ -91,6 +161,7 @@ Keys (List View):
   n        new search (fetch a different query without interrupting music)
   m        more results (re-fetch current query, +25 to count)
   o        rotate sort field / order (relevance → view_count → duration), re-fetch
+  e        switch source, re-fetch the same query (only when >1 engine is installed)
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
   q        quit (stops background playback on exit)
 
@@ -134,7 +205,7 @@ require_cmd() {
 
 is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
 
-# Parse: search-shaping flags forwarded to yt-search (and captured for status line);
+# Parse: search-shaping flags forwarded to <engine>-search (and captured for status line);
 # -f/-p/--color are menu-local. The rest is query. Reject anything else.
 SEARCH_ARGS=()
 RESULT_N=25          # fetch count; -n overrides. Runtime-mutable: m adds 25 (more_results).
@@ -156,9 +227,15 @@ query=()
 while (($#)); do
     case "$1" in
     -h | --help) print_usage; exit 0 ;;
-    # Same single source as the wrappers: ask a verb, print our own name. yt-tui reaches the
-    # core only through them, so it asks the one it already resolved.
-    -V | --version) printf 'yt-tui %s\n' "$("$YT_SEARCH" --version | awk '{print $NF}')"; exit 0 ;;
+    # Same single source as the engines: ask a verb, print our own name. It asks ut-play
+    # rather than a search half because ut-play is resolved before this loop and is the one
+    # component that exists whatever engines are installed — the version is one file
+    # (shell/VERSION) that all of them read, so any of them would answer the same.
+    -V | --version) printf 'yt-tui %s\n' "$("$UT_PLAY" --version | awk '{print $NF}')"; exit 0 ;;
+    --engine)
+        [[ $# -ge 2 ]] || die "$1 requires a value"
+        ENGINE="$2"; shift 2 ;;
+    --engine=*) ENGINE="${1#*=}"; shift ;;
     -n)
         [[ $# -ge 2 ]] || die "$1 requires a value"
         RESULT_N="$2"; shift 2 ;;
@@ -208,6 +285,12 @@ is_uint "$MIN_DISP" || die "-m must be a non-negative integer"
 is_uint "$MAX_DISP" || die "-M must be a non-negative integer"
 ((MAX_DISP == 0 || MAX_DISP > MIN_DISP)) || die "-M must be greater than -m when both are set"
 case " ${SORT_CYCLE[*]} " in *" $SORT_FIELD "*) ;; *) die "-s must be one of: ${SORT_CYCLE[*]}" ;; esac
+# A mistyped engine is caught HERE, against what is actually installed, rather than at the
+# first fetch as "search failed". The message lists what there is, because the answer to
+# "which sources do I have" is not written down anywhere else.
+engine_seen "$ENGINE" || die "--engine must be one of: ${ENGINES[*]}"
+ENGINE_SEARCH=$(engine_search_bin "$ENGINE") || ENGINE_SEARCH=""
+[[ -n "$ENGINE_SEARCH" ]] || die "engine '$ENGINE' has no '$ENGINE-search' beside this file or on PATH"
 # Playback is DETACHED here (ut-play -d), and a detached player has no terminal, so the
 # terminal-rendering modes (ascii/viz) cannot work — the core rejects them for -d. Validate
 # up front instead of letting an Enter fail silently. Same list the v key cycles.
@@ -417,7 +500,8 @@ set_ui_lang() {
         S_BACK_LIST="列表"; S_PAUSE_RESUME="暂停"; S_SEEK="跳转"
         S_VOL_ADJUST="音量"; S_STOP_PLAY="停止"
         S_PLAYING="播放中"; S_PAUSED="已暂停"; S_STARTING="缓冲中"; S_CARD_HEAD="专注卡片"
-        S_PROMPT_SEARCH="搜索 YouTube:"; S_NEW_SEARCH="新搜索（Esc 或留空取消）"
+        S_PROMPT_SEARCH="搜索"; S_NEW_SEARCH="新搜索（Esc 或留空取消）"
+        S_ENGINE="音源"; S_ENGINE_ACT="音源"
         S_SEARCHING="搜索中"; S_REFETCH="重新获取"; S_RESULTS_N="条"
         S_ANY_KEY="按任意键继续"; S_QUITTING="正在退出"
         S_MORE_ACT="更多"; S_SORT_ACT="排序"
@@ -432,7 +516,8 @@ set_ui_lang() {
         S_BACK_LIST="list"; S_PAUSE_RESUME="pause"; S_SEEK="seek"
         S_VOL_ADJUST="vol"; S_STOP_PLAY="stop"
         S_PLAYING="Playing"; S_PAUSED="Paused"; S_STARTING="Starting"; S_CARD_HEAD="NOW PLAYING FOCUS"
-        S_PROMPT_SEARCH="Search YouTube:"; S_NEW_SEARCH="New search (Esc or empty to cancel)"
+        S_PROMPT_SEARCH="Search"; S_NEW_SEARCH="New search (Esc or empty to cancel)"
+        S_ENGINE="source"; S_ENGINE_ACT="Source"
         S_SEARCHING="searching"; S_REFETCH="re-fetching"; S_RESULTS_N="results"
         S_ANY_KEY="Press any key"; S_QUITTING="Quitting"
         S_MORE_ACT="More"; S_SORT_ACT="Sort"
@@ -1518,11 +1603,18 @@ spin_stop() {
 
 # ── SEARCH delegate ─────────────────────────────────────────────────────────────────────
 SEARCH_ERR=""
+# Which engine produced the results currently on screen. Read back from the ENVELOPE rather
+# than assumed from $ENGINE, because `engine` is the field whose entire job is routing a
+# result to the resolver that can turn it into bytes — using it here means every Enter
+# exercises that contract instead of trusting a variable this file set itself. It is a
+# per-FETCH fact, not a per-row one (the envelope declares it once), so it needs no room in
+# the row format.
+CURRENT_ENGINE=""
 fetch_json() {
     local out cnt errfile rc=0
     errfile=$(mktemp "${TMPDIR:-/tmp}/yt-tui-search-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/yt-tui-search-err.$$"
     spin_start
-    out=$("$YT_SEARCH" -j -n "$RESULT_N" -s "$SORT_FIELD" ${SEARCH_ARGS[@]+"${SEARCH_ARGS[@]}"} -- "$QUERY_LABEL" 2>"$errfile") || rc=$?
+    out=$("$ENGINE_SEARCH" -j -n "$RESULT_N" -s "$SORT_FIELD" ${SEARCH_ARGS[@]+"${SEARCH_ARGS[@]}"} -- "$QUERY_LABEL" 2>"$errfile") || rc=$?
     spin_stop
     SEARCH_ERR=$(<"$errfile")
     rm -f "$errfile"
@@ -1530,6 +1622,8 @@ fetch_json() {
     cnt=$(printf '%s' "$out" | jq -r '.count // 0' 2>/dev/null || echo 0)
     [[ "$cnt" != "0" ]] || return 2
     json="$out"
+    CURRENT_ENGINE=$(printf '%s' "$out" | jq -r '.engine // empty' 2>/dev/null) || CURRENT_ENGINE=""
+    [[ -n "$CURRENT_ENGINE" ]] || CURRENT_ENGINE="$ENGINE"
     return 0
 }
 
@@ -1632,7 +1726,9 @@ display_list_menu() {
     # Fields are packed like every other chrome row, and min=/max= appear only when set:
     # at their 0s default they were pure width, and the line overflowed a 60-column
     # terminal because of them.
-    local st_items=("results=$NUM_ENTRIES" "sort=$SORT_FIELD")
+    # engine= leads the line: with more than one source installed it is the field that
+    # changes what every other field means.
+    local st_items=("engine=$ENGINE" "results=$NUM_ENTRIES" "sort=$SORT_FIELD")
     [[ "$MIN_DISP" != "0" ]] && st_items+=("min=${MIN_DISP}s")
     [[ "$MAX_DISP" != "0" ]] && st_items+=("max=${MAX_DISP}s")
     st_items+=("mode=$PLAY_MODE ($status_extra)")
@@ -1689,6 +1785,13 @@ display_list_menu() {
         "n	$S_SEARCH" "m	$S_MORE" "o	$S_SORT" "/	$S_FILTER" "l	$S_LANGKEY"
         "9/0	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "s	$S_STOP" "q	$S_QUIT"
     )
+    # The source key is offered ONLY when a second engine is installed. This block is
+    # measured and can already cost four lines of a ten-line terminal, so a key that would
+    # do nothing must not spend a cell — and on a single-engine install `e` genuinely does
+    # nothing (cycle_engine returns immediately).
+    if ((${#ENGINES[@]} > 1)); then
+        nav_items=("${nav_items[@]:0:9}" "e	$S_ENGINE" "${nav_items[@]:9}")
+    fi
     # Measure the block before committing the space: on a very short terminal it is 4 lines of
     # a 10-line screen, and printing it would push the header off the top no matter how the
     # rows are repaged. Then the keys go and the results stay — the card view still
@@ -2291,7 +2394,11 @@ play_selected() {
     # search's: it is the only place a launch failure's reason exists.
     local sock errfile rc=0 msg
     errfile=$(mktemp "${TMPDIR:-/tmp}/yt-tui-play-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/yt-tui-play-err.$$"
-    out=$("$UT_PLAY" -d -j -f "$PLAY_MODE" ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>"$errfile") || rc=$?
+    # --engine is passed EXPLICITLY and comes from the envelope: ut-play defaults to its own
+    # UT_DEFAULT_ENGINE, and letting that default decide would send a second engine's URL to
+    # the first engine's resolver — which since ROADMAP D12 is a hard usage error rather
+    # than the silent mislabel it used to be.
+    out=$("$UT_PLAY" -d -j --engine "$CURRENT_ENGINE" -f "$PLAY_MODE" ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>"$errfile") || rc=$?
     msg=$(<"$errfile")
     rm -f "$errfile"
     if ((rc != 0)); then
@@ -2429,6 +2536,42 @@ more_results() {
 }
 
 # ── SORT action (key: o) ────────────────────────────────────────────────────────────────
+# Switch source and re-fetch the same query (key: e). Modelled on cycle_sort, including its
+# page/selection reset: a different engine puts entirely different videos under the old
+# index, so keeping the highlight would point it at a track the user never saw.
+#
+# Both the name and the resolved binary are rolled back on a failed fetch. Rolling back only
+# the name would leave ENGINE_SEARCH pointing at the engine we just left, so the next fetch
+# would query one source under the other's label — the exact confusion the `engine` field
+# exists to prevent.
+cycle_engine() {
+    if ((${#ENGINES[@]} < 2)); then
+        return 0
+    fi
+    local prev="$ENGINE" prev_bin="$ENGINE_SEARCH" i n=${#ENGINES[@]} cur=0 rc=0 bin
+    for (( i = 0; i < n; i++ )); do
+        if [[ "${ENGINES[$i]}" == "$ENGINE" ]]; then cur=$i; break; fi
+    done
+    ENGINE="${ENGINES[$(( (cur + 1) % n ))]}"
+    bin=$(engine_search_bin "$ENGINE") || bin=""
+    if [[ -z "$bin" ]]; then
+        ENGINE="$prev"
+        return 0
+    fi
+    ENGINE_SEARCH="$bin"
+    printf '\n%s%s%s %s %s %s %s "%s"%s' \
+        "$C_BOLD" "$S_ENGINE_ACT" "$C_RESET" "$GL_ARROW" "$ENGINE" "$GL_DASH" \
+        "$S_REFETCH" "$QUERY_LABEL" "$GL_ELL"
+    fetch_json || rc=$?
+    if ((rc != 0)); then
+        ENGINE="$prev"
+        ENGINE_SEARCH="$prev_bin"
+        report_fetch_failure "$rc"
+        return 0
+    fi
+    apply_search_results
+}
+
 cycle_sort() {
     # The page/selection reset in apply_search_results is DELIBERATE here, unlike in
     # more_results: re-sorted rows put a different video under the old index, so keeping the
@@ -2734,7 +2877,9 @@ page_index=1
 # Echo off for the duration: read_query_input echoes what it assembles, so the driver's copy
 # would print every character twice (see tty_echo_off).
 if ((${#query[@]} == 0)); then
-    printf '%s %s ' "$GL_CARET" "$S_PROMPT_SEARCH" >&2
+    # The prompt names the ENGINE, not a site: this file learned "YouTube" back when there
+    # was only one, and that string was the last piece of source knowledge left in it.
+    printf '%s %s %s: ' "$GL_CARET" "$S_PROMPT_SEARCH" "$ENGINE" >&2
     tty_echo_off
     # if-form, not `read_query_input; rc=$?`: a cancel returns status 1, and under set -e that
     # bare call kills the script at status 1 before this block can say what it meant (see
@@ -2826,6 +2971,7 @@ while true; do
     n | N) new_search ;;      # new search (non-blocking: music continues)
     m | M) more_results ;;    # more results
     o | O) cycle_sort ;;      # rotate sort
+    e | E) cycle_engine ;;    # switch source (engine), re-fetch the same query
     v | V) cycle_mode ;;      # rotate playback mode
     l | L) cycle_ui_lang ;;   # toggle chrome language (en <-> zh)
     t | T) cycle_theme ;;     # cycle palette family live
