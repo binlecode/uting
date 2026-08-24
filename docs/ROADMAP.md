@@ -30,9 +30,11 @@
 
 **明确的 non-goals**：
 
-- **不做通用 TUI 音乐播放器。** 那一层（本地/MPD：cmus、ncmpcpp、rmpc、musikcube、kew、termusic）
-  已经饱和且活跃，见 §4 的实测数据。**不去和 cmus 抢本地/MPD 那一格** —— 这里播的是引擎给的东西，
-  不是 `~/Music/*.mp3`。
+- **不做通用 TUI 音乐播放器。** 理由不是"那层没人动了所以饱和"—— 那个前提会过期，而且实测已经
+  不成立（§4）。正确的理由是**那层每月都有新项目以 ~500★/月 起量**（`cliamp` 六个月 3403★），
+  且竞争已经打到**终端图形协议封面、参数 EQ/频谱、Lua 插件 ABI、同步歌词**上 —— 全是别人靠语言
+  和库免费拿到、而 bash 3.2 要从零手写的东西（§7 第 1 条：那是负债，不是护城河）。
+  **不去和 cmus 抢本地/MPD 那一格** —— 这里播的是引擎给的东西，不是 `~/Music/*.mp3`。
 - **不做收藏**：它是"一个名字固定的播放列表"，而播放列表在范围内（P4）。一个能力两种拼法，
   正是 D10 那条"一名一物"要防的。
 - **不做下载器、频道订阅**：不在这一轮。**它们不是 non-goal，是未排期**，各自的未决问题记在 P4。
@@ -139,19 +141,44 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
 新一代（都还小）：`NoctaVox` 370、`SubTUI` 260（Subsonic）、`gomu` 211、`waves` 168（Soulseek）、
 `involvex/youtube-music-cli` 404。
 
+**`pushed_at` 会把两个分布抹平，必须看 commit 数**：经典四件套在**维护模式**
+（近 180 天：`musikcube` 1、`ncmpcpp` 2、`yewtube` 4、`cmus` 7），生长全在 2024–2026 新生代
+（`cliamp` / `rmpc` / `kew` / `termusic` / `spotatui` / `go-musicfox` / `yt-x` 各 100+）。
+
+**国内格**（原表完全缺失，两条形态判断）：头部只有"网易云 + 逆向 API"这一条路且只有两个玩家有规模
+（`musicbox` 9830★、`go-musicfox` 2513★），其成本不在渲染而在**持续对抗接口变更**
+（`UnblockNeteaseMusic` 的存在本身就是证据）；而 **2026 年建仓的中文项目集体在换音源** ——
+`maboroshi`、`bighu630/music-tui`、`yueting`、`BiliBiliMusicPlayer` 一律走 **YouTube / B 站 +
+yt-dlp/mpv**，不再碰网易云。**国内新生代与本项目走在同一条技术路线上**，只是都还在 0–10★
+的量级（唯一例外是 `MareDevi/bilibili-tui` 209★）。这是最直接的一条竞争情报。
+
 三条结论，直接支撑 §0：
 
-1. **这个领域按音源分层，不按 UI 分层。** 本地/MPD 那层饱和且活跃 → 不做通用播放器是对的。
-2. **YouTube 这一格最弱、最缺维护。** 最像本项目的 `ytfzf`（POSIX shell + fzf + mpv，4.1k★）
-   **2024-09 后没动过**；`ytui-music` 2025-03 停滞；`yewtube` 是 2014 年项目的 Python 续命。
-3. **没有任何一个是 agent 可驱动的。** 全是人机 TUI：没有稳定机读契约、没有退出码分类、没有"脱离
-   终端后仍可查/停/调音量"的生命周期 API。**star 数在这里不是对标指标 —— 不在同一赛道。**
+1. **这个领域按音源分层，不按 UI 分层。** 不做通用播放器是对的 —— 理由见 §0 那条 non-goal
+   （不是"对手不动"，是"那层的竞争打在 bash 拿不到的地方"）。
+2. **YouTube 这一格的人机面已被占，机器面仍空。** 不能再说"这格无人维护"：`ytfzf` 确实死在
+   2024-09，但**位置被 `Benexl/yt-x` 接管了**（1642★，POSIX sh + fzf + jq + curl + mpv，
+   近半年 100+ commit）—— 技术栈与本项目高度重合，功能面走得更远（行内过滤、搜索历史与 bang
+   召回、个人 feeds、分页、下载、扩展系统）。**但它没有机读契约**：本地 JSON 是它自己的状态文件，
+   不是对外承诺。它的**扩展系统**（source shell 脚本、覆盖函数）是本仓**明确不该抄**的东西 ——
+   那是把 shell 的动态作用域当插件 ABI，与"契约即安全边界"的取向正相反。
+3. **「没有任何一个是 agent 可驱动的」已撤回 —— 那句话当时就不完全成立。** 反例分四档：MPD 全家
+   （`ncmpcpp`/`rmpc`）**天生**可驱动，协议二十余年稳定且有 `mpc`；`cmus-remote -Q` 1998 年就在出
+   行式 key/value；`ncspot` **推 JSON 到 unix socket**（与本仓的 mpv IPC 客户端路径几乎同构，
+   连"stock netcat 不肯关连接"那个坑都踩过并写进了文档）；`spotify-player` 是
+   **daemon + CLI 动词 + 给 jq 的 JSON**，且**早于本项目**；`termusic` 拆 server/client 走 gRPC；
+   `spotatui`（1247★）与 `spotuify` 已经在出 **MCP 面**；`mpv-mcp-server` 干脆从另一侧直接做了
+   mpv + yt-dlp 的 agent 面。
+
+   **站得住的收窄版命题**（经得起查，差异化叙事只能建在这句上）：在 **YouTube 这一格**里，仍然
+   没有一个项目提供**单行 JSON envelope + 退出码分类 + 脱离终端的播放器生命周期（launch → status
+   → stop，幂等，歧义即 4）**这一整套契约。`yt-x` 无机读契约；`youtui` 的独立 API crate 是给 Rust
+   调用方的库，不是 CLI 契约；其余是纯 TUI。**star 数在这里不是对标指标 —— 不在同一赛道。**
 
 ---
 
 ## 5. 调研（三）：发布 shell 版要付的账
 
-- **四个运行时依赖**（yt-dlp、jq、mpv、nc），全部由用户负责安装并保持可用。
 - **bash 3.2 与 5 的行为差异**，可移植性契约已长篇记录（`SPEC-system.md` §28）—— 那是持续的维护承诺。
 - **Linux 自带 netcat 没有 `-U`**（`SPEC-system.md` §26）。发布后从个人脚注变成平台缺口。
 - **终端动物园**：DCS 帧同步、Ambiguous 宽度、tmux 透传 —— 宽度层与 `YT_AMBIG_WIDE` 存在的全部理由，
@@ -163,6 +190,9 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
   见 D7 的"永不发布 `bin/yt`"。
 
 预期：issue 列表九成是环境问题，不是行为问题。
+
+**但"shell 项目在今天没人要"不成立**，反证在同一格里：`yt-x` 是 POSIX sh + 四依赖，2024-09 建仓，
+2026 年仍收着 1642★ 与 100+ commit/半年。上面那笔环境账照付 —— 它只是不构成"别发布"的理由。
 
 ---
 
@@ -220,6 +250,11 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
 3. **agent 对接的是窄动词的 argv + 它们背后的契约。** 没有壳可言 —— 窄动词就是实现本身，
    `ut-play` 与四个引擎都是平级 peer。所以可移植的单位是**播放器**，而引擎可以整条留在 shell：
    它们才是随外部网站变动而频繁改的那一半（迭代速度论证见第 6 条）。
+
+   **但"守护进程 + CLI 动词 + JSON"这个形状不是本项目独有的**（§4 结论 3）：`spotify-player`
+   用不同音源做了同一件事且早于本项目，`spotuify` 更彻底（"if the TUI can do it, the CLI can."）。
+   所以差异化**不能**建在"有 CLI"上，只能落到**契约的严格度** —— 退出码分类、幂等 stop、
+   歧义即 4、单行 envelope、脱离终端后仍可查/停/调音量。这是叙事收紧，不是结论翻转。
 
 4. **两个 agent 侧诉求落在播放器/新脸上，且 bash 都给不了。**
 
@@ -328,13 +363,17 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
   **零元数据**（`BiliBiliSearchIE` 只 yield URL 与 aid）；完整抽取则因该站音乐结果绝大多数是
   多 P 合集而**逐 P 递归**，N=10 超过 120s 未完成。直连 `search/type` 一次请求 0.71s 拿全字段。
 
-  所以分界不在站点，在**操作** —— 与 R6 同一条原则。落进本仓的 B 站知识因此是
+  所以分界不在站点，在**操作**（search / resolve / play / info）而非站点（provider）—— 与 D9
+  切引擎用的是同一条原则。落进本仓的 B 站知识因此是
   **一个公开端点 + 一个 Referer + 一个本地生成的随机 buvid3**，不含任何认证机制；登录态只经
   `--cookies-from-browser` 到 yt-dlp。`buvid3` 是正确性要求而非优化：不带它，连续六次搜索里三次
   412（带则 6/6 通过），而 `<uuid>infoc` 与「本地造」都是 yt-dlp 自己对每个 B 站请求做的事。
 
-  **重开条件**：若 yt-dlp 的 `BiliBiliSearchIE` 对齐 `SoundcloudSearchIE` 的元数据透传（上游
-  patch，`RESEARCH` §2.6），搜索那一格就该改回 yt-dlp，本仓的 HTTP 路径整个删掉。
+  **重开条件**：若 yt-dlp 的 `BiliBiliSearchIE` 对齐 `SoundcloudSearchIE` 的元数据透传，
+  搜索那一格就该改回 yt-dlp，本仓的 HTTP 路径整个删掉。**这是一个上游 patch 就能翻转的决定** ——
+  同一个代码库里 `SoundcloudSearchIE` 已经在做正确的事（把搜索响应里的元数据透传给 flat 结果），
+  `BiliBiliSearchIE` 拿到同一份响应却只留 URL 与 aid，把 title / author / duration / play / pic
+  全丢了。所以正确的长期解法是去修它，而不是在本仓长期养一条 HTTP 路径。
 
 ---
 
@@ -354,8 +393,8 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
   调用方点错了引擎,与 `--engine nope` 是同一个错误,评分也该相同。
 
   **要付的账,如实记**：URL-only 音源（Bandcamp / Apple Podcasts / 喜马拉雅）原先「`ut-play <url>`
-  今天就能放」是**靠上面那个疣**才成立的。这条路现在关闭,`RESEARCH-bilibili-engine.md` §0 把它们
-  判为「不需要接」的依据随之失效。**重开条件**：若它们成为真实需求,正确做法是**给它写一对**,
+  今天就能放」是**靠上面那个疣**才成立的。这条路现在关闭,当初把它们判为「不需要接」的依据
+  随之失效（那份取舍现记在 §11）。**重开条件**：若它们成为真实需求,正确做法是**给它写一对**,
   不是放宽 host 校验。
 
 ---
@@ -422,7 +461,13 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
 任一为真，**播放器**移植就值得它的风险。全不为真，`ut-play` 无限期保持 shell —— 那是正当终态。
 （引擎不受这三条支配，见 D5。）
 
-1. **真的要 MCP**（解除 §0 的那条 non-goal）。
+1. **真的要 MCP**（解除 §0 的那条 non-goal）。**这一条的事实基础已经变了，状态没变**：MCP 已从
+   "要不要做"变成"同格竞争者做了，并且给出了可抄的工程细节" —— `spotatui` 的默认关闭 +
+   只绑 loopback + token、写给 protocol revision `2026-07-28` 且**双时代兼容**（仍应答
+   `initialize`，否则在跑的客户端直接失败）、**stdout 只跑协议**（启动提示走 stderr）、
+   应用内 DJ 与 MCP **复用同一张 tool table 而非拷贝**（两个入口永不漂移）。
+   这不构成"必须做"，只是把这条触发条件从假设降到了实证。附带情报：字幕这一格在 MCP 生态里
+   已有 `kevinwatt/yt-dlp-mcp`（273★）与 `--transcript` 正面重叠，真做 MCP 时要说清为什么用本仓的。
 2. **真的要单文件分发**（推翻 D1）。
 3. **真的要支持 Linux**（`nc -U` 缺失与 bash 3.2/5 分裂只在这里一起消失）。
 
@@ -542,6 +587,34 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
   可观测性**不是障碍**：`--status` 实读 `paused`，agent 暂停了观测得到。这批动词卡在上面那个
   决定上，不是卡在可观测性上。
 
+- **B 站的一条搜索结果 ≠ 一个可播对象 —— 合集至少要标出来。** 实测搜"周杰伦"，前三条全是
+  "50首精选合集"/"100首合集"/"最热门100首"，时长 **222 / 271 / 419 分钟**。这不是 bug：
+  **B 站音乐搜索的头部天然是长合集**，那就是平台上音乐消费的主流形态。但一个"搜到 → 放上"的
+  播放器，如果第一条就把 3.7 小时的连播丢给用户，体验是坏的 —— 而这正是今天的行为。
+  同类的第二种形态是**分 P**（一个 BV 里几十个 part，`?p=N`），"播放第一条结果"要先决定放哪一 part。
+  可选策略（`PLAN-` 展开）：按 `duration` 阈值标注、把合集单列一栏、或只在焦点卡上加一个"合集"标记。
+  **哪一种都行，但"不标"不行。** 注意这是**引擎的**活（形态是站点事实），按"correctness 加在下面"
+  该由 `bili-search` 在 envelope 里说清楚，而不是让 `uting` 去猜 —— 一个只在 TUI 里加标记的修法，
+  是把 agent 面漏掉的那半个功能。
+
+- **B 站音频区（`au` 号）的歌词，走已有的字幕管线。** B 站的**视频区**没有字幕，所以
+  `bili-resolve` 今天没有 `--transcript`（一个引擎用动词的有无来声明能力）。但**音频区是另一套
+  API**：`/audio/au<id>` 是该站真正的音乐区（原生音频、有 `statistic`），而 yt-dlp 的
+  `BilibiliAudioIE` 把 `song.lyric` **作为 subtitles 暴露** —— 与 `yt-resolve --transcript`
+  是同一条管线。**若要做，歌词是复用字幕路径，不需要新原语**，`bili-resolve` 届时才长出
+  `--transcript`。**证据强度要如实记：这一条是读 `yt_dlp/extractor/bilibili.py` 得出的，从未实跑**，
+  所以开工第一步是拿一个真 `au` 号验证，而不是直接写代码。前置：`bili-search` 今天只搜视频区，
+  音频区要么是它的第二个端点，要么是第三对引擎 —— 那个边界本身就是待答的问题。
+
+- **下一个引擎选谁：候选已经筛过一轮，结论是"没有明显的第三个"。** 记在这里是为了**挡住重复调研**，
+  不是排期：**YouTube Music** 不算新引擎（同站的另一个语料库，同 extractor、同 cookie、同鉴权，
+  属于 YouTube 引擎的检索面改进）；**网易云 / QQ音乐**排除（extractor 存在，但地域封锁 + VIP 门槛，
+  `go-musicfox` 靠 `UnblockNeteaseMusic` 才活着 —— 那是持续军备竞赛，等于把 §5 的环境账加倍）；
+  **Spotify / Tidal / Deezer** 不可能（DRM，yt-dlp 无 extractor）；**Niconico** 排除
+  （有 `nicosearch:` 前缀，实测返回 0 条）；**SoundCloud** 排除（产品决策：内容面不重合）。
+  **Bandcamp / Apple Podcasts / 喜马拉雅**曾被判为"不需要接、URL-only 今天就能放"—— **该判断已由
+  D12 作废**：那条路是靠 `yt-resolve` 接受任意 URL 的疣才成立的，疣已经拔掉。它们若成为真实需求，
+  正确做法是**给它写一对引擎**，不是放宽 host 校验。
 ---
 
 ## 12. 开放问题
