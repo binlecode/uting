@@ -10,7 +10,8 @@
 # And it carries the one claim that needs a SECOND source: that the player applies the
 # http_headers an engine hands it. See the Bilibili section for why only that site can show it.
 #
-# Portability: bash 3.2. Needs tmux for the tick check, jq for the envelopes.
+# Portability: bash 3.2. Needs jq for the envelopes; no tmux and no terminal — every
+# assertion here is an exit code or a field out of a real envelope.
 #
 # Usage:  YT_TEST_LIFECYCLE=1 tests/lifecycle.sh
 # Exit:   0 = every check held, 1 = at least one failed, 2 = refused to run (not gated in)
@@ -51,7 +52,6 @@ wait_for_sock() {
 
 # Always stop everything, however this exits — a leaked player outlives the shell.
 cleanup() {
-    tmux kill-session -t lc-tick 2>/dev/null
     shell/ut-play --stop --all -j >/dev/null 2>&1
     return 0
 }
@@ -88,27 +88,6 @@ report "--set-volume --id"    0 "$(shell/ut-play --set-volume 40 --id "$id1" -j 
 # Only the targeted player moved: a mutation that leaks across players is the bug --id exists for.
 report "only the target moved" "40" \
     "$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.volume')"
-
-echo "── Starting -> Playing flips on the tick, with NO keypress ────────"
-# The TUI polls the player once a second, so the banner must resolve on its own. Nothing is
-# typed after Enter on purpose; a keypress would repaint anyway and prove nothing.
-tmux kill-session -t lc-tick 2>/dev/null
-tmux new-session -d -s lc-tick -x 100 -y 30 "cd '$REPO' && env YT_SYNC=0 shell/uting 'lofi hip hop'"
-i=0
-while [ $i -lt 80 ]; do
-    tmux capture-pane -t lc-tick -p 2>/dev/null | grep -q 'results=' && break
-    sleep 0.3; i=$((i + 1))
-done
-tmux send-keys -t lc-tick Enter
-flip=""
-i=0
-while [ $i -lt 60 ]; do                              # up to 30s for mpv to produce output
-    if tmux capture-pane -t lc-tick -p 2>/dev/null | grep -qE 'Playing:'; then flip=yes; break; fi
-    sleep 0.5; i=$((i + 1))
-done
-tmux kill-session -t lc-tick 2>/dev/null
-if [ "$flip" = yes ]; then ok "banner reached Playing unprompted in ~$(echo "$i * 0.5" | bc)s"
-else bad "banner never left Starting — the 1s tick is not resolving the state"; fi
 
 echo "── a second engine: the envelope's http_headers reach mpv ─────────"
 # The only check in the suite that proves the player APPLIES what an engine hands it.

@@ -1,6 +1,6 @@
 ---
 name: capture-pane
-description: Refresh the terminal frames in README.md / docs/SPEC-system.md from REAL uting panes instead of hand-drawing them. Covers picking the geometry per view, waiting for the ready marker so the frame is not a spinner, cleaning the capture with clean_capture.py, proving it with tests/assert_pane.py BEFORE it enters a doc, and splicing it in with a Python replace rather than hand-transcribing box glyphs. Use when a layout change has made a doc frame stale.
+description: Refresh the terminal frames in README.md / docs/SPEC-system.md from REAL uting panes instead of hand-drawing them. Covers picking the geometry per view, waiting for the ready marker so the frame is not a spinner, cleaning the capture with clean_capture.py, proving it with this skill's assert_pane.py BEFORE it enters a doc, and splicing it in with a Python replace rather than hand-transcribing box glyphs. Use when a layout change has made a doc frame stale.
 ---
 
 # capture-pane
@@ -76,8 +76,8 @@ A capture is evidence only once it has been measured. This is the step that sepa
 skill from screenshotting:
 
 ```bash
-python3 tests/assert_pane.py tmp/list.txt 100 list   # PASS + rail/index columns reported
-python3 tests/assert_pane.py tmp/card.txt 100 card
+python3 .claude/skills/capture-pane/assert_pane.py tmp/list.txt 100 list   # PASS + rail/index columns reported
+python3 .claude/skills/capture-pane/assert_pane.py tmp/card.txt 100 card
 ```
 
 If `assert_pane.py` fails, **you found a layout bug — do not paste the frame.** Fix the

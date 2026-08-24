@@ -15,7 +15,7 @@ The suite is exposed **directly** to shell-capable agents with no MCP wrapper, s
 - **bash 3.2** — macOS's frozen system `/bin/bash`. This is a deliberate floor, not an accident: zero install step, identical behavior under macOS, Linux, containers, CI, and cron/launchd. Do **not** raise it, and do **not** hardcode a Homebrew bash path. See the portability contract below — it is a hard rule.
 - Runtime deps, all external and unvendored: `yt-dlp`, `jq`, `mpv`, `nc` (BSD netcat, stock on macOS), `curl`. `curl` is required by `bili-search` (it IS that engine's transport) and optional elsewhere — the YouTube play-time client probe.
 - **macOS first.** Linux is not currently usable: stock netcat has no `-U`, which the mpv IPC path needs. Do not "fix" Linux support by adding a dependency — that decision is gated in `docs/ROADMAP.md` §9.
-- Verification rigs need `tmux` (`tui_pane.sh`, and `lifecycle.sh`'s TUI case) and `python3` (`assert_pane.py`, `mpv_ipc_mock.py`). **No `pip install`**: a suite that depends only on primitives should not need a Python terminal emulator to test itself. Nothing in `tests/` is needed at runtime.
+- The test suite needs `tmux` (`contract.sh`'s TUI boot check) and `python3` (`mpv_ipc_mock.py`, the fake IPC peer). **No `pip install`**: a suite that depends only on primitives should not need a package to test itself. Nothing in `tests/` is needed at runtime.
 - There is **no** build step, no venv, no lockfile, and no CI. The checks below are run by hand — that is the whole reason they are written out — with two of them gated locally by git hooks:
 
 ```sh
@@ -34,14 +34,12 @@ shell/ut-play --help                                          # the player's own
 shell/bili-search -j -n 5 -- "周杰伦"                          # the second engine, same envelope
 shell/uting --version                                        # answers before any dependency gate
 
-tests/contract.sh                                             # the CLI contract, 78 checks
-tests/tui_pane.sh                                             # the TUI via tmux; starts no playback
+tests/contract.sh                                             # the CLI contract, 89 checks
 YT_TEST_LIFECYCLE=1 tests/lifecycle.sh                        # detached players; gated, silent
-python3 tests/assert_pane.py <capture.txt> <pane_width> [list|card]
 python3 tests/mpv_ipc_mock.py --reverse                       # fake IPC peer for the awkward shapes
 ```
 
-Every rig runs directly and says in its own docstring what it proves. Read the docstring before changing the rig.
+Each suite runs directly and says in its own docstring what it proves. Read the docstring before changing it.
 
 ## Architecture & Core Components
 
@@ -54,7 +52,6 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
 | `shell/bili-resolve` | **The Bilibili engine, half two** (778 lines) — handle → the same resolve envelope, over `yt-dlp`. No request signing, no stream selection, no CDN logic: that is a thousand lines to redo what the dependency maintains. Owns the BV/av handle shapes, the cookie decision, the mode→format table. No `--transcript` — the site has no captions, and an engine states a missing capability by not having the verb |
 | `shell/VERSION` | The suite version, declared once — a one-line data file, not a shell variable. The player and the engines are independent executables sharing no library, so a variable in any one of them would make the others ask *it* for the version — the wrong dependency direction for a player that must not know its engines |
 | `shell/uting` | The human face (3.0k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
-| `tests/assert_pane.py` | Layout invariants on a captured pane, measured in **cells** (east-asian-width), not characters: nothing exceeds the pane width, titles start on one column, the duration rail is right-flush |
 | `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that does what the real one will not do on cue: answer out of order, report a property null, interleave async events, walk the clock, never close its side |
 
 **Dependency graph — one layer, six peers. Site knowledge exists ONLY in an engine pair, playback ONLY in the player. An engine's two halves need not use the same primitive: the seam is the ENVELOPE, not the tool behind it:**
@@ -112,7 +109,7 @@ If a feature genuinely needs bash 4+, the honest move is `((BASH_VERSINFO[0] >= 
 
 ### 3. Scratch stays under `tmp/`
 
-`.gitignore` carries `**/tmp/`. All throwaway scripts, captures, and probe output go there — never the repo root, never `tests/`. A rig graduates into `tests/` only when it earns a permanent place, and then it gets a docstring saying what it proves. Consequently `docs/SPEC-system.md` §27 **names no rig by path**: a cited scratch path is a promise the checkout cannot keep. Record the *shape* of a check, not its filename.
+`.gitignore` carries `**/tmp/`. All throwaway scripts, captures, and probe output go there — never the repo root, never `tests/`. A throwaway check graduates into `tests/` only when it earns a permanent place, and then it gets a docstring saying what it proves. Consequently `docs/SPEC-system.md` §27 **names no scratch check by path**: a cited scratch path is a promise the checkout cannot keep. Record the *shape* of a check, not its filename.
 
 ### 4. The contract is frozen surface
 
@@ -120,44 +117,41 @@ The single-line JSON envelope, the player record, the exit-code table (0 ok / 1 
 
 ## Testing Guidelines (HARD RULE — enforced at review)
 
-These are **verification rigs, not a unit-test suite.** What this code gets wrong is renderer and protocol behaviour, which only a real pty and a real socket can show.
+**Functional tests only.** A command-line tool is tested by running it and reading its exit code and its stdout. There is no rig layer, no screen model, no pty harness and no unit tier: every check invokes a real entry point the way a caller does, and asserts on what came back.
 
-**Every rig MUST answer "what production failure mode does this catch that no other rig catches?"** If you cannot name it, do not add it.
+Two files, one rule:
+
+| File | Drives | Gate |
+|---|---|---|
+| `tests/contract.sh` | the six commands' argv, exit codes and `-j` envelopes; the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux | none — run it before every commit |
+| `tests/lifecycle.sh` | detached players end to end (launch → status → mutate → stop → stop again), and that an engine's `http_headers` actually reach mpv | `YT_TEST_LIFECYCLE=1` — it starts real players |
+
+`tests/mpv_ipc_mock.py` is **not** a third suite: it is a fake **peer** that `contract.sh` drives, legitimate for the same reason a stubbed renderer is not — it produces socket shapes real mpv will not produce on cue (replies out of order, a property reported null, a side that never closes). **Fake the peer, never the thing under test.**
+
+### Harden before you extend
+
+The default move on a gap is to make an **existing** check stronger, not to add a file. A check that drives one engine when the function behind it is duplicated across engines is a *weak* check, not a missing one — state the claim as an invariant over all **discovered** engines (`<name>-search` + `<name>-resolve` pairs, the registry `uting` already builds) and engine #3 is covered the day it lands. A new check earns its place only by naming a production failure no existing check catches; if you cannot name one, harden instead.
 
 ### Reject a check when it:
 
-- drives an internal shell function directly instead of the command's real entry point, or asserts on a private helper's output in isolation;
-- greps the **byte stream** for a claim that is about the **screen** ("changed exactly one row", "nothing blanked") — the byte stream of a correct in-place frame looks nothing like the picture it produces. Assert on the cell grid `tmux capture-pane` returns. (The converse also holds: a screen-clear and a spinner frame ARE byte claims, and `tmux pipe-pane` is where to read them);
-- measures a title's width in characters rather than display cells — a CJK title is two cells, and `len()` passes a line that visibly wraps;
-- fakes the data or the logic under test. A fake **peer** (`mpv_ipc_mock.py`) is legitimate — it produces shapes the real mpv will not produce on cue. A fake renderer or a stubbed core is not;
-- exists only to raise a count, or asserts a default value that a behavioral check already exercises;
-- times a network-dependent path against YouTube when a local synthetic source (`av://lavfi:sine`) would do — throttling has corrupted a timing measurement here before (`docs/SPEC-system.md` §25.1).
+- asserts on an internal function or a private helper instead of invoking the command;
+- fakes the data or the logic under test (a fake *peer* is not the thing under test);
+- asserts on a rendered **picture** — cell grids, column alignment, glyph widths. Layout is proved when a frame enters a doc, and the `capture-pane` skill owns that; the suite asserts survival, not shape;
+- exists only to raise a count, or asserts a default that a behavioural check already exercises;
+- times a network-dependent path against YouTube when a local synthetic source (`av://lavfi:sine`) would do — throttling has corrupted a timing measurement here before (`docs/SPEC-system.md` §25.1);
+- **cannot fail.** Before it lands, break the thing it guards and watch it go red. A check nobody has seen fail is a check nobody has tested.
 
 ### Accept a check when it drives a real surface:
 
-a pty running the actual script; a real mpv or the IPC mock over a real unix socket; `bash -n` on all six scripts; the JSON envelope parsed out of a real `-j` invocation; the exit code of a real failure path; a captured pane measured in cells.
-
-### Two lessons that each cost a wrong green result first
-
-1. **A pty starts at 0×0, and `LINES`/`COLUMNS` do not fix it.** The TUI reads `stty size` through `/dev/tty` on purpose, so without `TIOCSWINSZ` the reflow has no rows to spend and draws a one-row list — whose frames look plausible enough to trust.
-2. **Assert on the screen model, not the byte stream.** (Same root as the reject rule above; it is listed twice because it is the mistake that recurs.)
+`bash -n` on all six scripts; a real `-j` invocation whose envelope is parsed; the exit code of a real failure path; a real unix socket (real mpv, or the mock); the TUI under tmux asserted on survival — it booted, it is still up after a resize, it left on `q` with 0.
 
 ### Minimum checks before every commit
 
-**The three rigs in `tests/` ARE these checks.** There is no sweep document to follow: a check
-that only exists as prose for someone to copy out reports green by default, which is why the
-skill that used to hold this list was deleted. A new check goes in the rig, never in a doc.
+**The two files in `tests/` ARE these checks.** A check that exists only as prose for someone to copy out reports green by default — which is why the skill that once held this list was deleted. A new check goes in the suite, never in a doc.
 
-- `/bin/bash -n shell/*` — enforced by `.githooks/pre-commit` on staged content and by
-  `pre-push` on the worktree, so this is a backstop for a `--no-verify`, not a habit.
-- **Any contract or lifecycle change:** `tests/contract.sh` (it also drives the empty-argument
-  paths on the 3.2 floor, and the live `--status` read against the IPC mock).
-- **Any renderer change:** `tests/tui_pane.sh` — the geometry sweep, the chrome variants,
-  redraw-on-resize with no keypress, the in-place repaint rule, and the spinner; it calls
-  `assert_pane.py` for each geometry.
-- **Any change to the detached player:** `YT_TEST_LIFECYCLE=1 tests/lifecycle.sh`. It starts
-  real players (silent, `--volume 0`) and does not pass until `pgrep` is empty, so it is gated
-  and run deliberately.
+- `/bin/bash -n shell/*` — enforced by `.githooks/pre-commit` on staged content and by `pre-push` on the worktree, so this is a backstop for a `--no-verify`, not a habit.
+- **Any change at all:** `tests/contract.sh` (it also drives the empty-argument paths on the 3.2 floor, and the live `--status` read against the IPC mock).
+- **Any change to the detached player:** `YT_TEST_LIFECYCLE=1 tests/lifecycle.sh`. It starts real players (silent, `--volume 0`) and does not pass until `pgrep mpv` is empty, so it is gated and run deliberately.
 - The shellcheck baseline is a tracked count, not a clean bill — `docs/ROADMAP.md` §6.1.
 
 ## Safe-Evolution Methodology (how this suite is changed)
@@ -203,7 +197,7 @@ The live files:
 - `docs/SPEC-system.md` — architecture, every non-obvious decision and why, the function map, the data contracts, the risk/defect register, and the verification matrix. **Kept in sync on every PR that touches architecture or a contract.**
 - `docs/ROADMAP.md` — positioning and non-goals, the naming survey, the OSS-readiness assessment, and the conditions under which the core would move to Go. Consult §0 before adding a feature. **In scope (D14/D15, P4):** queue, playlist management, listening history — to be built in the SHELL version, not deferred to a Go rewrite. **Favourites is NOT a feature** (it is a playlist with a fixed name — one capability, one spelling). A downloader and channel subscriptions are unscheduled. What did NOT change: this is still not a general-purpose local/MPD player, and every one of those features must ship an **agent surface** (a verb plus a `-j` envelope) alongside its keybinding — a TUI-only feature is half a feature here. MCP remains a non-goal, gated by §9.
 - `docs/PLAN-*.md` — whatever is ready to build or in flight, with its progress recorded inline. Empty is a valid state.
-- One repo, one README: there is deliberately no `tests/README.md` — the rigs are described in the root README's `## Tests` section and in their own docstrings.
+- One repo, one README: there is deliberately no `tests/README.md` — the two suites are described in the root README's `## Tests` section and in their own docstrings.
 
 ### Agent skills
 
@@ -212,10 +206,10 @@ The live files:
 | Skill | Use it when |
 |---|---|
 | `run-uting` | You need to *see* the TUI. It requires a real TTY on both stdin and stdout, so a Bash-tool call proves nothing — this covers the tmux drive, the pty-size trap, the ready markers, the keymap, and the detached-player cleanup a session kill does **not** do |
-| `capture-pane` | A terminal frame in `README.md` / `docs/SPEC-system.md` is stale. Capture → clean (`clean_capture.py`, which refuses a mid-fetch frame) → **prove with `tests/assert_pane.py`** → splice with a Python replace. Never hand-draw a frame |
+| `capture-pane` | A terminal frame in `README.md` / `docs/SPEC-system.md` is stale. Capture → clean (`clean_capture.py`, which refuses a mid-fetch frame) → **prove with the skill's own `assert_pane.py`** → splice with a Python replace. Never hand-draw a frame |
 | `audit-conformance` | Periodically, not per-commit. Whole-suite scan against 12 rules (surface layering, DRY, bash 3.2, dead code, swallowed errors, contract and doc drift) → `docs/PLAN-conformance-YYYY-MM-DD.md`. Ships `fn_graph.py` (defs vs call sites across all six scripts) as a manual aid — **never** as a gate or a `tests/` member |
 
-A skill may propose a *structural detector as a manual aid*; it may never propose one as a test. The rigs-only mandate above binds skills too.
+A skill may propose a *structural detector as a manual aid*; it may never propose one as a test. The functional-only mandate above binds skills too — and layout proving lives in `capture-pane`, deliberately outside the suite.
 
 ## Coding Style & Naming Conventions
 
@@ -229,8 +223,8 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 
 - **`main` is the working branch** — 54 commits, zero merges, single author. Commit straight to it for ordinary work; take a branch when the change is structural enough to want the staged A→E order below, or when it may need to be abandoned. No stacked branches.
 - Imperative, scoped commit subjects in the existing style — the file or surface first when it helps: `uting: stop Enter stalling a second in utf8_complete`, `add --version, declared once`, `docs: resync DESIGN with the detached-playback TUI`.
-- One logical change per commit. Renderer changes come with the capture or the rig output that proves them.
-- `bash -n` on all six scripts before every commit; the relevant rig before every push.
+- One logical change per commit. Renderer changes come with the proved capture (`capture-pane`) that shows them.
+- `bash -n` on all six scripts before every commit; `tests/contract.sh` before every push.
 - **Always ask before `git push`.** Never force-push `main`.
 - **Versioning is semver 2.0.0 over the CLI contract, not over the code** (`docs/ROADMAP.md` D13 defines what counts as the public API). While the suite is `0.y.z`: a breaking change bumps **y**, an addition or a fix bumps **z**. `shell/VERSION` is bumped deliberately, **alone, in its own commit**, and never once per commit. There is no release process to run and no CHANGELOG: the suite is not packaged (`docs/ROADMAP.md` D1), so a `v<VERSION>` tag is for a real release only — `1.0.0` waits for D1/D2 to reverse.
 

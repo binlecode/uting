@@ -142,36 +142,41 @@ addition bumps `z`; `1.0.0` is a promise this reference implementation does not 
 
 ## Tests
 
-Verification rigs, not a unit-test suite — what this code gets wrong is renderer and protocol
-behaviour, which only a real terminal and a real socket can show. tmux IS that terminal, so
-nothing here hand-rolls a pty. Each file's header says what it proves; run any of them
-directly.
+**Functional tests only.** A command-line tool is tested by running it and reading its exit
+code and its stdout, which is all these do — no rig layer, no screen model, no pty harness,
+no unit tier. Each file's header says what it proves; run either one directly.
 
-| Rig | What it is for |
+| Suite | What it is for |
 |---|---|
-| `tests/assert_pane.py` | Layout invariants on a captured pane: nothing exceeds the pane width (measured in cells), every row's title starts on the same column, the duration rail is right-flush at exactly the pane width, and the boundary rail is full width in both its static and its live form. |
-| `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that can do what the real one will not do on cue: answer out of order (`--reverse`), report a property as null (`--null pause`), start out paused (`--paused`), interleave async events, walk the clock, and never close its side of the socket. Every IPC rule in the read path exists because of one of these shapes. |
-| `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, `--transcript` both ways, the lifecycle verbs, the live `--status` read (against the mock, over a real socket), the tombstone record for a player that died unasked, and the exit-code taxonomy. |
-| `tests/tui_pane.sh` | The TUI against a real terminal (tmux): layout at four geometries plus the chrome variants, redraw-on-resize with no keypress, the in-place repaint rule (a keypress emits no screen-clear), and the fetch spinner actually turning. Starts no playback. |
-| `tests/lifecycle.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, `Starting` → `Playing` flipping on the tick with no keypress, and zero orphan mpv at the end. It also plays a real Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. Starts real players at `--volume 0`, so it is gated behind `YT_TEST_LIFECYCLE=1`. |
+| `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the lifecycle verbs, the live `--status` read (against the mock, over a real socket), the tombstone record for a player that died unasked, the exit-code taxonomy, and the TUI booting / surviving a resize / leaving on `q` under tmux. |
+| `tests/lifecycle.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, and zero orphan mpv at the end. It also plays a real Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. Starts real players at `--volume 0`, so it is gated behind `YT_TEST_LIFECYCLE=1`. |
 
-The two `.sh` rigs need `tmux`; `contract.sh` skips its live-read block without `python3` (it
-drives the mock). There is no `pip install` step: a suite whose claim is that it depends only
-on primitives everyone already has should not need a Python terminal emulator to test itself,
-which is why the two pty rigs it used to carry are gone. Nothing here is needed at runtime.
+`tests/mpv_ipc_mock.py` is not a third suite but a fake **peer** that `contract.sh` drives: it
+does what real mpv will not do on cue — answer out of order (`--reverse`), report a property
+null (`--null pause`), start paused, interleave async events, walk the clock, never close its
+side. Every IPC rule in the read path exists because of one of those shapes. Fake the peer,
+never the thing under test.
 
-Four things these rigs learned the hard way, every one of which produced a wrong result first:
+`contract.sh` needs `tmux` for its TUI boot check and skips the live-read block without
+`python3`. There is no `pip install` step, and nothing here is needed at runtime.
+
+**Layout is proved outside the suite.** Cell grids, column alignment and glyph widths are
+checked when a frame enters a doc — that is what `.claude/skills/capture-pane` is for, and its
+`assert_pane.py` refuses a frame that would wrap. The suite asserts *survival*, not shape.
+
+Lessons these paid for, every one of which produced a wrong result first:
 
 - **Wait on a ready marker, never on a sleep.** A captured spinner frame is a picture of the
   loading state, not of the layout.
-- **Assert on the cell grid, not the byte stream** — for a claim that is about the screen.
-  `tmux capture-pane` is that grid; `tmux pipe-pane` is the byte stream, for the claims that
-  really are about bytes (a screen-clear, a spinner frame).
+- **A pty starts at 0×0, and `LINES`/`COLUMNS` do not fix it.** The TUI reads `stty size`
+  through `/dev/tty`, so without `TIOCSWINSZ` the reflow has no rows and draws a one-row list
+  whose frames look plausible enough to trust. tmux is the terminal here for that reason.
 - **A piped `while read` loop body runs in a subshell**, so every failure it counted was
   discarded and the run reported green regardless.
 - **Match multibyte glyphs without `LC_ALL=C`.** Under the C locale a bracket expression of
   multibyte characters is a set of *bytes*: it matches fragments, reports one glyph where four
   turned, and reads as a spinner that never advanced.
+- **A check nobody has watched fail is untested.** Break the thing it guards first.
 
 ## Documentation
 

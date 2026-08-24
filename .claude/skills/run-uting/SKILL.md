@@ -123,7 +123,7 @@ Prove the width and alignment claims rather than eyeballing them:
 
 ```bash
 tmux capture-pane -t $S -p > tmp/pane.txt
-python3 tests/assert_pane.py tmp/pane.txt 100 list    # PASS + the measured rail/index columns
+python3 .claude/skills/capture-pane/assert_pane.py tmp/pane.txt 100 list    # PASS + the measured rail/index columns
 ```
 
 ## Gotchas

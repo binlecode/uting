@@ -470,9 +470,10 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
 - 交给库因而可删的清单：显示宽度表、resize 处理、事件循环、`\033[K`/`\033[J` 记账、每次按键的
   `stty` fork。
 - 验收：对着 `SPEC-system.md` §27 与 shell TUI 并排比对 —— 窄终端网格、reflow 下限用例、中英、
-  `YT_ASCII=1`、播放态迁移。复用 `tests/tui_pane.sh`（tmux 就是终端，所以 harness 不可能与真终端
-  有差异——那正是 pty 版本栽过的地方），连同教训：等就绪标记而不是 sleep，屏幕类断言下在
-  `capture-pane` 的单元格网格上、字节类断言下在 `pipe-pane` 的流上。
+  `YT_ASCII=1`、播放态迁移。渲染 rig 已删（测试面改为 functional-only，见 `CLAUDE.md`），所以这一步
+  的并排比对要么用 `capture-pane` skill 的 `assert_pane.py` 手动做，要么为 Go 版另起一份
+  —— 连同教训：等就绪标记而不是 sleep，屏幕类断言下在 `capture-pane` 的单元格网格上、
+  字节类断言下在 `pipe-pane` 的流上。
 
 ### P3 —— 播放器移植（仅当 §9 触发）
 

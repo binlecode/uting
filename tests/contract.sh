@@ -233,12 +233,54 @@ report "bili-search rejects -d" 1 "$(rc shell/bili-search -d -- 音乐)"
 # One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
 # which supports 1700+ sites — so a Bilibili URL resolved fine and came back labelled
 # `engine:"yt"`. It WORKED, which is why it went unnoticed, and it made the one field whose
-# job is routing a result back to its resolver into a field that lies. These two checks are
-# each other's mirror, because a rule only one engine follows is not a rule.
-report "yt-resolve refuses a bili URL" 1 \
-    "$(rc shell/yt-resolve -j -- https://www.bilibili.com/video/BV1mL411E7Fb)"
-report "bili-resolve refuses a yt URL" 1 \
-    "$(rc shell/bili-resolve -j -- "https://www.youtube.com/watch?v=$MEDIA_ID")"
+# job is routing a result back to its resolver into a field that lies.
+#
+# Engine-DISCOVERED, not hardcoded: the pair convention (`<name>-search` + `<name>-resolve`)
+# is the one `uting` already builds its registry from, so a third engine is covered the day
+# its pair lands rather than when someone remembers to add it here. And the claim is stated
+# as an invariant over ALL engines, needing no table of who owns what — which is why it
+# cannot drift from the engines themselves. Every host-gate function is duplicated per
+# engine (`url_host` is byte-identical across the pair today), so a check that drove only
+# one engine would be green while the other copy, and engine #3, said nothing.
+ENGINES=""
+for f in shell/*-resolve; do
+    n=$(basename "$f"); n=${n%-resolve}
+    [ -x "shell/$n-search" ] && ENGINES="$ENGINES $n"
+done
+NENG=$(echo "$ENGINES" | wc -w | tr -d ' ')
+report "engine pairs discovered" 2 "$NENG"
+
+# refusals <url> — how many engines reject it as a USAGE error (1)? A rejected host dies
+# before the dependency gate, so each of these costs ~20ms and no network.
+refusals() {
+    local u=$1 n r=0
+    for n in $ENGINES; do
+        [ "$(rc "shell/$n-resolve" -j -- "$u")" = 1 ] && r=$((r + 1))
+    done
+    echo $r
+}
+
+# A real URL is claimed by EXACTLY ONE engine: the other N-1 refuse it with 1 — usage, not
+# extraction failure, because nothing was attempted and nothing is retryable.
+report "only 1 engine claims a yt URL"   $((NENG - 1)) "$(refusals "https://www.youtube.com/watch?v=$MEDIA_ID")"
+report "only 1 engine claims a bili URL" $((NENG - 1)) "$(refusals 'https://www.bilibili.com/video/BV1mL411E7Fb')"
+# The ordering probe, and the one here that costs a network call: `url_host` strips userinfo
+# BEFORE the port, so `user:pass@host` resolves to the host. Swap those two expansions — a
+# plausible tidy-up — and this resolves to host `user`, is refused by every engine, and
+# nothing else in this file notices.
+report "userinfo stripped before port"   $((NENG - 1)) "$(refusals "https://user:pass@www.youtube.com/watch?v=$MEDIA_ID")"
+
+# A confusable is refused by EVERY engine. These are the shapes `url_host`'s expansion ORDER
+# decides, and the two plain URLs above exercise three of its eight lines:
+#   evil<host>.com    an explicit host list, never a substring test
+#   <host>@evil.com   the LAST `@` is the separator, the way browsers read it
+#   https:///         an empty host must match nothing
+#   <host>.           trailing dot refused — the safe direction, pinned so a change is deliberate
+for u in 'https://evilyoutube.com/watch?v=x' 'https://evilbilibili.com/x' \
+         'https://youtube.com@evil.com/' 'https://bilibili.com@evil.com/' \
+         'https:///watch?v=x' 'https://youtube.com./watch?v=x'; do
+    report "all refuse ${u#https://}" "$NENG" "$(refusals "$u")"
+done
 # The opposite failure is just as real: a host list tightened too far silently drops a
 # spelling users actually type. youtu.be is the one every share button produces.
 report "yt-resolve still takes youtu.be" 0 "$(rc shell/yt-resolve -j -- https://youtu.be/$MEDIA_ID)"
@@ -369,6 +411,56 @@ report "capped at 8 on disk"         8 "$(ls "$SD/players/dead" 2>/dev/null | wc
 report "newest kept"                 0 "$(jq_ok '.failed[0].id=="ctest_c9"' shell/ut-play --status -j)"
 rm -f "$SD/players"/ctest_*.json "$SD"/mpv-ctest_*.log
 rm -rf "$SD/players/dead"
+
+echo "── the TUI boots, paints, survives a resize, and leaves on q ──────"
+# NOT a renderer assertion: no cell arithmetic, no width table, no captured frame compared
+# against an expected picture. The claim is only that the interactive surface starts on a
+# real tty, paints a list, stays up across two resizes, and exits 0 on `q`.
+#
+# It earns its place because every other check in this file is BLIND to the TUI: they all
+# reach it through a non-tty, where it correctly refuses to run. A `uting` that aborts on
+# boot or wedges on exit would leave this whole suite green.
+#
+# tmux is the tty. Wait on the ready marker, never on a sleep — a captured spinner frame is
+# a picture of the loading state, and a blind sleep here has produced a wrong result before.
+if ! command -v tmux >/dev/null 2>&1; then
+    echo "  skip  (needs tmux for a real tty)"
+else
+    TS="ctest-tui-$$"
+    tmux kill-session -t "$TS" 2>/dev/null
+    tmux new-session -d -s "$TS" -x 100 -y 30 \
+        "cd '$PWD' && env YT_SYNC=0 shell/uting 'lofi hip hop'"
+    booted=0; i=0
+    while [ $i -lt 80 ]; do
+        tmux capture-pane -t "$TS" -p 2>/dev/null | grep -q 'results=' && { booted=1; break; }
+        sleep 0.3; i=$((i + 1))
+    done
+    report "TUI boots and paints a list" 1 "$booted"
+
+    # Reflow is width-conditional, so the two geometries that change layout are the ones
+    # worth walking. The assertion is survival, not shape: still up, still showing a list.
+    alive=1
+    for geom in "62 20" "26 24"; do
+        set -- $geom
+        tmux resize-window -t "$TS" -x "$1" -y "$2" 2>/dev/null
+        j=0; seen=0
+        while [ $j -lt 20 ]; do
+            tmux capture-pane -t "$TS" -p 2>/dev/null | grep -q 'results=' && { seen=1; break; }
+            sleep 0.25; j=$((j + 1))
+        done
+        [ "$seen" = 1 ] || alive=0
+    done
+    report "survives 62x20 and 26x24" 1 "$alive"
+
+    tmux send-keys -t "$TS" q
+    gone=0; i=0
+    while [ $i -lt 40 ]; do
+        tmux has-session -t "$TS" 2>/dev/null || { gone=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "quits on q, no wedged pty" 1 "$gone"
+    tmux kill-session -t "$TS" 2>/dev/null
+fi
 
 echo "── version and the non-TTY refusal ────────────────────────────────"
 report "one version, six entry points" 1 \

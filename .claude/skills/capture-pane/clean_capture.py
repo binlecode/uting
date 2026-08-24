@@ -14,7 +14,7 @@ What it does:
     pasted into a doc is a diagram of the loading state, not of the layout.
 
 What it deliberately does NOT do: measure widths. Cell measurement lives in
-tests/assert_pane.py and must not exist twice — run that on the cleaned file before
+this skill's assert_pane.py and must not exist twice — run that on the cleaned file before
 splicing it into a doc. It also never removes an interior row: every row of a list
 frame is load-bearing (the index column, the right-flush duration rail and the
 details block are all mutually aligned), so a "compressed" frame is a torn frame.

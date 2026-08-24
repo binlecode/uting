@@ -1232,8 +1232,9 @@ with fewer than two engines it returns immediately and the affordance is not dra
     it, which is why this survived so long; under tmux, where sync is off by default, nothing
     did. `display_list_menu` now homes the cursor and erases as it draws like the card, closing
     with one `\033[J`, and pause/resume repaints exactly one row (one changed row, zero `ED`
-    sequences — `tests/tui_pane.sh` counts the `ED`s in `tmux pipe-pane`'s stream between two
-    marks, since tmux emits its own clear when the pane opens). The view-switch `clear` on Tab/Esc went with
+    sequences — measured by counting the `ED`s in `tmux pipe-pane`'s stream between two marks,
+    since tmux emits its own clear when the pane opens; that check lived in the renderer rig
+    and went with it, so this is now a recorded measurement rather than a guarded one). The view-switch `clear` on Tab/Esc went with
     it — both renderers end in `\033[J`, so the incoming frame covers the outgoing one, and the
     switch was the last blank frame in the app.
 
@@ -3163,9 +3164,17 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 ## 27. Verification matrix
 
-**Last run: 2026-08-24, all three rigs green** — `contract.sh` **78 ok / 0 failed / 0 known
-drift**, `tui_pane.sh` **13 ok / 0 failed**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **15 ok /
-0 failed**, with `pgrep mpv` empty afterwards.
+**Last run: 2026-08-24, both suites green** — `contract.sh` **89 ok / 0 failed / 0 known
+drift**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **14 ok / 0 failed**, with `pgrep mpv` empty
+afterwards.
+
+**Functional only, and two files.** The renderer rig (`tui_pane.sh`) and its cell-grid prover
+were removed: layout is proved when a frame enters a doc (`.claude/skills/capture-pane`, which
+still carries `assert_pane.py`), and the suite asserts *survival* instead — the TUI boots,
+holds through two resizes, and leaves on `q` with 0. `lifecycle.sh` lost its banner-tick case
+for the same reason and no longer needs tmux at all. What that trade gives up is named
+plainly: a CJK title that wraps, a rail that stops being right-flush, or a repaint that clears
+the screen will not be caught by a test — only by the next doc capture.
 
 > **Observed flakiness, recorded rather than smoothed over.** On the first of three
 > consecutive runs on 2026-08-23, ten checks failed — the live-read and death-record clusters plus
@@ -3175,19 +3184,19 @@ drift**, `tui_pane.sh` **13 ok / 0 failed**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` 
 > fixtures**. Treat a single red run as inconclusive until it repeats; the durable fix is a
 > per-run state dir, which is not built yet.
 
-**No *scratch* rig is named by path here, on purpose.** The exception is the five harnesses
-that earned a permanent home and are committed under `tests/` — `contract.sh`, `tui_pane.sh`,
-`lifecycle.sh`, `assert_pane.py`, `mpv_ipc_mock.py` — which the root README describes by name
-because a contributor cannot run what nothing points at. (The two pty-based rigs that
-preceded `tui_pane.sh` were deleted: tmux IS the terminal, and a pty harness starting at 0×0
-produced plausible-looking one-row frames — a wrong green.) Everything else this suite has been
+**No *scratch* check is named by path here, on purpose.** The exception is the three files
+that earned a permanent home and are committed under `tests/` — `contract.sh`, `lifecycle.sh`,
+`mpv_ipc_mock.py` — which the root README describes by name because a contributor cannot run
+what nothing points at. (Two pty-based rigs and then a tmux renderer rig preceded today's
+shape: a pty starting at 0×0 produced plausible-looking one-row frames — a wrong green — and
+tmux fixed that, but asserting on the picture at all is what finally went.) Everything else this suite has been
 verified with is a throwaway under a `tmp/` the repo does not track (`.gitignore`:
 `**/tmp/`), so citing one of those by path is a promise the checkout cannot keep — it resolves on exactly one machine, until that
 machine's scratch directory is cleaned. What is durable is the *shape* of each check, and that
 is what the entries below record: what was driven, how it was observed, and the count of
-assertions that survived. A rig is cheap to rebuild from its description and expensive to trust
+assertions that survived. A check is cheap to rebuild from its description and expensive to trust
 when the file it names is gone; §25.1's harness lessons are here for the same reason — they are
-the part of a rig worth keeping.
+the part of a deleted harness worth keeping.
 
 ```
    Syntax     : bash -n on all six scripts (+ repo-wide shell check), gated by
@@ -3287,7 +3296,14 @@ the part of a rig worth keeping.
                 with NO epitaph line (the kill -9 / --stop shape) writes none either, and
                 10 failures leave 8 on disk and 8 in the envelope, newest first. A real
                 --stop of a live player leaves failed[] empty and zero orphan mpv
-   uting      : (tmux PTY) Enter → background play + banner; Tab → card (live
+   uting      : HISTORICAL RECORD, NOT A GUARDED CHECK. Everything under this heading was
+                proved by the renderer rig that has since been removed (functional-only
+                suite — CLAUDE.md); the suite now asserts only that the TUI boots, survives
+                two resizes and exits 0 on `q`. These entries are kept because they record
+                that the layout WAS correct, measured, at a point in time — but a regression
+                in any of them today is caught by the next `capture-pane` proof, not by a
+                test. Re-proving one means driving it by hand through that skill.
+                (tmux PTY) Enter → background play + banner; Tab → card (live
                 time/progress via the envelope's sock) → Tab → list; Esc → list;
                 IPC: against real mpv the card's meta row shows a new reading on
                 every one-second sample (6/6 on a VOD row — the LIVE branch returns
