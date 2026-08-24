@@ -430,6 +430,77 @@ report "newest kept"                 0 "$(jq_ok '.failed[0].id=="ctest_c9"' shel
 rm -f "$SD/players"/ctest_*.json "$SD"/mpv-ctest_*.log
 rm -rf "$SD/players/dead"
 
+echo "── the playlist store: durable state, one file, one lock ──────────"
+# UT_STATE_DIR is exported, and that is the whole reason the knob exists: without it every
+# check below would write into the user's real playlists. It points somewhere disposable
+# for the rest of this file.
+export UT_STATE_DIR
+UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/uting-plstore.XXXXXX")
+PL=shell/ut-playlist
+ENV_JSON='{"status":"ok","engine":"yt","query":"q","count":2,"results":[{"id":"a1","title":"One","url":"https://www.youtube.com/watch?v=a1","channel":"c","duration":213,"duration_fmt":"00h:03m:33s","view_count":5,"live_status":"not_live"},{"id":"a2","title":"Two","url":"https://www.youtube.com/watch?v=a2","channel":"c","duration":null,"duration_fmt":null,"view_count":null,"live_status":"is_live"}]}'
+
+report "empty store: ok, exit 0"      0 "$(jq_ok '.status=="ok" and .count==0 and .playlists==[]' $PL --ls -j)"
+printf '%s' "$ENV_JSON" | $PL --add chill -j >/dev/null 2>&1
+report "a search envelope tags engine" 0 "$(jq_ok '.count==2 and ([.items[].engine]|unique==["yt"])' $PL --show chill -j)"
+# An ITEM carries no engine — the envelope does. An engine tag that survived the store is
+# the only thing that makes a stored record a callable `ut-play --engine E -- URL`.
+echo '[{"engine":"bili","id":"BV1","url":"https://www.bilibili.com/video/BV1","title":"三","duration":90}]' | $PL --add chill -j >/dev/null 2>&1
+report "an array keeps its own engine"  0 "$(jq_ok '[.items[].engine]|unique==["bili","yt"]' $PL --show chill -j)"
+report "--show is ONE line"             1 "$($PL --show chill -j | wc -l | tr -d ' ')"
+report "duration_fmt derived on read"   0 "$(jq_ok '.items[0].duration_fmt=="00h:03m:33s" and (.items[1].duration_fmt==null)' $PL --show chill -j)"
+report "--show missing: 1, not_found"   1 "$(rc $PL --show nope)"
+report "…and says so in the envelope"   0 "$(jq_ok '.status=="error" and .reason=="not_found"' $PL --show nope -j)"
+report "--rm out of range: 1"           1 "$(rc $PL --rm chill --index 9)"
+report "--rm removes exactly one"       0 "$(jq_ok '.count==2' $PL --rm chill --index 1 -j)"
+# Idempotent, like --stop on a player that already exited: the caller asked for an end state
+# and the end state holds. `deleted` is the field that says which of the two happened.
+report "--del missing: 0, deleted=false" 0 "$(jq_ok '.status=="ok" and .deleted==false' $PL --del ghost -j)"
+$PL --rename chill mellow -j >/dev/null 2>&1
+report "--rename moves the file"        0 "$(jq_ok '.playlists[0].name=="mellow" and .count==1' $PL --ls -j)"
+printf '%s' "$ENV_JSON" | $PL --add other -j >/dev/null 2>&1
+report "--rename onto a name: 1"        1 "$(rc $PL --rename other mellow)"
+report "…with reason exists"            0 "$(jq_ok '.reason=="exists"' $PL --rename other mellow -j)"
+# The store round trip: its own --show output is accepted by --add, which is what copying
+# one list into another is.
+$PL --show mellow -j | $PL --add copy -j >/dev/null 2>&1
+report "a playlist envelope re-adds"    0 "$(jq_ok '.count==2' $PL --show copy -j)"
+report "a name with / is refused"       1 "$(rc $PL --del "a/b")"
+report "…with reason invalid_name"      0 "$(jq_ok '.reason=="invalid_name"' $PL --del "a/b" -j)"
+report "a selector with no verb: 1"     1 "$(rc $PL --show mellow --index 2)"
+report "two actions at once: 1"         1 "$(rc $PL --ls --show mellow)"
+report "a playback flag: 1"             1 "$(rc $PL --status)"
+report "a handle after --: 1"           1 "$(rc $PL -- "https://youtu.be/x")"
+report "bad stdin: 1"                   1 "$(echo not-json | $PL --add mellow >/dev/null 2>&1; echo $?)"
+# Captured first, never piped straight into jq: `set -o pipefail` makes a pipeline carry the
+# LEFT side's status, so `$PL … -j | jq -e` reports the command's own exit 1 as jq's verdict
+# and the check goes red against correct behaviour. Same lesson as jq_ok, which cannot be
+# used here because these commands read stdin.
+PL_OUT=$(echo not-json | $PL --add mellow -j 2>/dev/null)
+report "…and an error envelope under -j" 0 "$(printf '%s' "$PL_OUT" | jq -e '.status=="error" and .reason=="invalid_input"' >/dev/null 2>&1; echo $?)"
+
+# THE LOCK, driven rather than asserted from prose. Without it these eight writers are eight
+# read-modify-write races on one file and the list ends up with ONE item — measured, by
+# stubbing lock_playlist out and re-running this exact loop.
+i=0
+while [ "$i" -lt 8 ]; do
+    printf '[{"engine":"yt","url":"https://x/%s"}]' "$i" | $PL --add race -j >/dev/null 2>&1 &
+    i=$((i + 1))
+done
+wait
+report "8 concurrent adds keep all 8"   0 "$(jq_ok '.count==8' $PL --show race -j)"
+# A held lock is did-not-take-effect (4), never a usage error and never a silent unlocked
+# write: this store is durable, so proceeding without the lock could drop what the user just
+# added. Costs the 5s spin once.
+mkdir -p "$UT_STATE_DIR/playlists/.lock-race"
+report "a held lock: 4, not 1"          4 "$(printf '[{"engine":"yt","url":"https://x/z"}]' | $PL --add race >/dev/null 2>&1; echo $?)"
+PL_OUT=$(printf '[{"engine":"yt","url":"https://x/z"}]' | $PL --add race -j 2>/dev/null)
+report "…with reason locked"            0 "$(printf '%s' "$PL_OUT" | jq -e '.reason=="locked"' >/dev/null 2>&1; echo $?)"
+# A lock left by a SIGKILLed writer must not wedge a playlist forever.
+touch -t 202001010000 "$UT_STATE_DIR/playlists/.lock-race"
+report "a stale lock is stolen"         0 "$(printf '[{"engine":"yt","url":"https://x/z"}]' | $PL --add race -j >/dev/null 2>&1; echo $?)"
+rm -rf "$UT_STATE_DIR"
+unset UT_STATE_DIR
+
 echo "── the TUI boots, paints, survives a resize, and leaves on q ──────"
 # NOT a renderer assertion: no cell arithmetic, no width table, no captured frame compared
 # against an expected picture. The claim is only that the interactive surface starts on a
@@ -481,8 +552,19 @@ else
 fi
 
 echo "── version and the non-TTY refusal ────────────────────────────────"
-report "one version, six entry points" 1 \
-    "$(for c in ut-play yt-search yt-resolve bili-search bili-resolve uting; do shell/$c --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
+# Stated over every entry point the checkout HAS, not over a list of six names: a hardcoded
+# list is a check that silently stops covering the thing it was written for the moment a
+# seventh command lands. Anything in shell/ with a shebang is an entry point.
+ENTRY_POINTS=""
+for f in shell/*; do
+    [ -f "$f" ] || continue
+    head -n 1 "$f" | grep -q '^#!' || continue      # VERSION is data, not a command
+    ENTRY_POINTS="$ENTRY_POINTS $f"
+done
+report "at least seven entry points" 1 \
+    "$(set -- $ENTRY_POINTS; [ $# -ge 7 ] && echo 1 || echo 0)"
+report "one version, every entry point" 1 \
+    "$(for c in $ENTRY_POINTS; do "$c" --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
 report "uting refuses a non-TTY" 1 "$(shell/uting </dev/null >/dev/null 2>&1; echo $?)"
 
 echo

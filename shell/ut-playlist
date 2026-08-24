@@ -1,0 +1,559 @@
+#!/usr/bin/env bash
+# ut-playlist — the PLAYLIST STORE: durable, user-level, engine-agnostic. Agent-facing.
+#
+# The seventh command, and the first one that owns state a user would be upset to lose.
+# It knows nothing about sites (no yt-dlp, no cookie, no host grammar) and nothing about
+# playback (no mpv, no lifecycle, no players/). It knows two things: the item record and
+# the file. docs/PLAN-listening.md §1/§2/§4.1.
+#
+# WHY IT IS NOT PART OF THE PLAYER. `players/` lives in ${TMPDIR}/uting-$(id -u) and dies
+# with the reboot — correct for a running process, fatal for a list a user spent six months
+# building. This store is user-level and permanent; the queue (a playlist being consumed)
+# stays with the player. A queue that survives a reboot IS a playlist, which is the whole
+# reason these are two different things. ARCHITECTURE.md §9.2.
+#
+# ONE INPUT SHAPE: JSON on stdin, either a search envelope (`yt-search -j` verbatim) or a
+# bare array of items. Taking the envelope is correctness, not convenience — a search
+# RESULT carries no `engine` field, the envelope does, so only the whole package tags the
+# items with the engine that produced them. AS-BUILT-contract.md §3.
+set -euo pipefail
+# Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md §28.
+
+# Resolve this script's OWN symlink chain before looking for its siblings — the PATH entry
+# is a symlink into a checkout that can live anywhere. Physical `cd -P`/`pwd -P`, and a
+# loop rather than `readlink -f` (bash 3.2 / BSD readlink has neither). Same preamble as
+# every other command in the suite; it is duplicated because there is no library to share.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+    _link=$(readlink "$_self")
+    case "$_link" in
+    /*) _self="$_link" ;;
+    *)  _self="$(dirname "$_self")/$_link" ;;
+    esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
+
+# THE version of the whole suite, declared once, in a data file. CLAUDE.md § one fact, one place.
+if [[ -r "$SCRIPT_DIR/VERSION" ]]; then
+    UT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
+else
+    UT_VERSION="unknown"
+fi
+
+# ==============================================================================
+# 1. SETTINGS
+# ==============================================================================
+
+# The user-level state root. XDG rather than ~/Library/Application Support because this
+# suite's user surface is a terminal and its neighbours (yt-dlp, mpv) live there too — and
+# because a Linux port would not need a second layout. The override is not a convenience:
+# without it `tests/contract.sh` would write into the user's real playlists.
+# AS-BUILT-contract.md §5.
+UT_STATE_DIR="${UT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/uting}"
+PLAYLISTS_DIR="$UT_STATE_DIR/playlists"
+
+COLOR_MODE="auto"
+OUTPUT_MODE="list"
+ACTION=""
+NAME=""
+NEW_NAME=""
+INDEX=""
+
+# ==============================================================================
+# 2. HELPERS
+# ==============================================================================
+
+die() {
+    local red='' reset=''
+    case "${COLOR_MODE:-auto}" in
+    always) red=$'\033[31m'; reset=$'\033[0m' ;;
+    auto) if [[ -t 2 ]]; then red=$'\033[31m'; reset=$'\033[0m'; fi ;;
+    never) ;;
+    esac
+    echo "${red}Error:${reset} $*" >&2
+    exit 1
+}
+
+require_cmd() {
+    command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+validate_enum() {
+    local value=$1; shift
+    local allowed
+    for allowed in "$@"; do
+        [[ "$value" == "$allowed" ]] && return 0
+    done
+    return 1
+}
+
+# An OPERATIONAL failure — one that happens after argv is understood, so the caller asked a
+# well-formed question that the store cannot answer. Prose goes to stderr in both modes (a
+# -j caller debugging a pipeline still wants the sentence); the machine envelope goes to
+# stdout only under -j, exactly as the engines do with their extraction failures.
+#
+# The reason enum here is the STATE enum and is deliberately NOT the playback/extraction one
+# (forbidden|unavailable|…): nothing in a file store can be `format_unavailable`, and
+# widening a taxonomy three other readers branch on would be the wrong kind of sharing.
+# Members: not_found | exists | invalid_name | invalid_input | locked. AS-BUILT-contract.md §3.
+fail() {
+    local code=$1 reason=$2 msg=$3
+    echo "ut-playlist: $msg" >&2
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --arg name "$NAME" --arg reason "$reason" \
+            '{status: "error", name: (if $name == "" then null else $name end), reason: $reason}'
+    fi
+    exit "$code"
+}
+
+now_utc() { date -u +%FT%TZ 2>/dev/null || echo unknown; }
+
+# A playlist name is also its filename, with no slug in between: a slug would make the name
+# printed by --ls and the name on disk two different facts, and then one of them would be
+# wrong. The cost of that choice is this validator — it is what keeps a name from escaping
+# the directory or colliding with the lock dirs.
+#
+# NOT validated: case. On a case-insensitive filesystem (APFS by default) `Rock` and `rock`
+# ARE the same playlist. Accepted and documented rather than fought: bash 3.2 has no
+# case-folding parameter expansion (that one is bash 4) and `tr` is wrong on UTF-8, so any
+# normalisation written here would be a lie for exactly the names most likely to need it.
+validate_name() {
+    local n=$1
+    [[ -n "$n" ]] || fail 1 invalid_name "a playlist name is required"
+    ((${#n} <= 64)) || fail 1 invalid_name "playlist name is longer than 64 characters"
+    case "$n" in
+    .*)   fail 1 invalid_name "playlist name must not begin with '.'" ;;
+    */*)  fail 1 invalid_name "playlist name must not contain '/'" ;;
+    esac
+    if [[ "$n" =~ [[:cntrl:]] ]]; then
+        fail 1 invalid_name "playlist name must not contain control characters"
+    fi
+}
+
+playlist_file() { echo "$PLAYLISTS_DIR/$1.json"; }
+playlist_lock() { echo "$PLAYLISTS_DIR/.lock-$1"; }
+
+ensure_store() {
+    mkdir -p -m 700 "$PLAYLISTS_DIR" 2>/dev/null || die "cannot create the state directory: $PLAYLISTS_DIR"
+    chmod 700 "$UT_STATE_DIR" "$PLAYLISTS_DIR" 2>/dev/null || true
+}
+
+# `mkdir` is atomic on POSIX, which makes it the portable lock on bash 3.2 (no flock on
+# stock macOS) — the same one `ut-play` uses for its player records. Two differences from
+# that one, both because this data is durable and the player's is not:
+#
+#   1. On timeout we FAIL (exit 4, did-not-take-effect) rather than proceeding unlocked.
+#      The player's patches were best-effort field updates; here proceeding unlocked can
+#      drop a track the user just added.
+#   2. A lock older than a minute is STOLEN. The EXIT trap releases the lock on every
+#      normal death including `die`, so a stale dir means a SIGKILL — and a playlist that
+#      can never be written again is a worse failure than a torn write we have never seen.
+LOCK_HELD=""
+release_lock() {
+    [[ -n "$LOCK_HELD" ]] && rmdir "$LOCK_HELD" 2>/dev/null
+    LOCK_HELD=""
+    return 0
+}
+trap release_lock EXIT
+
+lock_playlist() {
+    local dir i
+    dir=$(playlist_lock "$1")
+    for ((i = 0; i < 50; i++)); do
+        if mkdir "$dir" 2>/dev/null; then
+            LOCK_HELD="$dir"
+            return 0
+        fi
+        sleep 0.1
+    done
+    # -mmin +1 is understood by both BSD and GNU find; -maxdepth 0 tests the dir itself.
+    if [[ -d "$dir" ]] && [[ -n "$(find "$dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]]; then
+        rmdir "$dir" 2>/dev/null || true
+        if mkdir "$dir" 2>/dev/null; then
+            LOCK_HELD="$dir"
+            return 0
+        fi
+    fi
+    fail 4 locked "playlist '$1' is locked by another process"
+}
+
+# temp + mv in the SAME directory, so the rename is atomic and a reader never sees a half
+# written list. $$ in the temp name keeps two writers from colliding on the temp itself.
+write_playlist() {
+    local name=$1 json=$2 f
+    f=$(playlist_file "$name")
+    printf '%s\n' "$json" >"$f.tmp.$$" || die "cannot write $f"
+    mv -f "$f.tmp.$$" "$f" || { rm -f "$f.tmp.$$" 2>/dev/null || true; die "cannot persist $f"; }
+}
+
+# The ONE duration formatter, as a jq prelude rather than a bash function — same reason the
+# engines carry theirs: every consumer here is already shaping JSON, and a bash version
+# would fork jq once per row to read a field back out. It is a third copy of six lines
+# because the suite has no library, which is the trade ARCHITECTURE.md §4 already made.
+JQ_PRELUDE='
+def p2: tostring | if length < 2 then "0" + . else . end;
+def fmt_dur:
+  if type != "number" then null
+  else (. | floor) as $t
+    | ($t / 86400 | floor) as $d
+    | (($t % 86400) / 3600 | floor) as $h
+    | (($t % 3600) / 60 | floor) as $m
+    | ($t % 60) as $s
+    | (if $d > 0 then "\($d)d " else "" end) + "\($h | p2)h:\($m | p2)m:\($s | p2)s"
+  end;
+'
+
+# Normalise whatever arrived on stdin into the item record (PLAN-listening.md §2): the
+# search envelope's own field names, minus the ones that expire (channel, view_count,
+# live_status), plus our timestamp. `engine` + `url` are exactly the two arguments of
+# `ut-play --engine E -- URL`, so a stored record IS a call.
+#
+# The result lands in a GLOBAL, not on stdout. `items=$(read_items)` reads better and was
+# how this was first written, but a command substitution runs in a SUBSHELL: `fail`'s -j
+# error envelope went into the variable instead of to the caller, and its `exit` ended only
+# the subshell. A function that can fail with an envelope cannot return its value through
+# stdout.
+ITEMS_JSON=""
+read_items() {
+    [[ -t 0 ]] && fail 1 invalid_input "--add reads items from stdin (try: yt-search -j -- QUERY | ut-playlist --add NAME)"
+    local raw items rc=0
+    raw=$(cat)
+    [[ -n "${raw//[[:space:]]/}" ]] || fail 1 invalid_input "no input on stdin"
+    items=$(printf '%s' "$raw" | jq -c --arg now "$(now_utc)" '
+        (if type == "object" and has("results") then
+            (.engine) as $e
+            | (if ($e | type) != "string" or ($e | length) == 0 then
+                 error("search envelope has no engine field")
+               else . end)
+            | [ .results[] | {engine: $e, id: (.id // null), url: .url,
+                              title: (.title // null), duration: (.duration // null)} ]
+         elif type == "object" and has("items") then
+            # A playlist envelope, i.e. the --show output of this same command. Items
+            # already carry their own engine, so no envelope-level tag is needed: this is
+            # what makes `ut-playlist --show a -j | ut-playlist --add b` work.
+            [ .items[] | {engine: (.engine // null), id: (.id // null), url: (.url // null),
+                          title: (.title // null), duration: (.duration // null)} ]
+         elif type == "array" then
+            [ .[] | {engine: (.engine // null), id: (.id // null), url: (.url // null),
+                     title: (.title // null), duration: (.duration // null)} ]
+         else
+            error("input must be a search envelope or a JSON array of items")
+         end)
+        | (map(select((.engine | type) != "string" or (.engine | length) == 0
+                      or (.url | type) != "string" or (.url | length) == 0)) | length) as $bad
+        | if $bad > 0 then error("every item needs a non-empty engine and url") else . end
+        | map(. + {added_at: $now})
+    ' 2>/dev/null) || rc=$?
+    if ((rc != 0)) || [[ -z "$items" ]]; then
+        fail 1 invalid_input "stdin is not a search envelope or a valid item array (every item needs engine + url)"
+    fi
+    ITEMS_JSON="$items"
+}
+
+# ==============================================================================
+# 3. VERBS
+# ==============================================================================
+
+do_ls() {
+    ensure_store
+    local files=() f
+    for f in "$PLAYLISTS_DIR"/*.json; do
+        [[ -e "$f" ]] || continue
+        files+=("$f")
+    done
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        if ((${#files[@]} == 0)); then
+            jq -nc '{status: "ok", count: 0, playlists: []}'
+            return 0
+        fi
+        # -s slurps the files jq reads itself; the name comes from the FILE's own field, not
+        # from its basename, so a manually renamed file is reported as what it says it is.
+        jq -sc '{status: "ok", count: length,
+                 playlists: map({name, count: (.items | length), updated_at})}' "${files[@]}"
+        return 0
+    fi
+
+    if ((${#files[@]} == 0)); then
+        echo "No playlists yet."
+        echo "  Add one:  yt-search -j -n 5 -- \"lofi\" | ut-playlist --add chill"
+        return 0
+    fi
+    jq -r '"\(.name) - \(.items | length) items - updated \(.updated_at)"' "${files[@]}"
+}
+
+do_show() {
+    ensure_store
+    local f; f=$(playlist_file "$NAME")
+    [[ -f "$f" ]] || fail 1 not_found "no such playlist: $NAME"
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        # `duration_fmt` is DERIVED here, never stored: a stored copy would be a second
+        # truth about the same number. It is emitted because it makes an item field-for-
+        # field row-compatible with a search result — which is what lets `uting` render a
+        # playlist through the same loader it renders a search with, and lets this output
+        # be piped straight back into --add.
+        jq -c "$JQ_PRELUDE"'{status: "ok", name, count: (.items | length),
+              items: (.items | map(. + {duration_fmt: (.duration | fmt_dur)}))}' "$f"
+        return 0
+    fi
+    jq -r "$JQ_PRELUDE"'
+        "\(.name) - \(.items | length) items",
+        (.items | to_entries[]
+         | "  [\(.key)] \(.value.title // "(untitled)")",
+           "        \(.value.duration | fmt_dur // "--") - \(.value.engine)",
+           "        \(.value.url)")
+    ' "$f"
+}
+
+do_add() {
+    ensure_store
+    read_items
+    local items="$ITEMS_JSON"
+    lock_playlist "$NAME"
+    local f now json added
+    f=$(playlist_file "$NAME")
+    now=$(now_utc)
+    added=$(printf '%s' "$items" | jq 'length')
+    if [[ -f "$f" ]]; then
+        json=$(jq -c --argjson new "$items" --arg now "$now" \
+            '.items += $new | .updated_at = $now | .count = (.items | length)' "$f") \
+            || fail 1 invalid_input "playlist file is not readable JSON: $f"
+    else
+        json=$(jq -nc --arg name "$NAME" --arg now "$now" --argjson new "$items" \
+            '{schema: 1, name: $name, created_at: $now, updated_at: $now,
+              count: ($new | length), items: $new}')
+    fi
+    write_playlist "$NAME" "$json"
+    release_lock
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        printf '%s' "$json" | jq -c --argjson added "$added" \
+            '{status: "ok", name, added: $added, count: (.items | length)}'
+    else
+        printf 'Added %s item(s) to %s (%s total)\n' "$added" "$NAME" "$(printf '%s' "$json" | jq '.items | length')"
+    fi
+}
+
+do_rm() {
+    ensure_store
+    local f; f=$(playlist_file "$NAME")
+    [[ -f "$f" ]] || fail 1 not_found "no such playlist: $NAME"
+    lock_playlist "$NAME"
+    local len
+    len=$(jq '.items | length' "$f") || fail 1 invalid_input "playlist file is not readable JSON: $f"
+    if ((INDEX >= len)); then
+        fail 1 invalid_input "index $INDEX is out of range (playlist '$NAME' has $len items)"
+    fi
+    local json
+    json=$(jq -c --argjson i "$INDEX" --arg now "$(now_utc)" \
+        'del(.items[$i]) | .updated_at = $now | .count = (.items | length)' "$f")
+    write_playlist "$NAME" "$json"
+    release_lock
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        printf '%s' "$json" | jq -c '{status: "ok", name, removed: 1, count: (.items | length)}'
+    else
+        printf 'Removed item %s from %s (%s left)\n' "$INDEX" "$NAME" "$(printf '%s' "$json" | jq '.items | length')"
+    fi
+}
+
+# Deleting something that is already gone is not a failure — the caller asked for an end
+# state and the end state holds. Same rule as `ut-play --stop` on a player that already
+# exited (AS-BUILT-contract.md §4); `deleted` is the field that says which happened.
+do_del() {
+    ensure_store
+    local f deleted=false
+    f=$(playlist_file "$NAME")
+    if [[ -f "$f" ]]; then
+        lock_playlist "$NAME"
+        rm -f "$f" || die "cannot delete $f"
+        release_lock
+        deleted=true
+    fi
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --arg name "$NAME" --argjson deleted "$deleted" \
+            '{status: "ok", name: $name, deleted: $deleted}'
+    elif [[ "$deleted" == "true" ]]; then
+        printf 'Deleted playlist %s\n' "$NAME"
+    else
+        printf 'No such playlist: %s (nothing to delete)\n' "$NAME"
+    fi
+}
+
+do_rename() {
+    ensure_store
+    local from to
+    from=$(playlist_file "$NAME")
+    to=$(playlist_file "$NEW_NAME")
+    [[ -f "$from" ]] || fail 1 not_found "no such playlist: $NAME"
+    if [[ -f "$to" ]] && [[ "$NAME" != "$NEW_NAME" ]]; then
+        fail 1 exists "a playlist named '$NEW_NAME' already exists"
+    fi
+    lock_playlist "$NAME"
+    local json
+    json=$(jq -c --arg name "$NEW_NAME" --arg now "$(now_utc)" \
+        '.name = $name | .updated_at = $now' "$from") \
+        || fail 1 invalid_input "playlist file is not readable JSON: $from"
+    write_playlist "$NEW_NAME" "$json"
+    [[ "$NAME" == "$NEW_NAME" ]] || rm -f "$from"
+    release_lock
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --arg from "$NAME" --arg name "$NEW_NAME" \
+            '{status: "ok", name: $name, from: $from}'
+    else
+        printf 'Renamed %s to %s\n' "$NAME" "$NEW_NAME"
+    fi
+}
+
+# ==============================================================================
+# 4. CLI
+# ==============================================================================
+
+print_usage() {
+    cat <<'EOF'
+ut-playlist — the playlist store (durable, user-level, engine-agnostic)
+
+Usage:
+  ut-playlist --ls
+  ut-playlist --show NAME
+  ut-playlist --add NAME            < items on stdin
+  ut-playlist --rm NAME --index N
+  ut-playlist --del NAME
+  ut-playlist --rename NAME NEWNAME
+
+Options:
+  --index N     Which item --rm removes (0-based, as printed by --show)
+  -l            Plain text output (default)
+  -j            JSON envelope, one line
+  --color MODE  auto | always | never (default: auto)
+  -h            This help
+  -V            Print the suite version
+
+Input (--add): JSON on stdin — a search envelope (an engine's -j output, verbatim), this
+  command's own --show envelope, or an array of {engine, url, [id], [title], [duration]}.
+  The search-envelope form is preferred: a search RESULT carries no engine field, the
+  envelope does.
+
+    yt-search -j -n 5 -- "lofi hip hop" | ut-playlist --add chill
+    ut-playlist --show chill -j | jq '.items[0]'
+
+Storage: $UT_STATE_DIR/playlists/<name>.json
+  (default $XDG_STATE_HOME/uting, else ~/.local/state/uting) — one file per playlist,
+  written atomically under a lock. Names may not contain '/' or control characters,
+  may not start with '.', and are capped at 64 characters. On a case-insensitive
+  filesystem (macOS default) two names differing only in case are the SAME playlist.
+
+Exit codes: 0 ok · 1 usage/validation (see .reason: not_found, exists, invalid_name,
+            invalid_input) · 4 locked by another process
+
+This store holds no playback state: to play a list, hand it to the player —
+  ut-playlist --show chill -j | ut-play -d --queue -
+EOF
+}
+
+set_action() {
+    [[ -z "$ACTION" ]] || { echo "ut-playlist: only one action per call ($ACTION and $1)" >&2; exit 1; }
+    ACTION="$1"
+}
+
+while (($#)); do
+    case "$1" in
+    -h | --help) print_usage; exit 0 ;;
+    -V | --version)
+        # Answered before any dependency gate, like every other command in the suite.
+        printf 'ut-playlist %s\n' "$UT_VERSION"
+        exit 0
+        ;;
+    -l | --list) OUTPUT_MODE="list"; shift ;;
+    -j | --json) OUTPUT_MODE="json"; shift ;;
+    --color=*) COLOR_MODE="${1#*=}"; shift ;;
+    --color)
+        [[ $# -ge 2 ]] || { echo "ut-playlist: $1 requires a value" >&2; exit 1; }
+        COLOR_MODE="$2"; shift 2
+        ;;
+    --ls | --playlists) set_action ls; shift ;;
+    --show | --add | --rm | --del | --delete)
+        [[ $# -ge 2 ]] || { echo "ut-playlist: $1 requires a playlist name" >&2; exit 1; }
+        case "$1" in
+        --show) set_action show ;;
+        --add)  set_action add ;;
+        --rm)   set_action rm ;;
+        *)      set_action del ;;
+        esac
+        NAME="$2"; shift 2
+        ;;
+    --rename)
+        [[ $# -ge 3 ]] || { echo "ut-playlist: --rename requires two names (OLD NEW)" >&2; exit 1; }
+        set_action rename
+        NAME="$2"; NEW_NAME="$3"; shift 3
+        ;;
+    --index | --index=*)
+        case "$1" in
+        --index=*) INDEX="${1#*=}"; shift ;;
+        *)
+            [[ $# -ge 2 ]] || { echo "ut-playlist: --index requires a value" >&2; exit 1; }
+            INDEX="$2"; shift 2
+            ;;
+        esac
+        ;;
+    # The gate arms. ut-play and ut-playlist are one suffix apart, so the two most likely
+    # wrong turns get a sentence naming the right verb rather than a bare unknown-flag
+    # error — the same thing every other command in this suite does at its edges
+    # (AS-BUILT-contract.md §2).
+    -d | --detach | --status | --stop | --set-volume | --all | --engine | -f)
+        echo "ut-playlist: $1 is a playback flag — this command stores lists, use ut-play to play one" >&2
+        exit 1
+        ;;
+    -n | -m | -M | -s | --info | --transcript)
+        echo "ut-playlist: $1 belongs to an engine — use <engine>-search / <engine>-resolve" >&2
+        exit 1
+        ;;
+    --)
+        shift
+        # `--` stops FLAG parsing, not argument validation. This command takes NO
+        # positional argument: every name is attached to its verb, so anything here is a
+        # caller who meant a different command — most likely the player.
+        if (($#)); then
+            echo "ut-playlist: unexpected argument '$1' — names belong to a verb (--add NAME); to play a handle use ut-play" >&2
+            exit 1
+        fi
+        break
+        ;;
+    -*)
+        echo "ut-playlist: unknown flag '$1' (verbs: --ls --show --add --rm --del --rename)" >&2
+        exit 1
+        ;;
+    *)
+        echo "ut-playlist: unexpected argument '$1' — names belong to a verb (see 'ut-playlist -h')" >&2
+        exit 1
+        ;;
+    esac
+done
+
+[[ -n "$ACTION" ]] || { echo "ut-playlist: an action is required: --ls --show --add --rm --del --rename (see 'ut-playlist -h')" >&2; exit 1; }
+validate_enum "$COLOR_MODE" auto always never || die "--color must be one of: auto, always, never"
+
+require_cmd jq
+
+case "$ACTION" in
+ls) do_ls ;;
+show | add | rm | del | rename)
+    validate_name "$NAME"
+    [[ "$ACTION" == "rename" ]] && validate_name "$NEW_NAME"
+    if [[ "$ACTION" == "rm" ]]; then
+        [[ -n "$INDEX" ]] || { echo "ut-playlist: --rm requires --index N (0-based, from --show)" >&2; exit 1; }
+        [[ "$INDEX" =~ ^[0-9]+$ ]] || { echo "ut-playlist: --index must be a non-negative integer" >&2; exit 1; }
+    elif [[ -n "$INDEX" ]]; then
+        # A selector with no action to select for. `ut-play` rejects the same shape
+        # (--id without --stop/--set-volume); silently ignoring it would let a caller
+        # believe --add --index 3 inserted at a position. AS-BUILT-contract.md §2.
+        echo "ut-playlist: --index belongs to --rm, not --$ACTION" >&2
+        exit 1
+    fi
+    "do_$ACTION"
+    ;;
+esac
+exit 0
