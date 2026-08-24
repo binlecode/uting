@@ -7,6 +7,9 @@
 # It also carries the one timing claim that needs a player: Starting -> Playing flips on the
 # TUI's own 1 s tick with NO keypress. That was the last thing `pty_drive.py` was kept for.
 #
+# And it carries the one claim that needs a SECOND source: that the player applies the
+# http_headers an engine hands it. See the Bilibili section for why only that site can show it.
+#
 # Portability: bash 3.2. Needs tmux for the tick check, jq for the envelopes.
 #
 # Usage:  YT_TEST_LIFECYCLE=1 tests/lifecycle.sh
@@ -24,6 +27,8 @@ fi
 # Two long, stable tracks. Silent at --volume 0; the point is the process, not the audio.
 U1=${YT_TEST_URL1:-https://www.youtube.com/watch?v=n61ULEU7CO0}
 U2=${YT_TEST_URL2:-https://www.youtube.com/watch?v=8S0FDjFBj8o}
+# The second engine's fixture: an old-format BV with 76M views, picked to outlive the rig.
+BV=${YT_TEST_BILI:-BV1fx411N7bU}
 
 pass=0; fail=0; FAILED=""
 ok()  { pass=$((pass + 1)); printf '  ok    %s\n' "$1"; }
@@ -104,6 +109,38 @@ done
 tmux kill-session -t lc-tick 2>/dev/null
 if [ "$flip" = yes ]; then ok "banner reached Playing unprompted in ~$(echo "$i * 0.5" | bc)s"
 else bad "banner never left Starting — the 1s tick is not resolving the state"; fi
+
+echo "── a second engine: the envelope's http_headers reach mpv ─────────"
+# The only check in the suite that proves the player APPLIES what an engine hands it.
+# contract.sh asserts http_headers is PRESENT in the resolve envelope; nothing asserted that
+# ut-play forwards it into mpv. This site is what makes the difference observable: its CDN
+# answers 403 to a bare stream URL and 206 to the same URL carrying the envelope's Referer
+# (docs/SPEC-system.md §0, measured). So a player that dropped the header block would still
+# play YouTube, and every other check in this file would stay green, while bytes never flowed
+# from here. Position leaving zero IS the proof that they did.
+o3=$(shell/ut-play -d -j --volume 0 --engine bili -- "$BV" 2>/dev/null)
+report "bili detach envelope" 0 \
+    "$(printf '%s' "$o3" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
+id3=$(printf '%s' "$o3" | jq -r '.id // empty')
+sock3=$(printf '%s' "$o3" | jq -r '.sock // empty')
+if wait_for_sock "$sock3"; then
+    # Poll, never sleep a guess: time-to-first-byte is network-bound, so a fixed wait either
+    # flakes or spends the whole budget on a run that was ready in a second (same rule as
+    # wait_for_sock). `position` is read live off the socket, not from the record.
+    pos=""; i=0
+    while [ $i -lt 40 ]; do
+        pos=$(shell/ut-play --status -j 2>/dev/null \
+              | jq -r --arg i "$id3" '.players[]|select(.id==$i)|.position // empty' 2>/dev/null)
+        case "$pos" in "" | null | 0) ;; *) break ;; esac
+        sleep 1; i=$((i + 1))
+    done
+    case "$pos" in
+        "" | null | 0) bad "bili position never left 0 — did http_headers reach mpv? (CDN 403s without the Referer)" ;;
+        *) ok "bili audio flowed (position ${pos}s) — the envelope's headers reached mpv" ;;
+    esac
+else
+    bad "the bili player's IPC socket never appeared — the header claim is untested"
+fi
 
 echo "── stop is targeted, then idempotent, and leaks nothing ───────────"
 report "--stop --id"       0 "$(shell/ut-play --stop --id "$id1" -j >/dev/null 2>&1; echo $?)"
