@@ -684,14 +684,35 @@ cursor_show() { tput cnorm 2>/dev/null || true; }
 # was never filed is that every multi-byte key was mojibake anyway, so there was nothing legible
 # for the duplicate to spoil. Own it for the whole session and restore it exactly the way the
 # cursor is restored — on every exit path, through the same trap.
+#
+# ECHO off is not enough on its own: it has to come WITH canonical mode off. `-echo` while
+# ICANON is still SET is the exact termios signature of getpass(), and terminals poll the pty
+# for it — Ghostty on that heuristic flips macOS Secure Input on (`macos-auto-secure-input`)
+# and draws its indication, iTerm2 draws a padlock at the cursor. Nothing was echoing a
+# password, but the fetch spinner parks the cursor on its own glyph (`printf '%s\b'`), so the
+# padlock landed ON the spinner for the whole length of a search. bash's `read -rsn1` clears
+# ICANON only for the duration of ONE read, which left every gap between keystrokes — and the
+# entire fetch, where no read is running at all — advertising a password prompt. A full-screen
+# app is `-echo -icanon` (which is why vi is never flagged), and that is what this is; `min 1
+# time 0` keeps a raw read blocking on one byte rather than spinning on zero.
+#
+# Restore is the state `stty -g` saw on the way in, verbatim, rather than a guess at what the
+# shell handed us: two flags are now being changed, and re-asserting defaults would silently
+# "fix" a tty the caller had deliberately set up otherwise.
 TTY_ECHO_OFF=0
+TTY_SAVED=""
 tty_echo_off() {
-    stty -echo </dev/tty 2>/dev/null && TTY_ECHO_OFF=1
+    [[ -n "$TTY_SAVED" ]] || TTY_SAVED=$(stty -g </dev/tty 2>/dev/null || true)
+    stty -echo -icanon min 1 time 0 </dev/tty 2>/dev/null && TTY_ECHO_OFF=1
     return 0
 }
 tty_echo_restore() {
     ((TTY_ECHO_OFF)) || return 0
-    stty echo </dev/tty 2>/dev/null || true
+    if [[ -n "$TTY_SAVED" ]]; then
+        stty "$TTY_SAVED" </dev/tty 2>/dev/null || true
+    else
+        stty echo icanon </dev/tty 2>/dev/null || true
+    fi
     TTY_ECHO_OFF=0
     return 0
 }

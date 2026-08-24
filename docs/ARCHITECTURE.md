@@ -2625,6 +2625,19 @@ new tmux rigs; the premise was measured before a line was written):
   -echo` now covers the whole session and is restored through the same trap as the cursor
   (a two-path rig asserts the restore after `q` AND after a signal, because a uting that
   exits without putting `echo` back leaves the user typing blind in their shell).
+- **Echo off is only half of it: `-echo` with ICANON still set is `getpass()`.** Terminals poll
+  the pty for that exact pair — Ghostty flips macOS Secure Input on the heuristic
+  (`macos-auto-secure-input`) and draws its indication, iTerm2 draws a padlock at the cursor —
+  and `bash`'s `read -rsn1` clears ICANON only for the duration of ONE read. So every gap
+  between keystrokes, and the whole length of a fetch (where no read is running at all),
+  advertised a password prompt; the padlock landed **on the spinner glyph** because the spinner
+  parks the cursor there (`printf '%s\b'`). Reported as "a lock icon on the spin glyph", and it
+  was never a glyph we drew — a tmux capture of that frame contains `▖` and nothing else. A
+  full-screen app is `-echo -icanon` (which is why vi is never flagged), so `tty_echo_off` sets
+  both (`min 1 time 0`, keeping a raw read blocking on one byte) and `tty_echo_restore` puts
+  back the `stty -g` state saved on the way in rather than re-asserting defaults over a tty the
+  caller had set up deliberately. `contract.sh` samples the pane's termios from inside the
+  boot-wait loop — the fetch — and fails if the getpass pair is ever observed.
 - **A harness lesson, recorded because it produced a false failure first.** The signal-path test
   reported the tty left at `-echo` when nothing was wrong: the harness blocked in `sleep`, a
   CHILD process, and bash defers a trap until the current command finishes. The TUI blocks in

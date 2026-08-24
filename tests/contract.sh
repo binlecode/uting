@@ -517,14 +517,33 @@ if ! command -v tmux >/dev/null 2>&1; then
 else
     TS="ctest-tui-$$"
     tmux kill-session -t "$TS" 2>/dev/null
-    tmux new-session -d -s "$TS" -x 100 -y 30 \
-        "cd '$PWD' && env YT_SYNC=0 shell/uting 'lofi hip hop'"
-    booted=0; i=0
+    # The session outlives the TUI on purpose: what the tty looks like AFTER `q` is a claim
+    # of its own, and the pane is the only place to read it from once uting has gone.
+    TUI_CMD="cd '$PWD' && env YT_SYNC=0 shell/uting 'lofi hip hop'"
+    TUI_CMD="$TUI_CMD"'; printf "RC=%s\n" $?'
+    TUI_CMD="$TUI_CMD"'; stty -a </dev/tty | tr " " "\n" | grep -E "^-?(echo|icanon)$" | tr "\n" " " | sed "s/^/FLAGS= /"; echo; sleep 20'
+    tmux new-session -d -s "$TS" -x 100 -y 30 "$TUI_CMD"
+    TUI_TTY=$(tmux display-message -p -t "$TS" '#{pane_tty}' 2>/dev/null)
+    booted=0; i=0; getpass=0
     while [ $i -lt 80 ]; do
+        # Sampled from inside this loop rather than in a phase of its own: waiting for the
+        # first frame IS the fetch, the one stretch of the session where no `read` is running
+        # and the tty carries whatever the app left on it.
+        #
+        # `-echo` with ICANON still SET is the termios signature of getpass(), and terminals
+        # poll the pty for exactly that pair: Ghostty flips macOS Secure Input on it,
+        # iTerm2 draws a padlock at the cursor — which the fetch spinner parks on its own
+        # glyph. Two greps, not a case glob: `-echo` is a prefix of `-echoe`/`-echok`.
+        if [ -n "$TUI_TTY" ]; then
+            flags=$(stty -f "$TUI_TTY" -a 2>/dev/null | tr ' ' '\n')
+            [ "$(printf '%s\n' "$flags" | grep -c '^-echo$')" = 1 ] &&
+                [ "$(printf '%s\n' "$flags" | grep -c '^icanon$')" = 1 ] && getpass=1
+        fi
         tmux capture-pane -t "$TS" -p 2>/dev/null | grep -q 'results=' && { booted=1; break; }
         sleep 0.3; i=$((i + 1))
     done
     report "TUI boots and paints a list" 1 "$booted"
+    report "never signals a password prompt" 0 "$getpass"
 
     # Reflow is width-conditional, so the two geometries that change layout are the ones
     # worth walking. The assertion is survival, not shape: still up, still showing a list.
@@ -541,13 +560,20 @@ else
     done
     report "survives 62x20 and 26x24" 1 "$alive"
 
+    # `q` used to be asserted by waiting for tmux to tear the session down, which proves the
+    # pty is not wedged but says nothing about the status or about what was handed back. The
+    # pane now outlives the TUI, so both come out of the same exit.
     tmux send-keys -t "$TS" q
-    gone=0; i=0
+    left=0; i=0
     while [ $i -lt 40 ]; do
-        tmux has-session -t "$TS" 2>/dev/null || { gone=1; break; }
+        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'RC=0' && { left=1; break; }
         sleep 0.25; i=$((i + 1))
     done
-    report "quits on q, no wedged pty" 1 "$gone"
+    report "quits on q with 0" 1 "$left"
+    restored=0
+    tui_flags=" $(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -o 'FLAGS=.*' | head -1) "
+    case "$tui_flags" in *" echo "*) case "$tui_flags" in *" icanon "*) restored=1 ;; esac ;; esac
+    report "hands the tty back on exit" 1 "$restored"
     tmux kill-session -t "$TS" 2>/dev/null
 fi
 
