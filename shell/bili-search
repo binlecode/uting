@@ -568,9 +568,10 @@ while (($#)); do
         shift 2
         ;;
     -S)
-        # yt-search takes -S because yt-dlp has a --format-sort. This engine does not run
-        # yt-dlp at all, and a search result carries no format, so accepting the flag would
-        # be accepting a value that cannot change any output. Rejected rather than ignored.
+        # -S sorts STREAM FORMATS, and a search resolves none: whatever engine it is
+        # pointed at, the value cannot change one byte of a search's output. Both search
+        # halves reject it (yt-search used to forward it into a --flat-playlist dump, where
+        # it did nothing); the resolve half is where it belongs.
         echo "bili-search: -S selects a stream format — searching resolves none (see bili-resolve -S)" >&2
         exit 1
         ;;

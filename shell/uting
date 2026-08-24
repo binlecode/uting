@@ -34,6 +34,15 @@ while [[ -L "$_self" ]]; do
     esac
 done
 SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
+
+# THE version of the whole suite, declared once, in a data file (CLAUDE.md § one fact, one
+# place). Read before any dependency gate, so --version answers on a machine with nothing
+# installed.
+if [[ -r "$SCRIPT_DIR/VERSION" ]]; then
+    UT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
+else
+    UT_VERSION="unknown"
+fi
 if [[ -x "$SCRIPT_DIR/ut-play" ]]; then
     UT_PLAY="$SCRIPT_DIR/ut-play"
 elif command -v ut-play >/dev/null 2>&1; then
@@ -238,11 +247,11 @@ query=()
 while (($#)); do
     case "$1" in
     -h | --help) print_usage; exit 0 ;;
-    # Same single source as the engines: ask a verb, print our own name. It asks ut-play
-    # rather than a search half because ut-play is resolved before this loop and is the one
-    # component that exists whatever engines are installed — the version is one file
-    # (shell/VERSION) that all of them read, so any of them would answer the same.
-    -V | --version) printf 'uting %s\n' "$("$UT_PLAY" --version | awk '{print $NF}')"; exit 0 ;;
+    # The same data file every other entry point reads, read the same way. This used to
+    # fork ut-play and awk the last field out of its PROSE — a second command's help-line
+    # format turned into a dependency, in a suite whose whole argument is that callers
+    # branch on envelopes rather than parse sentences.
+    -V | --version) printf 'uting %s\n' "$UT_VERSION"; exit 0 ;;
     --engine)
         [[ $# -ge 2 ]] || die "$1 requires a value"
         ENGINE="$2"; shift 2 ;;

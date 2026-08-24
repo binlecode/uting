@@ -58,7 +58,7 @@ there is no core to delegate to.
 
 - **Owns:** one site's query path, its own transport, its own cookie decision, its own
   result shaping and duration formatter, its own gate. **Zero playback or lifecycle logic.**
-- **Flags:** `-n -m -M -s -S -l -j -J --color -h -V`. Positional: a QUERY. A URL is
+- **Flags:** `-n -m -M -s -l -j -J --color -h -V`. Positional: a QUERY. A URL is
   rejected, pointing at `ut-play` — including after `--`, which is where the check has to be
   re-applied because `--` stops flag parsing, not argument validation.
 - **Envelope:** `{status, engine, query, count, results[]}`, one line (§3).
@@ -133,14 +133,16 @@ nothing sits between a caller and an implementation.
 ```
    <engine>-search                            ut-play
    ─────────────────────────────────         ─────────────────────────────────
-   allow: -n -m -M -s -S -l -j -J            allow: -f -S -d -j -l --engine --volume
+   allow: -n -m -M -s -l -j -J              allow: -f -S -d -j -l --engine --volume
           --color -h -V                             --status --stop --set-volume
                                                     --id --all --color -h -V
    reject (→ "use ut-play"):                  reject (→ "use yt-search"):
           -f -d --detach --status                   -n -m -M -s
           --stop --set-volume --id --all      reject (→ "use <engine>-resolve"):
    reject (→ "use <engine>-resolve"):                --info --transcript --sub-lang
-          --info --transcript                       --get-url  -J
+          --info --transcript -S                    --get-url  -J
+          (-S sorts stream formats; a
+           search resolves none)
    positional: a QUERY (reject URLs)         positional: a HANDLE (reject whitespace)
    default: inject -l if no -l/-j/-J         handle required unless
                                              --status/--stop/--set-volume
@@ -537,7 +539,7 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
 Pointers only; every obligation is stated once above. A new source `foo` ships exactly two
 executables and changes nothing else (ROADMAP D9):
 
-1. **`foo-search`** — the surface of §1.2: flags `-n -m -M -s -S -l -j -J --color -h -V`,
+1. **`foo-search`** — the surface of §1.2: flags `-n -m -M -s -l -j -J --color -h -V`,
    a QUERY positional (URLs rejected, re-checked after `--`), the §3 search envelope with
    `engine:"foo"`, errors per §3 with exit 2+ (§4).
 2. **`foo-resolve`** — the surface of §1.3: flags `-f -S -j -J --color -h -V` plus only the

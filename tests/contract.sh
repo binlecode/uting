@@ -240,8 +240,6 @@ report "bili resolve sends a Referer" 0 \
 # Capability differs per engine and is stated, not faked: this site's videos carry no
 # caption track, so the verb is absent rather than always answering "none".
 report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcript -- "$BILI_ID")"
-# -S on a search that resolves no format takes a value it cannot act on.
-report "bili-search rejects -S" 1 "$(rc shell/bili-search -S abr -- 音乐)"
 report "bili-search rejects -d" 1 "$(rc shell/bili-search -d -- 音乐)"
 # One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
 # which supports 1700+ sites — so a Bilibili URL resolved fine and came back labelled
@@ -262,6 +260,17 @@ for f in shell/*-resolve; do
 done
 NENG=$(echo "$ENGINES" | wc -w | tr -d ' ')
 report "engine pairs discovered" 2 "$NENG"
+
+# A search half resolves no format, so -S (a stream-format sort) is a value it cannot act
+# on. Stated over EVERY discovered engine, not just the one that got it right: yt-search
+# took the flag and forwarded it into a --flat-playlist dump where it changed nothing, so
+# the two halves disagreed about what a search IS and the add-an-engine checklist copied
+# the wrong one. Engine #3 is covered the day it lands.
+_sdash=0
+for n in $ENGINES; do
+    [ "$(rc "shell/$n-search" -S abr -- q)" = 1 ] && _sdash=$((_sdash + 1))
+done
+report "every search half refuses -S" "$NENG" "$_sdash"
 
 # refusals <url> — how many engines reject it as a USAGE error (1)? A rejected host dies
 # before the dependency gate, so each of these costs ~20ms and no network.

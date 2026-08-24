@@ -483,7 +483,7 @@ purpose: an engine that shared a library with another engine would be a library 
 would eventually have to know about (§4).
 
 ```
-  QUERY, NUM_RESULTS, MIN/MAX_DURATION, SORT_FIELD, FORMAT_SORT, cookies
+  QUERY, NUM_RESULTS, MIN/MAX_DURATION, SORT_FIELD, cookies
         │
         ▼
   ┌─────────────────────────────────────────────────────────────┐

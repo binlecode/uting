@@ -123,7 +123,6 @@ NUM_RESULTS=25
 MIN_DURATION=0
 MAX_DURATION=0
 SORT_FIELD="relevance"
-FORMAT_SORT=""
 COLOR_MODE="auto"
 OUTPUT_MODE="list"
 QUERY=""
@@ -307,10 +306,6 @@ fetch_results() {
         --quiet
     )
 
-    if [[ -n "$FORMAT_SORT" ]]; then
-        cmd+=(--format-sort "$FORMAT_SORT")
-    fi
-
     # Search used to be the one surface with NO error contract: a yt-dlp failure aborted on
     # `set -e` with raw stderr even under -j, so an agent got a jq parse error instead of a
     # shape it could branch on. Capture the failure and emit the same {status:"error",
@@ -405,7 +400,6 @@ Options:
   -m SEC   Minimum duration in seconds
   -M SEC   Maximum duration in seconds
   -s FIELD Sort field: relevance | view_count | duration (default: relevance)
-  -S SORT  yt-dlp format-sort override (--format-sort)
   -l       Plain text list output (default)
   -j       JSON: {status, engine, query, count, results[]} — 8 lean fields per result
   -J       JSON with full raw yt-dlp fields per result (same envelope)
@@ -471,16 +465,25 @@ while (($#)); do
         COLOR_MODE="$2"
         shift 2
         ;;
-    -n | -m | -M | -s | -S)
+    -n | -m | -M | -s)
         [[ $# -ge 2 ]] || { echo "yt-search: $1 requires a value" >&2; exit 1; }
         case "$1" in
         -n) NUM_RESULTS="$2" ;;
         -m) MIN_DURATION="$2" ;;
         -M) MAX_DURATION="$2" ;;
         -s) SORT_FIELD="$2" ;;
-        -S) FORMAT_SORT="$2" ;;
         esac
         shift 2
+        ;;
+    -S)
+        # Taken and forwarded as --format-sort until now, into a --flat-playlist
+        # --dump-single-json --skip-download call that selects no format at all: the value
+        # could not change one byte of the output. Rejected rather than ignored, the same
+        # sentence bili-search already answered with — the two search halves may not
+        # disagree about what a search IS, and an engine author reading the checklist
+        # would otherwise implement a no-op.
+        echo "yt-search: -S selects a stream format — searching resolves none (see yt-resolve -S)" >&2
+        exit 1
         ;;
     -f | -d | --detach | --status | --stop | --set-volume | --id | --all)
         echo "yt-search: $1 is a playback flag — use ut-play for playback" >&2
@@ -507,7 +510,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "yt-search: unknown flag '$1' (search flags: -n -m -M -s -S -l -j -J)" >&2
+        echo "yt-search: unknown flag '$1' (search flags: -n -m -M -s -l -j -J)" >&2
         exit 1
         ;;
     http://* | https://* | www.* | youtube.com/* | youtu.be/*)
