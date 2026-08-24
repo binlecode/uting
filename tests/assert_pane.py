@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assert yt-tui's layout invariants against a captured pane.
+"""Assert ut-tui's layout invariants against a captured pane.
 
 Three rigs merged into one, because they all read the same capture and all failed the same
 way when kept apart — you fix a renderer, remember to re-run two of the three, and the third
@@ -83,7 +83,7 @@ def main(argv):
     body = "\n".join(lines)
 
     if view == "list":
-        if not lines or "yt-tui" not in lines[0]:
+        if not lines or "ut-tui" not in lines[0]:
             fails.append("header not on line 1 (scrolled off?): %r" % (lines[0][:60] if lines else ""))
         # Detect the hint block by its LAST item (q quit), not by a label: the block carried a
         # "Navigation:" prefix once and no longer does, and a rig that keys off chrome wording
@@ -152,7 +152,7 @@ def main(argv):
         # pane wraps into that blank line, which is the defect the literal match was really
         # catching.
         head = lines[0] if lines else ""
-        if "yt-tui" not in head or (len(lines) > 1 and lines[1].strip()):
+        if "ut-tui" not in head or (len(lines) > 1 and lines[1].strip()):
             fails.append("card header missing or wrapped: %r" % head[:60])
         rails = [l for l in lines if re.match(r"^[─━-]{10,}$", l.strip())]
         widths = sorted(set(w(r.strip()) for r in rails))

@@ -42,7 +42,7 @@ start() {
     S="tp-$name"
     tmux kill-session -t "$S" 2>/dev/null
     tmux new-session -d -s "$S" -x "$cols" -y "$rows" \
-        "cd '$REPO' && env ${*:-} YT_SYNC=0 shell/yt-tui '$QUERY'"
+        "cd '$REPO' && env ${*:-} YT_SYNC=0 shell/ut-tui '$QUERY'"
     local i=0
     while [ $i -lt 80 ]; do
         if tmux capture-pane -t "$S" -p 2>/dev/null | grep -q 'results='; then return 0; fi
@@ -152,7 +152,7 @@ S=tp-spin
 RAW=$OUT/spin.bin
 tmux kill-session -t "$S" 2>/dev/null
 : > "$RAW"
-tmux new-session -d -s "$S" -x 80 -y 24 "cd '$REPO' && env YT_SYNC=0 shell/yt-tui '$QUERY'"
+tmux new-session -d -s "$S" -x 80 -y 24 "cd '$REPO' && env YT_SYNC=0 shell/ut-tui '$QUERY'"
 tmux pipe-pane -t "$S" -o "cat >> '$RAW'"
 i=0
 while [ $i -lt 80 ]; do

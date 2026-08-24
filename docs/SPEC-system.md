@@ -64,6 +64,12 @@ in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 >   its own site's hosts**, so §12's handle grammar now carries a host allowlist per engine
 >   and a URL from another site is a usage error (1), not an extraction failure. `yt-resolve`
 >   had been accepting any http(s) URL and labelling the result `engine:"yt"`.
+> - **Step D** — the interactive surface is **`shell/ut-tui`**; `yt-tui` no longer exists, and
+>   with it went `ytt` (D10: no short name ships). It holds no engine list: an engine is any
+>   `<name>-search` + `<name>-resolve` PAIR beside it or on PATH, discovered at start-up, so
+>   §4's topology gained a source without this file gaining a name. `e` switches source and
+>   re-fetches; play passes `--engine` taken from the search envelope's own `engine` field.
+>   The last site-specific string in the UI — the prompt's literal "YouTube" — is gone.
 > - Still true everywhere: the exit-code taxonomy, the lifecycle semantics, and one line
 >   per `-j` envelope.
 

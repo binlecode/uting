@@ -88,7 +88,7 @@ echo "── Starting -> Playing flips on the tick, with NO keypress ───�
 # The TUI polls the player once a second, so the banner must resolve on its own. Nothing is
 # typed after Enter on purpose; a keypress would repaint anyway and prove nothing.
 tmux kill-session -t lc-tick 2>/dev/null
-tmux new-session -d -s lc-tick -x 100 -y 30 "cd '$REPO' && env YT_SYNC=0 shell/yt-tui 'lofi hip hop'"
+tmux new-session -d -s lc-tick -x 100 -y 30 "cd '$REPO' && env YT_SYNC=0 shell/ut-tui 'lofi hip hop'"
 i=0
 while [ $i -lt 80 ]; do
     tmux capture-pane -t lc-tick -p 2>/dev/null | grep -q 'results=' && break

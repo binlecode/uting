@@ -42,7 +42,7 @@ done
 
 # Syntax gate on every script as it stands in the worktree. Cheap, and it is the
 # check the whole suite's correctness rests on — there is no CI behind this push.
-for f in shell/ut-play shell/yt-search shell/yt-resolve shell/bili-search shell/bili-resolve shell/yt-tui; do
+for f in shell/ut-play shell/yt-search shell/yt-resolve shell/bili-search shell/bili-resolve shell/ut-tui; do
   [ -f "$f" ] || continue
   if ! /bin/bash -n "$f" 2>/tmp/uting-push-syntax.$$; then
     {

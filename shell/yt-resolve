@@ -139,9 +139,9 @@ SUB_LANG=""
 # already making. English first, then Simplified/generic Chinese, then Japanese.
 SUB_LANG_CHAIN="en,zh-Hans,zh,ja"
 
-# Glyph fallback shares ONE switch with yt-tui (YT_ASCII, legacy alias YT_TUI_ASCII): a
+# Glyph fallback shares ONE switch with ut-tui (YT_ASCII, legacy alias YT_TUI_ASCII): a
 # terminal whose font can't draw ♫ can't draw it in either surface, and a non-UTF-8 locale
-# (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as yt-tui does.
+# (bare cron/launchd) would emit mojibake. Empty = drop the glyph, as ut-tui does.
 MUSIC_CHAR="♫"
 case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
 1 | true | yes | on) MUSIC_CHAR="" ;;

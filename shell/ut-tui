@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# yt-tui — interactive terminal browser for YouTube (self-rendered menu). Owned glue, not a
+# ut-tui — interactive terminal browser for YouTube (self-rendered menu). Owned glue, not a
 # client: the human-facing surface, ZERO YouTube logic. It composes the headless verbs with jq.
 #
 # Delegates core jobs to headless binaries:
@@ -7,7 +7,7 @@
 #   play                   → ut-play -d -j -f MODE -- url  (ASYNCHRONOUS: detached background player)
 #   filter (narrow rows)   → pure bash, no external tool
 #
-# yt-tui renders its OWN menu with dual switchable views:
+# ut-tui renders its OWN menu with dual switchable views:
 #   List View          → interactive result list + live Now-Playing status banner
 #   Now Playing card   → dedicated full-screen Now-Playing metadata & control card
 # Toggle between the two with [Tab] at any time without stopping audio.
@@ -39,7 +39,7 @@ if [[ -x "$SCRIPT_DIR/ut-play" ]]; then
 elif command -v ut-play >/dev/null 2>&1; then
     UT_PLAY=$(command -v ut-play)
 else
-    echo "yt-tui: cannot locate ut-play" >&2
+    echo "ut-tui: cannot locate ut-play" >&2
     exit 1
 fi
 
@@ -89,7 +89,7 @@ if ((${#ENGINES[@]} == 0)); then
     unset _saved_ifs _pdir
 fi
 if ((${#ENGINES[@]} == 0)); then
-    echo "yt-tui: no engine found — need a <name>-search and <name>-resolve pair beside this file or on PATH" >&2
+    echo "ut-tui: no engine found — need a <name>-search and <name>-resolve pair beside this file or on PATH" >&2
     exit 1
 fi
 
@@ -113,10 +113,10 @@ ENGINE_SEARCH=""
 
 print_usage() {
     cat <<'EOF'
-yt-tui — interactive terminal browser for YouTube
+ut-tui — interactive terminal browser for YouTube
 
 Usage:
-  yt-tui [options] [search query]
+  ut-tui [options] [search query]
 
 With no query, prompts for one (interactive). Requires a terminal.
 
@@ -182,7 +182,7 @@ Environment:
                    query, then dark. For minimal/mono, light swaps cyan for blue; for
                    community themes it picks the theme's own light variant.
   YT_SYNC=0|1|auto  Synchronized redraws (DCS 1q/2q; default auto: on, off under tmux).
-  YT_BRAND=1       Header wordmark in mathematical sans-serif bold ("𝗬 𝗧  𝗧 𝗨 𝗜").
+  YT_BRAND=1       Header wordmark in mathematical sans-serif bold ("𝗨 𝗧  𝗧 𝗨 𝗜").
                    OPT-IN: your terminal font must cover the U+1D5D4 block, else tofu.
                    ASCII mode (YT_ASCII=1) always wins.
   NO_COLOR=1       Disables color in --color auto mode (an explicit --color wins).
@@ -193,7 +193,7 @@ EOF
 }
 
 die() {
-    echo "yt-tui: $1" >&2
+    echo "ut-tui: $1" >&2
     exit 1
 }
 
@@ -231,7 +231,7 @@ while (($#)); do
     # rather than a search half because ut-play is resolved before this loop and is the one
     # component that exists whatever engines are installed — the version is one file
     # (shell/VERSION) that all of them read, so any of them would answer the same.
-    -V | --version) printf 'yt-tui %s\n' "$("$UT_PLAY" --version | awk '{print $NF}')"; exit 0 ;;
+    -V | --version) printf 'ut-tui %s\n' "$("$UT_PLAY" --version | awk '{print $NF}')"; exit 0 ;;
     --engine)
         [[ $# -ge 2 ]] || die "$1 requires a value"
         ENGINE="$2"; shift 2 ;;
@@ -270,7 +270,7 @@ while (($#)); do
         shift
         while (($#)); do query+=("$1"); shift; done
         break ;;
-    -*) die "unknown flag '$1' (yt-tui flags: -n -m -M -s -f -p --color --theme --volume); run 'yt-tui -h'" ;;
+    -*) die "unknown flag '$1' (ut-tui flags: -n -m -M -s -f -p --color --theme --volume); run 'ut-tui -h'" ;;
     *) query+=("$1"); shift ;;
     esac
 done
@@ -592,15 +592,15 @@ init_glyphs() {
         GL_BULLET="-"; GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
         GL_SPIN=("|" "/" "-" "\\")
     fi
-    # Brand wordmark (YT_BRAND=1): the three view headers render "𝗬 𝗧  𝗧 𝗨 𝗜" in
+    # Brand wordmark (YT_BRAND=1): the three view headers render "𝗨 𝗧  𝗧 𝗨 𝗜" in
     # mathematical sans-serif bold (U+1D5D4 block). OPT-IN on purpose: terminal fonts
     # vary, and a font without that block shows tofu — your call, your eyes. Width is
     # whatever the font gives; char_w's conservative 2-cell overcount keeps the query
     # elision safe in either case (over-count packs early, never overflows). ASCII mode
     # always wins — a font that cannot draw ♫ cannot draw these either.
-    GL_BRAND="yt-tui"
+    GL_BRAND="ut-tui"
     case "${YT_BRAND:-}" in
-    1 | true | yes | on) ((ASCII_GLYPHS)) || GL_BRAND="𝗬 𝗧  𝗧 𝗨 𝗜" ;;
+    1 | true | yes | on) ((ASCII_GLYPHS)) || GL_BRAND="𝗨 𝗧  𝗧 𝗨 𝗜" ;;
     esac
 }
 init_glyphs
@@ -867,7 +867,7 @@ card_divider() {
 #
 # The chrome's own glyphs are one such table, and they are safe to table because the suite's
 # glyph inventory is deliberately all text-presentation — "non-graphical". There is no emoji
-# anywhere in ut-play / yt-search / yt-resolve / yt-tui, so none of these characters can carry a
+# anywhere in ut-play / yt-search / yt-resolve / ut-tui, so none of these characters can carry a
 # U+FE0F and silently become a 2-cell emoji glyph behind the table's back. All 17 measured
 # at ONE cell (tmux over Ghostty, `tmux display-message -p '#{cursor_x}'`):
 #   Neutral EAW    ↵ ♫ ❚ ❯                      one cell in EVERY terminal
@@ -1454,7 +1454,7 @@ clear_play_state() {
     PT_PCT=""
 }
 
-# The detached player owns its own lifecycle, so yt-tui only learns of its death by asking.
+# The detached player owns its own lifecycle, so ut-tui only learns of its death by asking.
 # Nothing used to ask: send_mpv_ipc swallows every failure and mpv_get_prop answers empty on a
 # dead socket, so a track that ended (or an mpv crash) left the list banner showing its title
 # forever, the card showing --:-- against a stale title, and Space flipping a local paused flag
@@ -1612,7 +1612,7 @@ SEARCH_ERR=""
 CURRENT_ENGINE=""
 fetch_json() {
     local out cnt errfile rc=0
-    errfile=$(mktemp "${TMPDIR:-/tmp}/yt-tui-search-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/yt-tui-search-err.$$"
+    errfile=$(mktemp "${TMPDIR:-/tmp}/ut-tui-search-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ut-tui-search-err.$$"
     spin_start
     out=$("$ENGINE_SEARCH" -j -n "$RESULT_N" -s "$SORT_FIELD" ${SEARCH_ARGS[@]+"${SEARCH_ARGS[@]}"} -- "$QUERY_LABEL" 2>"$errfile") || rc=$?
     spin_stop
@@ -2374,7 +2374,7 @@ press_any_key() {
 #
 # The reason exists ONLY on the core's stderr. `die` writes prose there and exits 1 whatever -j
 # asked for, so a synchronous -d failure puts nothing on stdout — there is no envelope field to
-# read it out of. §14's `reason` taxonomy belongs to the BLOCKING play path, which yt-tui never
+# read it out of. §14's `reason` taxonomy belongs to the BLOCKING play path, which ut-tui never
 # takes. Not colored: C_YELLOW is retired (see the palette block), and the n/m/o failures next
 # to it print plain too.
 play_failed_notice() {
@@ -2393,7 +2393,7 @@ play_selected() {
     # stderr goes to a temp file, not /dev/null, the same way fetch_json already keeps the
     # search's: it is the only place a launch failure's reason exists.
     local sock errfile rc=0 msg
-    errfile=$(mktemp "${TMPDIR:-/tmp}/yt-tui-play-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/yt-tui-play-err.$$"
+    errfile=$(mktemp "${TMPDIR:-/tmp}/ut-tui-play-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/ut-tui-play-err.$$"
     # --engine is passed EXPLICITLY and comes from the envelope: ut-play defaults to its own
     # UT_DEFAULT_ENGINE, and letting that default decide would send a second engine's URL to
     # the first engine's resolver — which since ROADMAP D12 is a hard usage error rather
@@ -2886,7 +2886,7 @@ if ((${#query[@]} == 0)); then
     # char_w). Cancelling the first prompt is a clean quit, so it exits 0.
     if ! read_query_input; then tty_echo_restore; exit 0; fi
     tty_echo_restore
-    [[ -n "${QUERY_INPUT//[[:space:]]/}" ]] || { echo "yt-tui: no query entered" >&2; exit 0; }
+    [[ -n "${QUERY_INPUT//[[:space:]]/}" ]] || { echo "ut-tui: no query entered" >&2; exit 0; }
     query=("$QUERY_INPUT")
 fi
 QUERY_LABEL="${query[*]}"

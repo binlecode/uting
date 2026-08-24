@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Clean a raw `tmux capture-pane -p` frame of yt-tui into a block ready to paste
+"""Clean a raw `tmux capture-pane -p` frame of ut-tui into a block ready to paste
 VERBATIM into a Markdown fence.
 
 Usage:

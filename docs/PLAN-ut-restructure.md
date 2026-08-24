@@ -1,6 +1,6 @@
 # PLAN-ut-restructure —— 拆成「播放器 + 可扩展搜索引擎」
 
-**状态：A、B-1、B-2、B-3、C 已落地（2026-08-23）。下一步 D。**
+**状态：A、B-1、B-2、B-3、C、D 已落地（2026-08-23）。下一步 E（最后一步，落地即删本文件）。**
 决定见 `ROADMAP.md` D9 / D10；证据见 `RESEARCH-bilibili-engine.md`。
 本文件**自带进度**，每项落地即更新，最后一项落地后删除，契约并入 `SPEC-system.md`。
 
@@ -11,7 +11,7 @@
 | B-2 | `yt-resolve` 独立 **+** 播放器改走 resolve（耦合的一步，ytdl_hook 退场） | ☑ 2026-08-23 |
 | B-3 | 合并与删除：`yt-play` 删除，`ut-play` 上 PATH | ☑ 2026-08-23 |
 | C | `bili-search` / `bili-resolve` | ☑ 2026-08-23 |
-| D | `ut-tui` 引擎注册表 + 切源键 | ☐ 下一步 |
+| D | `ut-tui` 引擎注册表 + 切源键 + 改名 | ☑ 2026-08-23 |
 | E | 文档同步 + 三个 rig（`tests/contract.sh`、`tests/tui_pane.sh`、`YT_TEST_LIFECYCLE=1 tests/lifecycle.sh` —— 最后一个真发声） | ☐ |
 
 ---
@@ -540,9 +540,35 @@ yt-dlp、`--stop --all` 后零孤儿。
 - **音频区 `/audio/au<id>` 未接**（RESEARCH R5：`song.lyric` 可复用字幕管线）。`normalize_target`
   只认 BV / av / URL；`au` 是另一套 extractor，未实测，不做假能力。
 
-### D. `ut-tui` ☐
+### D. `ut-tui` ☑ 2026-08-23
 
-引擎注册表（名字 → 命令前缀）+ 切源键；其余渲染逻辑不动。`yt-tui` → `ut-tui` 改名。
+两个 commit，功能在前、改名在后（destructive step 最后且最小）。
+
+**D-1 —— 注册表 + 切源键。** 注册表是**发现**出来的，不是列出来的：引擎 = 同时具备
+`<name>-search` 与 `<name>-resolve` 两半的东西，先扫兄弟目录、无果再扫 PATH（与 `ut-play`
+找 resolver 是同一套优先级）。硬编码一张名字表会让「加一个音源 = 加一对脚本」在第三个音源上变成
+假话，而且假在没人看的地方 —— TUI 照跑，只是不提供新的那个。要求**成对**也不是迂腐：光有
+`-search` 会列出播放器解不了的结果。
+
+播放改为显式传 `--engine`，值取自 **search envelope 的 `engine` 字段**而不是本文件自己设的变量 ——
+那个字段的唯一职责就是路由回能解流的 resolver，用它等于每次 Enter 都在验契约。D12 之后它还从
+「讲究」变成了「必须」：`ut-play` 默认走自己的 `UT_DEFAULT_ENGINE`，让默认值决定就会把第二个引擎的
+URL 交给第一个引擎的 resolver，而那现在是硬性 usage 错误。
+
+`e` 键切源并重新取回同一查询，照 `cycle_sort` 的样子写（含选中项重置 —— 换引擎后同一个下标是另一个
+视频）。失败时**名字与已解析的二进制一起回滚**：只回滚名字会让下一次查询用甲的标签查乙的源。
+提示行里只在装了第二个引擎时才出现 `e`，因为那个块在十行高的终端上已经要占四行，一个什么都不做的键
+不该花掉一个格。
+
+顺带清掉本文件最后一处站点知识：搜索提示语原本是字面量 `Search YouTube:` / `搜索 YouTube:`。
+
+**D-2 —— 改名。** `shell/yt-tui` → `shell/ut-tui`，`ytt` 随之退役（D10：人机面不发短名，想短自建
+alias）。`GL_BRAND` 的横幅与 `tests/assert_pane.py` 是**功能耦合**（rig 断言首行含品牌串），必须
+同一个 commit 改。爆炸半径：六个 shell 文件的注释、四个 rig、`.githooks/pre-push`、`fn_graph.py`、
+三个 skill（`run-yt-tui/` 目录一并改名为 `run-ut-tui/`）、README、CLAUDE.md。
+
+`SPEC-system.md` 正文里的 72 处 `yt-tui` **不在本步**扫 —— 顶部在途说明已加 Step D 条目，全量重画
+是 E 步的事，这与 A/B/C 三步的处理一致。
 
 ### E. 文档 + 全量验证 ☐
 
