@@ -1,6 +1,6 @@
 ---
 name: capture-pane
-description: Refresh the terminal frames in README.md / docs/SPEC-system.md from REAL ut-tui panes instead of hand-drawing them. Covers picking the geometry per view, waiting for the ready marker so the frame is not a spinner, cleaning the capture with clean_capture.py, proving it with tests/assert_pane.py BEFORE it enters a doc, and splicing it in with a Python replace rather than hand-transcribing box glyphs. Use when a layout change has made a doc frame stale.
+description: Refresh the terminal frames in README.md / docs/SPEC-system.md from REAL uting panes instead of hand-drawing them. Covers picking the geometry per view, waiting for the ready marker so the frame is not a spinner, cleaning the capture with clean_capture.py, proving it with tests/assert_pane.py BEFORE it enters a doc, and splicing it in with a Python replace rather than hand-transcribing box glyphs. Use when a layout change has made a doc frame stale.
 ---
 
 # capture-pane
@@ -10,7 +10,7 @@ drifts from the code (invented labels, a rail that doesn't line up, a version th
 exists) and cannot reproduce the alignment that *is* the claim being made — the right-flush
 duration rail, the shared title column, the CJK title that occupies two cells per character.
 
-For session setup, keys, ready markers, and player cleanup, see the **run-ut-tui** skill.
+For session setup, keys, ready markers, and player cleanup, see the **run-uting** skill.
 This one is capture → clean → **prove** → splice.
 
 ## 1. Pick the view and geometry
@@ -37,7 +37,7 @@ visually, and put that width in the surrounding prose.
 ```bash
 S=cap
 tmux kill-session -t $S 2>/dev/null
-tmux new-session -d -s $S -x 100 -y 30 "cd $PWD && YT_LANG=en shell/ut-tui 'lofi hip hop'"
+tmux new-session -d -s $S -x 100 -y 30 "cd $PWD && YT_LANG=en shell/uting 'lofi hip hop'"
 timeout 30 bash -c "until tmux capture-pane -t $S -p | grep -q 'results='; do sleep 0.5; done"
 tmux capture-pane -t $S -p > tmp/raw-list.txt
 ```
@@ -53,7 +53,7 @@ tmux capture-pane -t $S -p > tmp/raw-filter.txt
 tmux kill-session -t $S 2>/dev/null
 ```
 
-If the frame will show playback, read the cleanup section of **run-ut-tui** first — the player
+If the frame will show playback, read the cleanup section of **run-uting** first — the player
 survives the session kill.
 
 ## 3. Clean

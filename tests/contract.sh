@@ -362,8 +362,8 @@ rm -rf "$SD/players/dead"
 
 echo "── version and the non-TTY refusal ────────────────────────────────"
 report "one version, six entry points" 1 \
-    "$(for c in ut-play yt-search yt-resolve bili-search bili-resolve ut-tui; do shell/$c --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
-report "ut-tui refuses a non-TTY" 1 "$(shell/ut-tui </dev/null >/dev/null 2>&1; echo $?)"
+    "$(for c in ut-play yt-search yt-resolve bili-search bili-resolve uting; do shell/$c --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
+report "uting refuses a non-TTY" 1 "$(shell/uting </dev/null >/dev/null 2>&1; echo $?)"
 
 echo
 printf '%s: %d ok, %d failed, %d known drift\n' "$(basename "$0")" "$pass" "$fail" "$known"

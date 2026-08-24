@@ -7,7 +7,7 @@ a TUI if you are a human, from a single-line JSON contract if you are a program.
 (YouTube, Bilibili); a third is a new pair of scripts and no change anywhere else.
 
 ```sh
-ut-tui                                 # interactive: search, browse, play, control
+uting                                  # interactive: search, browse, play, control
 yt-search -j -n 25 -- "lofi hip hop"   # machine: one line of JSON out
 bili-search -j -n 25 -- "周杰伦"        # machine: the second source, the same envelope
 ut-play -d -j -- "<url>"               # machine: launch detached, get {id, pid, sock}
@@ -47,7 +47,7 @@ sets for you.
   already maintains. The seam between an engine and the player is the **envelope**, never the tool
   behind it. There is no `--transcript` here: the site has no captions, and an engine says what it
   cannot do by not having the verb.
-- **`ut-tui`** — the human face. Self-rendered list and focus card, live filter, pagination that
+- **`uting`** — the human face. Self-rendered list and focus card, live filter, pagination that
   reflows against the measured chrome, three playback states, en/zh chrome, ASCII fallback, themes.
   No TUI framework, no fzf.
 
@@ -79,14 +79,14 @@ Nothing is vendored. Install yt-dlp and mpv however you normally would.
 ```sh
 git clone git@github.com:binlecode/uting.git
 cd uting
-./shell/ut-tui "lofi hip hop"     # or: ./shell/ut-tui  and type a query
+./shell/uting "lofi hip hop"     # or: ./shell/uting  and type a query
 ```
 
 For daily use, symlink onto your PATH. Each command goes under its own name — the suite ships
 no second spelling for anything:
 
 ```sh
-ln -s "$PWD/shell/ut-tui"       ~/bin/ut-tui
+ln -s "$PWD/shell/uting"        ~/bin/uting
 ln -s "$PWD/shell/ut-play"      ~/bin/ut-play
 ln -s "$PWD/shell/yt-search"    ~/bin/yt-search
 ln -s "$PWD/shell/yt-resolve"   ~/bin/yt-resolve
@@ -94,26 +94,27 @@ ln -s "$PWD/shell/bili-search"  ~/bin/bili-search
 ln -s "$PWD/shell/bili-resolve" ~/bin/bili-resolve
 ```
 
-Only `ut-tui` is strictly required: every command resolves its siblings from its own location,
+Only `uting` is strictly required: every command resolves its siblings from its own location,
 so a single symlink is enough to use the whole suite by hand. The rest are for calling the verbs
 directly — which is what an agent does.
 
-Want a shorter name to type? Make one — `alias ytt=ut-tui`, or a symlink of your own. Nothing
-reads its own `argv[0]`, so any name works. The suite does not ship one, because a second
-official spelling is a second thing to keep in sync (`docs/ROADMAP.md` D10).
+The human face carries the project's own name, so `~/bin/uting` is a plain symlink to
+`shell/uting` — same word at both ends, no alias in between. Want something shorter to type?
+Make one — `alias ut=uting`, or a symlink of your own. Nothing reads its own `argv[0]`, so any
+name works. The suite ships no short form itself, because a second official spelling is a second
+thing to keep in sync (`docs/ROADMAP.md` D10).
 
-Replacing an older `~/bin/ytt`: the TUI is `ut-tui` now, so that symlink dangles —
-`ln -sfn "$PWD/shell/ut-tui" ~/bin/ytt` keeps the short name working as your own alias, or
-`rm ~/bin/ytt` and use the line above.
+Replacing an older `~/bin/ut-tui` or `~/bin/ytt`: the TUI is `uting` now, so both dangle —
+`rm ~/bin/ut-tui ~/bin/ytt` and use the line above.
 
 Replacing an older `~/bin/yt-play`: that wrapper is gone, and `ut-play` is what it wrapped —
 `rm ~/bin/yt-play` and use the line above. Its `--info` / `--transcript` / `--get-url` verbs are
 the engine's now: `yt-resolve --info`, `yt-resolve --transcript`, and for a stream URL a bare
 `yt-resolve -j`.
 
-The older `yts` / `ytp` spellings are **deprecated**, and so is `ytt` as a shipped name.
+The older `yts` / `ytp` / `ytt` spellings are **deprecated**, and so is `ut-tui`.
 
-`ut-tui --version` (or `-V`) answers before any dependency check, so it works on a machine that
+`uting --version` (or `-V`) answers before any dependency check, so it works on a machine that
 has not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. All
 six entry points report the same number: it is declared once, in `shell/VERSION`.
 

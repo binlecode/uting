@@ -46,7 +46,7 @@ YT_MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-
 # libass; a title with glyphs no font covers (emoji — pervasive on YouTube) makes libass emit
 # a per-frame "[osd/libass] fontselect: failed … glyph" warning AND macOS CoreText a
 # ".LastResort" note. At ~30/s these interrupt mpv's in-place status line so it scrolls
-# endlessly, burying ut-tui's menu. Two-part fix that KEEPS the on-window OSD/OSC (so the video
+# endlessly, burying uting's menu. Two-part fix that KEEPS the on-window OSD/OSC (so the video
 # window still shows its seek bar / controls): (1) --msg-level=osd/libass=error suppresses the
 # libass warnings at the source while keeping error level for the -j classifier; (2) the
 # leftover CoreText notes — which no mpv flag can reach — are dropped by a stderr filter in
@@ -74,7 +74,7 @@ and it gates its own flags: no wrapper sits in front of it, and nothing else on 
 
   yt-search   search -> text list or JSON        (the YouTube engine, half one)
   yt-resolve  handle -> stream URL + headers, metadata, captions   (half two)
-  ut-tui      interactive terminal browser (pick + play)
+  uting      interactive terminal browser (pick + play)
 
 A HANDLE is a URL or an engine media id (dQw4w9WgXcQ). Whether an id is well formed is the
 engine's knowledge, not this file's, so a bad one fails as an extraction (2+), not usage (1).
@@ -85,7 +85,7 @@ Usage (everything after -- is the handle, so it may start with '-'):
   ut-play --status [-j]                                   list live detached players
   ut-play --stop [--id ID | --all] [-j]                   stop one player (or all)
   ut-play --set-volume N [--id ID] [-j]                   live volume on a detached player
-  ut-play (no handle, no action)                          usage error; use ut-tui to browse
+  ut-play (no handle, no action)                          usage error; use uting to browse
 
 Not here, by design: metadata, captions and stream URLs are extraction, so they are the
 engine's verbs — yt-resolve --info / --transcript / (bare) resolve. Searching is yt-search.
@@ -667,7 +667,7 @@ ensure_state_dir() {
 
 # Live property read straight off a player's IPC socket. The state file's `volume` is only
 # what was recorded at launch or by the last --set-volume, so anything driving the socket
-# directly (ut-tui's 9/0 keys — see SPEC-system.md §9.3) moves the real value without
+# directly (uting's 9/0 keys — see SPEC-system.md §9.3) moves the real value without
 # telling us; mpv is the source of truth. `pause` and the playback position are worse still:
 # the state file has never held them at all.
 #
@@ -821,7 +821,7 @@ new_player_id() {
 # so a 2nd -d is NOT refused (that is the point).
 #
 # THE CHILD RESOLVES, NOT US. Extraction is a ~3s round trip and detach must return in
-# milliseconds (ut-tui captures this call), so the parent launches first and writes `title`
+# milliseconds (uting captures this call), so the parent launches first and writes `title`
 # and `format` as null; the child backfills both from its own resolve envelope the moment it
 # has one (patch_player_meta). Doing it the other way — resolve here, then launch — would
 # put the whole engine round trip on the -d hot path. docs/PLAN-ut-restructure.md §5 B-2. Audio only in practice: a detached
@@ -895,7 +895,7 @@ detach_play() {
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         # sock/log are part of the envelope so a caller never has to RECONSTRUCT them from
-        # the state-dir layout (ut-tui used to hardcode "$TMPDIR/yt-cli-$(id -u)/mpv-$id.sock",
+        # the state-dir layout (uting used to hardcode "$TMPDIR/yt-cli-$(id -u)/mpv-$id.sock",
         # duplicating a private path in a second script). SPEC-system.md §9.3.
         jq -nc \
             --arg id "$id" --argjson pid "$pid" --arg url "$url" --arg mode "$PLAYBACK_MODE" \
@@ -1070,7 +1070,7 @@ collect_failed_players() {
 # `volume`, `paused`, `position` and `duration` are reported LIVE (one round trip per player
 # off its IPC socket, see read_player_live) rather than from the state file: the record only
 # knows about launch --volume and --set-volume, so a client driving the socket itself
-# (ut-tui's 9/0 keys) would make `volume` lie — and it has never held the other three at all.
+# (uting's 9/0 keys) would make `volume` lie — and it has never held the other three at all.
 # `volume` keeps the recorded value as its fallback; the other three are null when unread,
 # which is NOT the same as false/0 ("could not ask" vs "playing at zero"). read_player_live
 # is a no-op without nc, keeping the jq-only dep contract.
@@ -1122,7 +1122,7 @@ do_status() {
                 [[ -n "$volume" ]] && vol_suffix=", volume $volume"
                 # Only `paused` joins the human line: a person reading this wants to know why
                 # it went quiet. The position pair stays JSON-only — the human who wants a
-                # playhead has `ytt`, which draws one, and this line is already long.
+                # playhead has `uting`, which draws one, and this line is already long.
                 [[ "$LP_PAUSED" == "true" ]] && pause_suffix=", paused"
                 if [[ -n "$title" ]]; then
                     printf "playing (id %s, pid %s, mode %s%s%s, since %s): %s\n  %s\n" \
@@ -1524,9 +1524,9 @@ fi
 
 # A bare invocation (no handle, no lifecycle action) is a usage error (D3). Report it before
 # the heavier mpv dependency check so the message is about the missing input, not a missing
-# player. Searching lives in yt-search; interactive browsing in ut-tui.
+# player. Searching lives in yt-search; interactive browsing in uting.
 if ((! IS_HANDLE)) && [[ -z "${QUERY//[[:space:]]/}" ]] && [[ -z "$ACTION" ]]; then
-    die "provide a video id or URL (to search, run yt-search; for interactive browsing, ut-tui)"
+    die "provide a video id or URL (to search, run yt-search; for interactive browsing, uting)"
 fi
 
 # Lifecycle queries need only jq and take no handle — answer them before the heavier

@@ -64,11 +64,14 @@ in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 >   its own site's hosts**, so §12's handle grammar now carries a host allowlist per engine
 >   and a URL from another site is a usage error (1), not an extraction failure. `yt-resolve`
 >   had been accepting any http(s) URL and labelling the result `engine:"yt"`.
-> - **Step D** — the interactive surface is **`shell/ut-tui`**; `yt-tui` no longer exists, and
->   with it went `ytt` (D10: no short name ships). It holds no engine list: an engine is any
->   `<name>-search` + `<name>-resolve` PAIR beside it or on PATH, discovered at start-up, so
->   §4's topology gained a source without this file gaining a name. `e` switches source and
->   re-fetches; play passes `--engine` taken from the search envelope's own `engine` field.
+> - **Step D** — the interactive surface is **`shell/uting`**: the human face carries the
+>   project's own name, so `~/bin/uting` is a plain symlink with the same word at both ends.
+>   `yt-tui` no longer exists, nor the `ut-tui` it was briefly renamed to, and `ytt` went with
+>   them (ROADMAP D10 + its same-day revision: no short name ships). It holds no engine
+>   list: an engine is any `<name>-search` + `<name>-resolve` PAIR beside it or on PATH,
+>   discovered at start-up, so §4's topology gained a source without this file gaining a
+>   name. `e` switches source and re-fetches; play passes `--engine` taken from the search
+>   envelope's own `engine` field.
 >   The last site-specific string in the UI — the prompt's literal "YouTube" — is gone.
 > - Still true everywhere: the exit-code taxonomy, the lifecycle semantics, and one line
 >   per `-j` envelope.
@@ -1326,7 +1329,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     not curated.
 
     **One deliberate exception: the brand wordmark (`YT_BRAND=1`).** Both view
-    headers render `𝗬 𝗧  𝗧 𝗨 𝗜` (mathematical sans-serif bold, U+1D5D4 block) when
+    headers render `𝗨 𝗧 𝗜 𝗡 𝗚` (mathematical sans-serif bold, U+1D5D4 block) when
     opted in. It lives OUTSIDE the closed inventory on purpose: the UCD class is Neutral
     (one cell "in principle"), but real terminal fonts render this block via fallback
     fonts at whatever width they like — so it is NOT measured and NOT in the table, and

@@ -1,12 +1,12 @@
 ---
-name: run-ut-tui
-description: Launch and drive the ut-tui terminal UI through tmux send-keys/capture-pane. Covers the TTY requirement (ut-tui refuses a non-TTY and cannot be run with the Bash tool directly), the pty-size trap, the fetch/ready markers, the full keymap, the YT_* environment knobs, and the detached-player cleanup that a session kill does NOT do for you. Use whenever a change has to be seen rather than reasoned about.
+name: run-uting
+description: Launch and drive the uting terminal UI through tmux send-keys/capture-pane. Covers the TTY requirement (uting refuses a non-TTY and cannot be run with the Bash tool directly), the pty-size trap, the fetch/ready markers, the full keymap, the YT_* environment knobs, and the detached-player cleanup that a session kill does NOT do for you. Use whenever a change has to be seen rather than reasoned about.
 ---
 
-# run-ut-tui
+# run-uting
 
-`ut-tui` takes over the terminal and **requires a real TTY on both stdin and stdout** — it
-refuses a pipe and exits 1 (`ut-tui: needs a terminal`). Calling it with the Bash tool
+`uting` takes over the terminal and **requires a real TTY on both stdin and stdout** — it
+refuses a pipe and exits 1 (`uting: needs a terminal`). Calling it with the Bash tool
 therefore proves nothing. Drive it inside tmux.
 
 Everything it calls (`yt-search`, `ut-play`) is the opposite: never interactive, never needs a
@@ -16,14 +16,14 @@ the whole CLI contract that way.
 ## 1. Launch
 
 ```bash
-S=ytt
+S=uting
 tmux kill-session -t $S 2>/dev/null
-tmux new-session -d -s $S -x 100 -y 30 "cd $PWD && YT_LANG=en shell/ut-tui 'lofi hip hop'"
+tmux new-session -d -s $S -x 100 -y 30 "cd $PWD && YT_LANG=en shell/uting 'lofi hip hop'"
 ```
 
 **The size must be set at session creation** (`-x` / `-y`). `LINES`/`COLUMNS` in the
 environment do **not** work: the TUI reads the real ioctl via `stty size </dev/tty`
-(`shell/ut-tui:555`), which is exactly why a rig that forgets `TIOCSWINSZ` gets a 0×0
+(`shell/uting:555`), which is exactly why a rig that forgets `TIOCSWINSZ` gets a 0×0
 terminal and a one-row list whose frames still look plausible. Pass a query on argv to skip
 the startup prompt; omit it to exercise the prompt and its own UTF-8 reader.
 
@@ -69,7 +69,7 @@ tmux send-keys -t $S 'q'          # quit — reaps only ITS OWN player
 
 ## 4. Playback starts a REAL detached player — clean it up
 
-This is where `ut-tui` differs from an ordinary TUI, and the one thing this skill exists to
+This is where `uting` differs from an ordinary TUI, and the one thing this skill exists to
 stop you getting wrong: `Enter` launches mpv in **its own process group, detached from the
 terminal**. Killing the tmux session does **not** stop it. Audio keeps playing.
 

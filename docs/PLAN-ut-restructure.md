@@ -11,7 +11,7 @@
 | B-2 | `yt-resolve` 独立 **+** 播放器改走 resolve（耦合的一步，ytdl_hook 退场） | ☑ 2026-08-23 |
 | B-3 | 合并与删除：`yt-play` 删除，`ut-play` 上 PATH | ☑ 2026-08-23 |
 | C | `bili-search` / `bili-resolve` | ☑ 2026-08-23 |
-| D | `ut-tui` 引擎注册表 + 切源键 + 改名 | ☑ 2026-08-23 |
+| D | 人机面：引擎注册表 + 切源键 + 改名（`yt-tui` → `ut-tui` → `uting`） | ☑ 2026-08-23 |
 | E | 文档同步 + 三个 rig（`tests/contract.sh`、`tests/tui_pane.sh`、`YT_TEST_LIFECYCLE=1 tests/lifecycle.sh` —— 最后一个真发声） | ☐ |
 
 ---
@@ -42,7 +42,7 @@
   yt-search ─┐                          yt-search    引擎：搜索（壳与实现合一）
   yt-play   ─┼─► ut-play (核心)         yt-resolve   引擎：id → 直链 + header
   yt-tui    ─┘   门禁壳 + 全部逻辑       ut-play      播放器：自带门禁，上 PATH
-                                        ut-tui       人机面（D 步改名）
+                                        uting       人机面（D 步改名）
                  VERSION                             一行数据文件，版本唯一声明处
 ```
 
@@ -62,12 +62,12 @@ ut-play  --set-volume N (--id ID) [-j]
 <engine>-resolve  --info [-j|-J] -- <id|url>
 <engine>-resolve  --transcript [--sub-lang L] [-j|-J] -- <id|url>
 
-ut-tui   [引擎选择键] [其余沿用今天的 yt-tui]
+uting             [引擎选择键] [其余沿用今天的 yt-tui]
 ```
 
 **引擎选择（v1，刻意最小）**：`ut-play` 用 `--engine NAME`；缺省取环境变量
 `UT_DEFAULT_ENGINE`（默认 `youtube`，**播放一个 YouTube URL 的行为与今天逐字相同**）。
-**v1 不做 URL 嗅探** —— `ut-tui` 永远知道引擎（是它搜的），agent 播裸 URL 时显式给 `--engine`。
+**v1 不做 URL 嗅探** —— `uting` 永远知道引擎（是它搜的），agent 播裸 URL 时显式给 `--engine`。
 嗅探（引擎声明自己的 URL 模式，`ut-play` 按注册表匹配）列为 v2，等真有第三个引擎再说。
 
 **`--id` 不与媒体 id 冲突**：`--id` 始终是**播放器 id**（生命周期动词用）；媒体 id 走位置参数。
@@ -273,7 +273,7 @@ pid 匹配自守）。于是 §8 那个悬而未决的问题有了答案：**`de
 
 **2. 引擎令牌 `youtube` → `yt`（名字即命令前缀）。**
 `ut-play --engine yt` 直接拼出 `yt-resolve`，零注册表 —— 否则 `ut-play` 与（D 步的）
-`ut-tui` 各要一张 `youtube→yt` 映射表。B-1 刚加的 `engine` 字段随之改值，改在这里最便宜。
+`uting` 各要一张 `youtube→yt` 映射表。B-1 刚加的 `engine` 字段随之改值，改在这里最便宜。
 
 **3. resolve envelope 只发 `stream_urls`（数组），不发 §3.2 草稿里的单值 `stream_url`。**
 两个键是同一事实两处；数组形态也正好是今天 `--get-url -j` 已有的形状，契约不变量更稳。
@@ -540,9 +540,9 @@ yt-dlp、`--stop --all` 后零孤儿。
 - **音频区 `/audio/au<id>` 未接**（RESEARCH R5：`song.lyric` 可复用字幕管线）。`normalize_target`
   只认 BV / av / URL；`au` 是另一套 extractor，未实测，不做假能力。
 
-### D. `ut-tui` ☑ 2026-08-23
+### D. 人机面 `uting` ☑ 2026-08-23
 
-两个 commit，功能在前、改名在后（destructive step 最后且最小）。
+三个 commit，功能在前、改名在后（destructive step 最后且最小）；改名走了两跳。
 
 **D-1 —— 注册表 + 切源键。** 注册表是**发现**出来的，不是列出来的：引擎 = 同时具备
 `<name>-search` 与 `<name>-resolve` 两半的东西，先扫兄弟目录、无果再扫 PATH（与 `ut-play`
@@ -563,9 +563,10 @@ URL 交给第一个引擎的 resolver，而那现在是硬性 usage 错误。
 顺带清掉本文件最后一处站点知识：搜索提示语原本是字面量 `Search YouTube:` / `搜索 YouTube:`。
 
 **D-2 —— 改名。** `shell/yt-tui` → `shell/ut-tui`，`ytt` 随之退役（D10：人机面不发短名，想短自建
-alias）。`GL_BRAND` 的横幅与 `tests/assert_pane.py` 是**功能耦合**（rig 断言首行含品牌串），必须
+alias）。**同日再改一跳 `ut-tui` → `shell/uting`**（D10 修订：人机面拿发布名，见 `ROADMAP.md`），
+爆炸半径与本步逐字相同，做法照抄。`GL_BRAND` 的横幅与 `tests/assert_pane.py` 是**功能耦合**（rig 断言首行含品牌串），必须
 同一个 commit 改。爆炸半径：六个 shell 文件的注释、四个 rig、`.githooks/pre-push`、`fn_graph.py`、
-三个 skill（`run-yt-tui/` 目录一并改名为 `run-ut-tui/`）、README、CLAUDE.md。
+三个 skill（`run-yt-tui/` 目录一并改名，最终为 `run-uting/`）、README、CLAUDE.md。
 
 `SPEC-system.md` 正文里的 72 处 `yt-tui` **不在本步**扫 —— 顶部在途说明已加 Step D 条目，全量重画
 是 E 步的事，这与 A/B/C 三步的处理一致。
@@ -603,8 +604,8 @@ README + 各 `usage()`。然后跑三个 rig，**`tests/lifecycle.sh` 必须真�
 - `yt-play` → **删除**（职责并入 `ut-play`，见 §5 B-3）
 - `--get-url` → **删除**（由 `yt-resolve` 取代，无别名期）
 - `yt-search` → **名字不变**（它本来就该说明自己是 YouTube）
-- `yt-tui` → `ut-tui`（D 步）。**人机面不发短名**（D10：`ut` 与 `utt` 都被占）；
-  用户想要短名自建 alias，套件不发第二个名字
+- `yt-tui` → `ut-tui` → `uting`（D 步两跳，第二跳见 `ROADMAP.md` D10 的修订）。
+  **人机面不发短名**（D10：`ut` 与 `utt` 都被占）；用户想要短名自建 alias，套件不发第二个名字
 - 用户自建的 `~/bin/yt-play` 符号链接由 README 一行迁移说明处理
   （`ln -s "$PWD/shell/ut-play" ~/bin/ut-play`）
 - `ROADMAP.md` **D2 / D3 里「裸 `yt "query"` → 列表、`yt <url>` → 播放」的核心内部契约

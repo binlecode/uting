@@ -8,7 +8,7 @@ This file is the single source of truth for repository guidelines, used by Claud
 
 The suite is exposed **directly** to shell-capable agents with no MCP wrapper, so the **CLI contract itself** (argv, exit codes, output shape, process lifecycle) *is* the product and the safety boundary. Every design choice follows from that. Full rationale: `docs/SPEC-system.md`.
 
-**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `ut-tui` (the human surface) and `ut-play`/`yt-search`/`yt-resolve`/`bili-search`/`bili-resolve` (the agent surface) onto their own PATH. **No short name ships** (`docs/ROADMAP.md` D10) — `ytt` was retired with the rename and is a user's own alias now.
+**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `uting` (the human surface) and `ut-play`/`yt-search`/`yt-resolve`/`bili-search`/`bili-resolve` (the agent surface) onto their own PATH. **No short name ships** (`docs/ROADMAP.md` D10) — the human face simply carries the project's own name, so `~/bin/uting` is a plain symlink with the same word at both ends; `ytt` was retired and is a user's own alias now.
 
 ## Runtime Environment (Required)
 
@@ -27,12 +27,12 @@ git config core.hooksPath .githooks   # RUN ONCE PER CLONE — fresh clones have
 ## Build, Test, and Development Commands
 
 ```sh
-bash -n shell/ut-play shell/yt-search shell/yt-resolve shell/bili-search shell/bili-resolve shell/ut-tui  # syntax check — run before EVERY commit
+bash -n shell/ut-play shell/yt-search shell/yt-resolve shell/bili-search shell/bili-resolve shell/uting  # syntax check — run before EVERY commit
 /bin/bash shell/yt-search -j -n 5 -- "lofi hip hop"           # exercise on the 3.2 floor, explicitly
-shell/ut-tui "lofi hip hop"                                   # interactive; needs a real TTY on stdin AND stdout
+shell/uting "lofi hip hop"                                   # interactive; needs a real TTY on stdin AND stdout
 shell/ut-play --help                                          # the player's own help (it is on PATH)
 shell/bili-search -j -n 5 -- "周杰伦"                          # the second engine, same envelope
-shell/ut-tui --version                                        # answers before any dependency gate
+shell/uting --version                                        # answers before any dependency gate
 
 tests/contract.sh                                             # the CLI contract, 75 checks
 tests/tui_pane.sh                                             # the TUI via tmux; starts no playback
@@ -53,7 +53,7 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
 | `shell/bili-search` | **The Bilibili engine, half one** (658 lines) — query → result envelope, over `curl` + `jq`. It talks HTTP rather than shelling out to yt-dlp because yt-dlp's Bilibili search returns **no metadata at all** (flat) and recurses into every part of every collection (non-flat, >120s for 10 results). Sends no credential: one public endpoint, a Referer, and a locally generated random `buvid3` |
 | `shell/bili-resolve` | **The Bilibili engine, half two** (747 lines) — handle → the same resolve envelope, over `yt-dlp`. No request signing, no stream selection, no CDN logic: that is a thousand lines to redo what the dependency maintains. Owns the BV/av handle shapes, the cookie decision, the mode→format table. No `--transcript` — the site has no captions, and an engine states a missing capability by not having the verb |
 | `shell/VERSION` | The suite version, declared once — a one-line data file, not a shell variable. The player and the engines are independent executables sharing no library, so a variable in any one of them would make the others ask *it* for the version — the wrong dependency direction for a player that must not know its engines |
-| `shell/ut-tui` | The human face (2.8k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
+| `shell/uting` | The human face (2.8k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
 | `tests/assert_pane.py` | Layout invariants on a captured pane, measured in **cells** (east-asian-width), not characters: nothing exceeds the pane width, titles start on one column, the duration rail is right-flush |
 | `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that does what the real one will not do on cue: answer out of order, report a property null, interleave async events, walk the clock, never close its side |
 
@@ -65,7 +65,7 @@ Every rig runs directly and says in its own docstring what it proves. Read the d
   ~/bin/bili-search  → shell/bili-search ─► curl · jq              (engine: query → results)
   ~/bin/bili-resolve → shell/bili-resolve ► yt-dlp · jq            (engine: handle → stream URL + headers)
   ~/bin/ut-play      → shell/ut-play ─────► <engine>-resolve -j ──► mpv · jq · nc   (player)
-  ~/bin/ut-tui       → shell/ut-tui ──────► (<engine>-search -j → render → ut-play -d -j --engine)
+  ~/bin/uting       → shell/uting ──────► (<engine>-search -j → render → ut-play -d -j --engine)
 ```
 
 The player never runs yt-dlp and mpv never runs it either (`--no-ytdl` + a direct URL): **one extraction, and we make it.** The engine name IS the command prefix, which is what lets the player find `yt-resolve` with a string concatenation instead of a registry.
@@ -74,7 +74,7 @@ Each script locates its siblings by a path **relative to its own resolved script
 
 **Primitives sit behind seams** (`docs/SPEC-system.md` §5), and the seams are now split by file: `mpv` behind `run_mpv()` in `ut-play` (single play seam) plus the `mpv_supports_vo()` capability probe; `yt-dlp` only in the engines (`fetch_results` in `yt-search`; `resolve_stream`, `resolve_info`, `resolve_transcript`, `probe_media_fetchable` in `yt-resolve`; `dump_once`, `resolve_info` in `bili-resolve`); the Bilibili HTTP seam is `fetch_page_once` in `bili-search`, the only place in the suite that builds a request by hand; `jq` pervasive. Keep new primitive calls inside the existing seams — and a yt-dlp call in `ut-play` or an mpv call in an engine is a layering violation, not a seam.
 
-**Governing principle: correctness is added *down* — in the player if it is about playback, in the engine if it is about a site — so every surface inherits it, never *up* in a UI.** A fix in `ut-tui` that `ut-play` could have made is a bug in the wrong file.
+**Governing principle: correctness is added *down* — in the player if it is about playback, in the engine if it is about a site — so every surface inherits it, never *up* in a UI.** A fix in `uting` that `ut-play` could have made is a bug in the wrong file.
 
 ## Hard Rules
 
@@ -87,14 +87,14 @@ Each script locates its siblings by a path **relative to its own resolved script
                         ${arr[-1]} · &>> · |& · ${!prefix@}
   Empty array + set -u: a bare "${arr[@]}" on an EMPTY array ABORTS on 3.2. Use
                           ((${#arr[@]})) && cmd "${arr[@]}"      (guard, as in the core)
-                          cmd ${arr[@]+"${arr[@]}"}              (inline, as in ut-tui)
+                          cmd ${arr[@]+"${arr[@]}"}              (inline, as in uting)
   Arithmetic + set -e:  a bare ((expr)) is a COMMAND whose status is 1 when the
                         expression evaluates to 0 — under set -e that aborts. Never
                         ((n += w)) as a statement; write n=$((n + w)). ((x)) as a TEST
                         (in if / && / ||) is fine — there the status is the point.
   read -rsn1 = one BYTE, not one character. A CJK keypress arrives as 2-3 "keys", so any
                         reader accumulating keypresses must reassemble the UTF-8 sequence
-                        from its lead byte (ut-tui's utf8_complete). Classify the lead
+                        from its lead byte (uting's utf8_complete). Classify the lead
                         byte by TABLE MEMBERSHIP the way char_w does — `LC_ALL=C [[ … ]]`
                         is not valid bash at all, and a ( LC_ALL=C … ) subshell forks per
                         keypress and cannot set a global.
@@ -211,7 +211,7 @@ The live files:
 
 | Skill | Use it when |
 |---|---|
-| `run-ut-tui` | You need to *see* the TUI. It requires a real TTY on both stdin and stdout, so a Bash-tool call proves nothing — this covers the tmux drive, the pty-size trap, the ready markers, the keymap, and the detached-player cleanup a session kill does **not** do |
+| `run-uting` | You need to *see* the TUI. It requires a real TTY on both stdin and stdout, so a Bash-tool call proves nothing — this covers the tmux drive, the pty-size trap, the ready markers, the keymap, and the detached-player cleanup a session kill does **not** do |
 | `capture-pane` | A terminal frame in `README.md` / `docs/SPEC-system.md` is stale. Capture → clean (`clean_capture.py`, which refuses a mid-fetch frame) → **prove with `tests/assert_pane.py`** → splice with a Python replace. Never hand-draw a frame |
 | `audit-conformance` | Periodically, not per-commit. Whole-suite scan against 12 rules (surface layering, DRY, bash 3.2, dead code, swallowed errors, contract and doc drift) → `docs/PLAN-conformance-YYYY-MM-DD.md`. Ships `fn_graph.py` (defs vs call sites across all four scripts) as a manual aid — **never** as a gate or a `tests/` member |
 
@@ -220,7 +220,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 ## Coding Style & Naming Conventions
 
 - Match the surrounding style: 4-space indentation, `snake_case` functions, `UPPER_SNAKE` globals, `local` for everything inside a function, `set -euo pipefail` semantics respected (see the arithmetic rule above).
-- **One name per command, and no second spelling of any of them.** `ut-play`, `yt-search`, `yt-resolve`, `bili-search`, `bili-resolve`, `ut-tui` are the canonical identity — help text, errors, docs, and the PATH entry itself. The suite ships **no short form**: `ytt` went with the `ut-tui` → `ut-tui` rename (D10 — the short names are taken on npm/PyPI/crates, and a second official spelling is a second thing to keep in sync). A user wanting one writes their own alias. `yts`/`ytp` are deprecated. Never add a second name for an existing command.
+- **One name per command, and no second spelling of any of them.** `ut-play`, `yt-search`, `yt-resolve`, `bili-search`, `bili-resolve`, `uting` are the canonical identity — help text, errors, docs, and the PATH entry itself. The suite ships **no short form**: the TUI went `yt-tui` → `ut-tui` → `uting`, and `ytt` was retired on the way (D10 — the short names are taken on npm/PyPI/crates, and a second official spelling is a second thing to keep in sync). A user wanting one writes their own alias. `yts`/`ytp`/`ytt` and `ut-tui` are deprecated. Never add a second name for an existing command.
 - Per-request choices are **flags**; set-once tuning is an **environment variable** (`YT_*`) — this keeps each verb's flag surface narrow enough for a small model to call safely. Do not add a flag for something a user sets once.
 - Never add a runtime dependency. The suite's differentiator is that it depends only on primitives everyone already has.
 - Prefer small, incremental edits in the existing scripts over refactors that move logic between files.
@@ -228,7 +228,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 ## Commit & Pull Request Guidelines
 
 - **`main` is the working branch** — 54 commits, zero merges, single author. Commit straight to it for ordinary work; take a branch when the change is structural enough to want the staged A→E order below, or when it may need to be abandoned. No stacked branches.
-- Imperative, scoped commit subjects in the existing style — the file or surface first when it helps: `ut-tui: stop Enter stalling a second in utf8_complete`, `add --version, declared once`, `docs: resync DESIGN with the detached-playback TUI`.
+- Imperative, scoped commit subjects in the existing style — the file or surface first when it helps: `uting: stop Enter stalling a second in utf8_complete`, `add --version, declared once`, `docs: resync DESIGN with the detached-playback TUI`.
 - One logical change per commit. Renderer changes come with the capture or the rig output that proves them.
 - `bash -n` on all four scripts before every commit; the relevant rig before every push.
 - **Always ask before `git push`.** Never force-push `main`.
