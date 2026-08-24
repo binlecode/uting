@@ -101,23 +101,14 @@ PyPI、**同领域**的 GitHub 同名仓库。
 agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。想短的人自己写 alias。
 （`ytt` 为什么不能用、为什么人机面直接叫 `uting`：D10。）
 
-### 3.2 被否掉的候选，及原因
-
-| 名字 | Homebrew core | 其他 tap | crates/npm/PyPI | 结论 |
-|---|---|---|---|---|
-| **`uting`** | 空 | 空 | 全空 | **采用** —— 唯一六项全空 |
-| `ting` 听 | 空 | `dhth/tap/ting`（同为命令行音频工具，"叮"） | 全占 | 个人 OSS 勉强可用，但撞商标 `Ting®`（Tucows / Ting Internet）且与那个工具**同词异义**，SEO 全废 |
-| `yting` | 空 | 空 | 全空 | 六项也全空，但**是描述性名字**（`yt-*` 是最挤的角落），焊死 YouTube，读音含混 |
-| `ytt` | **被占** —— carvel `ytt`（YAML 模板工具，1873★，`brew install ytt`） | — | 全占 | 出局。撞的正是同一批用户（k8s 生态）；作者本机有 k8s 相关笔记，说明本人也可能装它 |
-| `tin` | **被占** —— Usenet 阅读器 tin 2.6.5（bottled） | — | 全占 | 出局。语义也丢了（锡/罐头） |
-| `kiku` 聴く | 空 | — | crates 被占（"Kiku (聞く, to listen) 转录引擎"，同一词源） | 出局 |
-| `yin` 音 / `yun` 韵 / `sheng` 声 / `qu` 曲 / `jing` 静 / `chan` 蝉 | — | — | crates + npm 基本全占 | 单音节拼音已被抢完 |
-| `tuna` / `dial` | — | — | — | 撞 Linux 实时调优工具 `tuna(8)` / 一个 AI 语音 CLI |
-| `tingyu` 听雨 / `qingyin` 清音 | 空 | 空 | 全空 | **备选**，若 `uting` 被推翻 |
-
-规律：**短的 `yt*` / `t*` 名字这块地已被翻过一遍**，还空着的只有拼前缀拼出来的 `uting`。
-
-风格先例（名字不描述功能、只做标签）：`yazi`（鸭子）、`nezha`（哪吒）、`atuin`、`zellij`、`kew`。
+**别再提这几个**（六项筛查的结论，记下来是为了挡住重复调研）：`ytt` 撞 carvel 的 YAML 模板工具
+（1873★，`brew install ytt`，而且撞的正是同一批 k8s 用户）；`tin` 撞 Usenet 阅读器；`ting` 撞商标
+`Ting®` 且已有个同名异义的命令行音频工具，SEO 全废；`kiku` 与单音节拼音（`yin`/`yun`/`sheng`/`qu`…）
+在 crates/npm 上已被抢完；`tuna`/`dial` 各有主。**`yting` 六项也全空，但照样否掉** —— 它是描述性
+名字，焊死 YouTube，而 `uting` 的第三层回声会随音源增加体面淡掉、不会变成谎话。
+规律：短的 `yt*` / `t*` 这块地已经被翻过一遍，还空着的只有拼前缀拼出来的 `uting`。
+**备选（若 `uting` 因挪威语含义被推翻，见 §12）：`tingyu` 听雨 / `qingyin` 清音，两个都六项全空。**
+风格先例（名字不描述功能、只做标签）：`yazi`、`nezha`、`atuin`、`zellij`、`kew`。
 
 ---
 
@@ -346,7 +337,7 @@ yt-dlp/mpv**，不再碰网易云。**国内新生代与本项目走在同一条
 
   **不发任何短名。** 六项筛查（§3 方法）：`ut-play` / `ut-search` **PATH·brew·npm·PyPI·crates·
   GitHub 同名 全空**；光杆 `ut` 全占（npm/PyPI/crates + `boost-ext/ut` 1438★），`utt` 也被占
-  （npm/PyPI + `larose/utt` 349★），`ytt` 撞 carvel（§3.2）。想短由用户自建 alias —— 随包发第二个
+  （npm/PyPI + `larose/utt` 349★），`ytt` 撞 carvel（§3.1）。想短由用户自建 alias —— 随包发第二个
   拼法，就是给每一份文档、每一条 allowlist、每一个习惯多一个要同步的东西，正是 §3.1 那条
   "一个命令一个名字"存在的理由。人机面因此不叫 `ut-tui`：那会是 `uting` 的第二种拼法，
   而且是在最显眼的那个命令上破例。
