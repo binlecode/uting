@@ -18,8 +18,8 @@ out here rather than left inside the skills.
 ```
  (research) ──► interrogate ──► pre-mortem ──► design ──► build ──► verify ──► land
       │              │              │             │          │         │          │
-  RESEARCH-       DESIGN-         PLAN-      (SPEC-system  (§24 A-E   (the      (checklist;
-  cited, then    distilled      hardened      §5 seams)   if struct.)  rigs)    PLAN- deleted)
+  RESEARCH-       DESIGN-         PLAN-      (SPEC-system  (§24 A-E   (the two  (checklist;
+  cited, then    distilled      hardened      §5 seams)   if struct.)  suites)  PLAN- deleted)
   distilled + deleted
 
   ...and between units of work, on its own cadence: the whole-tree conformance audit.
@@ -46,7 +46,8 @@ B3. **Design speaks the seam vocabulary, and this repo's doctrine outranks gener
     and depth is judged by what a caller gets per fact they must learn. Explore alternatives
     (2–4 deliberately different shapes) before committing to one. Where generic design
     advice points at a shared library or a mock, `CLAUDE.md`'s carve-outs win: six
-    standalone executables duplicate on purpose, and rigs drive real surfaces.
+    standalone executables duplicate on purpose, and every check invokes a real entry
+    point rather than a seam built to be tested.
 
 B4. **A build is incremental, or it is staged.** Small edits in place for ordinary work; the
     A→E order (`SPEC-system.md` §24) the moment the change is structural — moves logic
@@ -54,8 +55,9 @@ B4. **A build is incremental, or it is staged.** Small edits in place for ordina
 
 B5. **A bug gets a red loop before it gets a theory.** No hypothesis until one command
     exists that goes red on the exact symptom — fast, deterministic, agent-runnable.
-    Harnesses live in `tmp/`; the regression check lands in whichever rig owns the surface
-    (`CLAUDE.md`'s testing rules); the hypothesis that proved out is stated in the commit
+    Harnesses live in `tmp/`; the regression check lands in whichever suite owns the surface
+    (`CLAUDE.md`'s testing rules — and the default move on a gap is to harden an existing
+    check, not to add a file); the hypothesis that proved out is stated in the commit
     message.
 
 B6. **Research is cited or it is opinion.** Outside-world questions (a yt-dlp mechanism, a
@@ -111,11 +113,14 @@ plan; the rejected ones are recorded as rejected. Only now does building start.
 logical change per commit). Anything structural — a new verb touching the player's
 lifecycle — runs A→E with the destructive step last and smallest. A bug found on the way
 gets its red loop before any theory; the loop's harness sits in `tmp/`, the regression
-check graduates into the owning rig.
+check graduates into the owning suite.
 
-**Verify.** The rigs named in `CLAUDE.md` for whatever surfaces changed: the contract rig
-for envelope or exit-code changes, the pane rig for renderer changes, the gated lifecycle
-rig for detached-player changes. Doc frames that went stale are re-captured from real
+**Verify.** The suites named in `CLAUDE.md` for whatever surfaces changed: `tests/contract.sh`
+for envelope or exit-code changes (and for any change at all), the gated
+`tests/lifecycle.sh` for detached-player changes. A renderer change has no suite by design —
+layout is proved when a frame enters a doc, and that lives in the `capture-pane` skill,
+deliberately outside the suite; `tests/drive.sh` is the driver when a TUI change has to be
+driven rather than reasoned about. Doc frames that went stale are re-captured from real
 panes, proven, and spliced — never hand-drawn.
 
 **Land (B7).** The closing checklist runs against `PLAN-queue.md`: every item landed or

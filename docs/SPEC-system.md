@@ -207,9 +207,9 @@ directory that does not exist. bash 3.2 has no `readlink -f`, hence the hand-rol
 dotfiles layout; extracting the suite into its own repo is what exposed it.)
 
 Anything that calls these by name through PATH — agent tool definitions, Claude Code Bash
-allowlist entries — uses exactly the six names above. Callers INSIDE the checkout (the rigs in
+allowlist entries — uses exactly the six names above. Callers INSIDE the checkout (the suites in
 `tests/`, the skills) use the repo-relative `shell/<name>` form instead: they run beside the
-code and must not depend on the user's PATH at all — a rig that resolved through `~/bin`
+code and must not depend on the user's PATH at all — a check that resolved through `~/bin`
 would be testing the install, not the suite.
 
 **Governing principle, unchanged by the split — only sharpened:** correctness is added
@@ -2340,7 +2340,7 @@ kept out of flags to keep each verb's flag surface narrow.
                       terminal, so quiet mpv + no stderr filter)  YT_PLAYER_ID (which
                       record the child backfills title/format into, §9.1)
    Test-only:         YT_TEST_LIFECYCLE (=1 arms tests/lifecycle.sh, which starts real
-                      players; unset it and the rig skips rather than making noise)
+                      players; unset it and the suite skips rather than making noise)
    (color MODE is the --color flag, NOT an env var — the scripts hardcode
     COLOR_MODE=auto at startup and only --color changes it, so a COLOR_MODE env
     value is never read. Theme and background ARE env-read: YT_THEME / YT_BG.)
@@ -2574,7 +2574,8 @@ exit 4) exit 0 so a polling loop never misreads a normal state as failure.
              duplicated per engine ON PURPOSE (§17): a shared library would be a file
              every engine, and transitively the player, would have to know about, which
              is exactly the coupling the split removed. The ENVELOPE is what must not
-             diverge, and §14 plus a rig that runs both engines is what holds it.
+             diverge, and §14 plus a check stated over every DISCOVERED engine is what
+             holds it — engine #3 is covered the day it lands.
 ```
 
 ## 24. Safe-evolution methodology (how this suite is changed)

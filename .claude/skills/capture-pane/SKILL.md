@@ -81,7 +81,7 @@ python3 .claude/skills/capture-pane/assert_pane.py tmp/card.txt 100 card
 ```
 
 If `assert_pane.py` fails, **you found a layout bug — do not paste the frame.** Fix the
-renderer, re-capture. Width measurement lives only in that rig; do not reimplement cell
+renderer, re-capture. Width measurement lives only in `assert_pane.py`; do not reimplement cell
 counting in this skill's script or in a doc-splicing snippet.
 
 ## 5. Splice — Python replace between stable markers, never by hand
