@@ -188,9 +188,11 @@ stops moving is a doc nobody trusts, so each stage names what ends it:
 | plan | `PLAN-<topic>.md` | one feature, ready to build: field names, flags, the verification matrix. Decided already, or it would still be a `DESIGN-`. **Tracks its own progress while the work is in flight** — the status line and per-item state are updated as things land | **delete on landing**, once its contract is in the spec |
 | code-synced spec | `SPEC-<scope>.md` | what the code actually is and why. Every fact in exactly ONE section | never; it is **kept in sync on every change that touches architecture or a contract** |
 
-Today the only scope is `docs/SPEC-system.md`; a per-surface `SPEC-<scope>.md` splits out when one
-earns it. The rule that keeps the family honest is the one that already governs a single file: one
-fact, one section, everything else points at it.
+Today there are two scopes: `docs/SPEC-system.md` (the **application** — what the code is and why)
+and `docs/SPEC-workflow.md` (the **process** — how a unit of work moves through the repo); the two
+do not mix, and a further `SPEC-<scope>.md` splits out when one earns it. The rule that keeps the
+family honest is the one that already governs a single file: one fact, one section, everything
+else points at it.
 
 `PLAN-`, not `TODO-`, for the third stage: a plan **carries work-in-progress state** — it is
 updated as items land and is only deleted when the last one has — whereas a todo is a list of
@@ -200,6 +202,7 @@ things not done, with nowhere to record that three of five now are. The stage ne
 The live files:
 
 - `docs/SPEC-system.md` — architecture, every non-obvious decision and why, the function map, the data contracts, the risk/defect register, and the verification matrix. **Kept in sync on every PR that touches architecture or a contract.**
+- `docs/SPEC-workflow.md` — the development process: which discipline each stage of work is bound to (interrogate → pre-mortem → design → build → verify → land, plus the periodic audit), and the worked walkthrough. The disciplines are normative; the agent skills that automate them are conveniences the checkout does not depend on.
 - `docs/ROADMAP.md` — positioning and non-goals, the naming survey, the OSS-readiness assessment, and the conditions under which the core would move to Go. Consult §0 before adding a feature. **In scope (D14/D15, P4):** queue, playlist management, listening history — to be built in the SHELL version, not deferred to a Go rewrite. **Favourites is NOT a feature** (it is a playlist with a fixed name — one capability, one spelling). A downloader and channel subscriptions are unscheduled. What did NOT change: this is still not a general-purpose local/MPD player, and every one of those features must ship an **agent surface** (a verb plus a `-j` envelope) alongside its keybinding — a TUI-only feature is half a feature here. MCP remains a non-goal, gated by §9.
 - `docs/PLAN-*.md` — whatever is ready to build or in flight, with its progress recorded inline. Empty is a valid state.
 - One repo, one README: there is deliberately no `tests/README.md` — the two suites are described in the root README's `## Tests` section and in their own docstrings.
