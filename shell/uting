@@ -43,6 +43,17 @@ else
     exit 1
 fi
 
+# The playlist store, located the same way and OPTIONAL. Absent, the two playlist keys say
+# so once and the rest of the session is unchanged — the same "a capability is declared by
+# being there" rule an engine follows with --transcript. This file never touches
+# $UT_STATE_DIR itself: the store owns its layout, exactly as ut-play owns players/.
+UT_PLAYLIST=""
+if [[ -x "$SCRIPT_DIR/ut-playlist" ]]; then
+    UT_PLAYLIST="$SCRIPT_DIR/ut-playlist"
+elif command -v ut-playlist >/dev/null 2>&1; then
+    UT_PLAYLIST=$(command -v ut-playlist)
+fi
+
 # THE ENGINE REGISTRY — discovered, not listed. The suite's whole claim is that adding a
 # source is adding a PAIR of scripts and changing nothing else; a hardcoded list of engine
 # names in this file would make that claim false at the third source, and it would be false
@@ -508,6 +519,10 @@ set_ui_lang() {
         S_NO_MATCH="(无匹配"; S_NO_MATCH_KEYS="按 / 改过滤，或 n 重新搜索)"
         S_FILTER_HINT="过滤（输入即筛选，Enter 播放，Esc 清除）"
         S_NOTHING="(暂无正在播放的音频)"; S_BACK_SEARCH="返回搜索列表"; S_PLAY_SEL="播放选中歌曲"
+        S_PL_ADD="加入列表"; S_PL_OPEN="播放列表"; S_PL_ACT="播放列表"
+        S_PL_PROMPT_ADD="加入哪个列表（Esc 取消）"; S_PL_PROMPT_OPEN="打开哪个列表（Esc 取消）"
+        S_PL_ADDED="已加入"; S_PL_EMPTY="该列表是空的"; S_PL_FAILED="操作失败"
+        S_PL_ABSENT="未安装 ut-playlist"; S_PL_SEARCH_ONLY="该键只在搜索结果里可用（按 n 重新搜索）"
     else
         S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_VIEW="view"; S_MODE="mode"
         S_SEARCH="search"; S_MORE="more"; S_SORT="sort"; S_FILTER="filter"
@@ -524,6 +539,10 @@ set_ui_lang() {
         S_NO_MATCH="(no matches"; S_NO_MATCH_KEYS="press / to change filter, or n for new search)"
         S_FILTER_HINT="filter (type to narrow, Enter plays, Esc clears)"
         S_NOTHING="(nothing playing)"; S_BACK_SEARCH="back to results"; S_PLAY_SEL="play selection"
+        S_PL_ADD="add to list"; S_PL_OPEN="playlists"; S_PL_ACT="Playlist"
+        S_PL_PROMPT_ADD="Add to which playlist (Esc cancels)"; S_PL_PROMPT_OPEN="Open which playlist (Esc cancels)"
+        S_PL_ADDED="Added to"; S_PL_EMPTY="that playlist is empty"; S_PL_FAILED="failed"
+        S_PL_ABSENT="ut-playlist is not installed"; S_PL_SEARCH_ONLY="that key needs search results (press n to search)"
     fi
 }
 
@@ -1378,7 +1397,12 @@ print_details() {
     # a glob metacharacter in this expansion and matches the literal '?' of "watch?v=".
     vid="${urls[$i]}"
     vid="${vid#*watch?v=}"
-    meta="${R_CHAN[$i]} $GL_SEP $dur"
+    # A playlist row has no channel (not stored — it expires), so the field is dropped
+    # rather than printed as an empty cell with a separator hanging off it, the same way an
+    # absent view count is dropped above.
+    meta=""
+    [[ -n "${R_CHAN[$i]}" ]] && meta="${R_CHAN[$i]} $GL_SEP "
+    meta+="$dur"
     [[ -n "$views" ]] && meta+=" $GL_SEP $views"
     meta+=" $GL_SEP $vid"
     truncate_disp "$meta" $((width - 2))
@@ -1645,17 +1669,47 @@ build_all_rows() {
         gsub("[\\x{1F000}-\\x{1FAFF}\\x{2190}-\\x{21FF}\\x{2300}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{2122}\\x{2139}]"; "")
         | gsub("\\s+"; " ") | gsub("^ | $"; "");
       def oneline: gsub("\\s+"; " ") | gsub("^ | $"; "");
-      .results[]
+      .engine as $e
+      | .results[]
       | [ .url,
           (.title // "" | clean),
           (.duration_fmt // ""),
           (.view_count | if . == null then "" else tostring end),
           (.channel // "?" | oneline),
-          (.live_status // "")
+          (.live_status // ""),
+          ($e // "")
+        ] | join("\u001f")')
+}
+
+# The same seven-field record, built from a PLAYLIST envelope instead of a search one. A
+# playlist is engine-agnostic — its items can come from different sources — which is why
+# the engine is a per-ROW field rather than one session-wide variable: play_selected reads
+# the row's own engine, so a list mixing yt and bili plays either one correctly.
+# Channel and view count are deliberately empty: they are not stored (they expire), and an
+# empty field renders as absent rather than as a guess. ut-playlist derives duration_fmt on
+# read, so nothing here formats a duration.
+build_playlist_rows() {
+    ALL_ROWS=$(printf '%s' "$json" | jq -r '
+      def clean:
+        gsub("[\\x{1F000}-\\x{1FAFF}\\x{2190}-\\x{21FF}\\x{2300}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{2122}\\x{2139}]"; "")
+        | gsub("\\s+"; " ") | gsub("^ | $"; "");
+      .items[]
+      | [ .url,
+          # An item stored without a title (an agent that had only a URL) falls back to the
+          # URL rather than to an empty row: a blank line in a list you are steering with
+          # arrow keys is unusable, and the URL is language-neutral, so no chrome string.
+          (.title // .url // "" | clean),
+          (.duration_fmt // ""),
+          "",
+          "",
+          "",
+          (.engine // "")
         ] | join("\u001f")')
 }
 
 apply_search_results() {
+    LIST_SOURCE="search"
+    PLAYLIST_NAME=""
     build_all_rows
     FILTER_LABEL=""
     FILTER_MODE=0
@@ -1670,9 +1724,9 @@ apply_search_results() {
 # from the same numbers and cannot disagree about a row.
 load_rows() {
     urls=()
-    R_TITLE=(); R_DUR=(); R_VIEWS=(); R_CHAN=(); R_LIVE=()
-    local url title dur views chan live
-    while IFS="$US" read -r url title dur views chan live; do
+    R_TITLE=(); R_DUR=(); R_VIEWS=(); R_CHAN=(); R_LIVE=(); R_ENGINE=()
+    local url title dur views chan live engine
+    while IFS="$US" read -r url title dur views chan live engine; do
         [[ -n "$url" ]] || continue
         urls+=("$url")
         R_TITLE+=("$title")
@@ -1680,6 +1734,7 @@ load_rows() {
         R_VIEWS+=("$views")
         R_CHAN+=("$chan")
         R_LIVE+=("$live")
+        R_ENGINE+=("$engine")
     done <<<"$1"
     NUM_ENTRIES=${#urls[@]}
     NUM_PAGES=$(( (NUM_ENTRIES + PAGE_SIZE - 1) / PAGE_SIZE ))
@@ -1715,10 +1770,14 @@ display_list_menu() {
     printf '\033[H'
     # Title. Elided like every other row: a long query used to wrap and push the whole layout
     # down a line.
-    local t_head="${GL_NOTE:+$GL_NOTE }$GL_BRAND  query="
+    # The field NAME says where the rows came from. `query='chill'` for a playlist would be
+    # a false statement about the one line that tells you what you are looking at.
+    local head_field="query"
+    [[ "$LIST_SOURCE" == "playlist" ]] && head_field="playlist"
+    local t_head="${GL_NOTE:+$GL_NOTE }$GL_BRAND  $head_field="
     disp_w "$t_head"
     truncate_disp "'$QUERY_LABEL'" $((nav_cols - DISP_W))
-    printf '%s%s%s%s%s  query=%s\033[K\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$TRUNC_TEXT"
+    printf '%s%s%s%s%s  %s=%s\033[K\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$head_field" "$TRUNC_TEXT"
     chrome_h=$((chrome_h + 1))
     
     # Status line
@@ -1728,7 +1787,12 @@ display_list_menu() {
     # terminal because of them.
     # engine= leads the line: with more than one source installed it is the field that
     # changes what every other field means.
-    local st_items=("engine=$ENGINE" "results=$NUM_ENTRIES" "sort=$SORT_FIELD")
+    local st_items
+    if [[ "$LIST_SOURCE" == "playlist" ]]; then
+        st_items=("engine=${PLAYLIST_ENGINES:-?}" "items=$NUM_ENTRIES")
+    else
+        st_items=("engine=$ENGINE" "results=$NUM_ENTRIES" "sort=$SORT_FIELD")
+    fi
     [[ "$MIN_DISP" != "0" ]] && st_items+=("min=${MIN_DISP}s")
     [[ "$MAX_DISP" != "0" ]] && st_items+=("max=${MAX_DISP}s")
     st_items+=("mode=$PLAY_MODE ($status_extra)")
@@ -1791,6 +1855,11 @@ display_list_menu() {
     # nothing (cycle_engine returns immediately).
     if ((${#ENGINES[@]} > 1)); then
         nav_items=("${nav_items[@]:0:9}" "e	$S_ENGINE" "${nav_items[@]:9}")
+    fi
+    # Same rule as the source key: a key that cannot do anything must not spend a cell of a
+    # measured block. With no ut-playlist installed, `a` and `b` genuinely do nothing.
+    if [[ -n "$UT_PLAYLIST" ]]; then
+        nav_items+=("a	$S_PL_ADD" "b	$S_PL_OPEN")
     fi
     # Measure the block before committing the space: on a very short terminal it is 4 lines of
     # a 10-line screen, and printing it would push the header off the top no matter how the
@@ -2398,7 +2467,13 @@ play_selected() {
     # UT_DEFAULT_ENGINE, and letting that default decide would send a second engine's URL to
     # the first engine's resolver — which since ROADMAP D12 is a hard usage error rather
     # than the silent mislabel it used to be.
-    out=$("$UT_PLAY" -d -j --engine "$CURRENT_ENGINE" -f "$PLAY_MODE" ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>"$errfile") || rc=$?
+    # The ROW's engine, not the session's: a playlist can mix sources, and passing the
+    # session engine would hand a bili URL to yt-resolve — a hard usage error since D12.
+    # Falls back to the session engine for a row that predates the field (an empty string
+    # never reaches ut-play, which would reject it).
+    local row_engine="${R_ENGINE[$selected]:-}"
+    [[ -n "$row_engine" ]] || row_engine="$CURRENT_ENGINE"
+    out=$("$UT_PLAY" -d -j --engine "$row_engine" -f "$PLAY_MODE" ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>"$errfile") || rc=$?
     msg=$(<"$errfile")
     rm -f "$errfile"
     if ((rc != 0)); then
@@ -2463,6 +2538,123 @@ play_selected() {
     CURRENT_PLAY_STARTED=$(date +%s 2>/dev/null || echo 0)
 }
 
+# ── Playlist actions (keys: a add · b browse) ───────────────────────────────────────────
+#
+# THIS FILE STORES NOTHING. Both actions shell out to `ut-playlist` and hand it JSON, the
+# same way play_selected shells out to `ut-play`: the store owns the directory layout, the
+# lock and the record shape, and a bug in any of the three is fixed in ONE file for every
+# surface. A version of `a` that appended to a file here would be the exact shape
+# CLAUDE.md forbids — correctness added up, in a UI, instead of down.
+#
+# A short notice, then a keypress. Same contract as play_failed_notice, with a caller-
+# supplied label, because "Play failed:" is the wrong word for a store that is not there.
+store_notice() {
+    printf '\n%s%s%s %s\n' "$C_BOLD" "$1" "$C_RESET" "$2"
+    press_any_key
+}
+
+have_store() {
+    [[ -n "$UT_PLAYLIST" ]] && return 0
+    store_notice "$S_PL_ACT:" "$S_PL_ABSENT"
+    return 1
+}
+
+# Prompt for a playlist name, echoing what is typed. Esc / empty cancels, exactly like the
+# n prompt this borrows its reader from — one reader owns UTF-8 assembly, backspace width
+# and the cancel contract for every prompt in the app.
+prompt_name() {
+    PROMPT_NAME=""
+    printf '\n%s%s %s%s: ' "$C_BOLD" "$GL_CARET" "$1" "$C_RESET"
+    read_query_input || return 1
+    [[ -n "${QUERY_INPUT//[[:space:]]/}" ]] || return 1
+    PROMPT_NAME="$QUERY_INPUT"
+    return 0
+}
+
+# Add the focused row to a playlist. The item is cut from the SEARCH ENVELOPE by url rather
+# than rebuilt from the row arrays: the envelope carries the engine tag and the exact field
+# spellings the store wants, so nothing here knows the item record — and the row arrays are
+# filtered and re-ordered, so an index into them is not an index into .results.
+add_to_playlist() {
+    ((NUM_ENTRIES > 0)) || return 0
+    have_store || return 0
+    local url="${urls[$selected]}" name payload rc=0 msg errfile
+    if [[ "$LIST_SOURCE" == "playlist" ]]; then
+        payload=$(printf '%s' "$json" | jq -c --arg u "$url" \
+            '{items: [.items[] | select(.url == $u)]}' 2>/dev/null) || payload=""
+    else
+        payload=$(printf '%s' "$json" | jq -c --arg u "$url" \
+            '{status: "ok", engine: .engine, count: 1, results: [.results[] | select(.url == $u)]}' 2>/dev/null) || payload=""
+    fi
+    if [[ -z "$payload" ]]; then
+        store_notice "$S_PL_ACT:" "$S_PL_FAILED"
+        return 0
+    fi
+    prompt_name "$S_PL_PROMPT_ADD" || return 0
+    name="$PROMPT_NAME"
+    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-pl-err.$$"
+    printf '%s' "$payload" | "$UT_PLAYLIST" --add "$name" -j >/dev/null 2>"$errfile" || rc=$?
+    msg=$(<"$errfile")
+    rm -f "$errfile"
+    if ((rc != 0)); then
+        msg=${msg##*$'\n'}
+        msg=${msg#ut-playlist: }
+        [[ -n "${msg//[[:space:]]/}" ]] || msg="$S_PL_FAILED"
+        store_notice "$S_PL_ACT:" "$msg"
+        return 0
+    fi
+    printf '\n%s%s%s %s %s\n' "$C_BOLD" "$S_PL_ADDED" "$C_RESET" "$GL_ARROW" "$name"
+    press_any_key
+}
+
+# Load a playlist as the row source. The list view is unchanged — same renderer, same
+# filter, same keys — because a playlist envelope produces the same seven-field row a
+# search does (build_playlist_rows). What changes is LIST_SOURCE, which is what the
+# search-only keys (m / o / e) test before re-fetching a query that is no longer on screen.
+open_playlist() {
+    local name="$1" out rc=0 cnt errfile
+    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-pl-err.$$"
+    out=$("$UT_PLAYLIST" --show "$name" -j 2>"$errfile") || rc=$?
+    local msg; msg=$(<"$errfile")
+    rm -f "$errfile"
+    if ((rc != 0)); then
+        msg=${msg##*$'\n'}
+        msg=${msg#ut-playlist: }
+        store_notice "$S_PL_ACT:" "${msg:-$S_PL_FAILED}"
+        return 1
+    fi
+    cnt=$(printf '%s' "$out" | jq -r '.count // 0' 2>/dev/null || echo 0)
+    if [[ "$cnt" == "0" ]]; then
+        store_notice "$S_PL_ACT:" "$S_PL_EMPTY"
+        return 1
+    fi
+    json="$out"
+    LIST_SOURCE="playlist"
+    PLAYLIST_NAME="$name"
+    # One label for the whole list, computed once: a mixed playlist says so rather than
+    # claiming the session engine, which is not what its rows will play under.
+    PLAYLIST_ENGINES=$(printf '%s' "$out" | jq -r '[.items[].engine] | unique | join("+")' 2>/dev/null) || PLAYLIST_ENGINES=""
+    QUERY_LABEL="$name"
+    build_playlist_rows
+    FILTER_LABEL=""
+    FILTER_MODE=0
+    selected=0
+    page_index=1
+    load_rows "$ALL_ROWS"
+    return 0
+}
+
+# List what is stored, then ask which one. A picker widget would be a second list renderer
+# in a file that already has one, and the prose --ls output is the store's own answer to
+# "what have I got" — printed, not re-rendered here.
+browse_playlists() {
+    have_store || return 0
+    printf '\n'
+    "$UT_PLAYLIST" --ls || true
+    prompt_name "$S_PL_PROMPT_OPEN" || { display_menu "$page_index"; return 0; }
+    open_playlist "$PROMPT_NAME" || return 0
+}
+
 # ── MODE action (key: v) ────────────────────────────────────────────────────────────────
 cycle_mode() {
     local i n=${#MODE_CYCLE[@]} cur=0
@@ -2513,6 +2705,11 @@ new_search() {
 
 # ── MORE action (key: m) ────────────────────────────────────────────────────────────────
 more_results() {
+    # Search-only: it re-fetches the QUERY, and a playlist on screen has none.
+    if [[ "$LIST_SOURCE" != "search" ]]; then
+        store_notice "$S_PL_ACT:" "$S_PL_SEARCH_ONLY"
+        return 0
+    fi
     local prev="$RESULT_N" rc=0 page="$page_index" sel="$selected"
     RESULT_N=$(( RESULT_N + 25 ))
     printf '\n%s%s%s %s %s "%s" %s %s %s%s' \
@@ -2545,6 +2742,11 @@ more_results() {
 # would query one source under the other's label — the exact confusion the `engine` field
 # exists to prevent.
 cycle_engine() {
+    # Search-only: it re-fetches the QUERY, and a playlist on screen has none.
+    if [[ "$LIST_SOURCE" != "search" ]]; then
+        store_notice "$S_PL_ACT:" "$S_PL_SEARCH_ONLY"
+        return 0
+    fi
     if ((${#ENGINES[@]} < 2)); then
         return 0
     fi
@@ -2573,6 +2775,11 @@ cycle_engine() {
 }
 
 cycle_sort() {
+    # Search-only: it re-fetches the QUERY, and a playlist on screen has none.
+    if [[ "$LIST_SOURCE" != "search" ]]; then
+        store_notice "$S_PL_ACT:" "$S_PL_SEARCH_ONLY"
+        return 0
+    fi
     # The page/selection reset in apply_search_results is DELIBERATE here, unlike in
     # more_results: re-sorted rows put a different video under the old index, so keeping the
     # index would move the highlight to a track the user never selected.
@@ -2864,6 +3071,13 @@ move_selection() {
 }
 
 # ── Initial fetch ───────────────────────────────────────────────────────────────────────
+# Where the rows on screen came from. Everything that RE-FETCHES a query (m / o / e) is
+# search-only and tests this; everything that works on the rows themselves (arrows, Enter,
+# /, v, the playback keys) does not care and is left alone.
+LIST_SOURCE="search"
+PLAYLIST_NAME=""
+PLAYLIST_ENGINES=""
+PROMPT_NAME=""
 FILTER_LABEL=""
 FILTER_MODE=0
 selected=0
@@ -2975,6 +3189,8 @@ while true; do
     v | V) cycle_mode ;;      # rotate playback mode
     l | L) cycle_ui_lang ;;   # toggle chrome language (en <-> zh)
     t | T) cycle_theme ;;     # cycle palette family live
+    a | A) add_to_playlist ;; # add the focused row to a playlist
+    b | B) browse_playlists ;;# open a stored playlist as the row source
     "/") filter_live ;;       # LIVE incremental filter
     q | Q) printf '%s%s\n' "$S_QUITTING" "$GL_ELL"; exit 0 ;;
     ESC) ;;
