@@ -2867,7 +2867,7 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 ## 27. Verification matrix
 
-**Last run: 2026-08-24, both suites green** — `contract.sh` **121 ok / 0 failed / 0 known
+**Last run: 2026-08-24, both suites green** — `contract.sh` **126 ok / 0 failed / 0 known
 drift**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **16 ok / 0 failed**, with `pgrep mpv` empty
 afterwards.
 
@@ -2886,6 +2886,15 @@ the screen will not be caught by a test — only by the next doc capture.
 > nothing else, so **two overlapping runs (or a stray detached player) corrupt each other's
 > fixtures**. Treat a single red run as inconclusive until it repeats; the durable fix is a
 > per-run state dir, which is not built yet.
+>
+> **2026-08-24 sharpens the mechanism, and it is worse than "two overlapping runs".** The same
+> cluster went red twice while an ordinary interactive `uting` was open in another window, then
+> passed 3/3 in a row (40 checks, isolated) minutes later with nothing else changed. The reaper
+> is not the other RUN — it is **any concurrent reader of the state dir**: every lifecycle verb
+> reaps, so one `ut-play --status` from anywhere, including a TUI's liveness poll, deletes the
+> tombstone fixtures between the `mkfake` and the assertion. A green suite therefore means
+> "green with no other uting on this uid", which is a condition the file does not enforce and
+> the reason the per-run state dir is the real fix rather than a tidy-up.
 
 **No *scratch* check is named by path here, on purpose.** The exception is the four files
 that earned a permanent home and are committed under `tests/` — the two suites `contract.sh`
