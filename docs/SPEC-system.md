@@ -3537,12 +3537,20 @@ nothing in the checkout depends on their presence.
    `docs/RESEARCH-<topic>.md` with each claim cited — then distilled into a ROADMAP entry
    or `DESIGN-` and deleted, per the lifecycle.
 
-7. **A session ends by sorting its residue.** Durable state — settled decisions, work-in-
+7. **A landing is a checklist, not a feeling.** The unit of work closes against the
+   document that authorized it, atomically: every plan item landed or explicitly
+   deferred, every `done_when` executed rather than read, accepted pre-mortem fixes
+   verified in, review findings resolved, the spec resynced, the `PLAN-` doc deleted,
+   the version judged (its own commit if bumped). Skipping the housekeeping half means
+   the work has not landed — the code is merely present. Landing closes the unit of
+   work, not the code's liability: that stays with §25 and rule 9 below.
+
+8. **A session ends by sorting its residue.** Durable state — settled decisions, work-in-
    progress position — is written into the in-flight `PLAN-` doc before the session
    closes; only conversation-shaped remainder (untested hunches, the next command to run)
    goes to a `tmp/` handoff note. The dividing line: if it still has value after the next
    session consumes it, it is not handoff content.
 
-8. **Accretion is audited, not watched for.** Diff review catches what a change
+9. **Accretion is audited, not watched for.** Diff review catches what a change
    introduces; the whole-tree sweep (`/audit-conformance`, this repo's own skill) catches
    what accumulates between changes. Its cadence and rules are its own file's.
