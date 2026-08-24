@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# uting — interactive terminal browser for YouTube (self-rendered menu). Owned glue, not a
-# client: the human-facing surface, ZERO YouTube logic. It composes the headless verbs with jq.
+# uting — interactive terminal browser for whatever engines are installed (self-rendered
+# menu). Owned glue, not a client: the human-facing surface, ZERO SITE logic. It composes the
+# headless verbs with jq.
 #
 # Delegates core jobs to headless binaries:
-#   search (network fetch) → yt-search -j <query>   (JSON envelope)
+#   search (network fetch) → <engine>-search -j <query>   (JSON envelope)
 #   play                   → ut-play -d -j -f MODE -- url  (ASYNCHRONOUS: detached background player)
 #   filter (narrow rows)   → pure bash, no external tool
 #
@@ -112,7 +113,7 @@ ENGINE_SEARCH=""
 
 print_usage() {
     cat <<'EOF'
-uting — interactive terminal browser for YouTube
+uting — interactive terminal browser for the installed engines
 
 Usage:
   uting [options] [search query]
@@ -2413,7 +2414,7 @@ play_selected() {
         return 1
     fi
     # id/pid/sock in one jq pass. The socket path is READ FROM THE ENVELOPE, never rebuilt:
-    # it is the core's private state layout, and hardcoding "$TMPDIR/yt-cli-$(id -u)/mpv-
+    # it is the core's private state layout, and hardcoding "$TMPDIR/uting-$(id -u)/mpv-
     # $id.sock" here duplicated it in a second script that would break silently if the core
     # ever moved its state dir. SPEC-system.md §9.3.
     # US, not tab, for the same reason build_all_rows uses it: all three fields default to

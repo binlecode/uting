@@ -264,7 +264,7 @@ report "--stop --all line"  1 "$(shell/ut-play --stop --all -j | wc -l | tr -d '
 # per player, which is a 30x slowdown no output assertion would notice. python3-gated: the
 # rest of this file is dependency-free on purpose.
 echo "── live read: four properties, one round trip, null != false ──────"
-SD="${TMPDIR:-/tmp}/yt-cli-$(id -u)"
+SD="${TMPDIR:-/tmp}/uting-$(id -u)"
 if ! command -v python3 >/dev/null 2>&1; then
     echo "  skip  (needs python3 for tests/mpv_ipc_mock.py)"
 else
@@ -331,7 +331,7 @@ fi
 # reaper reads; the code under test (reap, classify, prune, envelope) is the real one, driven
 # through the real verb. Like --stop --all above, this writes in the live state dir.
 echo "── the death record: failures only, bounded, never inferred ───────"
-SD="${TMPDIR:-/tmp}/yt-cli-$(id -u)"
+SD="${TMPDIR:-/tmp}/uting-$(id -u)"
 mkfake() { # <id> <rc|""> [ended_at]   — a dead player, with or without an epitaph
     mkdir -p "$SD/players"
     printf '{"id":"%s","pid":999999,"url":"https://youtu.be/%s","mode":"audio","format":"ba","started_at":"2026-01-01T00:00:00Z","log":"%s/mpv-%s.log","sock":"%s/mpv-%s.sock","title":null,"volume":50}\n' \

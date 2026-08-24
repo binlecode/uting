@@ -43,9 +43,9 @@ SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
 # THE version of the whole suite, declared once — in a data file, not in code. See the same
 # block in yt-search / yt-resolve / ut-play. CLAUDE.md § one fact, one place.
 if [[ -r "$SCRIPT_DIR/VERSION" ]]; then
-    YT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
+    UT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
 else
-    YT_VERSION="unknown"
+    UT_VERSION="unknown"
 fi
 
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
@@ -530,7 +530,7 @@ while (($#)); do
     -V | --version)
         # Answered before ANY dependency gate: a version is the first thing a bug report
         # needs, and needing curl installed to find out which version you have is backwards.
-        printf 'bili-search %s\n' "$YT_VERSION"
+        printf 'bili-search %s\n' "$UT_VERSION"
         exit 0
         ;;
     -l | --list)

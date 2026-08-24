@@ -21,9 +21,9 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # direction for a player that must not know its engines. A one-line file each reads keeps
 # "one fact, one place" with zero code sharing. CLAUDE.md § one fact, one place.
 if [[ -r "$SCRIPT_DIR/VERSION" ]]; then
-    YT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
+    UT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
 else
-    YT_VERSION="unknown"
+    UT_VERSION="unknown"
 fi
 # Path to this script, used to re-exec a detached playback child (see detach_play).
 SELF="${BASH_SOURCE[0]}"
@@ -895,7 +895,7 @@ detach_play() {
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         # sock/log are part of the envelope so a caller never has to RECONSTRUCT them from
-        # the state-dir layout (uting used to hardcode "$TMPDIR/yt-cli-$(id -u)/mpv-$id.sock",
+        # the state-dir layout (uting used to hardcode "$TMPDIR/uting-$(id -u)/mpv-$id.sock",
         # duplicating a private path in a second script). SPEC-system.md §9.3.
         jq -nc \
             --arg id "$id" --argjson pid "$pid" --arg url "$url" --arg mode "$PLAYBACK_MODE" \
@@ -1299,7 +1299,7 @@ STOP_ALL=0           # --stop --all
 RESOLVED_ID=""       # resolve_target out-param: the resolved player id
 RESOLVE_ERR=""       # resolve_target out-param: "not_playing" | "ambiguous"
 RESOLVE_PLAYERS_JSON="[]"  # resolve_target out-param: candidates on ambiguity
-STATE_DIR="${TMPDIR:-/tmp}/yt-cli-$(id -u)"
+STATE_DIR="${TMPDIR:-/tmp}/uting-$(id -u)"
 PLAYERS_DIR="$STATE_DIR/players"   # one <id>.json per detached player
 
 # Actions are mutually exclusive; a caller asking for two used to silently get whichever
@@ -1455,7 +1455,7 @@ while getopts ":f:S:dljhV" opt; do
     # Answered before ANY dependency gate: a version is the first thing a bug report needs,
     # and needing yt-dlp installed to find out which version you have is backwards.
     V)
-        printf 'ut-play %s\n' "$YT_VERSION"
+        printf 'ut-play %s\n' "$UT_VERSION"
         exit 0
         ;;
     :)

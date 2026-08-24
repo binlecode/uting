@@ -255,4 +255,4 @@ Report: docs/PLAN-conformance-<date>.md
 
 **Cadence:** periodic, not per-commit — the residue accumulates between runs by design. Good
 triggers: `git log` shows the same cleanup repeating, before making the repo public, before a
-`YT_VERSION` bump, or after any change that touched two surfaces at once.
+`UT_VERSION` bump, or after any change that touched two surfaces at once.
