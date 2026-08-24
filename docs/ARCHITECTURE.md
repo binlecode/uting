@@ -77,7 +77,8 @@ document's own series** — `ROADMAP.md` keeps a separate one, and a reference t
 written `ROADMAP D9`, never a bare `D9`.
 
 ```
-  D0  Names: ut-play, yt-search, yt-resolve, bili-search, bili-resolve, uting —
+  D0  Names: ut-play, yt-search, yt-resolve, bili-search, bili-resolve, ut-playlist,
+      uting —
       the canonical name every doc, help text and error message uses. ONE name per
       command, and NO short form ships: yts/ytp/ytt are all retired (ROADMAP D10).
       Three naming rules, one per audience: the human face is the release name
@@ -98,7 +99,7 @@ written `ROADMAP D9`, never a bare `D9`.
   D5  No fzf / interactive dependency anywhere in the suite.                  (§11)
   D6  No third-party media-client dependency.                                 (§2)
   D7  RETIRED and inverted at the split. Was: one shared core, verbs are thin gates
-      that exec into it. There is no core: six peers, each self-gating, each owning
+      that exec into it. There is no core: seven peers, each self-gating, each owning
       its own primitive calls. What they share is the ENVELOPE, not code.     (§4)
   D8  uting composes the VERBS only — never an engine's internals, never mpv
       except through the socket the player published.                        (AS-BUILT-contract.md §2)
@@ -121,11 +122,16 @@ written `ROADMAP D9`, never a bare `D9`.
   D13 An engine states a capability by HAVING the verb. `bili-resolve` has no
       --transcript because the site serves no captions — rather than a verb that
       always answers "none", which a caller cannot distinguish from a bad day. (AS-BUILT-contract.md §1)
+  D14 DURABLE state is a command of its own, and lives outside $TMPDIR. `ut-playlist`
+      owns the user-level store; the player's `players/` stays runtime-only and dies
+      with the reboot. The stored record is {engine, url, …} — the two arguments of
+      `ut-play`, so a record is a CALL, not a reference. The queue is the deliberate
+      exception: it is a playlist being consumed, so it belongs to the player.  (§9.4)
 ```
 
 ## 4. Command topology & file layout
 
-**Six commands, one layer, no library.** There is no core and there are no wrappers. Each
+**Seven commands, one layer, no library.** There is no core and there are no wrappers. Each
 file is a complete, PATH-exposed executable that gates its own flags and calls its own
 primitives. They divide by *what kind of knowledge they hold*, not by who calls whom:
 
@@ -133,7 +139,9 @@ primitives. They divide by *what kind of knowledge they hold*, not by who calls 
 - **an engine** is a PAIR — `<name>-search` (query → results) and `<name>-resolve`
   (handle → stream URL + headers, plus whatever read-only verbs the site supports) — and
   holds **all** of one site's knowledge;
-- **the human face** (`uting`) holds rendering and holds neither.
+- **the store** (`ut-playlist`) holds durable user-level state and knows neither site nor
+  playback — its record is `{engine, url}`, which is a CALL rather than a reference (§9.4);
+- **the human face** (`uting`) holds rendering and holds none of them.
 
 ```
                           PATH entries (user-created symlinks)
@@ -143,13 +151,15 @@ primitives. They divide by *what kind of knowledge they hold*, not by who calls 
         ├── yt-search    → <checkout>/shell/yt-search      agent surface
         ├── yt-resolve   → <checkout>/shell/yt-resolve     agent surface
         ├── bili-search  → <checkout>/shell/bili-search    agent surface
-        └── bili-resolve → <checkout>/shell/bili-resolve   agent surface
+        ├── bili-resolve → <checkout>/shell/bili-resolve   agent surface
+        └── ut-playlist  → <checkout>/shell/ut-playlist    agent surface (optional)
               ONE name per command; no short form ships (ROADMAP D10)
 
    Runtime graph — site knowledge ONLY in an engine pair, playback ONLY in the player:
 
-     uting ──► <engine>-search -j ──► render ──► ut-play -d -j --engine <name>
-        │                                              │
+     uting ──► <engine>-search -j ──► render ──► ut-play -d -j --engine <row's engine>
+        │  ▲                                           │
+        │  └──── ut-playlist --show -j   same rows, other source (§9.4)
         └──► nc -U <sock>  (the player published the path; §9.3)
                                                        ▼
                                    ut-play ──► <engine>-resolve -j -f MODE
@@ -181,7 +191,7 @@ models: in practice `ut-play` is its caller, and what a model sees is `<engine>-
 file, sources nothing from it, and holds no list of valid names — an unknown `--engine` is
 discovered by the concatenated path not existing. This is the same dependency-direction rule
 that put the version in `shell/VERSION`: a one-line data file, because a variable inside any
-one of six independent executables would make the other five ask *that* file for the version,
+one of seven independent executables would make the other six ask *that* file for the version,
 and the player asking an engine anything except "resolve this" is the coupling the split
 removed.
 
@@ -207,7 +217,7 @@ directory that does not exist. bash 3.2 has no `readlink -f`, hence the hand-rol
 dotfiles layout; extracting the suite into its own repo is what exposed it.)
 
 Anything that calls these by name through PATH — agent tool definitions, Claude Code Bash
-allowlist entries — uses exactly the six names above. Callers INSIDE the checkout (the suites in
+allowlist entries — uses exactly the seven names above. Callers INSIDE the checkout (the suites in
 `tests/`, the skills) use the repo-relative `shell/<name>` form instead: they run beside the
 code and must not depend on the user's PATH at all — a check that resolved through `~/bin`
 would be testing the install, not the suite.
@@ -1029,6 +1039,71 @@ never demands it (AS-BUILT-contract.md §4).
 - lwilletts/mpvc — reference for the `set_volume` command shape; its reply parsing
   (greps `"success"`, no `request_id`) is deliberately **not** copied.
 
+### 9.4 The durable state layer (`ut-playlist`) — and the line between it and `players/`
+
+§9.1–§9.3 describe state that is SUPPOSED to die: a player record lives in
+`${TMPDIR:-/tmp}/uting-$(id -u)`, it is reaped when its process group goes, and the whole
+directory is erased on reboot. That is correct for a running process and fatal for a list a
+user spent six months building. So the first listening feature (ROADMAP P4) begins with a
+second, separate store:
+
+```
+   $UT_STATE_DIR/                      default ${XDG_STATE_HOME:-~/.local/state}/uting
+     playlists/<name>.json             one file per playlist, atomic temp+mv
+     playlists/.lock-<name>/           mkdir lock, same primitive as lock_player_state
+```
+
+**The record is a call, not a reference.** An item is `{engine, id, url, title, duration,
+added_at}` — a subset of a search result with the envelope's `engine` folded in, because
+`engine` + `url` are exactly the two arguments of `ut-play --engine E -- URL`. Storing a bare
+URL would throw the routing fact away and force some later surface to guess it, which since
+ROADMAP D12 is a hard usage error rather than the silent mislabel it used to be. `channel`,
+`view_count` and `live_status` are deliberately not stored: playback does not need them and
+they expire into wrong answers. Schemas → AS-BUILT-contract.md §3.
+
+**Why a seventh command rather than a flag on something that exists.** The store shares
+nothing with the player but the lock primitive, and nothing with an engine at all. Inside
+`ut-play` it would give the player cross-playback state and a second kind of file to own;
+inside `uting` it would be state written by a renderer — correctness added UP, in a UI,
+where only one of the two surfaces inherits it. As its own verb it is one call for an agent
+and the same call for the TUI.
+
+**Three differences from the player's lock, all forced by durability.**
+`lock_player_state` proceeds unlocked on timeout, because its writes are best-effort field
+patches. This one (a) FAILS on timeout — exit 4, `locked` — because an unlocked write here
+can drop the track the user just added; (b) STEALS a lock older than a minute, because the
+EXIT trap releases it on every normal death including `die`, so a stale dir means a SIGKILL,
+and a playlist that can never be written again is worse than a torn write nobody has seen;
+(c) is proved by a check that was watched to fail — with the lock stubbed out, eight
+concurrent `--add` calls leave ONE item (measured), which is exactly the read-modify-write
+race the pattern exists to stop.
+
+**The name IS the filename.** No slug: a slug makes the name on screen and the name on disk
+two facts, and then one of them is wrong. The cost is a validator (no `/`, no control
+characters, no leading `.`, ≤64 characters) and one accepted limitation — on a
+case-insensitive filesystem, macOS's default, `Rock` and `rock` are the same playlist. It is
+documented rather than normalised: bash 3.2 has no `${var,,}` and `tr` is wrong on UTF-8, so
+any normalisation written here would be a lie for exactly the names most likely to need it.
+
+**What the TUI does and does not do with it.** `uting` gained two keys — `a` adds the focused
+row, `b` opens a playlist as the row source — and **stores nothing itself**: both shell out
+to `ut-playlist` with JSON, the way `play_selected` shells out to `ut-play`. The item handed
+to `--add` is cut from the SEARCH ENVELOPE by url, not rebuilt from the row arrays: the
+envelope carries the engine tag and the exact field spellings, so the TUI never learns the
+item record — and the row arrays are filtered and re-ordered, so an index into them is not
+an index into `.results`.
+
+The row record grew a seventh field, `engine`, and that is what makes a mixed playlist
+playable: `play_selected` passes the ROW's engine, where the session engine would send a
+Bilibili URL to `yt-resolve`. Because a playlist envelope produces the same seven-field row
+a search does, the list view, the filter and the paging are unchanged — the only keys that
+had to learn about the new source are the three that RE-FETCH a query (`m`, `o`, `e`), which
+a playlist does not have.
+
+**What is NOT here: the queue.** A queue is a playlist being consumed, and it belongs to the
+player, in the player's runtime state. A queue that survives a reboot IS a playlist — that
+judgement is what keeps the two stores apart. ROADMAP P4 / `docs/PLAN-listening.md` §3.
+
 ## 10. Resolve — the engine's half two
 
 `<engine>-resolve` turns a **handle** into everything needed to play it, and carries the
@@ -1729,15 +1804,17 @@ with fewer than two engines it returns immediately and the affordance is not dra
     crosses a one-line/three-line title; that is the accepted cost of an uncapped title, and
     the reflow already recomputes it every redraw. On a terminal too short to pay for both,
     the block goes and the rows stay — the same trade the navigation hints make.
-  - **Six raw fields per row, US-separated — never a rendered string, and never tab.** The
+  - **Seven raw fields per row, US-separated — never a rendered string, and never tab.** The
     details section needs channel, views, liveness and an id per row, so a row stopped being
-    one display string. `IFS=$'\t' read` **collapses runs of tabs** (tab is an IFS
+    one display string. The seventh field is the row's own `engine`, added when a playlist
+    became a second row source (§9.4): a stored list can mix sources, so "which engine plays
+    this row" is a property of the ROW, not of the session. `IFS=$'\t' read` **collapses runs of tabs** (tab is an IFS
     *whitespace* character), so one empty field silently shifts every field after it — and a
     live row's `duration_fmt` IS empty, which is exactly how a prototype came to read a
     channel name as a view count. ASCII US (0x1f) is not IFS whitespace, so empty fields
     survive; `clean`/`oneline` collapse whitespace in the two free-text fields so no field can
     contain a newline and split one record into two. The video id is derived from the url
-    rather than carried as a seventh field. `play_selected` reads the arrays directly, which
+    rather than carried as a field of its own. `play_selected` reads the arrays directly, which
     also retired its old habit of re-parsing the composed display string by splitting on
     ` · ` — a title containing that separator mis-split. The same tab trap was latent in the
     `ut-play -d -j` envelope parse (`id`/`pid`/`sock`, all defaulting to `""`, `@tsv`-joined:
@@ -2010,6 +2087,17 @@ Moved → `AS-BUILT-contract.md` §5.
                   resolve_transcript / transcript_fail (§10.2)
      bili-resolve    : no transcript half at all — the capability rule (D13)
 
+   Store (shell/ut-playlist) — no site knowledge, no playback, jq only
+     Setup/util : die, require_cmd, validate_enum, now_utc, print_usage, set_action,
+                  fail (the state-error envelope: not_found | exists | invalid_name |
+                  invalid_input | locked — its OWN enum, §9.4), JQ_PRELUDE (fmt_dur)
+     Store      : playlist_file/playlist_lock, ensure_store, validate_name,
+                  lock_playlist/release_lock (fails on timeout, steals a stale dir),
+                  write_playlist (temp+mv), read_items (stdin → the item record; returns
+                  through a GLOBAL because a command substitution would swallow its
+                  error envelope in a subshell)
+     Verbs      : do_ls, do_show, do_add, do_rm, do_del (idempotent), do_rename
+
    Interactive  : uting   (fetch_json → build_all_rows → load_rows → menu loop:
                   display_menu · read_nav_input · move_selection · play_selected ·
                   new_search [read_query_input, Esc cancels] · filter_live → apply_filter)
@@ -2040,6 +2128,11 @@ Moved → `AS-BUILT-contract.md` §5.
      Formatters : fmt_sec (clock), short_dur (duration_fmt → 6:10:58), commas
      Engines    : scan_engines / engine_seen / engine_search_bin (discovery by pair,
                   §11), cycle_engine (the `e` key: switch source and re-fetch)
+     Playlists  : build_playlist_rows (a playlist envelope → the same seven-field row a
+                  search builds), add_to_playlist (`a`), browse_playlists / open_playlist
+                  (`b`), prompt_name (the `n` prompt's reader, reused), have_store /
+                  store_notice — all of them shelling out to ut-playlist, storing nothing
+                  here (§9.4)
 ```
 
 **The repetition across the four engine files is deliberate, not drift.** `die`,
@@ -2163,7 +2256,7 @@ exit 4) exit 0 so a polling loop never misreads a normal state as failure.
 | Error taxonomy | branch on a cause, not raw wording | ✅ fixed `reason` enum |
 | Config surface | per-request in flags; set-once as env | ✅ flags per-call; env for tuning |
 | Ownership | no client lock-in; both surfaces portable | ✅ owned player + engines + glue; primitives behind seams |
-| Entry-point shape | separate verbs beat one mode-flagged command | ✅ six narrow verbs, no dispatcher, no wrapper tier |
+| Entry-point shape | separate verbs beat one mode-flagged command | ✅ seven narrow verbs, no dispatcher, no wrapper tier |
 | Extensibility | a new capability must not edit the caller | ✅ a new source = one engine PAIR; player and TUI unchanged (proved by step C) |
 
 ## 23. Clean / Safe / Modular / DRY adherence
@@ -2174,7 +2267,7 @@ exit 4) exit 0 so a polling loop never misreads a normal state as failure.
    Safe    : exit-code contracts preserved across two restructures; TTY guards;
              interactive path never absent during change (§24); destructive edits
              grep-gated.
-   Modular : six peers, one layer, one explicit dependency graph; each primitive behind
+   Modular : seven peers, one layer, one explicit dependency graph; each primitive behind
              a single seam, and the seams split by file (§5).
    DRY     : the rule is one fact one PLACE, which is not the same as one COPY.
              Playback and lifecycle exist once (the player). One site's knowledge exists
@@ -2718,13 +2811,14 @@ new-search/more-results instead of `n`/`m`; also corrected.
   `audio` is the norm and `video`/`fast` open their own GUI window.
 - Blocking playback (`ut-play -- <handle>` / `-j`) returns only when playback ends; use
   `--detach`+`--status`/`--stop`, or `<engine>-resolve`, for non-blocking agent flows.
-- **Scope note (ROADMAP D14/D15):** a queue, playlist management and listening history are
-  planned work in the shell version (ROADMAP P4) — not specified here until one lands, at which
-  point its data model and its agent verb arrive together. Favourites is deliberately not a
-  feature (a playlist with a fixed name); a downloader and channel subscriptions are
-  unscheduled. Nothing in them is specified here yet; when one lands, its data
-  model and its agent verb come with it. The constraint they inherit from this document: a
-  feature with a keybinding and no verb + `-j` envelope is half-built.
+- **Scope note (ROADMAP D14/D15):** of the three listening features, **playlist management
+  has landed** — it is specified in §9.4 and AS-BUILT-contract.md §1.5, and it arrived with
+  its agent verb and its `-j` envelope in the same commit as its keybinding, which is the
+  constraint all three inherit: a feature with a keybinding and no verb is half-built. The
+  **queue** and **listening history** remain planned work in the shell version (ROADMAP P4,
+  in flight in `docs/PLAN-listening.md`) and are not specified here until they land.
+  Favourites is deliberately not a feature (a playlist with a fixed name); a downloader and
+  channel subscriptions are unscheduled.
 - `uting` rows are one jq pass over the cached results per search — fine for small N;
   not intended for thousands of results.
 - **URL sniffing in the player** — `ut-play` never guesses which engine a bare URL belongs
@@ -2773,8 +2867,8 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 ## 27. Verification matrix
 
-**Last run: 2026-08-24, both suites green** — `contract.sh` **89 ok / 0 failed / 0 known
-drift**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **14 ok / 0 failed**, with `pgrep mpv` empty
+**Last run: 2026-08-24, both suites green** — `contract.sh` **121 ok / 0 failed / 0 known
+drift**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **16 ok / 0 failed**, with `pgrep mpv` empty
 afterwards.
 
 **Functional only, and two files.** The renderer rig (`tui_pane.sh`) and its cell-grid prover
@@ -2809,7 +2903,7 @@ when the file it names is gone; §25.1's harness lessons are here for the same r
 the part of a deleted harness worth keeping.
 
 ```
-   Syntax     : bash -n on all six scripts (+ repo-wide shell check), gated by
+   Syntax     : bash -n on every script in shell/ (+ repo-wide shell check), gated by
                 .githooks/pre-commit on staged content and pre-push on the worktree
    Engine seam: an unknown --engine is USAGE (1), not a tool failure — an agent must not
                 retry a name that will never exist; `--engine ../evil` is rejected too;
@@ -2834,7 +2928,7 @@ the part of a deleted harness worth keeping.
                 -d --stop → rejected; -d -f ascii|viz → rejected
    Player     : ut-play (no args) → D3 error; ut-play "a query" and ut-play -- "a query"
                 → 1, naming yt-search; invalid --color rejected
-   Gating     : one tier, six self-gating verbs (AS-BUILT-contract.md §2). <engine>-search rejects
+   Gating     : one tier, seven self-gating verbs (AS-BUILT-contract.md §2). <engine>-search rejects
                 -f/--detach/URL (URL rejection re-applied after `--`); ut-play rejects
                 -n/-s/bare-query. Three checks exist specifically to prove the deleted
                 wrapper took its gate WITH it rather than dropping it: an unknown long
@@ -2884,6 +2978,21 @@ the part of a deleted harness worth keeping.
                 listening — measured at t=3s vs exit 0 from t=6s on a cold URL. That is the
                 taxonomy working (4 = did not take effect), not a defect; a rig that sets a
                 property inside the start-up window reads it as a false red
+   Store      : the playlist verbs driven under a disposable UT_STATE_DIR (the knob exists
+                so the suite cannot write into a user's real playlists). A search envelope
+                keeps its engine tag through the store; a bare array keeps its OWN engine,
+                so one list holds both sources; duration_fmt is derived on read and null
+                when duration is; --show on a missing name is 1 + not_found (never an
+                empty list, which would be indistinguishable from an empty playlist);
+                --del on a missing name is idempotent 0 with deleted:false; --rename onto
+                an occupied name is 1 + exists; a name with `/` is refused; --index
+                without --rm is 1; a playback flag and a positional after `--` are both 1
+                naming the right verb; bad stdin is 1 AND emits the error envelope under
+                -j. Concurrency is DRIVEN, not argued: eight concurrent --add calls all
+                survive (with lock_playlist stubbed out the same loop leaves ONE item —
+                watched, so the check is known to be able to fail), a held lock is 4 with
+                reason locked rather than an unlocked write, and a lock older than a
+                minute is stolen
    Live volume: uting 9/0 on a --volume 0 player → --status reports the
                 moved value (not the stale launch value); from 98, three 0 presses stop
                 at 100 and never reach mpv's own 130 ceiling
@@ -3039,7 +3148,7 @@ the part of a deleted harness worth keeping.
 
 ## 28. Portability contract — bash 3.2
 
-**All six scripts must run under bash 3.2** (macOS's frozen system `/bin/bash`, which
+**Every script in `shell/` must run under bash 3.2** (macOS's frozen system `/bin/bash`, which
 `#!/usr/bin/env bash` resolves to on stock macOS). This is a deliberate floor: zero
 install step, identical behavior across macOS, Linux, containers, CI, and cron/launchd
 (where PATH may not surface a newer bash). We do *not* depend on Homebrew bash — a

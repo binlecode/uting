@@ -4,11 +4,11 @@ This file is the single source of truth for repository guidelines, used by Claud
 
 ## Project Overview
 
-**uting** (u-ting / 你听) — an agent-first media engine with a terminal face. A six-script bash suite: search a source, play it through `mpv` detached from the terminal, and keep controlling it — from a TUI if you are a human, from a single-line JSON contract if you are a program. Two sources ship today (YouTube, Bilibili); a third is a new pair of scripts and no change anywhere else.
+**uting** (u-ting / 你听) — an agent-first media engine with a terminal face. A seven-script bash suite: search a source, play it through `mpv` detached from the terminal, keep controlling it, and save what you found — from a TUI if you are a human, from a single-line JSON contract if you are a program. Two sources ship today (YouTube, Bilibili); a third is a new pair of scripts and no change anywhere else. Durable user-level state (playlists) lives in its own command, `ut-playlist` — never in the player, never in the TUI.
 
 The suite is exposed **directly** to shell-capable agents with no MCP wrapper, so the **CLI contract itself** (argv, exit codes, output shape, process lifecycle) *is* the product and the safety boundary. Every design choice follows from that. Full rationale: `docs/ARCHITECTURE.md`.
 
-**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `uting` (the human surface) and `ut-play`/`yt-search`/`yt-resolve`/`bili-search`/`bili-resolve` (the agent surface) onto their own PATH. **No short name ships** (`docs/ROADMAP.md` D10) — the human face carries the project's own name, so `~/bin/uting` is a plain symlink with the same word at both ends. A user wanting a short form writes their own alias.
+**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `uting` (the human surface) and `ut-play`/`yt-search`/`yt-resolve`/`bili-search`/`bili-resolve`/`ut-playlist` (the agent surface) onto their own PATH. **No short name ships** (`docs/ROADMAP.md` D10) — the human face carries the project's own name, so `~/bin/uting` is a plain symlink with the same word at both ends. A user wanting a short form writes their own alias.
 
 ## Runtime Environment (Required)
 
@@ -22,19 +22,21 @@ The suite is exposed **directly** to shell-capable agents with no MCP wrapper, s
 git config core.hooksPath .githooks   # RUN ONCE PER CLONE — fresh clones have no hooks
 ```
 
-`.githooks/pre-commit` blocks a staged secret / cookie export, a **bash-4 idiom on an added line**, a staged shell script that does not parse under `/bin/bash -n`, and a force-added `tmp/` file. `.githooks/pre-push` blocks a force-push or deletion of `main` and a syntax error in any of the six scripts, and warns when a `v*` tag is pushed (the tag must match `shell/VERSION`). A direct push to `main` is **not** blocked — see the commit guidelines.
+`.githooks/pre-commit` blocks a staged secret / cookie export, a **bash-4 idiom on an added line**, a staged shell script that does not parse under `/bin/bash -n`, and a force-added `tmp/` file. `.githooks/pre-push` blocks a force-push or deletion of `main` and a syntax error in any script under `shell/` (globbed, not listed), and warns when a `v*` tag is pushed (the tag must match `shell/VERSION`). A direct push to `main` is **not** blocked — see the commit guidelines.
 
 ## Build, Test, and Development Commands
 
 ```sh
-bash -n shell/ut-play shell/yt-search shell/yt-resolve shell/bili-search shell/bili-resolve shell/uting  # syntax check — run before EVERY commit
+bash -n shell/ut-play shell/yt-search shell/yt-resolve shell/bili-search shell/bili-resolve shell/ut-playlist shell/uting  # syntax check — run before EVERY commit
 /bin/bash shell/yt-search -j -n 5 -- "lofi hip hop"           # exercise on the 3.2 floor, explicitly
 shell/uting "lofi hip hop"                                   # interactive; needs a real TTY on stdin AND stdout
 shell/ut-play --help                                          # the player's own help (it is on PATH)
 shell/bili-search -j -n 5 -- "周杰伦"                          # the second engine, same envelope
+shell/ut-playlist --ls -j                                     # the store: durable, user-level state
+UT_STATE_DIR=$(mktemp -d) shell/ut-playlist --ls -j           # …never against the real one, in a test
 shell/uting --version                                        # answers before any dependency gate
 
-tests/contract.sh                                             # the CLI contract, 89 checks
+tests/contract.sh                                             # the CLI contract, 121 checks
 YT_TEST_LIFECYCLE=1 tests/lifecycle.sh                        # detached players; gated, silent
 tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
 tests/drive.sh -k Enter -w Playing                            # …including a real detached play
@@ -53,10 +55,11 @@ Each suite runs directly and says in its own docstring what it proves. Read the 
 | `shell/bili-search` | **The Bilibili engine, half one** (658 lines) — query → result envelope, over `curl` + `jq`. It talks HTTP rather than shelling out to yt-dlp because yt-dlp's Bilibili search returns **no metadata at all** (flat) and recurses into every part of every collection (non-flat, >120s for 10 results). Sends no credential: one public endpoint, a Referer, and a locally generated random `buvid3` |
 | `shell/bili-resolve` | **The Bilibili engine, half two** (778 lines) — handle → the same resolve envelope, over `yt-dlp`. No request signing, no stream selection, no CDN logic: that is a thousand lines to redo what the dependency maintains. Owns the BV/av handle shapes, the cookie decision, the mode→format table. No `--transcript` — the site has no captions, and an engine states a missing capability by not having the verb |
 | `shell/VERSION` | The suite version, declared once — a one-line data file, not a shell variable. The player and the engines are independent executables sharing no library, so a variable in any one of them would make the others ask *it* for the version — the wrong dependency direction for a player that must not know its engines |
+| `shell/ut-playlist` | **The playlist store** (559 lines) — durable, user-level, engine-agnostic state: `$UT_STATE_DIR/playlists/<name>.json`, one file per list, `mkdir` lock + atomic temp+mv, six verbs (`--ls --show --add --rm --del --rename`) and its own state-error enum (`not_found`, `exists`, `invalid_name`, `invalid_input`, `locked`). Knows **no site and no playback**: its record is `{engine, url, …}`, which is exactly `ut-play --engine E -- URL`, so a stored record is a CALL, not a reference. Input is stdin JSON only — a search envelope, its own `--show` envelope, or an item array. **The queue is NOT here**: a queue is a playlist being consumed and belongs to the player (`docs/ARCHITECTURE.md` §9.4) |
 | `shell/uting` | The human face (3.0k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
 | `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that does what the real one will not do on cue: answer out of order, report a property null, interleave async events, walk the clock, never close its side |
 
-**Dependency graph — one layer, six peers. Site knowledge exists ONLY in an engine pair, playback ONLY in the player. An engine's two halves need not use the same primitive: the seam is the ENVELOPE, not the tool behind it:**
+**Dependency graph — one layer, seven peers. Site knowledge exists ONLY in an engine pair, playback ONLY in the player. An engine's two halves need not use the same primitive: the seam is the ENVELOPE, not the tool behind it:**
 
 ```
   ~/bin/yt-search    → shell/yt-search ───► yt-dlp · jq            (engine: query → results)
@@ -64,7 +67,9 @@ Each suite runs directly and says in its own docstring what it proves. Read the 
   ~/bin/bili-search  → shell/bili-search ─► curl · jq              (engine: query → results)
   ~/bin/bili-resolve → shell/bili-resolve ► yt-dlp · jq            (engine: handle → stream URL + headers)
   ~/bin/ut-play      → shell/ut-play ─────► <engine>-resolve -j ──► mpv · jq · nc   (player)
-  ~/bin/uting       → shell/uting ──────► (<engine>-search -j → render → ut-play -d -j --engine)
+  ~/bin/ut-playlist  → shell/ut-playlist ─► jq                    (durable state, optional)
+  ~/bin/uting       → shell/uting ──────► (<engine>-search -j | ut-playlist --show -j → render
+                                            → ut-play -d -j --engine <the ROW's engine>)
 ```
 
 The player never runs yt-dlp and mpv never runs it either (`--no-ytdl` + a direct URL): **one extraction, and we make it.** The engine name IS the command prefix, which is what lets the player find `yt-resolve` with a string concatenation instead of a registry.
@@ -125,7 +130,7 @@ Two files, one rule:
 
 | File | Drives | Gate |
 |---|---|---|
-| `tests/contract.sh` | the six commands' argv, exit codes and `-j` envelopes; the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux | none — run it before every commit |
+| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store under a disposable `UT_STATE_DIR`; the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux | none — run it before every commit |
 | `tests/lifecycle.sh` | detached players end to end (launch → status → mutate → stop → stop again), and that an engine's `http_headers` actually reach mpv | `YT_TEST_LIFECYCLE=1` — it starts real players |
 
 Neither of the other two files in `tests/` is a suite, and neither asserts anything:
@@ -148,7 +153,7 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 
 ### Accept a check when it drives a real surface:
 
-`bash -n` on all six scripts; a real `-j` invocation whose envelope is parsed; the exit code of a real failure path; a real unix socket (real mpv, or the mock); the TUI under tmux asserted on survival — it booted, it is still up after a resize, it left on `q` with 0.
+`bash -n` on every script in `shell/`; a real `-j` invocation whose envelope is parsed; the exit code of a real failure path; a real unix socket (real mpv, or the mock); the TUI under tmux asserted on survival — it booted, it is still up after a resize, it left on `q` with 0.
 
 ### Minimum checks before every commit
 
@@ -216,7 +221,7 @@ The live files:
 | Skill | Use it when |
 |---|---|
 | `capture-pane` | A terminal frame in `README.md` / `docs/ARCHITECTURE.md` is stale. Capture → clean (`clean_capture.py`, which refuses a mid-fetch frame) → **prove with the skill's own `assert_pane.py`** → splice with a Python replace. Never hand-draw a frame |
-| `audit-conformance` | Periodically, not per-commit. Whole-suite scan against 12 rules (surface layering, DRY, bash 3.2, dead code, swallowed errors, contract and doc drift) → `docs/PLAN-conformance-YYYY-MM-DD.md`. Ships `fn_graph.py` (defs vs call sites across all six scripts) as a manual aid — **never** as a gate or a `tests/` member |
+| `audit-conformance` | Periodically, not per-commit. Whole-suite scan against 12 rules (surface layering, DRY, bash 3.2, dead code, swallowed errors, contract and doc drift) → `docs/PLAN-conformance-YYYY-MM-DD.md`. Ships `fn_graph.py` (defs vs call sites across every script in `shell/`) as a manual aid — **never** as a gate or a `tests/` member |
 
 A skill may propose a *structural detector as a manual aid*; it may never propose one as a test. The functional-only mandate above binds skills too — and layout proving lives in `capture-pane`, deliberately outside the suite.
 
@@ -225,7 +230,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 ## Coding Style & Naming Conventions
 
 - Match the surrounding style: 4-space indentation, `snake_case` functions, `UPPER_SNAKE` globals, `local` for everything inside a function, `set -euo pipefail` semantics respected (see the arithmetic rule above).
-- **One name per command, and no second spelling of any of them.** `ut-play`, `yt-search`, `yt-resolve`, `bili-search`, `bili-resolve`, `uting` are the canonical identity — help text, errors, docs, and the PATH entry itself. The suite ships **no short form** (D10 — the short names are taken on npm/PyPI/crates, and a second official spelling is a second thing to keep in sync). A user wanting one writes their own alias. Never add a second name for an existing command.
+- **One name per command, and no second spelling of any of them.** `ut-play`, `yt-search`, `yt-resolve`, `bili-search`, `bili-resolve`, `ut-playlist`, `uting` are the canonical identity — help text, errors, docs, and the PATH entry itself. The suite ships **no short form** (D10 — the short names are taken on npm/PyPI/crates, and a second official spelling is a second thing to keep in sync). A user wanting one writes their own alias. Never add a second name for an existing command.
 - Per-request choices are **flags**; set-once tuning is an **environment variable** (`YT_*`) — this keeps each verb's flag surface narrow enough for a small model to call safely. Do not add a flag for something a user sets once.
 - Never add a runtime dependency. The suite's differentiator is that it depends only on primitives everyone already has.
 - Prefer small, incremental edits in the existing scripts over refactors that move logic between files.
@@ -235,7 +240,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 - **`main` is the working branch** — linear, no merges, single author. Commit straight to it for ordinary work; take a branch when the change is structural enough to want the staged A→E order below, or when it may need to be abandoned. No stacked branches.
 - Imperative, scoped commit subjects in the existing style — the file or surface first when it helps: `uting: stop Enter stalling a second in utf8_complete`, `add --version, declared once`, `docs: resync DESIGN with the detached-playback TUI`.
 - One logical change per commit. Renderer changes come with the proved capture (`capture-pane`) that shows them.
-- `bash -n` on all six scripts before every commit; `tests/contract.sh` before every push.
+- `bash -n` on every script in `shell/` before every commit; `tests/contract.sh` before every push.
 - **Always ask before `git push`.** Never force-push `main`.
 - **Versioning is semver 2.0.0 over the CLI contract, not over the code** (`docs/ROADMAP.md` D13 defines what counts as the public API). While the suite is `0.y.z`: a breaking change bumps **y**, an addition or a fix bumps **z**. `shell/VERSION` is bumped deliberately, **alone, in its own commit**, and never once per commit. There is no release process to run and no CHANGELOG: the suite is not packaged (`docs/ROADMAP.md` D1), so a `v<VERSION>` tag is for a real release only — `1.0.0` waits for D1/D2 to reverse.
 

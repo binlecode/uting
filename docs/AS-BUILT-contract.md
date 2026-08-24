@@ -19,8 +19,9 @@ Rationale lives in `ARCHITECTURE.md` (pointed at throughout); process in
 
 ## 1. Command specifications
 
-Six peers, three shapes: the player, an engine's two halves, and the UI. Every one of them
-parses its own argv and holds its own gate (ARCHITECTURE.md §4) — there is no core to delegate to.
+Seven peers, four shapes: the player, an engine's two halves, the UI, and the playlist
+store. Every one of them parses its own argv and holds its own gate (ARCHITECTURE.md §4) —
+there is no core to delegate to.
 
 ### 1.1 `ut-play` — the player (source-agnostic, non-interactive)
 
@@ -87,9 +88,43 @@ parses its own argv and holds its own gate (ARCHITECTURE.md §4) — there is no
   `Esc` back to list · `Space` pause · `[`/`]` seek ∓10s · `9`/`0` volume · `s` stop ·
   `v` cycle mode (audio→video→fast) · `e` switch source (hidden with one engine) ·
   `l` switch chrome language (en↔zh, any view) · `t` cycle palette family (any view) ·
-  `n` new search · `m` more results · `o` sort · `/` filter · `q` quit.
+  `n` new search · `m` more results · `o` sort · `/` filter · `q` quit ·
+  `a` add the focused row to a playlist · `b` open a stored playlist as the row source.
+  `a`/`b` appear only when `ut-playlist` is installed (§1.5), the same rule that hides `e`
+  on a single-engine install. With a playlist on screen the three keys that RE-FETCH a
+  query — `m` `o` `e` — say so and do nothing; everything that works on the rows
+  themselves is unchanged. Rows carry their own `engine`, so a list mixing sources plays
+  each row under the engine that produced it.
 
-## 2. Gating model — one tier, six self-gating verbs
+### 1.5 `ut-playlist` — the playlist store (durable, user-level, engine-agnostic)
+
+- **Owns:** the user-level state directory, the playlist file layout, the lock and the
+  atomic write, the item record (§3), and the state-error enum. **Owns nothing else:** no
+  site knowledge, no playback, no `players/`, no queue.
+- **Verbs (exactly one per call):** `--ls` · `--show NAME` · `--add NAME` · `--rm NAME
+  --index N` · `--del NAME` · `--rename NAME NEWNAME`. Shared: `-l -j --color -h -V`.
+  There is no `--new`: `--add` creates on demand. `--index` is 0-based, as `--show` prints
+  it, and belongs to `--rm` alone (a selector with another verb is exit 1, as `--id` is on
+  the player).
+- **Positional: none.** Every name is attached to its verb, so anything after `--` is a
+  caller who meant `ut-play`, and the gate says so.
+- **Input — ONE shape, on stdin (`--add`):** JSON, in any of three forms: a **search
+  envelope** (`<engine>-search -j` verbatim), this command's own **`--show` envelope** (so
+  one list copies into another), or a bare **array of items**. The search-envelope form is
+  the point: a search RESULT carries no `engine` field, the envelope does, so only the
+  whole package tags items with the engine that produced them.
+  Unknown fields are dropped; `engine` and `url` are required per item.
+- **Storage:** `$UT_STATE_DIR/playlists/<name>.json`, one file per playlist, `mkdir` lock
+  (`.lock-<name>`), temp+mv. The name IS the filename — no slug, because a slug makes the
+  name on screen and the name on disk two facts. Names reject `/`, control characters and
+  a leading `.`, and cap at 64 characters. **On a case-insensitive filesystem (macOS
+  default) two names differing only in case are the same playlist** — accepted and
+  documented rather than normalised.
+- **Not the player's state.** `players/` is in `$TMPDIR` and dies with the reboot; this
+  does not. The queue (a playlist being consumed) stays with the player — a queue that
+  survives a reboot IS a playlist (ARCHITECTURE.md §9.4).
+
+## 2. Gating model — one tier, seven self-gating verbs
 
 There is **no wrapper tier**. Each verb accepts only its own surface and points the caller at
 the correct tool on a cross-flag; that is what keeps the contracts non-overlapping now that
@@ -110,6 +145,14 @@ nothing sits between a caller and an implementation.
    default: inject -l if no -l/-j/-J         handle required unless
                                              --status/--stop/--set-volume
    both: `--` ends flags; the positional check is RE-APPLIED after it
+
+   ut-playlist
+   ─────────────────────────────────
+   allow: --ls --show --add --rm --del --rename --index -l -j --color -h -V
+   reject (→ "use ut-play"):        -f -d --detach --status --stop --set-volume --all
+                                    --engine, and ANY positional (incl. after --)
+   reject (→ "use <engine>-*"):     -n -m -M -s --info --transcript
+   input: stdin JSON for --add; no positional at all
 ```
 
 **`--` stops FLAG parsing, not argument validation.** Each verb re-applies its positional
@@ -226,6 +269,43 @@ format*, *sign in to confirm*), and `ut-play` carries a much smaller
 that fails is classified once, by the half that can read the wording, and the player replays
 that verdict rather than re-deriving it from prose. **No member may be added by any of the
 three that this section does not already list.**
+
+Playlist store (`ut-playlist`) — the ITEM is the durable record, and it is a subset of a
+search result with the envelope's `engine` folded in:
+```json
+{"engine":"yt","id":"a1","url":"https://…","title":"…","duration":213,"added_at":"…"}
+```
+`engine` + `url` are exactly the two arguments of `ut-play --engine E -- URL`, so **a stored
+record IS a call** — no mapping table anywhere. `channel`, `view_count` and `live_status`
+are deliberately NOT stored: playback does not need them and they expire into wrong answers.
+`duration` may be null (a live stream), as in the search envelope.
+
+On disk, one file per playlist:
+```json
+{"schema":1,"name":"chill","created_at":"…","updated_at":"…","count":2,"items":[…]}
+```
+`schema` is stamped from the first version: this is a file on a user's disk for years, and a
+format change with no version field can only be migrated by guessing.
+
+Envelopes (`-j`, one line each):
+```
+   --ls     : {status:"ok", count, playlists:[{name, count, updated_at}…]}
+   --show   : {status:"ok", name, count, items:[item + {duration_fmt}…]}
+   --add    : {status:"ok", name, added, count}
+   --rm     : {status:"ok", name, removed, count}
+   --del    : {status:"ok", name, deleted:true|false}     false = it was already gone
+   --rename : {status:"ok", name, from}
+   error    : {status:"error", name:NAME|null, reason}
+```
+`duration_fmt` is **derived on read, never stored** — a stored copy would be a second truth
+about the same number. It is emitted so an item is field-for-field row-compatible with a
+search result, which is what lets `uting` render a playlist through the same loader.
+
+**The state-error enum is its own, and deliberately not the playback one:**
+`not_found | exists | invalid_name | invalid_input | locked`. Nothing in a file store can be
+`format_unavailable`, and widening a taxonomy that three other readers branch on would be
+the wrong kind of sharing. Prose goes to stderr in both output modes; the envelope goes to
+stdout under `-j` only, exactly as an engine reports an extraction failure.
 
 Lifecycle / resolve:
 ```
@@ -346,6 +426,12 @@ on-disk record read by jq, not an envelope.
         ambiguous target, or mpv IPC failure. The -j status/reason says which.
         Distinct from 1 (usage) and 2+ (propagated player failure). --stop treats
         "nothing playing" as idempotent success (exit 0); only ambiguity is exit 4.
+        ALSO ut-playlist, for the same meaning: a playlist held by another writer
+        (reason `locked`) — it fails rather than writing unlocked, because this store
+        is durable and an unlocked write can drop what the user just added. A store
+        verb naming something that does not exist is a usage error (1, `not_found`);
+        --del on a missing playlist is idempotent success (0, `deleted:false`), the
+        same rule as --stop with nothing playing.
 
    TTY  : uting requires BOTH stdin and stdout (ARCHITECTURE.md §11). No other verb ever needs one —
           each errors on empty input rather than prompting (D1/D3).
@@ -358,12 +444,15 @@ on-disk record read by jq, not an envelope.
           yt-search / yt-resolve / bili-resolve : yt-dlp + jq. curl is an OPTIONAL soft
                          dep of yt-resolve, for the client probe (ARCHITECTURE.md §8.2).
           bili-search  : curl + jq — curl is REQUIRED here; it is the transport.
-          uting        : jq, plus the verbs it composes.
+          uting        : jq, plus the verbs it composes. ut-playlist is OPTIONAL —
+                         absent, the two playlist keys say so and nothing else changes.
+          ut-playlist  : jq only. No network, no yt-dlp, no mpv.
           BSD `nc -U` is stock on macOS; the Linux netcat `-U` gap is a known,
           documented limitation (ARCHITECTURE.md §26 / script comment).
    -V   : every entry point answers it BEFORE any dependency gate, reading shell/VERSION
           and printing its own name — needing yt-dlp installed to learn your version is
-          backwards, and six executables must not be able to disagree (ARCHITECTURE.md §4).
+          backwards, and seven executables must not be able to disagree (ARCHITECTURE.md §4).
+          Asserted over every file in shell/ that has a shebang, not over a list of names.
 ```
 
 ## 5. Configuration surface
@@ -375,7 +464,15 @@ kept out of flags to keep each verb's flag surface narrow.
    Flags (per call):  -n -m -M -s -f -S -l -j -J -d -h -V --color --theme --engine
                       --detach --status --stop --info --transcript --sub-lang
                       --set-volume --id --all --volume
-   Env (set once):    UT_DEFAULT_ENGINE   (default yt) = which engine --engine defaults
+   Env (set once):    UT_STATE_DIR  (default ${XDG_STATE_HOME:-~/.local/state}/uting) =
+                        the USER-LEVEL, durable state root — today `playlists/`. Distinct
+                        from the player's runtime state in ${TMPDIR}/uting-$(id -u), which
+                        is erased on reboot; nothing a user built by hand may live there.
+                        XDG rather than ~/Library/Application Support because the user
+                        surface is a terminal and a Linux port needs no second layout.
+                        Not a convenience knob: tests/contract.sh sets it, and without it
+                        the suite would write into the user's real playlists.
+                      UT_DEFAULT_ENGINE   (default yt) = which engine --engine defaults
                         to. Read by BOTH ut-play and uting, deliberately the same
                         variable: a user who picks a default source once should not
                         have to pick it again per surface. uting falls back to the
