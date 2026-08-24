@@ -220,6 +220,16 @@ resolve**，而 stream URL 会过期（YouTube 约 6 小时）—— 一个 20 �
   `tests/drive.sh` 的环境透传其实**从来没生效过**（新 tmux session 拿的是 tmux **服务器**的
   环境，不是当前 shell 的）—— 现在显式转发 `YT_*`/`UT_*`，实测才发现的。
 
+- **落地后的一次加固（`0f4d028`），改动了 §4.1 写下的退出码**：两个**读**动词原本没有任何
+  守卫，一个坏掉的 json 文件就让 jq 的 parse error 逃出去成为退出码 5 —— `-j` 下连 envelope 都
+  没有,正是 `yt-search` 修过的那个故障在第二个命令里复发。现在 `read_playlist()` 是唯一把 jq
+  指向播放列表文件的地方,顺带把写了却从不读的 `schema` 用起来。同时 `--rename` 原本只锁源、
+  却写目标（并发 `--add` 会被无锁覆盖,实测 0 + 列表丢失,现在 4 + `locked`）。
+  **退出码因此改成两侧**：`invalid_name`/`invalid_input` → 1（调用本身错）,
+  `not_found`/`exists`/`locked`/`corrupt` → 4（调用没问题、存储答不了）,与
+  `ut-play --set-volume` 找不到播放器退 4 同一条线。§4.1 只写了 "0/1/4 locked",以本条为准,
+  as-built 已同步。新增 reason `corrupt` 同时覆盖"文件坏了"和"schema 比本 build 新"。
+
 ### 步骤 2 —— 队列（唯一动到 D3 冻结面的一步）
 
 1. `shell/ut-play`：detached child 的播放循环、`players/<id>.queue.json`、三个动词、`--status` 的 `queue` 键。

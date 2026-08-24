@@ -96,7 +96,8 @@ validate_enum() {
 # The reason enum here is the STATE enum and is deliberately NOT the playback/extraction one
 # (forbidden|unavailable|…): nothing in a file store can be `format_unavailable`, and
 # widening a taxonomy three other readers branch on would be the wrong kind of sharing.
-# Members: not_found | exists | invalid_name | invalid_input | locked. AS-BUILT-contract.md §3.
+# Members: not_found | exists | invalid_name | invalid_input | locked | corrupt.
+# AS-BUILT-contract.md §3.
 #
 # WHICH CODE EACH REASON CARRIES, and why it is not all 1. The suite reserves 1 for "the
 # argv was wrong" and 4 for "the request was well formed and did not take effect"
@@ -104,7 +105,7 @@ validate_enum() {
 # player (4) rather than calling the caller's flags bad. So:
 #
 #   1  invalid_name · invalid_input   the caller's own argv or stdin is malformed
-#   4  not_found · exists · locked    argv understood, store said no
+#   4  not_found · exists · locked · corrupt   argv understood, store said no
 #
 # `--del` on a missing list stays 0 with `deleted:false`: the caller asked for an end state
 # and the end state holds, exactly as `--stop` does on a player that already exited.
