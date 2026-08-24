@@ -143,7 +143,7 @@ report "--info is the engine's"   1 "$(rc shell/ut-play --info -- URL)"
 echo "── argv order: a flag-shaped query after -- is SEARCHED ───────────"
 # Not a player list: --status after -- is eight characters of query text. The check lives on
 # yt-search because that is where searching lives now; the player has no search branch left
-# to confuse a flag-shaped token with (PLAN-ut-restructure step B-1).
+# to confuse a flag-shaped token with (docs/SPEC-system.md §13).
 report "yt-search -- --status searches" 0 \
     "$(shell/yt-search -l -- --status 2>&1 | head -1 | grep -qv '^{' && echo 0 || echo 1)"
 # The other half of that split: a non-URL positional is no longer a search, it is a usage
@@ -199,9 +199,19 @@ report "bili-search -j is one line" 1 \
     "$(shell/bili-search -j -n 2 -- 音乐 | wc -l | tr -d ' ')"
 # The site sends duration as "MM:SS" with unbounded minutes ("222:28"), which every surface
 # above would silently mis-sort and mis-render as a string. It is parsed in the engine, so
-# the assertion is that what leaves the engine is a NUMBER.
+# the assertion is that what leaves the engine is a NUMBER — never the raw string.
+#
+# `null` is ALLOWED and is not a miss: §7/§14 make duration/duration_fmt null together when the
+# row has no duration, and this endpoint does return such rows intermittently (observed: one
+# null among five, on a result set the site swapped in between two identical requests). An
+# earlier `all(type=="number")` here failed on exactly those runs and read as flaky — it was
+# asserting against the contract rather than for it. What must hold: nothing is a string, and
+# the page is not ALL nulls (which would mean the parser stopped working).
 report "bili duration is seconds" 0 \
-    "$(jq_ok '[.results[].duration]|length>0 and all(type=="number")' shell/bili-search -j -n 5 -- 音乐)"
+    "$(jq_ok '[.results[].duration]
+               | length>0
+               and all(type=="number" or type=="null")
+               and any(type=="number")' shell/bili-search -j -n 5 -- 音乐)"
 # Titles arrive as search-result HTML (<em class="keyword">) and entity-escaped. Markup that
 # survives into a title is counted by the width layer, which reflows every row wrongly.
 report "bili titles carry no markup" 0 \
