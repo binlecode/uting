@@ -36,7 +36,7 @@ shell/ut-playlist --ls -j                                     # the store: durab
 UT_STATE_DIR=$(mktemp -d) shell/ut-playlist --ls -j           # …never against the real one, in a test
 shell/uting --version                                        # answers before any dependency gate
 
-tests/contract.sh                                             # the CLI contract, 121 checks
+tests/contract.sh                                             # the CLI contract, 128 checks
 YT_TEST_LIFECYCLE=1 tests/lifecycle.sh                        # detached players; gated, silent
 tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
 tests/drive.sh -k Enter -w Playing                            # …including a real detached play
