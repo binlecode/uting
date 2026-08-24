@@ -23,7 +23,7 @@ together with a design document that is longer than most of the code it describe
 packaged: there is no installer and no Homebrew formula, and none is planned for the shell version
 (see [`docs/ROADMAP.md`](docs/ROADMAP.md) for why, and for what a Go rewrite would change).
 
-The document may be the more useful artifact. `docs/SPEC-system.md` records things that are usually
+The document may be the more useful artifact. `docs/ARCHITECTURE.md` records things that are usually
 learned and then forgotten: East-Asian-width handling in a terminal renderer, DCS frame
 synchronisation, correlating mpv IPC replies by `request_id`, and the `set -e` traps that bash 3.2
 sets for you.
@@ -77,7 +77,7 @@ find it, play it, watch it play, control it.
   player, `jq` to both. **`curl` is required by `bili-search`** — it IS that engine's transport —
   and optional everywhere else (the YouTube engine's play-time client probe).
 - bash 3.2 — the version macOS ships. The suite is written to that floor on purpose; see
-  `docs/SPEC-system.md` §28.
+  `docs/ARCHITECTURE.md` §28.
 
 Nothing is vendored. Install yt-dlp and mpv however you normally would.
 
@@ -191,7 +191,7 @@ Lessons these paid for, every one of which produced a wrong result first:
 
 ## Documentation
 
-- [`docs/SPEC-system.md`](docs/SPEC-system.md) — architecture, every non-obvious decision and why, plus the
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture, every non-obvious decision and why, plus the
   verification matrix.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — positioning and non-goals, the naming survey, the OSS
   readiness assessment, and the conditions under which the core would move to Go.

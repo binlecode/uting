@@ -1,6 +1,6 @@
 ---
 name: capture-pane
-description: Refresh the terminal frames in README.md / docs/SPEC-system.md from REAL uting panes instead of hand-drawing them. Covers picking the geometry per view, waiting for the ready marker so the frame is not a spinner, cleaning the capture with clean_capture.py, proving it with this skill's assert_pane.py BEFORE it enters a doc, and splicing it in with a Python replace rather than hand-transcribing box glyphs. Use when a layout change has made a doc frame stale.
+description: Refresh the terminal frames in README.md / docs/ARCHITECTURE.md from REAL uting panes instead of hand-drawing them. Covers picking the geometry per view, waiting for the ready marker so the frame is not a spinner, cleaning the capture with clean_capture.py, proving it with this skill's assert_pane.py BEFORE it enters a doc, and splicing it in with a Python replace rather than hand-transcribing box glyphs. Use when a layout change has made a doc frame stale.
 ---
 
 # capture-pane

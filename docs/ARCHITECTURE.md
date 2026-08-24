@@ -1,16 +1,16 @@
-# SPEC-system — uting, system scope
+# ARCHITECTURE — uting
 
 `ut-play` · `yt-search` · `yt-resolve` · `bili-search` · `bili-resolve` · `uting` — a
 search + terminal-playback CLI suite, designed as much for **LLM/agent callers** as for
-humans. This is the **code-synced spec**: architecture, functional structure, supported
-workflows, the module contract, and the rationale behind them, kept in step with the code
-on every change that touches architecture or a contract. Each fact lives in ONE section;
-everything else points at it.
+humans. This is the umbrella **as-built doc**: architecture, functional structure, supported
+workflows, the module contract, and the rationale behind them — a description that chases
+the code, resynced at every landing that touches architecture or a contract. Each fact
+lives in ONE section; everything else points at it.
 
-Scope is `system` — the whole suite. A per-surface `SPEC-<scope>.md` splits out only when
-one earns it, and the one-fact-one-section rule then holds across the family. What this
-document is NOT: a proposal (`DESIGN-<topic>.md`), the sequencing (`ROADMAP.md`), or work
-in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
+Scope is the whole suite. A per-surface `AS-BUILT-<scope>.md` splits out when this doc
+grows heavy enough that one earns it, and the one-fact-one-section rule then holds across
+the family. What this document is NOT: the sequencing (`ROADMAP.md`) or work in flight
+(`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
 
 - Player (source-agnostic): `shell/ut-play` — plays, and owns the detached lifecycle
 - YouTube engine (a pair): `shell/yt-search` (query → results), `shell/yt-resolve`

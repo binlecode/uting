@@ -5,14 +5,14 @@
 # (`ut-play`) is source-agnostic and knows neither. This file owns everything that is
 # YouTube-specific about searching: the yt-dlp invocation, the cookie decision, the
 # result shaping, and the duration formatter. It has NO playback, lifecycle, or mpv
-# logic and never starts a process that outlives it. See docs/SPEC-system.md §4.
+# logic and never starts a process that outlives it. See docs/ARCHITECTURE.md §4.
 #
 # It used to be a gating wrapper that exec'd the core. The gate and the implementation
 # are merged here because after the engine/player split there is no longer a second
-# caller to gate against: this file IS the search verb. docs/SPEC-system.md §13.
+# caller to gate against: this file IS the search verb. docs/ARCHITECTURE.md §13.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
-# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). SPEC-system.md §28.
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md §28.
 
 # Resolve this script's OWN symlink chain before looking for its siblings. The PATH entry
 # is a symlink into a checkout that can live anywhere, so `dirname $0` is the symlink's
@@ -46,7 +46,7 @@ fi
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
 # executables carry. Name == prefix is deliberate: it lets `ut-play --engine yt` find
 # `yt-resolve` by string concatenation, with no name->command registry to keep in sync in
-# both the player and the TUI. docs/SPEC-system.md §4.
+# both the player and the TUI. docs/ARCHITECTURE.md §4.
 ENGINE_NAME="yt"
 
 # ==============================================================================
@@ -199,7 +199,7 @@ require_deps() {
 # a bash version meant forking jq once per row just to read a field back out (25 results =
 # 50+ forks, measured 40x slower than one jq program) and keeping two copies of the same
 # padding logic. An unknown duration yields NULL rather than a fake "00h:00m:00s", so each
-# caller decides how to render it (a live stream has no duration). SPEC-system.md §7.
+# caller decides how to render it (a live stream has no duration). ARCHITECTURE.md §7.
 JQ_PRELUDE='
 def p2: tostring | if length < 2 then "0" + . else . end;
 def fmt_dur:
@@ -216,7 +216,7 @@ def fmt_dur:
 # Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
 # caller can branch on `reason` instead of string-matching raw extractor wording (which is
 # not a contract and drifts across versions). The ENUM is the shared fact and lives in
-# docs/SPEC-system.md §14 — this is the yt-dlp-side reader of it; the player carries its own
+# docs/ARCHITECTURE.md §14 — this is the yt-dlp-side reader of it; the player carries its own
 # mpv-side reader. No member may be added here that the enum does not already have.
 # `unknown` is the conservative default — never guess a cause we did not positively identify.
 classify_yt_dlp_error() {
@@ -426,7 +426,7 @@ EOF
 # Value-taking flags (consume the next token) vs boolean flags, restricted to the search
 # surface. Anything outside these is rejected — playback/lifecycle flags get a pointer to
 # ut-play so the caller learns the right tool instead of a bare error. This gate is the
-# whole reason a narrow verb exists (SPEC-system.md §13); it used to live in a separate
+# whole reason a narrow verb exists (ARCHITECTURE.md §13); it used to live in a separate
 # wrapper file and now sits directly in front of the implementation it guards.
 has_format=0
 query=()
@@ -496,7 +496,7 @@ while (($#)); do
         shift
         # `--` stops FLAG parsing, it does not stop argument validation: a query token
         # that looks like a URL is still the wrong tool, and a query beginning with '-'
-        # must survive as a query. SPEC-system.md §6.
+        # must survive as a query. ARCHITECTURE.md §6.
         while (($#)); do
             case "$1" in
             http://* | https://* | www.* | youtube.com/* | youtu.be/*) reject_url "$1" ;;

@@ -16,7 +16,7 @@
 # had no coverage at all for --transcript. A test suite that cannot be executed reports green
 # by default, which is worse than having none.
 #
-# Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/SPEC-system.md §28.
+# Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md §28.
 #
 # Usage:  tests/contract.sh            all checks
 #         tests/contract.sh -q         failures and the summary only
@@ -143,7 +143,7 @@ report "--info is the engine's"   1 "$(rc shell/ut-play --info -- URL)"
 echo "── argv order: a flag-shaped query after -- is SEARCHED ───────────"
 # Not a player list: --status after -- is eight characters of query text. The check lives on
 # yt-search because that is where searching lives now; the player has no search branch left
-# to confuse a flag-shaped token with (docs/SPEC-system.md §13).
+# to confuse a flag-shaped token with (docs/ARCHITECTURE.md §13).
 report "yt-search -- --status searches" 0 \
     "$(shell/yt-search -l -- --status 2>&1 | head -1 | grep -qv '^{' && echo 0 || echo 1)"
 # The other half of that split: a non-URL positional is no longer a search, it is a usage
@@ -376,7 +376,7 @@ fi
 
 # A detached player that dies on its own is the one lifecycle path the caller does not
 # drive, and it used to be silent: --status went empty, which is what a NORMAL finish looks
-# like too (docs/SPEC-system.md §9.2). These checks own the boundary that keeps the tombstone
+# like too (docs/ARCHITECTURE.md §9.2). These checks own the boundary that keeps the tombstone
 # list an error record rather than the listening history ROADMAP.md §0 rules out — a normal
 # finish must leave nothing, a log with no epitaph must not be read as a death, and the list
 # must stay bounded. The input is a fabricated state file + log, which is exactly what the

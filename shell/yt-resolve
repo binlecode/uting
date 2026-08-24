@@ -12,10 +12,10 @@
 # Why it exists at all: mpv's ytdl_hook used to do the extraction, so the last yt-dlp call
 # in a play was one WE did not make and could not see or classify. Now the player is handed
 # a URL it opens with --no-ytdl, and there is exactly one extraction, made by us.
-# docs/SPEC-system.md §8.1.
+# docs/ARCHITECTURE.md §8.1.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
-# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). SPEC-system.md §28.
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md §28.
 
 # Resolve this script's OWN symlink chain before looking for its siblings — see the same
 # block in yt-search for why `cd -P`/`pwd -P` and a hand-rolled loop (bash 3.2 has no
@@ -41,7 +41,7 @@ fi
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
 # executables carry. Name == prefix is deliberate: it lets `ut-play --engine yt` find
 # `yt-resolve` by string concatenation, with no name->command registry to keep in sync in
-# both the player and the TUI. docs/SPEC-system.md §4.
+# both the player and the TUI. docs/ARCHITECTURE.md §4.
 ENGINE_NAME="yt"
 
 # ==============================================================================
@@ -203,7 +203,7 @@ require_deps() {
 # The ONE implementation of duration formatting: seconds -> "[Nd ]HHh:MMm:SSs". A jq
 # prelude, not a bash function, so a caller already shaping JSON pays one fork instead of
 # one per row. An unknown duration yields NULL rather than a fake "00h:00m:00s", so each
-# caller decides how to render it (a live stream has no duration). SPEC-system.md §7.
+# caller decides how to render it (a live stream has no duration). ARCHITECTURE.md §7.
 JQ_PRELUDE='
 def p2: tostring | if length < 2 then "0" + . else . end;
 def fmt_dur:
@@ -220,7 +220,7 @@ def fmt_dur:
 # Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
 # caller can branch on `reason` instead of string-matching raw extractor wording (which is
 # not a contract and drifts across versions). The ENUM is the shared fact and lives in
-# docs/SPEC-system.md §14 — this is one of the two yt-dlp-side readers of it (yt-search
+# docs/ARCHITECTURE.md §14 — this is one of the two yt-dlp-side readers of it (yt-search
 # carries the other); the player carries its own, much smaller, mpv-side reader. No member
 # may be added here that the enum does not already have. `unknown` is the conservative
 # default — never guess a cause we did not positively identify.
@@ -436,7 +436,7 @@ probe_raw() {
     [[ "$code" == 2* ]]
 }
 
-# The resolve envelope (docs/SPEC-system.md §14). `format` is the format STRING this
+# The resolve envelope (docs/ARCHITECTURE.md §14). `format` is the format STRING this
 # engine actually used — the player records it verbatim and never reads it. `http_headers`
 # is a REQUIRED key, empty object when none: it closes the hole where --get-url handed
 # back a bare URL that a Referer-checking host would 403.
@@ -928,7 +928,7 @@ while (($#)); do
         shift 2
         ;;
     # The gate. Resolution neither plays nor tracks a player, and it does not search:
-    # a caller holding the wrong verb is told which one it wants (SPEC-system.md §13).
+    # a caller holding the wrong verb is told which one it wants (ARCHITECTURE.md §13).
     -d | --detach | --status | --stop | --set-volume | --id | --all | --volume)
         echo "yt-resolve: $1 is a playback flag — use ut-play for playback" >&2
         exit 1
@@ -940,7 +940,7 @@ while (($#)); do
     --)
         shift
         # `--` stops FLAG parsing, not argument validation: a handle beginning with '-'
-        # must survive, and a second handle is still an error. SPEC-system.md §6.
+        # must survive, and a second handle is still an error. ARCHITECTURE.md §6.
         while (($#)); do
             positional+=("$1")
             shift
@@ -985,7 +985,7 @@ fi
 # The mirror of that check, and the other half of the gate ut-play used to hold for
 # --transcript: -f / -S pick a FORMAT, and only stream resolution resolves one. Next to
 # --info or --transcript they were accepted and quietly did nothing, which is precisely
-# what a gating layer exists to reject rather than ignore (SPEC-system.md §13).
+# what a gating layer exists to reject rather than ignore (ARCHITECTURE.md §13).
 if [[ -n "$FORMAT_FLAG" && "$ACTION" != "stream" ]]; then
     die "$FORMAT_FLAG selects a stream format — it does not apply to --$ACTION"
 fi

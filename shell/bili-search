@@ -22,10 +22,10 @@
 # through the middle of the engine: the hand-written HTTP path NEVER TOUCHES A CREDENTIAL.
 # The only cookie it sends is a buvid3 it generates itself (see below) — no account, no
 # token, nothing read from a browser profile. Login lives entirely in `bili-resolve`, where
-# yt-dlp owns it. docs/SPEC-system.md §5; ROADMAP.md D11.
+# yt-dlp owns it. docs/ARCHITECTURE.md §5; ROADMAP.md D11.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
-# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). SPEC-system.md §28.
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md §28.
 
 # Resolve this script's OWN symlink chain before looking for its siblings — see the same
 # block in yt-search for why `cd -P`/`pwd -P` and a hand-rolled loop (bash 3.2 has no
@@ -50,7 +50,7 @@ fi
 
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
 # executables carry. Name == prefix is what lets `ut-play --engine bili` find `bili-resolve`
-# by string concatenation, with no name->command registry. docs/SPEC-system.md §4.
+# by string concatenation, with no name->command registry. docs/ARCHITECTURE.md §4.
 ENGINE_NAME="bili"
 
 # ==============================================================================
@@ -180,7 +180,7 @@ require_deps() {
 # prelude, not a bash function, so a caller already shaping JSON pays one fork instead of
 # one per row. Each engine carries its own copy: they are independent executables sharing
 # no library, and the shared fact is the FORMAT, which is stated once in
-# docs/SPEC-system.md §7.
+# docs/ARCHITECTURE.md §7.
 #
 # Bilibili adds the site-specific half: `duration` arrives as "MM:SS" with UNBOUNDED
 # minutes and an UNPADDED seconds field ("222:28", "416:0", "682:4" all measured in one
@@ -231,7 +231,7 @@ def clean_title:
 
 # Map an HTTP status + the response body's own `code` to the suite's stable reason taxonomy
 # so an agent caller can branch on `reason` instead of on Bilibili's numbers. The ENUM is
-# the shared fact and lives in docs/SPEC-system.md §14 — no member may be added here that
+# the shared fact and lives in docs/ARCHITECTURE.md §14 — no member may be added here that
 # it does not already have.
 #
 # TWO LAYERS, BOTH CHECKED. This host says "no" in two different places: an HTTP status,
@@ -416,7 +416,7 @@ fetch_results() {
     # `live_status` is null, not the raw `live_status: 0`. This search is search_type=video,
     # where that field is not the suite's is_live/was_live notion at all — carrying the 0
     # over would let a renderer draw a liveness state the site never claimed. A field this
-    # engine cannot know is null, and the key is still present (SPEC-system.md §14).
+    # engine cannot know is null, and the key is still present (ARCHITECTURE.md §14).
     FILTERED_JSON=$(jq "$JQ_PRELUDE $JQ_CLEAN_TITLE"'
         [ .[]
           | . + { id:         (.bvid // null),
@@ -514,7 +514,7 @@ EOF
 
 # Value-taking flags (consume the next token) vs boolean flags, restricted to the search
 # surface. Anything outside these is rejected — playback/lifecycle flags get a pointer to
-# ut-play so the caller learns the right tool instead of a bare error. SPEC-system.md §13.
+# ut-play so the caller learns the right tool instead of a bare error. ARCHITECTURE.md §13.
 has_format=0
 query=()
 reject_url() {
@@ -586,7 +586,7 @@ while (($#)); do
         shift
         # `--` stops FLAG parsing, it does not stop argument validation: a query token that
         # looks like a URL is still the wrong tool, and a query beginning with '-' must
-        # survive as a query. SPEC-system.md §6.
+        # survive as a query. ARCHITECTURE.md §6.
         while (($#)); do
             case "$1" in
             http://* | https://* | www.* | bilibili.com/* | b23.tv/*) reject_url "$1" ;;

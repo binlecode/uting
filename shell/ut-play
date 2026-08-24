@@ -2,7 +2,7 @@
 
 # Portability: must run on bash 3.2 (macOS system bash). No bash-4 features; guard
 # every empty-array expansion (a bare "${arr[@]}" on an empty array aborts under
-# `set -u` on 3.2). See SPEC-system.md §28.
+# `set -u` on 3.2). See ARCHITECTURE.md §28.
 #
 # set -e means any unguarded failing command aborts the script. This is desired for
 # this core: single-handle playback is non-interactive, so if the engine or mpv fails the
@@ -37,7 +37,7 @@ SELF="${BASH_SOURCE[0]}"
 # and only by that name — it carries no table of sites, no URL sniffing, and no idea what a
 # format string looks like. Name == command prefix is what keeps the lookup a string
 # concatenation instead of a registry the player and the TUI would both have to hold.
-# Per-call override: --engine. docs/SPEC-system.md §12.1.
+# Per-call override: --engine. docs/ARCHITECTURE.md §12.1.
 : "${UT_DEFAULT_ENGINE:=yt}"
 
 YT_MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar --no-video)
@@ -54,7 +54,7 @@ YT_MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-
 # STDERR, so filtering stderr never touches the progress bar. audio is immune (--no-video → no
 # OSD); ascii uses --really-quiet. Rejected: --osd-level=0 (kills the noise but also the
 # on-window OSD/OSC); --msg-level=all=error (blanks the status bar); OS_ACTIVITY_MODE=disable
-# (does NOT stop CoreText). See SPEC-system.md §8.1.
+# (does NOT stop CoreText). See ARCHITECTURE.md §8.1.
 YT_MPV_VIDEO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar)
 # mpv docs suggest sw-fast/really-quiet for terminal VOs to reduce glitches and improve speed.
 YT_MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term-osd-bar)
@@ -111,7 +111,7 @@ Options:
 Long-only flags: --engine --detach --status --stop --set-volume --id --all --json --list
                  --color --volume  (--help and --version also have short forms: -h, -V)
 
-Output contracts (full schemas: docs/SPEC-system.md §14):
+Output contracts (full schemas: docs/ARCHITECTURE.md §14):
   play -j   {status, url, mode, exit_code, reason, retried}
             reason: forbidden|unavailable|format_unavailable|network|stopped_by_user|
                     unknown|null(ok)   (network also covers HTTP 429 rate limiting)
@@ -355,7 +355,7 @@ patch_player_meta() {
 # handed us direct URLs plus the headers they must be fetched with, so mpv is told
 # --no-ytdl and never makes an extraction of its own. That closes the asymmetry where the
 # LAST yt-dlp call in a play was one we did not make and could not classify — from here
-# there is exactly one extraction and we made it. docs/SPEC-system.md §8.1.
+# there is exactly one extraction and we made it. docs/ARCHITECTURE.md §8.1.
 #
 # The media comes from the RESOLVED_* globals rather than arguments because bash 3.2 arrays
 # do not survive command substitution; resolve_media sets them in place and every path into
@@ -371,7 +371,7 @@ run_mpv() {
     # Launch-time volume. For a foreground/blocking session this is the only lever
     # (mpv's own volume keys work via the TTY); for detached playback it is just the
     # STARTING volume — live adjustment happens over the per-instance IPC socket
-    # (see YT_IPC_SOCK below and do_set_volume). SPEC-system.md §26.
+    # (see YT_IPC_SOCK below and do_set_volume). ARCHITECTURE.md §26.
     if [[ -n "$VOLUME" ]]; then
         mpv_cmd+=(--volume="$VOLUME")
     fi
@@ -379,7 +379,7 @@ run_mpv() {
     # Runtime control channel: only when launched under detach_play, which exports
     # YT_IPC_SOCK. mpv's --input-ipc-server is per-process, so each detached player
     # points at its own socket and is driven independently. A foreground/blocking
-    # session has a real TTY and needs no IPC. SPEC-system.md §26.
+    # session has a real TTY and needs no IPC. ARCHITECTURE.md §26.
     if [[ -n "${YT_IPC_SOCK:-}" ]]; then
         mpv_cmd+=(--input-ipc-server="$YT_IPC_SOCK")
     fi
@@ -391,7 +391,7 @@ run_mpv() {
     #
     # These land on mpv's argv and are therefore visible in `ps`. An engine must not return
     # a credential header (Cookie / Authorization) here; the YouTube engine returns only
-    # User-Agent / Accept / Accept-Language / Sec-Fetch-Mode. SPEC-system.md §14.
+    # User-Agent / Accept / Accept-Language / Sec-Fetch-Mode. ARCHITECTURE.md §14.
     if ((${#RESOLVED_HEADER_ARGS[@]})); then
         mpv_cmd+=("${RESOLVED_HEADER_ARGS[@]}")
     fi
@@ -417,7 +417,7 @@ run_mpv() {
     # unbounded growth in TMPDIR for exactly the long-lived players -d exists for). Silence
     # the cosmetic chatter there and keep error level, so the log stays small and still
     # explains a failure. These go AFTER the caller's mode options so they win (mpv: last
-    # flag wins). SPEC-system.md §9.1.
+    # flag wins). ARCHITECTURE.md §9.1.
     local detached_opts=()
     if [[ -n "${YT_DETACHED:-}" ]]; then
         detached_opts=(--no-term-osd-bar --msg-level=all=error)
@@ -531,7 +531,7 @@ play_url_directly() {
 # This is the PLAYER's half of that job and it only knows mpv. The yt-dlp wordings — video
 # unavailable, requested format, sign in to confirm — left with the extraction; they reach a
 # caller as the ENGINE's own reason, replayed here from the marker play_url_directly logs
-# rather than re-derived from prose. The ENUM is the shared fact (docs/SPEC-system.md §14),
+# rather than re-derived from prose. The ENUM is the shared fact (docs/ARCHITECTURE.md §14),
 # and no member may appear here that it does not already have. `unknown` is the conservative
 # default — we never guess a specific cause we didn't positively identify.
 classify_playback_error() {
@@ -667,7 +667,7 @@ ensure_state_dir() {
 
 # Live property read straight off a player's IPC socket. The state file's `volume` is only
 # what was recorded at launch or by the last --set-volume, so anything driving the socket
-# directly (uting's 9/0 keys — see SPEC-system.md §9.3) moves the real value without
+# directly (uting's 9/0 keys — see ARCHITECTURE.md §9.3) moves the real value without
 # telling us; mpv is the source of truth. `pause` and the playback position are worse still:
 # the state file has never held them at all.
 #
@@ -824,7 +824,7 @@ new_player_id() {
 # milliseconds (uting captures this call), so the parent launches first and writes `title`
 # and `format` as null; the child backfills both from its own resolve envelope the moment it
 # has one (patch_player_meta). Doing it the other way — resolve here, then launch — would
-# put the whole engine round trip on the -d hot path. docs/SPEC-system.md §6.1. Audio only in practice: a detached
+# put the whole engine round trip on the -d hot path. docs/ARCHITECTURE.md §6.1. Audio only in practice: a detached
 # process has no controlling terminal, so video/ascii/viz have nowhere to render.
 detach_play() {
     local url=$1
@@ -896,7 +896,7 @@ detach_play() {
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         # sock/log are part of the envelope so a caller never has to RECONSTRUCT them from
         # the state-dir layout (uting used to hardcode "$TMPDIR/uting-$(id -u)/mpv-$id.sock",
-        # duplicating a private path in a second script). SPEC-system.md §9.3.
+        # duplicating a private path in a second script). ARCHITECTURE.md §9.3.
         jq -nc \
             --arg id "$id" --argjson pid "$pid" --arg url "$url" --arg mode "$PLAYBACK_MODE" \
             --arg started_at "$started_at" --arg sock "$sock" --arg log "$log" \
@@ -1211,7 +1211,7 @@ do_stop() {
 # Adjust volume on a detached player via mpv's per-instance JSON IPC socket. One-shot:
 # open, send, read the matching ack, close, exit (stateless-per-call). Exit 4 for any
 # "did not take effect" (no such/no player, ambiguous, or IPC failure); the -j
-# status/reason carries the why. See SPEC-system.md §14/§15.
+# status/reason carries the why. See ARCHITECTURE.md §14/§15.
 do_set_volume() {
     local n=$1 want_id=$2
     is_non_negative_int "$n" || die "--set-volume must be a non-negative integer"
@@ -1322,7 +1322,7 @@ while (($#)); do
         # an action (`yt -l -- --status` listed players instead of searching for the text).
         # The `--` is forwarded to getopts too — getopts stops there (verified on bash 3.2),
         # so a query/URL starting with a single dash survives as well. This is the guard the
-        # wrappers rely on when they delegate (SPEC-system.md §6).
+        # wrappers rely on when they delegate (ARCHITECTURE.md §6).
         normalized_args+=("--")
         shift
         while (($#)); do
@@ -1510,7 +1510,7 @@ fi
 # one — that shape is engine knowledge, and giving it up is the whole point of the split — so
 # it rejects only what is not a handle at all: empty, or containing whitespace, which is a
 # search query and belongs to a different verb. An unresolvable handle therefore surfaces as
-# a propagated engine failure (2+), not a usage error. docs/SPEC-system.md §6.
+# a propagated engine failure (2+), not a usage error. docs/ARCHITECTURE.md §6.
 IS_HANDLE=0
 if [[ -n "${QUERY//[[:space:]]/}" && "$QUERY" != *[[:space:]]* ]]; then
     IS_HANDLE=1
@@ -1542,7 +1542,7 @@ fi
 # --set-volume drives a running player over its IPC socket: needs jq + nc, but NOT mpv,
 # and takes no handle. nc is gated lazily HERE (not in require_deps) so a plain play never
 # demands it. BSD `nc -U` is stock on macOS (first use in
-# this script); on Linux the -U flag varies by netcat variant (known gap, SPEC-system.md).
+# this script); on Linux the -U flag varies by netcat variant (known gap, ARCHITECTURE.md).
 if [[ "$ACTION" == "set-volume" ]]; then
     require_cmd jq
     require_cmd nc
@@ -1585,6 +1585,6 @@ fi
 # Not a handle: nothing left to route. Search moved out to the engine (yt-search) when the
 # suite split into player + engines, and the core's old D2 contract (bare `yt "query"` ->
 # list) went with it. Anything reaching here is a caller holding the wrong tool.
-# docs/SPEC-system.md §7.
+# docs/ARCHITECTURE.md §7.
 # =-----------------------------------------------------------------------------
 die "'$QUERY' is not a video id or URL — run 'yt-search -- $QUERY' to search for it"

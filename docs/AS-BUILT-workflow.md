@@ -1,7 +1,7 @@
-# SPEC-workflow — how a unit of work moves through this repo
+# AS-BUILT-workflow — how a unit of work moves through this repo
 
-**Scope separation:** `docs/SPEC-system.md` is the spec of the *application* — what the code
-is and why. This file is the spec of the *process* — how work on that code is conducted. The
+**Scope separation:** `docs/ARCHITECTURE.md` is the as-built doc of the *application* — what
+the code is and why. This file is the as-built doc of the *process* — how work on that code is conducted. The
 two do not mix: nothing about the suite's behavior lives here, and nothing about workflow
 lives there. The doc-lifecycle stages, the testing hard rules, and the commit guidelines are
 defined once in `CLAUDE.md`; this file owns the two facts stated nowhere else — which
@@ -16,22 +16,31 @@ out here rather than left inside the skills.
 ## 1. The pipeline
 
 ```
- (research) ──► interrogate ──► pre-mortem ──► design ──► build ──► verify ──► land
-      │              │              │             │          │         │          │
-  RESEARCH-       DESIGN-         PLAN-      (SPEC-system  (§24 A-E   (the two  (checklist;
-  cited, then    distilled      hardened      §5 seams)   if struct.)  suites)  PLAN- deleted)
-  distilled + deleted
+ (research) ──► interrogate ──► plan ──────► pre-mortem ──► build ──► verify ──► land
+      │              │            │               │            │          │          │
+  RESEARCH-      answers        PLAN-           PLAN-      (§24 A-E   (the two   (checklist;
+  cited, then    settle into    authored;       hardened   if struct.)  suites)  as-built docs
+  distilled      the PLAN-      design happens                                   resynced,
+  + deleted                     HERE (B3)                                        PLAN- deleted)
 
   ...and between units of work, on its own cadence: the whole-tree conformance audit.
 ```
+
+Design is an **activity inside the plan stage, not a doc class**: options and trade-offs are
+explored (B3's discipline) while the `PLAN-` is being authored, and what settles is written
+into it — there is no `DESIGN-` doc to distil and delete.
+
+The as-built docs are touched at exactly one stage: **land**. They describe what the code is,
+so they are resynced after the code stops moving — never written ahead of the build (that
+would make them a promise, which is the `PLAN-`'s job) and never edited mid-build.
 
 ## 2. The bindings (normative)
 
 B1. **An idea is interrogated before it is designed.** A feature or decision enters as an
     adversarial interview, not a monologue: questions asked in dependency order, each with a
     recommended answer; facts are looked up (or run — a contract claim is executed, never
-    read), only decisions are asked. What settles is distilled into a `DESIGN-` or `PLAN-`
-    doc **before the conversation ends** — a decision that lives only in a conversation does
+    read), only decisions are asked. What settles is distilled into the `PLAN-` doc
+    **before the conversation ends** — a decision that lives only in a conversation does
     not exist.
 
 B2. **A plan is pre-mortemed before it is built.** The plan text — alone, without its
@@ -42,7 +51,7 @@ B2. **A plan is pre-mortemed before it is built.** The plan text — alone, with
     inherits the plan's assumptions.
 
 B3. **Design speaks the seam vocabulary, and this repo's doctrine outranks generic
-    instinct.** Interfaces here are envelopes, seams are `SPEC-system.md` §5's swap points,
+    instinct.** Interfaces here are envelopes, seams are `ARCHITECTURE.md` §5's swap points,
     and depth is judged by what a caller gets per fact they must learn. Explore alternatives
     (2–4 deliberately different shapes) before committing to one. Where generic design
     advice points at a shared library or a mock, `CLAUDE.md`'s carve-outs win: six
@@ -50,7 +59,7 @@ B3. **Design speaks the seam vocabulary, and this repo's doctrine outranks gener
     point rather than a seam built to be tested.
 
 B4. **A build is incremental, or it is staged.** Small edits in place for ordinary work; the
-    A→E order (`SPEC-system.md` §24) the moment the change is structural — moves logic
+    A→E order (`ARCHITECTURE.md` §24) the moment the change is structural — moves logic
     between files, retires a path, adds a surface.
 
 B5. **A bug gets a red loop before it gets a theory.** No hypothesis until one command
@@ -63,15 +72,15 @@ B5. **A bug gets a red loop before it gets a theory.** No hypothesis until one c
 B6. **Research is cited or it is opinion.** Outside-world questions (a yt-dlp mechanism, a
     dependency's roadmap) are answered against primary sources and land as
     `docs/RESEARCH-<topic>.md` with each claim cited — then distilled into a `ROADMAP.md`
-    entry or a `DESIGN-` and deleted, per the lifecycle.
+    entry or a `PLAN-` and deleted, per the lifecycle.
 
 B7. **A landing is a checklist, not a feeling.** The unit of work closes against the
     document that authorized it, atomically: every plan item landed or explicitly deferred,
     every `done_when` executed rather than read, accepted pre-mortem fixes verified in,
-    review findings resolved, the spec resynced, the `PLAN-` doc deleted, the version judged
+    review findings resolved, the as-built docs resynced, the `PLAN-` doc deleted, the version judged
     (its own commit if bumped). Skipping the housekeeping half means the work has not
     landed — the code is merely present. Landing closes the unit of work, not the code's
-    liability: that stays with `SPEC-system.md` §25 and B9.
+    liability: that stays with `ARCHITECTURE.md` §25 and B9.
 
 B8. **A session ends by sorting its residue.** Durable state — settled decisions,
     work-in-progress position — is written into the in-flight `PLAN-` doc before the
@@ -96,14 +105,13 @@ deleted.
 player's state dir or a new home? What is the agent-facing verb and its `-j` envelope
 (a TUI-only feature is half a feature here)? Who owns the queue when the detached player
 exits? Each question arrives with a recommended answer; the answers settle into
-`docs/DESIGN-queue.md`.
+`docs/PLAN-queue.md` as it is authored.
 
-**Design (B3).** The queue verb's interface is designed in seam vocabulary: the envelope is
-the interface, alternatives are sketched 2–4 deliberately different ways (smallest surface /
-most flexible / easiest common call) and compared on depth and seam placement before one is
-chosen. The choice lands in `ROADMAP.md`; the `DESIGN-` doc is distilled into
-`docs/PLAN-queue.md` — field names, flags, verification matrix, a `done_when` per item — and
-deleted.
+**Plan (B3).** The queue verb's interface is designed in seam vocabulary while the plan is
+written: the envelope is the interface, alternatives are sketched 2–4 deliberately different
+ways (smallest surface / most flexible / easiest common call) and compared on depth and seam
+placement before one is chosen. The choice lands in `ROADMAP.md`; `docs/PLAN-queue.md`
+finishes with field names, flags, a verification matrix, and a `done_when` per item.
 
 **Pre-mortem (B2).** `PLAN-queue.md` alone goes to a cold reader: "six months later the
 queue shipped and failed — why?" The accepted preventive fixes are written back into the
@@ -125,7 +133,7 @@ panes, proven, and spliced — never hand-drawn.
 
 **Land (B7).** The closing checklist runs against `PLAN-queue.md`: every item landed or
 explicitly deferred; every `done_when` executed with its output shown; the pre-mortem's
-accepted fixes confirmed in; a diff review run and its findings resolved; `SPEC-system.md`
+accepted fixes confirmed in; a diff review run and its findings resolved; `ARCHITECTURE.md`
 resynced (the new envelope in §14, exit codes in §15, functions in §17, checks in §27);
 `PLAN-queue.md` deleted; `shell/VERSION` judged — a bump is its own commit. Then, and only
 then, the feature has landed.
