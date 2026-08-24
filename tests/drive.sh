@@ -72,10 +72,29 @@ cleanup() {
 trap 'cleanup || exit 1' EXIT
 trap 'exit 130' INT TERM
 
-# YT_SYNC=0 because tmux and DCS frame sync do not mix. Everything else in the environment
-# is passed through untouched, so `YT_ASCII=1 tests/drive.sh` works with no flag here.
+# The suite's own knobs are forwarded EXPLICITLY, not inherited. A new tmux session does not
+# get this shell's environment: it gets the tmux SERVER's, and the server is whichever one is
+# already running — often started hours ago from another window. `YT_ASCII=1 tests/drive.sh`
+# looked like it worked only when no server was up yet; with one up it silently drove the
+# default. Verified by driving UT_STATE_DIR: the pane reported an empty store while the same
+# variable listed four playlists outside tmux.
+#
+# YT_SYNC=0 (tmux and DCS frame sync do not mix) is placed AFTER the forwarded block so the
+# driver's own choice wins over an inherited one.
+env_prefix=""
+while IFS= read -r line; do
+    case "$line" in
+    YT_*=* | UT_*=*)
+        _n=${line%%=*}
+        _v=${line#*=}
+        _v=$(printf '%s' "$_v" | sed "s/'/'\\\\''/g")
+        env_prefix="$env_prefix $_n='$_v'"
+        ;;
+    esac
+done < <(env)
+
 tmux new-session -d -s "$S" -x "$COLS" -y "$ROWS" \
-    "cd '$PWD' && YT_SYNC=0 shell/uting '$QUERY'"
+    "cd '$PWD' &&$env_prefix YT_SYNC=0 shell/uting '$QUERY'"
 
 # Wait on the ready MARKER, never on a sleep: a captured spinner frame is a picture of the
 # loading state, not of the layout. A cold yt-dlp search takes ~10s.

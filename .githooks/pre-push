@@ -5,7 +5,7 @@
 # that are actually unrecoverable, and warns on the rest:
 #
 #   BLOCK  a non-fast-forward (force) push to main, and deleting main
-#   BLOCK  a syntax error in any of the six scripts (the last gate before it is public)
+#   BLOCK  a syntax error in any script under shell/ (the last gate before it is public)
 #   WARN   pushing a v* tag (shell/VERSION must match it; semver policy is ROADMAP D13)
 #
 # Enable once per clone:  git config core.hooksPath .githooks
@@ -42,8 +42,12 @@ done
 
 # Syntax gate on every script as it stands in the worktree. Cheap, and it is the
 # check the whole suite's correctness rests on — there is no CI behind this push.
-for f in shell/ut-play shell/yt-search shell/yt-resolve shell/bili-search shell/bili-resolve shell/uting; do
+# Globbed, not listed: a hardcoded set of six names is a gate that silently stops covering
+# the suite the day a seventh command lands. A shebang is what makes a file in shell/ a
+# script (VERSION is data).
+for f in shell/*; do
   [ -f "$f" ] || continue
+  head -n 1 "$f" | grep -q '^#!' || continue
   if ! /bin/bash -n "$f" 2>/tmp/uting-push-syntax.$$; then
     {
       echo ""
