@@ -1,23 +1,15 @@
-# ROADMAP-yt — `yt` 套件的下一步
+# ROADMAP —— `uting` 套件的下一步
 
-2026-08-21 写。与 `SPEC-system.md` 配套：那份讲这套东西**是什么**，这份记录它**该变成什么**、为什么、
-以及每一步开工前必须先成立的条件。
+2026-08-21 写；2026-08-23 随播放器/引擎重切（D9–D12）与代码重新对齐。与 `SPEC-system.md` 配套：
+那份讲这套东西**是什么**，这份记录它**该变成什么**、为什么、以及每一步开工前必须先成立的条件。
 
-范围：整个 `yt` 套件（`yt`、`yt-search`、`yt-play`、`yt-tui`），外加"其中哪一部分该被公开发布"这个
-问题。不是功能清单 —— 单个功能的实现前规划写 `PLAN-<topic>.md`，一路带着进度、上线即删，契约并入
+范围：整个套件 —— 播放器 `ut-play`、人机面 `uting`、两对引擎 `yt-search`/`yt-resolve` 与
+`bili-search`/`bili-resolve` —— 外加"其中哪一部分该被公开发布"这个问题。不是功能清单 —— 单个功能的实现前规划写 `PLAN-<topic>.md`，一路带着进度、上线即删，契约并入
 `SPEC-system.md`。
 
-> 文档类型（2026-08-22 定稿，规则在 `CLAUDE.md`）：五段流水线
-> **`RESEARCH-<topic>`（外部调研，蒸馏后删）→ `DESIGN-<topic>`（本系统方案待决，蒸馏后删）→
-> `ROADMAP`（已决定+排序）→
-> `PLAN-<topic>`（可施工，自带进度，上线即删）→ `SPEC-<scope>`（与代码同步，永久）**。
-> 第四段用 `PLAN-` 而非 `TODO-`：plan 会记录自己的进度，todo 只是一张没做的清单。
-> 这份是流水线里唯一不终结的一环，所以它装的是"必须活过重写的决定"。
-> 本文档此前那条注释已作废：它称 `CLAUDE.md` 登记了 `RUNBOOK-` / `DESIGN-` / `TODO-` 三种前缀，
-> 而 `CLAUDE.md` 里从来没有这张表，仓库里也没有 RUNBOOK。同轮把与代码同步的那份从
-> `DESIGN.md` 改名为 `SPEC-system.md` —— 它一直在做双重身份：是与代码同步的规格，却挂着提案阶段
-> 的名字。第一段拆成两个前缀：**`RESEARCH-` 装外部调研**（别人做到哪一步，实测数据），
-> **`DESIGN-` 装本系统的方案探索**（选项与权衡）。二者都待决、都在蒸馏进本文档后删除。
+> 五段文档流水线的定义在 `CLAUDE.md`。本文档是其中**唯一不终结**的一环，所以它只装两样东西：
+> **必须活过重写的决定**，和**还没做的事**。**已落地的工作不留在这里** —— 它的去处是
+> `SPEC-system.md`（契约与架构）与 git 历史（怎么落的）。
 
 ---
 
@@ -26,9 +18,13 @@
 先写这一节，因为没有它，任何"完整度够不够"的判断都无从谈起 —— 第一版这份文档就漏了它，导致完整度
 一度是拿通用 TUI 播放器当基准评的，结论错了（详见 §6.2 的更正）。
 
-**定位**：一个 **agent 优先的 YouTube 引擎**（`yt` + 两个窄动词壳），外加**一张给人的终端脸**。
-差异化是三件与渲染无关的东西：单行 JSON envelope 契约、退出码分类、脱离终端的播放器生命周期；
-以及同一套东西支持两种驱动方式。
+**定位**：一个 **agent 优先的媒体引擎**（一个不认识任何站点的播放器 + 一对一对可插拔的引擎），
+外加**一张给人的终端脸**。差异化是三件与渲染无关的东西：单行 JSON envelope 契约、退出码分类、
+脱离终端的播放器生命周期；以及同一套东西支持两种驱动方式。
+
+> **2026-08-23 措辞更正**：本条原写"agent 优先的 **YouTube** 引擎（`yt` + 两个窄动词壳）"。
+> D9 落地后音源不止一个（今天两个：YouTube、B 站），站点知识只住在引擎对里，所以"YouTube"
+> 不再属于定位，只是**今天的第一个引擎**。差异化那三件与 non-goals 一字未动 —— 换音源不改定位。
 
 **明确的 non-goals**：
 
@@ -43,44 +39,18 @@
 
 ---
 
-## 1. 现状（2026-08-22）
+## 1. 现状（2026-08-23）
 
-| 文件 | 行数 | 角色 | 受众 |
-|---|---:|---|---|
-| `shell/ut-play` | 2174 | 引擎。yt-dlp 调用、jq prelude、时长格式、播放、脱离终端的播放器生命周期（id/pid/sock/lock/state dir、reap）、`--status`/`--stop`/`--set-volume`/`--get-url`/`--info`/`--transcript` | 机器（经壳调用） |
-| `shell/yt-search` | 148 | parse → gate → `exec ut-play` | agent tool call |
-| `shell/yt-play` | 267 | parse → gate → `exec ut-play` | agent tool call |
-| `shell/yt-tui` | 2806 | 应用。自绘菜单、焦点卡片、宽度层、reflow、主题、中英 i18n、mpv IPC 客户端 | 人 |
-| `docs/SPEC-system.md` | 2745 | 架构 + 设计理由 + 验证矩阵（与代码同步的那一份） | 两者 |
+**六个平级可执行文件，一层，无库**：播放器 `ut-play`、人机面 `uting`、两对引擎
+（`yt-search`/`yt-resolve`、`bili-search`/`bili-resolve`）。站点知识只在引擎对里，播放只在播放器里
+（D9）。**架构、函数图与全部契约见 `SPEC-system.md`** —— 那份与代码同步，这里不复述，也不放行数表：
+一张会随每次 commit 过期的表，正是这份文档上次脱节的地方。
 
-运行时依赖：**yt-dlp、jq、mpv、nc**（curl 可选，用于播放时间的客户端探测）。
-可移植性契约：**bash 3.2**（macOS 自带）。
+运行时依赖：**yt-dlp、jq、mpv、nc、curl**（curl 由 `bili-search` 必需 —— 它就是那个引擎的传输层；
+在别处仍是可选的播放时客户端探测）。可移植性契约：**bash 3.2**（macOS 自带）。
 
-2026-08-21 这轮已落地（均已记入 `SPEC-system.md`）：启动提示支持 Esc 取消（复用
-`read_query_input`）、四条 fetch 路径统一的象限块 spinner、第三个播放态（`Starting`，由 `core-idle`
-判定，列表仅在该态下按秒 tick）、列表视图改为就地渲染（任何一帧都不再清屏）。
-
-2026-08-22 这轮已落地（同上）：
-
-- **`--transcript`** —— agent 侧的内容理解原语：字幕取回并清洗成可直接进 prompt 的文本。只读，
-  不播放，依赖仍是 yt-dlp + jq。`-j` 精简 / `-J` 加 `segments`（严格超集，与 search 的
-  `-j`/`-J` 同一关系）。定位上不属 §0 的 non-goals：那一列是**播放器层**功能，而它与 `--info`
-  同类，是只读元数据。
-- **`-j`/`-J` envelope全部收敛为单行** —— §0/§6.1 把"单行 JSON"当差异化和契约纪律写了很久，
-  实际上只有生命周期动词做到了：search `-j -n 3` 是 26 行、`-J` 76 行、`--info -j` 16 行、
-  `--get-url -j` 也是 pretty，而 `--status` **只在播放器列表为空时**是单行 —— 一有播放器就
-  pretty，正好是有人在轮询它的时候。五处 `jq` 补 `-c`（`emit_search_json` ×2、`resolve_info`、
-  `resolve_stream_url`、`--status` 的 `jq -s`）。`players/` 下的 state file 不在此规则内，仍是
-  pretty：那是给 jq 读的磁盘记录，不是 envelope。契约写进 `SPEC-system.md` §14 —— P0 抽契约文档
-  之前必须先修，否则抽出去的是一条假保证，而 Go 版按 D3 继承的正是那份文档。
-- **`yt-play` 的 `--` 不再绕过 URL 门禁** —— `yt-play "a query"` 一直正确 exit 1，但
-  `yt-play -- "a query"` 把 `--` 之后的全部灌进 `url`，不做校验就交给 core，于是**搜索**了：
-  散文列表，或 `-j` 下一整个 search envelope，来自那个契约说自己只播 URL 的动词。这正是 D7 把 `yt`
-  从 PATH 上撤下来要防的 bypass（§4），在防它的那层里以两个字符复现。`yt-search` 的 `--` 分支从来
-  都重做 `reject_url`，这次是把 `yt-play` 抄成同一形状（`reject_non_url`，两条位置参数路径共用）。
-- **HTTP 429 归入 `network`** —— 此前落到 `unknown`（调用方唯一无法据以行动的那个值）。可重试是
-  调用方唯一会分支的语义，因此不新增枚举成员。
-- **文档四段流水线定稿** + 与代码同步的那份从 `DESIGN.md` 改名 `SPEC-system.md`（见头部注释）。
+**在飞**：`docs/PLAN-ut-restructure.md` 只剩 E 步（`SPEC-system.md` 文档同步 + 三个 rig 全跑）。
+落地即删该文件，契约并入 spec。
 
 ---
 
@@ -88,8 +58,9 @@
 
 1. 现在这版 shell 值得单立 OSS 仓库并打包（curl 安装 + Homebrew）吗？
 2. 真正值得做的是不是 Go TUI 重写？
-3. 若 TUI 走 Go，agent 侧的 `yt-search` / `yt-play` 要不要跟着走 —— 还是 Go TUI 直接对接现有
-   shell 引擎才是 best of both worlds？
+3. 若 TUI 走 Go，agent 侧的 `ut-play` 与两对引擎要不要跟着走 —— 还是 Go TUI 直接对接现有
+   shell 播放器与引擎才是 best of both worlds？（D9 之后这一问的答案面变宽了：可以只移植播放器，
+   把引擎留在 shell —— 引擎才是会随站点变化而频繁改的那一半。）
 
 贯穿三问的约束：这套东西是**人机双驱动** —— 人用 TUI，agent 调动词 —— 任何一面都不能为另一面牺牲。
 
@@ -116,9 +87,9 @@ PyPI、**同领域**的 GitHub 同名仓库。
 
 已知瑕疵、接受：挪威语里 `uting` 是真词，意为"陋习 / 讨人厌的东西"。
 
-**别名策略**：`uting` 只作**发布名**。本机人机面继续用 `ytt`（Go 版用 argv[0] 分派或 shell alias
-实现）—— 明天早上敲的还是 `ytt`，公开的那个名字是干净的。agent 面用规范长名 `yt-search` /
-`yt-play`，不再留 `yts` / `ytp`：短名的理由是省打字，而 agent 面没人打（见 `SPEC-system.md` D0）。
+**别名策略（D10 定的现行规则）**：**套件不发任何短名。** 人机面就是发布名本身 —— `uting`；
+agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。想短的人自己写 alias。
+本节初稿提过的 `ytt` 与"`uting` 只作发布名"两条都已被 D10 推翻，理由记在那里。
 
 ### 3.2 被否掉的候选，及原因
 
@@ -177,7 +148,11 @@ PyPI、**同领域**的 GitHub 同名仓库。
 - **Linux 自带 netcat 没有 `-U`**（`SPEC-system.md` §26）。发布后从个人脚注变成平台缺口。
 - **终端动物园**：DCS 帧同步、Ambiguous 宽度、tmux 透传 —— 宽度层与 `YT_AMBIG_WIDE` 存在的全部理由，
   发布后都会变成外部 bug 类别。
-- **`yt` 是不安全的公开可执行名** —— 太短太通用，link `bin/yt` 的 formula 会直接冲突。
+- **五个运行时依赖**（yt-dlp、jq、mpv、nc、curl），全部由用户负责安装并保持可用；且**每加一个
+  音源就多一份站点维护面** —— 引擎对是本仓唯一会因外部网站变动而坏掉的地方（D9 把它关进两个
+  文件，但没让它消失）。
+- **通用短名不可用**：这一条已由 D10 兑现（六个命令名全做过六项筛查），但它仍约束 Go 版 ——
+  见 D7 的"永不发布 `bin/yt`"。
 
 预期：issue 列表九成是环境问题，不是行为问题。
 
@@ -190,51 +165,35 @@ PyPI、**同领域**的 GitHub 同名仓库。
 - 契约纪律：`-j` 单行 JSON、退出码分类（1 用法 / 2+ 传递 / 4 未生效）、US 而非 tab 作分隔、不从渲染
   串反解数据。
 - 边界处理：EAW 宽度表 + CJK 精确宽度、`YT_ASCII` 全量回退、中英 i18n 无串泄漏、reflow 验到 40×12。
-- 2494 行设计文档带一份可复查的验证矩阵。
-- `shellcheck --severity=warning` 共 **15 条**：SC2128×5、SC2178×4、SC2034×3、SC2054×2、SC2174×1。
-  其中 SC2128/SC2178 **全是假阳性** —— `filter_live` / `read_query_input` 的 `local query=""` 与全局
-  argv 数组同名，shellcheck 不跟踪作用域。要做的是改名消噪，不是改逻辑。
+- 3124 行设计文档带一份可复查的验证矩阵。
+- `shellcheck --severity=warning`（2026-08-23 六个脚本重测）共 **14 条**：SC2128×5、SC2178×4、
+  SC2054×2、SC2034×2、SC2174×1。SC2128/SC2178 那 9 条**全在 `uting`、全是假阳性** ——
+  `filter_live` / `read_query_input` 的 `local query=""` 与全局 argv 数组同名，shellcheck 不跟踪
+  作用域。要做的是改名消噪，不是改逻辑。四个引擎与播放器文件里 SC2128/SC2178 是零。
 
 ### 6.2 功能完整度：**按 §0 的定位，已完整**
 
-> **更正记录**：本节第一版拿 kew / ncspot / termusic 当基准，判定"缺队列 = 完整度没到"。那个基准
-> 是评估时自己加的，文档从未声明要做通用播放器。按 §0 的定位重评，队列 / 播放列表 / 历史 / 下载 /
-> 频道订阅**属于 non-goals，不是缺口**。原结论作废。
+> **更正记录（保留，因为它改的是评判基准而不是某一项工作）**：本节第一版拿 kew / ncspot /
+> termusic 当基准，判定"缺队列 = 完整度没到"。那个基准是评估时自己加的，文档从未声明要做通用
+> 播放器。按 §0 的定位重评，队列 / 播放列表 / 历史 / 下载 / 频道订阅**属于 non-goals，不是缺口**。
+> 原结论作废。
 
-按定位评，真正的功能缺口曾只剩一条，现已补齐（**更正**：本节原写"唯一契约漏洞"，2026-08-22
-另查出两条并当场修掉 —— `-j` 非单行、`yt-play` 的 `--` 绕过门禁，见 §1；那句"唯一"只对**功能**
-缺口成立，不对契约漏洞成立）：
+按这个基准，功能缺口为零；曾经的两条（detached 播放器的运行时状态、死亡原因不可观测）已于
+2026-08-22 补齐，契约在 `SPEC-system.md` §9.2/§9.3/§14，回归在 `tests/contract.sh`。
 
-- ~~**detached 播放器的运行时状态与死亡原因读不到**~~ —— **已补（2026-08-22）**，两件事，同一个
-  毛病（envelope 说不出播放器真实状态）：
-  - `--status` 没有 `paused`，也没有进度 → 现在一次连接实读 `volume`/`paused`/`position`/
-    `duration` 四个属性（`SPEC-system.md` §9.3/§14）；读不到是 `null`，与 `false`/`0` 可区分。
-    `yt-tui` 本地暂停态与外部改动不同步的老毛病同批修掉。
-  - 子进程死了没人知道 → 失败的播放器现在留一条有界的墓碑，`--status` 以 `failed[]` 报出
-    `reason`/`exit_code`（§9.2）。只记失败、最多 8 条、1 小时过期，所以是错误记录不是收听历史。
-
-> **更正记录（2026-08-22）**：本节此前写的缺口是"**`-d` 同步失败的原因没有进 envelope**"。实测
-> 该前提不成立：`-d` 不做启动前解析，`detach_play` 直接 `nohup` 拉起子进程，私有视频 / 网络失败
-> 全发生在子进程里（`yt-play -d -j -- <坏 id>` 返回 `started` + exit 0）。`-d` 真正的同步失败只有
-> 用法与依赖错误，统一 `die` + exit 1，`reason` 枚举覆盖不到，`yt-tui` 那段剥 `Error: ` 前缀的代码
-> 也因此删不掉。原条目作废，换成上面两条。
-
-### 6.3 发布硬件：没到，但都是便宜活
+### 6.3 发布硬件：**D8 三件已齐**，剩下的都是可选项
 
 | 缺项 | 后果 |
 |---|---|
-| ~~`LICENSE` 不存在~~ | **已补**（MIT，2026-08-21） |
-| ~~测试没进仓库~~ | **已补** —— `tests/` 四个装置入库（2026-08-21）。原先所有 rig 都是 `tmp/` 下不追踪的一次性物件：对自己没问题，对贡献者致命 |
-| ~~`--version` 不存在~~ | **已补**（2026-08-21）。曾经的后果：bug 报告说不清版本，升级后无法验证装上哪一版 |
 | 无 `CONTRIBUTING` / `CHANGELOG` | 次要 |
-| Linux 实际不可用 | §5 已述 |
+| Linux 实际不可用 | §5 已述，且由 §9 触发条件 3 把关 |
 
 ### 6.4 分身份结论
 
 | 以什么身份公开 | 现在够吗 |
 |---|---|
-| **参考实现 + 设计文档** | **够。** 补 `LICENSE`、套件 README、`--version` 即可 |
-| **YouTube 这一格里 agent 可驱动的那个**（即 §0 的定位） | **功能够**，差 §6.3 的发布硬件与 P0 的契约补洞 |
+| **参考实现 + 设计文档** | **够。** 发布硬件（D8）齐了 |
+| **agent 可驱动的那个**（即 §0 的定位；今天占着 YouTube 与 B 站两格） | **功能够**，只差 P0 的独立契约文档 |
 | brew / curl 分发的产品 | 不够，卡点不在功能，在 §5 的环境账 |
 
 ---
@@ -242,7 +201,7 @@ PyPI、**同领域**的 GitHub 同名仓库。
 ## 7. 分析：驱动决定的六条发现
 
 1. **差异化在契约，不在渲染。** 真正难而有价值的是 JSON envelope、退出码分类、脱离终端的生命周期 ——
-   都与语言无关。而 `yt-tui` 2667 行的大头是在重新实现 Go TUI 栈免费给的东西：显示宽度
+   都与语言无关。而 `uting` 2983 行的大头是在重新实现 Go TUI 栈免费给的东西：显示宽度
    （`go-runewidth`/`uniseg`）、事件循环与 resize（`bubbletea`）、样式（`lipgloss`）。那不是护城河，
    是重写会**删掉**（而非搬迁）的负债。
 
@@ -250,16 +209,19 @@ PyPI、**同领域**的 GitHub 同名仓库。
    留一个 shell 脚本就整体作废。Go TUI 接 shell 引擎仍是四依赖。所以 "best of both worlds" 在
    **风险**维度成立，在**分发**维度不成立。
 
-3. **agent 对接的是壳的 argv + core 的契约。** agent 调窄壳是刻意的（单一职责、互斥 flag 直接拒），
-   但让调用有意义的东西全在 `yt` 里。重写壳几乎零收益，重写 core 才改变能力边界。
+3. **agent 对接的是窄动词的 argv + 它们背后的契约。**（**2026-08-23 更新**：本条原写"壳的 argv +
+   core 的契约，重写壳几乎零收益"。D9 之后**没有壳了** —— 窄动词就是实现本身，`ut-play` 与四个引擎
+   都是平级 peer。结论因此换了形状：可移植的单位从"core"变成**播放器**，而引擎可以整条留在 shell，
+   因为它们才是随外部网站变动而频繁改的那一半 —— 见 §7.6 的迭代速度论证。）
 
-4. **三个 agent 侧诉求都在 core，且 bash 都给不了。**
+4. **两个 agent 侧诉求落在播放器/新脸上，且 bash 都给不了**（第三个已还清）。
 
    | 想要的 | bash 为何不行 | 归属 |
    |---|---|---|
-   | MCP stdio server | 手写 JSON-RPC 帧、长连接、并发 | core |
-   | 失败原因**进 envelope** | 见 §6.2，账已付过 | core |
-   | 流式进度 | 阻塞 `read`、一次性 jq | core |
+   | MCP stdio server | 手写 JSON-RPC 帧、长连接、并发 | 第三张脸（既非播放器也非引擎，D7） |
+   | 流式进度 | 阻塞 `read`、一次性 jq | 引擎（search）+ 播放器（`--status`） |
+
+   （原表第三行"失败原因进 envelope"已于 2026-08-22 落地，随之删除。）
 
 5. **yt-dlp 与 mpv 在任何方案里都是子进程，Go 也一样。** 引擎的真实价值是 **flag 学问**
    （`--ytdl-format=ba/b`、`--ytdl-raw-options`、`--msg-level` 噪音压制、`--no-video` 与 term-osd、
@@ -275,29 +237,38 @@ PyPI、**同领域**的 GitHub 同名仓库。
 
 ## 8. 决定
 
-- **D0 —— 定位冻结为 §0**：agent 优先的 YouTube 引擎 + 一张人脸；不做通用 TUI 播放器。
+- **D0 —— 定位冻结为 §0**：agent 优先的媒体引擎（播放器 + 可插拔引擎对）+ 一张人脸；
+  不做通用 TUI 播放器。音源数量不是定位的一部分（见 §0 的措辞更正）。
 - **D1 —— 不为分发打包 shell 套件。** 支持面（§5）大于差异化（§7.1）。
 - **D2 —— 但照样公开仓库，定位为参考实现，不承诺打包。** README 写明这是"一个可用的 shell 实现 +
-  一份 2494 行的设计文档"。文档是更可传播的产物。
+  一份 3124 行的设计文档"。文档是更可传播的产物。
 - **D3 —— 任何重写之前先冻结契约**（envelope schema、player record、退出码表、生命周期语义）。
   它是唯一完整活过重写的东西，也是 Go 版的验收规格。
-- **D4 —— Go 的第一步只做 TUI**（`ytt` → Go），调用今天原封不动的 `yt-search` / `yt-play`。被否方案 —— 一次性
-  全量移植：把生命周期语义和渲染器重写放进同一次变更，回归无法二分定位。
-- **D5 —— "core 是否也去 Go" 是独立的、条件触发的决定**（§9）。触发前 `yt` 保持 shell。
-- **D6 —— 发布名 `uting`（§3.1）**；`yts` / `ytp` 弃用 —— 一个命令一个名字。
-  ~~本机 PATH 为 `ytt` + `yt-search` / `yt-play`~~ **命令名已由 D9/D10 取代**：
-  `ut-tui` / `ut-play` / `yt-search` / `yt-resolve` / `bili-search` / `bili-resolve`。
+  **D9 之后冻结面多了一项：引擎契约**（`<engine>-search` 的结果 envelope、`<engine>-resolve` 的
+  `{stream_urls[], http_headers{}, title, duration, format}`、`engine` 字段的路由含义、非本站 URL
+  = 1）。它是"加一个音源 = 加一对脚本"这句话的全部兑现手段，所以 P0 抽契约文档时必须一并抽出。
+  同一轮里被**故意收窄**的只有一处：`--get-url` / `--info` / `--transcript` 不再是播放器的动词
+  （见 §1 的 2026-08-23 条目）。
+- **D4 —— Go 的第一步只做 TUI**（`uting` → Go），调用今天原封不动的 `<engine>-search` 与
+  `ut-play`。被否方案 —— 一次性全量移植：把生命周期语义和渲染器重写放进同一次变更，回归无法二分定位。
+  **D9 让这一步更干净了**：Go TUI 要复刻的只剩"扫 `*-search` 建注册表 + 切源"，它不需要认识任何站。
+- **D5 —— "播放器是否也去 Go" 是独立的、条件触发的决定**（§9）。触发前 `ut-play` 保持 shell。
+  **引擎不在这个问题里**：它们随外部网站变，shell 的原地可改性在那半边是净收益（§7.6）。
+- **D6 —— 发布名 `uting`（§3.1）**；一个命令一个名字，不留第二种拼法。**命令名由 D9/D10 定死**：
+  `uting` / `ut-play` / `yt-search` / `yt-resolve` / `bili-search` / `bili-resolve`。
 - **D7 —— Go 版只发一个二进制加子命令，绝不发三个通用名的可执行文件。**
 
   ```sh
-  uting search …     # 今天的 yt-search
-  uting play …       # 今天的 yt-play
-  uting              # 无参数 → TUI（今天的 ytt）
-  uting mcp          # 第三张脸，D5 触发后
+  uting search …           # 缺省引擎的 <engine>-search
+  uting <engine> search …  # per-engine，D9 之后的形状（yt / bili / …）
+  uting play …             # 今天的 ut-play
+  uting                    # 无参数 → TUI（今天就是这个名字，Go 版逐字相同）
+  uting mcp                # 第三张脸，D5 触发后
   ```
 
-  **永不发布 `bin/yt`**（§5）。**D9 之后这张子命令表要重排**（`uting play` 之外还有 per-engine 的
-  search/resolve），具体形状留到 Go 真正开工时定 —— 它不影响 shell 版的重切。
+  **永不发布 `bin/yt`**（§5 —— 那个名字今天已经不在套件里了，D10）。上表是 **D9 之后重排过的草稿**：
+  `resolve` 刻意不进子命令表（它只被播放器调），per-engine 那一层的最终形状留到 Go 真正开工时定 ——
+  它不影响 shell 版。
 
 - **D8 —— 三件发布硬件先于任何公开动作**（§6.3）：`LICENSE`、rig 入库、`--version`。
 - **D9 —— 套件按「播放器 + 可扩展搜索引擎」重切，不按站点开命令**（2026-08-22 定，取代 D6 的命令名）。
@@ -309,14 +280,14 @@ PyPI、**同领域**的 GitHub 同名仓库。
   与音源有关的只有**抽取**。按这条线切：
 
   ```
-        ut-tui  ──持有引擎注册表──┬── yt-search   / yt-resolve     (yt-dlp · yt-dlp)
-           │                      └── bili-search / bili-resolve   (curl · yt-dlp)
-           └── ut-play   生命周期 · mpv · envelope · players/ · 退出码
-                         不认识任何一个站；播放时回调 <engine>-resolve
+        uting ──持有引擎注册表──┬── yt-search   / yt-resolve     (yt-dlp · yt-dlp)
+          │                     └── bili-search / bili-resolve   (curl · yt-dlp)
+          └── ut-play   生命周期 · mpv · envelope · players/ · 退出码
+                        不认识任何一个站；播放时回调 <engine>-resolve
   ```
 
   - **引擎 = 两个动词**：`search`（列表）与 `resolve`（id → 直链 + header）。加第三个音源只加一对
-    脚本，`ut-play` 与 `ut-tui` 一行不改。
+    脚本，`ut-play` 与 `uting` 一行不改。
   - **四命令而非子命令**（否决 `yt search|resolve` 形式）：窄动词、flag 面窄，符合 D0 的 agent 取向；
     `resolve` 实际只被 `ut-play` 调，暴露给模型的仍是 `*-search` + `ut-play`。
   - **resolve 必须发生在播放时**，不能在搜索时：直链会过期，且 10 条结果只会用 1 条。
@@ -331,6 +302,13 @@ PyPI、**同领域**的 GitHub 同名仓库。
   GitHub 同名 全空**；光杆 `ut` 全占（npm/PyPI/crates + `boost-ext/ut` 1438★），短名 `utt` 也被占
   （npm/PyPI + `larose/utt` 349★）。**因此人机面没有短名** —— 想短由用户自建 alias，不随包发第二个名字。
   引擎命令保留音源自身的名字（`yt-*` / `bili-*`），因为它们本来就该说明自己是哪个站。
+
+  **修订（2026-08-23，同日）：人机面不叫 `ut-tui`，直接叫 `uting`。** `ut-tui` 与 `uting` 是同一个
+  东西的两种拼法，而人真正会敲、也真正会被别人提起的是**发布名本身** —— 留着 `ut-tui` 等于让
+  §3.1 那条"一个命令一个名字"在最显眼的那个命令上先破例。筛查结论不受影响：`uting` 本来就是
+  §3.2 里唯一六项全空的那个。**因此 `ut-` 前缀今天只约束 agent 面的播放器 `ut-play`**；
+  人机面用光杆发布名，引擎用站名。三类命令三种命名规则，各自的理由都在上面 —— 这不是不一致，
+  是"谁在敲它"不同。
 
 
 - **D11 —— B 站引擎按「操作」分原语：搜索走 curl，解流走 yt-dlp**（2026-08-23 实测定，取代
@@ -379,7 +357,8 @@ PyPI、**同领域**的 GitHub 同名仓库。
 
 ## 9. 把 core 推向 Go 的触发条件
 
-任一为真，core 移植就值得它的风险。全不为真，`yt` 无限期保持 shell —— 那是正当终态。
+任一为真，**播放器**移植就值得它的风险。全不为真，`ut-play` 无限期保持 shell —— 那是正当终态。
+（引擎不受这三条支配，见 D5。）
 
 1. **真的要 MCP**（解除 §0 的那条 non-goal）。
 2. **真的要单文件分发**（推翻 D1）。
@@ -395,44 +374,36 @@ PyPI、**同领域**的 GitHub 同名仓库。
 
 - 从 `SPEC-system.md` 抽成独立契约文档：envelope schema（search / play / status）、player record
   schema、退出码表、生命周期语义（launch → status → stop、幂等、歧义 → 4）、`-j` 单行保证。
-- ~~补上 §6.2 那两个洞~~ —— **已完成（2026-08-22）**。字段已定、shell 里已实现、契约已进
-  `SPEC-system.md`（§9.2/§9.3/§14/§27）、回归已进 `tests/contract.sh`（live read 7 条 + 死亡
-  记录 9 条），Go 版继承的是一个没有这两个洞的契约：
-  - **`--status` 实读 `paused` + 进度（`position` / `duration`）。** 今天暂停态与进度在任何 envelope
-    里都读不到，这正是 `live_volume()` 当初要消灭的那种谎（state file 说一套、socket 说另一套）。
-    `paused` 也是运行时播控动词的前置条件：没有可观测的状态，动词加了也是瞎的（`SPEC-system.md`
-    §26）。实现上把 `live_volume()` 泛化成一次连接读多属性，四个属性仍只付一次往返；顺带修掉
-    `yt-tui` 本地 `CURRENT_PLAY_PAUSED` 与外部改动不同步的问题。
-  - **detached 播放器的死亡原因可观测。** 失败（且仅失败）的播放器在被 reap 时留下一条有界的墓碑，
-    `--status` 以 `failed[]` 报出 `reason` / `exit_code`。只记失败、最多 8 条、随状态目录消失 ——
-    这是错误记录，不是 §0 non-goal 里的收听历史。
-- 验收：只读这份文档就能写出 JSON diff 测试，不需要读 `yt`。
-- 施工用的 `docs/PLAN-envelope-observability.md` 已随落地删除（plan 阶段的规矩：契约进 spec 即
-  删）。**P0 仍未完成的是第一条** —— 独立契约文档还没抽出来。
+- **D9 之后这份文档要多装一半：引擎契约**（见 D3）—— `<engine>-search` 的结果 envelope、
+  `<engine>-resolve` 的 `{stream_urls[], http_headers{}, title, duration, format}`、`engine` 字段的
+  路由含义、"只认自己站的 host，别的退 1"（D12）、以及**能力用动词的有无表达**（`bili-resolve`
+  没有 `--transcript`）。**这一半才是"加一个音源 = 加一对脚本"的兑现手段** —— 缺了它，第三方写引擎
+  只能照抄 `yt-resolve`。
+- **前置**：`PLAN-ut-restructure` 的 E 步（文档同步）必须先落 —— P0 是从 `SPEC-system.md` 里抽，
+  而它现在还挂着一段"A–D 已改了什么"的临时注记。从一份自知过期的文档里抽契约，抽出来的仍是过期的。
+- 验收：只读这份文档就能写出 JSON diff 测试，不需要读 `ut-play`；也能照着写出第三个音源的引擎对，
+  不需要读 `yt-resolve`。
+- **状态：未开工。** 两个洞（`--status` 的实读属性、死亡记录）已于 2026-08-22 补进 spec 与 rig，
+  所以要抽的是一份**没有那两个洞**的契约；抽取本身一行没写。
 
 ### P1 —— 独立仓库（D2 + D8）
 
-**2026-08-21 部分完成。** 已做：用 `git filter-repo` 带着 50 个 commit 的历史抽出
-`shell/{yt,yt-search,yt-play,yt-tui}` 与 `docs/{DESIGN,ROADMAP}.md`，落在
-`~/workspace_fullstack/uting`；补上 `LICENSE`（MIT）、`README.md`、`.gitignore`；三个脚本改为
-**自解析符号链接**定位同伴（原先的 `../../shell-scripts` 跳只在那一套 dotfiles 布局里成立，搬仓
-即暴露）；`env-config` 不再保留副本，`~/bin/{yts,ytp,ytt}` 直接指向本仓。
+**已完成（2026-08-21 建仓，D8 三件齐）。** 仓库在 `~/workspace_fullstack/uting`，含 `LICENSE`
+（MIT）、`README.md`、`tests/`、`shell/VERSION`；每个脚本自解析符号链接定位同伴，所以 checkout
+可以放在任何地方。
 
-**D8 三件已齐**：`LICENSE`（MIT）、rig 入库（`tests/` 四个装置，说明写在根 README 的
-`## Tests` 一节 —— 不设 `tests/README.md`，一个仓库一份 README）、`--version`（版本常量
-`YT_VERSION` 只在核心里声明一次，壳与 TUI 问它、打印自己的名字，四个入口不会各说各的；且在
-任何依赖门之前应答 —— 要装齐 yt-dlp 才能知道自己是哪一版是本末倒置）。
+**唯一剩下的是一个决定，不是一件工作：仓库是否公开。** 现为 private。公开前要成立的条件：
 
-公开与否另行决定 —— 仓库先建为 private。
-- README 直说依赖与平台现实（macOS 优先；Linux 需要支持 `nc -U` 的 netcat），并直说 §0 的 non-goals
-  —— 省掉一半"为什么没有队列"的 issue。
+- README 直说依赖与平台现实（macOS 优先；Linux 需要支持 `nc -U` 的 netcat），并直说 §0 的
+  non-goals —— 省掉一半"为什么没有队列"的 issue。
 - 不 vendor yt-dlp 或 mpv。
 - 验收：陌生人读完设计文档能理解架构，不必运行任何东西。
 
-### P2 —— Go TUI 接 shell 引擎（D4）
+### P2 —— Go TUI 接 shell 播放器与引擎（D4）
 
 - `bubbletea` + `lipgloss` + `go-runewidth`。移植**决定**而非代码：reflow 的"先测量再预算"顺序、
-  details 块作为可计费 chrome、三个播放态、象限 spinner、CHA 定位的时长轨、中英双语、主题。
+  details 块作为可计费 chrome、三个播放态、象限 spinner、CHA 定位的时长轨、中英双语、主题，
+  外加 D9 之后新增的那条：**扫 PATH / 同目录的 `*-search` 建引擎注册表 + 切源**，不写死站名。
 - mpv socket 用 `net.Dial("unix", …)` —— 客户端侧就此甩掉 nc。
 - 交给库因而可删的清单：显示宽度表、resize 处理、事件循环、`\033[K`/`\033[J` 记账、每次按键的
   `stty` fork。
@@ -441,12 +412,14 @@ PyPI、**同领域**的 GitHub 同名仓库。
   有差异——那正是 pty 版本栽过的地方），连同教训：等就绪标记而不是 sleep，屏幕类断言下在
   `capture-pane` 的单元格网格上、字节类断言下在 `pipe-pane` 的流上。
 
-### P3 —— core 移植（仅当 §9 触发）
+### P3 —— 播放器移植（仅当 §9 触发）
 
-- 在冻结的契约背后重写 `yt`。jq 化进结构体反序列化，nc 化进 `net.Dial`。flag 学问原样搬（§7.5）。
+- 在冻结的契约背后重写 **`ut-play`**。jq 化进结构体反序列化，nc 化进 `net.Dial`。flag 学问原样搬
+  （§7.5）。**引擎默认留在 shell** —— Go 播放器照样 `exec` `<engine>-resolve` 读它那一行 JSON，
+  这正是 D9 用进程边界换来的东西（移植面从"整套"缩到"一个文件"）。
 - 验收：固定查询集上两实现的 `-j` **逐字段 diff**（须含直播行、null 播放量、跨日时长、零结果、强制
-  yt-dlp 失败），外加生命周期序列（launch → status → set-volume → stop → 再 stop）退出码全等。
-  shell 套件保持安装，充当参考实现。
+  yt-dlp 失败），外加生命周期序列（launch → status → set-volume → stop → 再 stop）退出码全等；
+  **两个引擎都要各跑一遍**，否则 diff 只证明了 YouTube 那一格。shell 套件保持安装，充当参考实现。
 - 之后、且仅在之后：`uting mcp`、curl 安装脚本、Homebrew tap。
 
 ### P4 —— （已删）
@@ -477,4 +450,6 @@ PyPI、**同领域**的 GitHub 同名仓库。
 - **`uting` 的挪威语含义**（"陋习"）—— 当彩蛋接受，还是换 `tingyu` / `qingyin`？
 - **MCP 那张脸到底属不属于这个产品** —— 还是 agent 通过通用 shell 工具调 `uting search -j` 就够了？
   P0/P1 不依赖这个答案。
-- **仓库边界** —— 公开仓库含整个 `yt` 引擎（假定），还是只含壳？（只含壳没有意义。）
+- **引擎边界** —— 第三方音源的引擎对进本仓，还是各自成仓、只靠契约（P0 那份文档）对齐？
+  答案取决于 P0 抽不抽得出一份能照着写引擎的文档。（此问取代了原先的"仓库边界"：D9 之后没有壳，
+  六个文件都是实现，仓库就是全部。）
