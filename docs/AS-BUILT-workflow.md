@@ -10,14 +10,15 @@ conveniences, which is why they are written out here rather than left inside the
 ## 1. The pipeline
 
 ```
- (research) ──► plan ──────────► pre-mortem ──► build ──► verify ──► land
-      │           │                   │             │          │          │
-  RESEARCH-     PLAN- authored:     PLAN-       (§24 A-E   (the two   (checklist;
-  cited, then   interrogated (B1),  hardened    if struct.)  suites)  as-built docs
-  distilled     designed (B3)                                         resynced,
-  + deleted                                                           PLAN- deleted)
+ (roadmap) ──► plan ──────────► pre-mortem ──► build ──► verify ──► land
+     │          │                   │             │          │          │
+ ROADMAP.md   PLAN- authored:     PLAN-       (§24 A-E   (the two   (checklist;
+ entry:       interrogated (B1),  hardened    if struct.)  suites)  as-built docs
+ decided,     designed (B3)                                         resynced,
+ sequenced                                                          PLAN- deleted)
 
-  ...and between units of work, on its own cadence: the whole-tree conformance audit (B9).
+  ...and between units of work, on their own cadence: research feeding the roadmap (B6),
+  and the whole-tree conformance audit (B9).
 ```
 
 Interrogation (B1) and design (B3) are activities inside authoring the `PLAN-`, not stages of
@@ -51,9 +52,12 @@ B5. **A bug gets a red loop before it gets a theory.** No hypothesis until one c
     in `tmp/`; the regression check lands in whichever suite owns the surface; the hypothesis
     that proved out is stated in the commit message.
 
-B6. **Research is cited or it is opinion.** Outside-world questions are answered against
-    primary sources and land as `docs/RESEARCH-<topic>.md` with each claim cited — then
-    distilled into a `ROADMAP.md` entry or a `PLAN-`, and deleted.
+B6. **An initiative descends from the roadmap; research is its input, not a stage.**
+    Outside-world questions are answered against primary sources and land as
+    `docs/RESEARCH-<topic>.md` with each claim cited — that work runs on its own cadence, off
+    this pipeline. What survives the filter of relevance and business need (`ROADMAP.md` §0's
+    positioning and non-goals) becomes a roadmap entry carrying its reopen condition; the
+    research doc is then deleted, and the `PLAN-` names the entry it implements.
 
 B7. **A landing is a checklist, not a feeling.** The unit of work closes against the document
     that authorized it, atomically: every plan item landed or explicitly deferred, every
