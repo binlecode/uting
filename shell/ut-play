@@ -37,7 +37,7 @@ SELF="${BASH_SOURCE[0]}"
 # and only by that name — it carries no table of sites, no URL sniffing, and no idea what a
 # format string looks like. Name == command prefix is what keeps the lookup a string
 # concatenation instead of a registry the player and the TUI would both have to hold.
-# Per-call override: --engine. docs/PLAN-ut-restructure.md §2.2.
+# Per-call override: --engine. docs/SPEC-system.md §12.1.
 : "${UT_DEFAULT_ENGINE:=yt}"
 
 YT_MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar --no-video)
@@ -355,7 +355,7 @@ patch_player_meta() {
 # handed us direct URLs plus the headers they must be fetched with, so mpv is told
 # --no-ytdl and never makes an extraction of its own. That closes the asymmetry where the
 # LAST yt-dlp call in a play was one we did not make and could not classify — from here
-# there is exactly one extraction and we made it. docs/PLAN-ut-restructure.md §3.3.
+# there is exactly one extraction and we made it. docs/SPEC-system.md §8.1.
 #
 # The media comes from the RESOLVED_* globals rather than arguments because bash 3.2 arrays
 # do not survive command substitution; resolve_media sets them in place and every path into
@@ -824,7 +824,7 @@ new_player_id() {
 # milliseconds (uting captures this call), so the parent launches first and writes `title`
 # and `format` as null; the child backfills both from its own resolve envelope the moment it
 # has one (patch_player_meta). Doing it the other way — resolve here, then launch — would
-# put the whole engine round trip on the -d hot path. docs/PLAN-ut-restructure.md §5 B-2. Audio only in practice: a detached
+# put the whole engine round trip on the -d hot path. docs/SPEC-system.md §6.1. Audio only in practice: a detached
 # process has no controlling terminal, so video/ascii/viz have nowhere to render.
 detach_play() {
     local url=$1
@@ -1510,7 +1510,7 @@ fi
 # one — that shape is engine knowledge, and giving it up is the whole point of the split — so
 # it rejects only what is not a handle at all: empty, or containing whitespace, which is a
 # search query and belongs to a different verb. An unresolvable handle therefore surfaces as
-# a propagated engine failure (2+), not a usage error. docs/PLAN-ut-restructure.md §5 B-3.
+# a propagated engine failure (2+), not a usage error. docs/SPEC-system.md §6.
 IS_HANDLE=0
 if [[ -n "${QUERY//[[:space:]]/}" && "$QUERY" != *[[:space:]]* ]]; then
     IS_HANDLE=1
@@ -1585,6 +1585,6 @@ fi
 # Not a handle: nothing left to route. Search moved out to the engine (yt-search) when the
 # suite split into player + engines, and the core's old D2 contract (bare `yt "query"` ->
 # list) went with it. Anything reaching here is a caller holding the wrong tool.
-# docs/PLAN-ut-restructure.md §5 B-1.
+# docs/SPEC-system.md §7.
 # =-----------------------------------------------------------------------------
 die "'$QUERY' is not a video id or URL — run 'yt-search -- $QUERY' to search for it"

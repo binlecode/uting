@@ -21,7 +21,7 @@
 #
 # It also puts login on the right side of the line. An account gets higher-quality audio,
 # and cookies reach yt-dlp through --cookies-from-browser — a channel that already exists
-# and that the HTTP half never touches. docs/PLAN-ut-restructure.md §C.
+# and that the HTTP half never touches. docs/SPEC-system.md §5.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
 # expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). SPEC-system.md §28.
@@ -48,7 +48,7 @@ else
 fi
 
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
-# executables carry. docs/PLAN-ut-restructure.md §2.2.
+# executables carry. docs/SPEC-system.md §4.
 ENGINE_NAME="bili"
 
 # ==============================================================================

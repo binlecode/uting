@@ -12,7 +12,7 @@
 # Why it exists at all: mpv's ytdl_hook used to do the extraction, so the last yt-dlp call
 # in a play was one WE did not make and could not see or classify. Now the player is handed
 # a URL it opens with --no-ytdl, and there is exactly one extraction, made by us.
-# docs/PLAN-ut-restructure.md §3.3.
+# docs/SPEC-system.md §8.1.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
 # expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). SPEC-system.md §28.
@@ -41,7 +41,7 @@ fi
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
 # executables carry. Name == prefix is deliberate: it lets `ut-play --engine yt` find
 # `yt-resolve` by string concatenation, with no name->command registry to keep in sync in
-# both the player and the TUI. docs/PLAN-ut-restructure.md §2.2.
+# both the player and the TUI. docs/SPEC-system.md §4.
 ENGINE_NAME="yt"
 
 # ==============================================================================

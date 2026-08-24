@@ -115,7 +115,7 @@ echo "── a second engine: the envelope's http_headers reach mpv ────
 # contract.sh asserts http_headers is PRESENT in the resolve envelope; nothing asserted that
 # ut-play forwards it into mpv. This site is what makes the difference observable: its CDN
 # answers 403 to a bare stream URL and 206 to the same URL carrying the envelope's Referer
-# (docs/SPEC-system.md §0, measured). So a player that dropped the header block would still
+# (docs/SPEC-system.md §6.1, measured). So a player that dropped the header block would still
 # play YouTube, and every other check in this file would stay green, while bytes never flowed
 # from here. Position leaving zero IS the proof that they did.
 o3=$(shell/ut-play -d -j --volume 0 --engine bili -- "$BV" 2>/dev/null)

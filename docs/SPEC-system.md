@@ -1,6 +1,6 @@
 # SPEC-system — uting, system scope
 
-`ut-play` · `yt-search` · `yt-resolve` · `bili-search` · `bili-resolve` · `yt-tui` — a
+`ut-play` · `yt-search` · `yt-resolve` · `bili-search` · `bili-resolve` · `uting` — a
 search + terminal-playback CLI suite, designed as much for **LLM/agent callers** as for
 humans. This is the **code-synced spec**: architecture, functional structure, supported
 workflows, the module contract, and the rationale behind them, kept in step with the code
@@ -17,64 +17,13 @@ in flight (`PLAN-<topic>.md`). The four stages are defined in `CLAUDE.md`.
   (handle → stream URL + headers, plus `--info` / `--transcript`)
 - Bilibili engine (a pair): `shell/bili-search`, `shell/bili-resolve` (`--info`; this site
   serves no captions, so there is no `--transcript` half)
-- Interactive UI: `shell/yt-tui` (owned glue over the verbs; no extra deps)
+- Interactive UI: `shell/uting` (owned glue over the verbs; no extra deps)
 - Caller-facing surface: each verb's own `-h`/`--help` · Orientation: `README.md`
-- Runtime deps: `yt-dlp`, `jq` and (optionally) `curl` in the ENGINES; `mpv` + `jq` in the
+- Runtime deps: `yt-dlp` + `jq` in the engines, and `curl` — REQUIRED by `bili-search`
+  (it is that engine's transport), optional in `yt-resolve` (the probe); `mpv` + `jq` in the
   player; `nc` for `--set-volume`. No fzf / TUI framework — only foundational primitives.
-
-> **Restructure in flight (2026-08-23).** Several things below this line are behind the
-> code, all by design (`docs/PLAN-ut-restructure.md`). Names, diagrams and §13's gating
-> model are redrawn together in step E, once the shape stops moving; §14 below is the
-> exception — a contract is stated when it lands, never later. What has already changed:
->
-> - **Step A** — the core file was renamed `shell/yt` → `shell/ut-play`, so a bare `yt` in
->   prose or in a process diagram still means that player. The version moved to
->   `shell/VERSION`.
-> - **Step B-1** — search left for the `yt-search` engine, which owns the search yt-dlp
->   call, the cookie decision and the duration formatter, declares `engine`/`status` in its
->   envelope, and merged its former gating wrapper. The player's old D2 contract (bare
->   `yt "query"` → list) went with it.
-> - **Step B-2** — extraction left for `shell/yt-resolve`, and **mpv no longer runs yt-dlp
->   at all**: the player passes `--no-ytdl` and opens a direct URL the engine resolved. So
->   §5's seam table, §6.1's invocation stack, §8.1's mode→format table and §8.2's probe all
->   describe work that now happens one process further out, in the engine. `--get-url`,
->   `--info` and `--transcript` are `exec`-forwarded to `yt-resolve` and are its verbs now.
->   The engine token in every envelope is `yt`, not `youtube`: the name IS the command
->   prefix, which is what lets the player find `yt-resolve` without a registry.
-> - **Step B-3** — the `yt-play` gating wrapper is **deleted** and `ut-play` is the PATH
->   entry for playback, holding its own gate. Two layers became one, so §13's two-tier
->   gating model and §4's topology are now one tier of four peers. `--get-url` is **retired
->   with no alias**: it was a second spelling of what a bare `yt-resolve` call is. `--info`
->   and `--transcript` are no longer forwarded either — `ut-play` names the engine and exits
->   1 — so §10's resolve-only verb and §12's player spec belong to `yt-resolve` now, and the
->   player's own flag surface is exactly: `-f -S -d -j -l --engine --volume --status --stop
->   --set-volume --id --all --color -h -V`. `-J` went with the verbs that used it.
->
-> - **Step C** — a **second engine** exists: `bili-search` + `bili-resolve` (Bilibili).
->   Nothing in the player or the TUI changed to admit it, which was the whole point of the
->   split. Three facts it establishes, all of which §4/§5/§12/§14 will state properly at E:
->   an engine's two halves may use **different primitives** (this one's search half talks
->   HTTP via `curl`, its resolve half shells out to `yt-dlp`) — the seam is the ENVELOPE,
->   not the tool behind it; an engine **declares its capabilities by which verbs exist**
->   (there is no `--transcript` here because the site has no captions, rather than a verb
->   that always answers "none"); and `http_headers` stopped being a theoretical key —
->   this site's CDN answers **403 to a bare stream URL and 206 to the same URL with the
->   envelope's headers**, measured, so the hole D9 closed is now load-bearing.
->   Its follow-on tightened both engines (ROADMAP D12): **`<engine>-resolve` accepts only
->   its own site's hosts**, so §12's handle grammar now carries a host allowlist per engine
->   and a URL from another site is a usage error (1), not an extraction failure. `yt-resolve`
->   had been accepting any http(s) URL and labelling the result `engine:"yt"`.
-> - **Step D** — the interactive surface is **`shell/uting`**: the human face carries the
->   project's own name, so `~/bin/uting` is a plain symlink with the same word at both ends.
->   `yt-tui` no longer exists, nor the `ut-tui` it was briefly renamed to, and `ytt` went with
->   them (ROADMAP D10 + its same-day revision: no short name ships). It holds no engine
->   list: an engine is any `<name>-search` + `<name>-resolve` PAIR beside it or on PATH,
->   discovered at start-up, so §4's topology gained a source without this file gaining a
->   name. `e` switches source and re-fetches; play passes `--engine` taken from the search
->   envelope's own `engine` field.
->   The last site-specific string in the UI — the prompt's literal "YouTube" — is gone.
-> - Still true everywhere: the exit-code taxonomy, the lifecycle semantics, and one line
->   per `-j` envelope.
+- The version is declared once, in `shell/VERSION`; every entry point reads it and prints
+  its own name (§4).
 
 The document flows: **I. System architecture → II. Functional structure →
 III. Modular API → IV. Supported workflows → V. Aligned best practice.**
@@ -94,16 +43,20 @@ choice below follows from taking that contract as the product.
 
 ## 2. Ownership model — two surfaces, both 100% owned
 
-No opinionated third-party YouTube client anywhere in the path. All YouTube-specific
+No opinionated third-party media client anywhere in the path. All site-specific
 orchestration lives in code we own; the external primitives do only universal,
-non-YouTube heavy lifting, each isolated behind a single seam (§5).
+site-agnostic heavy lifting, each isolated behind a single seam (§5).
 
 ```
-   Human surface     ──►  yt-tui             (interactive: self-rendered menu, detached play)
-   LLM/agent surface ──►  yt-search, yt-play (headless: structured JSON, gated verbs)
-   Internal engine   ──►  yt (core)          (search / play / resolve / lifecycle; not on PATH)
-   Primitives        ──►  yt-dlp · mpv       (foundational, swappable behind seams)
+   Human surface     ──►  uting                      (interactive: self-rendered menu, detached play)
+   LLM/agent surface ──►  ut-play                    (playback + lifecycle, source-agnostic)
+                     ──►  <engine>-search            (query → results)
+                     ──►  <engine>-resolve           (handle → stream URL + headers, metadata, captions)
+   Primitives        ──►  yt-dlp · mpv · curl        (foundational, swappable behind seams)
 ```
+
+Every one of those is a PATH-exposed peer; there is no hidden core underneath them and no
+shared library between them (§4).
 
 **Why ownership matters (D6).** Surveyed alternatives were rejected as runtime
 dependencies: `ytfzf` dormant (~21 months, GPL-3.0) — client-level lock-in risk;
@@ -112,31 +65,43 @@ layout/keybinding ideas — no code or dependency taken. All clients are bottlen
 `yt-dlp` anyway, so a third-party client buys no capability we can't assemble ourselves
 while costing portability. Conclusion: own the glue, depend only on primitives.
 
+**Where the ownership line now falls (D7).** It used to be "own the core"; since the
+player/engine split it is **own the seam**. Site knowledge is owned and confined to an
+engine pair; playback and lifecycle are owned and confined to the player; what crosses
+between them is a JSON envelope this document specifies (§14), not a function call.
+
 ## 3. Design decisions (index)
 
-One line each; full rationale lives in the referenced section.
+One line each; full rationale lives in the referenced section. **These `D#` are this
+document's own series** — `ROADMAP.md` keeps a separate one, and a reference to it is always
+written `ROADMAP D9`, never a bare `D9`.
 
 ```
-  D0  Names: yt, yt-search, yt-play, yt-tui — self-descriptive, and the canonical
-      name every doc, help text and error message uses. ONE name per command on
-      PATH, and for the two AGENT-facing wrappers that name is the canonical one:
-      bin/ carries yt-search and yt-play under their own names, beside ytt for the
-      TUI — the one command a human types by hand. yts/ytp are deprecated; they
-      were a second spelling of an identity that already existed, which is the very
-      thing this decision exists to prevent.  (§4)
-      "tui" not "ui": it is precisely a full-screen *terminal* UI.
-  D1  The core (yt) is NON-INTERACTIVE. An agent-facing engine that can prompt can
-      also hang; removing the capability makes the failure mode impossible.   (§6)
-  D2  Bare `yt "query"` → list output; `yt <url>` → play (impl-internal contract;
-      wrappers locate `yt` by relative path — see §4 — it is not symlinked into bin/).
-  D3  `yt` with no query/URL/action → usage error pointing at yt-tui; never prompts.
-  D4  yt-tui renders its OWN menu (no picker/TUI framework) and delegates:
-      search → yt-search -j · play → yt-play -f MODE -- url (blocking) ·
+  D0  Names: ut-play, yt-search, yt-resolve, bili-search, bili-resolve, uting —
+      the canonical name every doc, help text and error message uses. ONE name per
+      command, and NO short form ships: yts/ytp/ytt are all retired (ROADMAP D10).
+      Three naming rules, one per audience: the human face is the release name
+      (`uting`), the player carries the suite prefix (`ut-`), an engine carries its
+      SITE's name — because that is the one thing a caller must know about it. (§4)
+      "tui" not "ui": uting is precisely a full-screen *terminal* UI.
+  D1  Everything except uting is NON-INTERACTIVE. An agent-facing verb that can
+      prompt can also hang; removing the capability makes the failure mode
+      impossible.                                                             (§6)
+  D2  RETIRED at the split. Was: bare `yt "query"` → list output. Searching is a
+      verb of its own now (`<engine>-search`), and `ut-play` given a non-handle
+      names that verb instead of guessing.                                    (§6)
+  D3  A verb with nothing to act on → usage error naming the RIGHT verb; never a
+      prompt. `ut-play` with no handle and no action points at yt-search/uting. (§6)
+  D4  uting renders its OWN menu (no picker/TUI framework) and delegates:
+      search → <engine>-search -j · play → ut-play -d -j --engine ·
       filter → pure bash.                                                     (§11)
   D5  No fzf / interactive dependency anywhere in the suite.                  (§11)
-  D6  No third-party YouTube client dependency.                               (§2)
-  D7  One shared core; verbs are thin gates that exec into it.                (§4)
-  D8  yt-tui composes the VERBS, never the core directly.                     (§13)
+  D6  No third-party media-client dependency.                                 (§2)
+  D7  RETIRED and inverted at the split. Was: one shared core, verbs are thin gates
+      that exec into it. There is no core: six peers, each self-gating, each owning
+      its own primitive calls. What they share is the ENVELOPE, not code.     (§4)
+  D8  uting composes the VERBS only — never an engine's internals, never mpv
+      except through the socket the player published.                        (§13)
   D9  Detached handle = a monotonic mktemp token, NOT the pid: the socket path is
       known before launch and it is immune to pid reuse; pid kept only for
       liveness. Runtime control (--set-volume) rides mpv's per-instance IPC. (§9.3)
@@ -149,64 +114,90 @@ One line each; full rationale lives in the referenced section.
       /dev/null and run_mpv adds --input-terminal=no on the detached path. This is a
       consequence of D9's process group, not an independent choice: `set -m` suppresses
       bash's OWN automatic /dev/null for background jobs, so the child inherited the
-      caller's tty and mpv raced yt-tui for every keystroke.                  (§9.1)
+      caller's tty and mpv raced the TUI for every keystroke.                 (§9.1)
+  D12 The engine NAME is the command prefix. `--engine yt` reaches `yt-resolve` by
+      string concatenation, so adding a source adds no registry, no mapping table
+      and no case arm anywhere in the player or the TUI.                       (§4)
+  D13 An engine states a capability by HAVING the verb. `bili-resolve` has no
+      --transcript because the site serves no captions — rather than a verb that
+      always answers "none", which a caller cannot distinguish from a bad day. (§12)
 ```
 
 ## 4. Command topology & file layout
 
-Four commands, one engine. `yt` is the full **non-interactive** core (search + play +
-resolve + lifecycle), kept internal to `shell/` — not a PATH-exposed surface.
-`yt-search`/`yt-play` are narrow real wrappers that gate flags and delegate. `yt-tui`
-is the interactive human surface — pure orchestration with **zero** search/play logic.
+**Six commands, one layer, no library.** There is no core and there are no wrappers. Each
+file is a complete, PATH-exposed executable that gates its own flags and calls its own
+primitives. They divide by *what kind of knowledge they hold*, not by who calls whom:
+
+- **the player** (`ut-play`) holds playback and the detached lifecycle, and knows **no site**;
+- **an engine** is a PAIR — `<name>-search` (query → results) and `<name>-resolve`
+  (handle → stream URL + headers, plus whatever read-only verbs the site supports) — and
+  holds **all** of one site's knowledge;
+- **the human face** (`uting`) holds rendering and holds neither.
 
 ```
-                          PATH entries (user-created)
+                          PATH entries (user-created symlinks)
         ~/bin/
-        ├── yt-search → <checkout>/shell/yt-search    agent surface
-        ├── yt-play   → <checkout>/shell/yt-play      agent surface
-        └── ytt       → <checkout>/shell/yt-tui       human surface
-              ONE name per command; ytt is the only short form
+        ├── uting        → <checkout>/shell/uting          human surface
+        ├── ut-play      → <checkout>/shell/ut-play        agent surface
+        ├── yt-search    → <checkout>/shell/yt-search      agent surface
+        ├── yt-resolve   → <checkout>/shell/yt-resolve     agent surface
+        ├── bili-search  → <checkout>/shell/bili-search    agent surface
+        └── bili-resolve → <checkout>/shell/bili-resolve   agent surface
+              ONE name per command; no short form ships (ROADMAP D10)
 
-        shell/
-          yt          CORE engine (all search/play/resolve/lifecycle logic); not
-                      symlinked into bin/ — reached only by the wrappers below
-          yt-search   narrow wrapper ─┐  each locates `yt` by a path RELATIVE to its
-          yt-play     narrow wrapper ─┼─► exec  yt   own script location (not PATH
-          yt-tui      menu orchestrator┘  yt-search -j → menu → yt-play  lookup), so it
-                                                                          needs no bin/
-                                                                          entry to work.
+   Runtime graph — site knowledge ONLY in an engine pair, playback ONLY in the player:
 
-   Dependency graph (search/play logic exists ONCE, in the core):
-     yt-search ─┐                       yt-tui ─► yt-search ─► yt
-     yt-play  ──┼─► yt (core)           yt-tui ─► yt-play   ─► yt
-                                        yt-tui ─► jq        (primitive)
+     uting ──► <engine>-search -j ──► render ──► ut-play -d -j --engine <name>
+        │                                              │
+        └──► nc -U <sock>  (the player published the path; §9.3)
+                                                       ▼
+                                   ut-play ──► <engine>-resolve -j -f MODE
+                                        │            (yt-dlp / curl live HERE)
+                                        └──► mpv --no-ytdl <direct URL>
 ```
 
-**Why symlinks, not copies:** the PATH entries are symlinks with zero logic of their own
-(OS branching lives in the core via `uname -s`). One physical copy of every script, so no
-two installs can drift.
+**The engine name IS the command prefix (D12).** `--engine yt` reaches `yt-resolve` by
+concatenation (`ut-play` line ~228: try `$SCRIPT_DIR/$ENGINE-resolve`, then PATH, else exit
+1 naming the engine). This is the whole registry. A third source is a new pair of files and
+**no edit** to the player or the TUI — which is the claim the Bilibili engine was built to
+test, and it held: step C changed neither file.
 
-**Why the PATH name IS the canonical name, and why `ytt` is the exception:** `bin/` once
-carried both spellings of all three commands — six symlinks onto three scripts — so every
-command answered to two names and each doc, allowlist and habit had to pick one. The rule
-that settled it was ONE name per command, and the short forms won on the grounds that they
-are what actually gets typed.
+**How `uting` finds engines without holding a list.** At start-up it scans its own directory
+and PATH for `<name>-search` and keeps the name only if `<name>-resolve` exists beside it —
+a half-installed engine is not an engine. `e` cycles the source and re-fetches; with one
+engine installed the affordance is not drawn. The `--engine` it hands to `ut-play` comes from
+the search envelope's own `engine` field, never from a default (§11).
 
-That ground holds for exactly one of the three. `yt-tui` is the human surface and `ytt` is
-typed by hand every day. `yt-search` and `yt-play` are the AGENT surface: nobody types them,
-an agent gains nothing from three letters, and their help text and error messages have always
-said `yt-search` / `yt-play`. So for those two the short form was never a second name that
-bought typing — it was just a second name, which is what the rule existed to prevent, and it
-put the identity and the PATH entry at two different spellings of the same command. They now
-sit on PATH under their own names and `yts`/`ytp` are deprecated.
+**Why four engine commands and not `yt search|resolve` subcommands.** A narrow verb has a
+narrow flag surface, which is what makes it safe for a small model to call: `yt-search`
+literally cannot accept `--detach`, and `ut-play` literally cannot search. A subcommand
+dispatcher re-merges those surfaces into one argv grammar and puts the gate back inside the
+program, which is where it was before the split. `resolve` is exposed but is not aimed at
+models: in practice `ut-play` is its caller, and what a model sees is `<engine>-search` plus
+`ut-play`.
 
-Deprecation costs nothing to honour: no script reads its own `argv[0]` for dispatch (the
-symlink chain below is resolved only to LOCATE the siblings), so a leftover `~/bin/yts` goes
-on working — it is simply no longer a documented spelling. Consequence:
-invoked as `~/bin/ytt`, a script's `$0` is the SYMLINK, not the code — so each script
-resolves its own symlink chain first and takes the real file's directory as the place to
-look for its siblings. That is the whole mechanism, and it is why the checkout can live
-anywhere.
+**Why the player must not be able to name its engines.** `ut-play` never reads an engine's
+file, sources nothing from it, and holds no list of valid names — an unknown `--engine` is
+discovered by the concatenated path not existing. This is the same dependency-direction rule
+that put the version in `shell/VERSION`: a one-line data file, because a variable inside any
+one of six independent executables would make the other five ask *that* file for the version,
+and the player asking an engine anything except "resolve this" is the coupling the split
+removed.
+
+**Why each verb holds its own gate (D7, inverted).** The old shape was one core plus two
+gating wrappers, and the gate was a *layer*. With search and extraction moved out, the player
+has one verb left, so there is no bypass left to defend against — and the arms that used to
+live in the wrapper are now the arms that produce a good error in the one place a caller
+reaches: `-n`/`-m`/`-M`/`-s` in `ut-play` answers "that is a search flag — use yt-search",
+`--info`/`--transcript` answers "that is an engine verb", and `--get-url` answers with the
+`yt-resolve` call that replaced it. A gate that names the right verb is worth more than a
+gate that only says no.
+
+**Self-locating siblings, not PATH lookup.** Invoked as `~/bin/uting`, a script's `$0` is the
+SYMLINK, not the code — so each script resolves its own symlink chain first and takes the real
+file's directory as the place to look for its siblings. That is the whole mechanism, and it is
+why the checkout can live anywhere and needs no `bin/` entry to work.
 
 `cd -P` / `pwd -P`, not the logical forms: a relative symlink resolves to something like
 `~/bin/../../../elsewhere/shell`, and a logical `cd` would normalise those `..` textually
@@ -215,64 +206,51 @@ directory that does not exist. bash 3.2 has no `readlink -f`, hence the hand-rol
 (This replaced an earlier `../../shell-scripts/` hop that only worked inside one specific
 dotfiles layout; extracting the suite into its own repo is what exposed it.)
 
-Anything that calls `yt-search`/`yt-play` by name through PATH — agent tool definitions,
-Claude Code Bash allowlist entries — now uses exactly those names. This paragraph used to
-read "must use `yts`/`ytp`, or an absolute path into the checkout's `shell/`", and that
-sentence was the whole argument for D0's revision: the friction landed on the one surface
-that cannot infer a name from context, so an allowlist entry said `yts` while every error
-message the agent read back said `yt-search`.
+Anything that calls these by name through PATH — agent tool definitions, Claude Code Bash
+allowlist entries — uses exactly the six names above. Callers INSIDE the checkout (the rigs in
+`tests/`, the skills) use the repo-relative `shell/<name>` form instead: they run beside the
+code and must not depend on the user's PATH at all — a rig that resolved through `~/bin`
+would be testing the install, not the suite.
 
-Callers INSIDE the checkout (the rigs in `tests/`, the skills) use the repo-relative
-`shell/yt-search` form instead. They run beside the code and must not depend on the user's
-PATH at all — a rig that resolved through `~/bin` would be testing the install, not the
-suite.
-
-**Why real wrappers, not `$0`-dispatch in one script:** a real, short wrapper makes each
-tool *physically* what it claims — `yt-search`'s help is short because the script is
-short, and it literally cannot accept `--detach`. Flag-gating lives naturally in it.
-
-**Why `yt-tui` is separate glue, not a mode of the core:** keeping the core
-non-interactive means the agent-facing surface can never prompt or hang (D1). `yt-tui`
-re-uses the verbs rather than re-implementing search/play — no YouTube logic, no extra
-runtime dependency.
-
-**Why `yt` is not symlinked into `bin/`:** it previously was, on the reasoning that it
-was "itself a shipped command." In practice every caller — human (`yt-tui`) and
-agent (`yt-search`/`yt-play`) — goes through a narrow verb, never `yt` directly; a
-PATH-exposed `yt` only invited bypassing the flag-gating the verbs exist to provide
-(D7). The wrappers don't need it on PATH either: they resolve `IMPL` via a path
-relative to their own `$SCRIPT_DIR`, so `yt` only has to exist as a file in
-`shell/`. `yt` keeps its full standalone argument parsing (D2/D3) for
-direct debugging from `shell/`, it's just no longer advertised as a surface.
-
-**Why a shared core at all, not per-verb `yt-dlp`/`mpv` (D7):** Search and play
-genuinely SHARE logic: per-platform cookie-from-browser detection serves both, and
-yt-dlp resolution is not play-only (probe-then-play §8.2 and `--get-url` §10 both use
-`yt-dlp -g`). Flattening each verb onto the primitives duplicates that surface — the
-exact drift the graph above prevents. The only non-duplicating alternative (a sourced
-helper lib + self-contained verbs) is a lateral move: the wrappers already `exec` into
-the core — a few ms of bash parse, ZERO extra processes. Governing principle:
-**correctness is added *down* in the core, so every surface inherits it — never *up*
-in a UI.**
+**Governing principle, unchanged by the split — only sharpened:** correctness is added
+*down*, in the player if it is about playback and in the engine if it is about a site, so
+every surface inherits it; never *up* in a UI. A fix in `uting` that `ut-play` could have
+made is a bug in the wrong file.
 
 ## 5. Primitives & seams (swap points)
 
-| Primitive | Role | Why foundational (not a client) | Seam (single swap point) |
-|---|---|---|---|
-| **yt-dlp** | extraction / search | de-facto standard; every client uses it | `fetch_results`, `resolve_info`, `resolve_transcript`, `resolve_stream_url`, `probe_media_fetchable`, `detach_title_updater` (6 direct sites) **plus one INDIRECT site inside mpv** — see §6.1 |
-| **mpv** | playback | general scriptable player; alt = vlc/ffplay | `run_mpv()` (single play seam) + `mpv_supports_vo()` capability probe |
-| jq | JSON shaping | universal JSON tool | pervasive (search/JSON emit, lifecycle, `yt-tui` rows) |
+**The seams are split by file now.** No file holds two of these roles, and a yt-dlp call in
+`ut-play` or an mpv call in an engine is a layering violation, not a seam.
 
-Only **mpv** sits behind a single function (`run_mpv` — all five `play_*_url` modes route
-through it), so swapping it (mpv→vlc) is a nearly localized edit; two mpv-specific details
-sit outside it by necessity — `mpv_supports_vo()` asks mpv what terminal VOs it has, and
-`play_viz_url` passes mpv's `--lavfi-complex` showwaves filter through `run_mpv`. **yt-dlp** is invoked at
-the ~5 sites above rather than one seam — but it is the extraction standard every client
-depends on, so replacing it isn't a realistic goal; the value is that each site is a
-plain `yt-dlp …` array, not buried in a third-party client. The seventh invocation is not
-ours at all: **mpv resolves the played stream by running yt-dlp itself** (§6.1), so the
-core's only channel to that call is `--ytdl-format` / `--ytdl-raw-options`. **jq** is pervasive. The
-in-list filter uses no primitive at all (§11).
+| Primitive | Role | Who may call it | Seam (the only call sites) |
+|---|---|---|---|
+| **yt-dlp** | extraction | engines only | `fetch_results` (`yt-search`); `dump_once`, `resolve_info`, `resolve_transcript` (`yt-resolve`); `dump_once`, `resolve_info` (`bili-resolve`) |
+| **mpv** | playback | player only | `run_mpv()` (single play seam) + `mpv_supports_vo()` capability probe |
+| **curl** | HTTP transport | `bili-search` (its transport); `yt-resolve` (probe only) | `fetch_page_once` (`bili-search`) — the one place in the suite that builds a request by hand; `probe_raw` (`yt-resolve`, the fetchability probe) |
+| **nc** | mpv JSON-IPC | player, and `uting` as a client | `live_props` / `do_set_volume` (`ut-play`); the TUI's own client (§11) |
+| jq | JSON shaping | everyone | pervasive |
+
+**mpv sits behind one function.** All five `play_*_url` modes route through `run_mpv`, so
+swapping it (mpv→vlc) is a nearly localized edit; two mpv-specific details sit outside it by
+necessity — `mpv_supports_vo()` asks mpv what terminal VOs it has, and `play_viz_url` passes
+mpv's `--lavfi-complex` showwaves filter through `run_mpv`.
+
+**mpv no longer runs yt-dlp** (step B-2). `run_mpv` passes `--no-ytdl` and a direct media URL
+the engine already resolved. Before this, the LAST extraction in any playback was one we did
+not make, could not classify, and could only influence through `--ytdl-format` /
+`--ytdl-raw-options`. Now: **one extraction per play, and we make it** — which is also what
+makes the reason enum honest, because the call that can fail is a call we read the stderr of.
+
+**An engine's two halves need not use the same primitive.** `bili-search` talks HTTP through
+`curl` while `bili-resolve` shells out to `yt-dlp`; the YouTube pair uses `yt-dlp` for both.
+The seam between a half and its caller is the ENVELOPE (§14), not the tool behind it — which
+is why the split is by *operation* rather than by site (ROADMAP D11).
+
+**yt-dlp is invoked at the sites in the table rather than one seam** — but it is the
+extraction standard every client depends on, so replacing it is not a realistic goal; the
+value is that each site is a plain `yt-dlp …` array, not buried in a third-party client, and
+that all of them are inside an engine. **jq** is pervasive. The in-list filter uses no
+primitive at all (§11).
 
 ---
 
@@ -280,58 +258,64 @@ in-list filter uses no primitive at all (§11).
 
 ## 6. End-to-end control flow
 
+Each verb parses its own argv; nothing execs into anything else. The player's parse is the
+largest and is the one shown here — the engines use the same three-stage shape (long-option
+normalization → `getopts` → validation) with their own flag sets (§12).
+
 ```
-   $ yt-search -j "lofi"                 $ yt-play --get-url "https://youtu.be/ID"
-        │                                     │
-        ▼                                     ▼
-   ┌─────────────────────┐              ┌─────────────────────┐
-   │ WRAPPER (yt-search) │              │ WRAPPER (yt-play)   │
-   │ • search-only help  │              │ • play-only help    │
-   │ • reject play flags │              │ • reject search flg │
-   │ • reject URL arg    │              │ • require URL arg   │
-   │ • default -l        │              │ • detect --action   │
-   │ • flags before query│              │ • flags before URL  │
-   └──────────┬──────────┘              └──────────┬──────────┘
-              │  exec yt <gated argv>              │
-              └───────────────┬────────────────────┘
-                              ▼
+   $ ut-play -d -j --engine yt -- "https://youtu.be/ID"
+        │
+        ▼
    ┌──────────────────────────────────────────────────────────────────┐
-   │ yt  (core)                                                         │
-   │  (a) long-opt NORMALIZATION loop                                   │
-   │      --json→-j  --json-full→-J  --detach→-d  --color/--volume→vars │
-   │      --status/--stop/--get-url/--info/--set-volume → set_action     │
-   │      `--` → END OF OPTIONS: rest copied verbatim (getopts stops too)│
-   │  (b) getopts  ":n:m:M:s:f:S:dljJh"  → NUM_RESULTS, MODE, …         │
-   │  (c) VALIDATION  ints, enums (sort, color), -M>-m, ascii VO,       │
-   │      one action only, --id/--all only w/ lifecycle, -d not w/ an    │
-   │      action, -d not w/ ascii|viz                                    │
-   │  (d) IS_URL? + action/URL guards + empty-query (D3) guard          │
-   │  (e) ROUTING (first match wins):                                   │
-   │        empty query & not URL & no action → die (D3)                │
-   │        ACTION=status → do_status   (jq only; exit 0)               │
-   │        ACTION=stop   → do_stop     (jq only; exit 0|4)             │
-   │        ACTION=set-volume → do_set_volume (jq+nc only; exit 0|4)       │
-   │        IS_URL:                                                     │
-   │           ACTION=geturl → resolve_stream_url   (no play)           │
-   │           DETACH        → detach_play          (background)        │
-   │           OUTPUT=json   → play_url_json        (structured)        │
-   │           else          → play_url_directly    (prose)             │
-   │        else (non-URL, query present):                              │
-   │           OUTPUT=list      → fetch_results → print_list  (default) │
-   │           OUTPUT=json|full → fetch_results → emit_search_json      │
+   │ ut-play                                                          │
+   │  (a) long-opt NORMALIZATION loop                                 │
+   │      --json→-j  --detach→-d  --list→-l  --help→-h --version→-V   │
+   │      --color/--volume/--engine/--id → vars                       │
+   │      --status/--stop/--set-volume   → set_action                 │
+   │      --get-url / --info / --transcript → die, naming yt-resolve  │
+   │      unknown --flag → die, LISTING the play flags                │
+   │      `--` → END OF OPTIONS: rest copied verbatim (getopts too)   │
+   │  (b) getopts  ":f:S:dljhV"  → MODE, FORMAT_SORT, OUTPUT_MODE     │
+   │      unknown -n/-m/-M/-s → die "that is a search flag"           │
+   │      unknown -J          → die "that is an engine flag"          │
+   │  (c) VALIDATION  --color enum, --volume 0-100, one action only,  │
+   │      --id only w/ stop|set-volume, --all only w/ stop,           │
+   │      -d not w/ an action, -d not w/ ascii|viz                    │
+   │  (d) IS_HANDLE?  non-empty AND contains no whitespace            │
+   │      (that is the WHOLE test — see below)                        │
+   │  (e) ROUTING (first match wins):                                 │
+   │        no handle & no action → die naming yt-search / uting (D3) │
+   │        ACTION=status     → do_status      (jq only; exit 0)      │
+   │        ACTION=stop       → do_stop        (jq only; exit 0|4)    │
+   │        ACTION=set-volume → do_set_volume  (jq+nc;  exit 0|4)     │
+   │        require_deps jq mpv        ◄─ NOT yt-dlp; that is the     │
+   │        IS_HANDLE:                    engine's dependency         │
+   │           DETACH      → detach_play      (background)            │
+   │           OUTPUT=json → play_url_json    (structured)            │
+   │           else        → play_url_directly (prose)                │
+   │        else → die "'<x>' is not a video id or URL — run          │
+   │                    'yt-search -- <x>' to search for it"          │
    └──────────────────────────────────────────────────────────────────┘
 ```
 
-**Non-interactive core (D1/D2/D3).** The core never prompts. The empty-query guard runs
-*before* the yt-dlp/mpv dependency check so the message is about the missing input, not
-a missing player.
+**The player deliberately cannot tell a good handle from a bad one.** `IS_HANDLE` is
+"non-empty and contains no whitespace" and nothing more. Id *shape* (`dQw4w9WgXcQ`,
+`BV1FPjy6TEiE`) is engine knowledge, and giving it up is the point of the split — so an
+unresolvable handle surfaces as a **propagated engine failure (2+)**, not a usage error (1).
+What the player still rejects as usage is what is not a handle at all: empty, or containing
+whitespace, which is a search query and belongs to another verb.
 
-**`--` is honoured by the core, not merely consumed by the wrappers.** The normalization
-loop stops at `--` and copies everything after it verbatim (including the `--` itself, so
-`getopts` stops there too — verified on bash 3.2). Both wrappers *forward* `--` ahead of
-the positional. Without this the loop kept scanning past `--` and a query that merely
-LOOKED like a long flag became an action: `yt-search -- --status` listed players instead of
-searching for that text, and a query starting with a single dash was eaten by `getopts`.
+**Non-interactive by construction (D1/D3).** No verb but `uting` ever prompts. The
+no-handle guard runs *before* the mpv dependency check so the message is about the missing
+input, not a missing player — and `-V` is answered before any dependency gate at all, because
+needing yt-dlp installed to learn which version you have is backwards.
+
+**`--` is honoured by every verb.** The normalization loop stops at `--` and copies
+everything after it verbatim (including the `--` itself, so `getopts` stops there too —
+verified on bash 3.2). Without this a query that merely LOOKED like a long flag became an
+action: `-l -- --status` listed players instead of searching for the text, and a handle
+starting with a single dash was eaten by `getopts`. This used to be a guard the wrappers
+relied on; it is now each verb's own.
 
 **One action per call.** `set_action` records which flag claimed the call and rejects a
 second, different one (`--status --stop` → "conflicting actions"), where the old
@@ -341,110 +325,106 @@ accepted and ignored.
 
 **Why a normalization loop before getopts:** bash `getopts` only understands single
 letters. The loop maps the long options that DO have a short form to it
-(`--json`→`-j`, `--json-full`→`-J`, `--detach`→`-d`, `--list`→`-l`, `--help`→`-h`) and
-consumes the no-short-form ones — the actions
-(`--status`/`--stop`/`--get-url`/`--info`/`--set-volume`, plus `--id`/`--all`) and the
-value-carrying `--color`/`--volume` — straight into globals, so getopts never sees them.
-There is deliberately no `-c` short flag for color (it is `--color` only); `-S` (not
-`-F`) is the format-sort override.
+(`--json`→`-j`, `--detach`→`-d`, `--list`→`-l`, `--help`→`-h`, `--version`→`-V`) and
+consumes the no-short-form ones — the actions (`--status`/`--stop`/`--set-volume`, plus
+`--id`/`--all`) and the value-carrying `--color`/`--volume`/`--engine` — straight into
+globals, so getopts never sees them. There is deliberately no `-c` short flag for color (it
+is `--color` only); `-S` (not `-F`) is the format-sort override, and it is forwarded to the
+engine verbatim because format-sort is yt-dlp's language, not the player's.
 
-**Why wrappers place flags before the positional:** `getopts` stops at the first
-non-option argument. If the query/URL preceded a flag (e.g. the injected `-l`), that
-flag would be swallowed into `QUERY` and silently ignored (a real past bug: it dropped
-`yt-search` into the old menu). Both wrappers collect option and positional tokens
-separately, emit `<flags> <positional>`, and delegate with a `--` guard so a query/URL
-beginning with `-` is safe.
+**Why an unknown long flag dies in the loop.** Every long flag is handled there, so an
+unmatched one can never be valid — and left to fall through it reached `getopts` as `-`,
+which reported the useless "invalid option: --". The arm names the real flags instead: the
+half of a gate that helps a caller recover.
 
-### 6.1 Invocation stack — which processes run, and where yt-dlp actually runs
+### 6.1 Invocation stack — which processes run, and where the extraction happens
 
-§6 above answers *"which function handles this argv"*. This answers *"which **processes** get
-spawned, and at which of them does yt-dlp run"*. The two views differ in one load-bearing
-way: **the core never resolves the stream that is played — mpv does, by running yt-dlp
-itself.** Everything downstream in this section follows from that.
+§6 answers *"which function handles this argv"*. This answers *"which **processes** get
+spawned, and where does the extraction that is actually played happen"*. Since step B-2 the
+answer to the second half is short: **in the engine, exactly once, and we read its stderr.**
 
-**A. Search and the read-only verbs — one process, exactly one yt-dlp**
+**A. Search and the read-only verbs — one process**
 
 ```
-   $ yt-search -j -- "lofi"                       $ yt-play --info -j -- <url>
-         │                                              │
-         │   exec  (the wrapper is REPLACED, not forked: the core's exit
-         │          code IS the wrapper's; nothing to forward)
-         ▼                                              ▼
-   ┌──────────────────────────────────────────────────────────────────┐
-   │ PROCESS 1 :  yt  (core)                                          │
-   │                                                                  │
-   │    fetch_results        ──►  yt-dlp "ytsearch<N>:<query>"   [#1] │
-   │    resolve_info         ──►  yt-dlp --dump-single-json      [#2] │
-   │    resolve_transcript   ──►  yt-dlp --skip-download …       [#3] │
-   │    resolve_stream_url   ──►  yt-dlp -g -f <fmt>             [#4] │
-   │            │                                                     │
-   │            └── jq ──►  single-line envelope on stdout            │
-   └──────────────────────────────────────────────────────────────────┘
-         one core process · exactly one yt-dlp per call · mpv never starts
+   $ yt-search -j -- "lofi"        $ bili-search -j -- "周杰伦"      $ yt-resolve --info -j -- <url>
+         │                               │                                  │
+         ▼                               ▼                                  ▼
+   ┌────────────────────────┐   ┌────────────────────────┐   ┌────────────────────────┐
+   │ yt-search              │   │ bili-search            │   │ yt-resolve             │
+   │  fetch_results         │   │  fetch_page_once       │   │  resolve_info          │
+   │   └─ yt-dlp            │   │   └─ curl (search/type)│   │   └─ yt-dlp            │
+   │      "ytsearch<N>:…"   │   │      + random buvid3   │   │      --dump-single-json│
+   │  jq → one-line envelope│   │  jq → one-line envelope│   │  jq → one-line envelope│
+   └────────────────────────┘   └────────────────────────┘   └────────────────────────┘
+        one process · one primitive call · mpv never starts · the player is not involved
 ```
 
-**B. Detached playback — three processes, and the stack breaks twice**
+`yt-resolve --transcript` has the same shape (one `yt-dlp --skip-download --no-simulate`,
+§14). `bili-resolve` has no `--transcript` half at all (D13).
+
+**B. Playback — the player asks an engine, then plays a direct URL**
 
 ```
-   $ yt-play -d -j -- <url>
-         │   exec
+   $ ut-play -j --engine yt -- <handle>
+         │
          ▼
    ┌───────────────────────────────────────────────────────────────────────────┐
-   │ PROCESS 1 :  yt (core) — the RETURNING parent                             │
-   │    detach_play:  ensure_state_dir · new_player_id · lock_player_state     │
-   │         │                                                                 │
-   │         ├── nohup bash "$SELF" -f MODE -- <url> &     ◄─ BOUNDARY 1       │
-   │         │      a FRESH CORE PROCESS, not mpv directly. set -m + disown,   │
-   │         │      so the player survives this parent's exit (§9.1)           │
-   │         │                                                                 │
-   │         ├── detach_title_updater &                                        │
-   │         │      └── yt-dlp --print "%(title)s" --skip-download       [#5]  │
-   │         │      background sibling; patches players/<id>.json .title       │
-   │         │      under the lock, only while the pid still matches           │
-   │         │                                                                 │
-   │         └── emit {status:"started", id, pid, …}  and EXIT                 │
+   │ PROCESS 1 :  ut-play                                                      │
+   │    resolve_via_engine:  "$SCRIPT_DIR/$ENGINE-resolve" (else PATH)         │
+   │         │               unknown engine → exit 1, naming it                │
+   │         ▼                                                                 │
+   │  ┌──────────────────────────────────────────────────────────────────┐     │
+   │  │ PROCESS 2 :  <engine>-resolve -j -f MODE -- <handle>             │     │
+   │  │    host allowlist: not this site's host → exit 1 (ROADMAP D12)   │     │
+   │  │    resolve_stream ──► yt-dlp --dump-single-json -f <fmt>   [#1]  │     │
+   │  │    (yt only) probe ──► curl 1 byte; on failure re-resolve  [#1'] │     │
+   │  │                        anonymously and set retried:true   (§8.2) │     │
+   │  │    jq ──► {stream_urls[], http_headers{}, title, duration, …}    │     │
+   │  └──────────────────────────────────────────────────────────────────┘     │
+   │    reads the envelope; classifies a failure from the engine's `reason`,   │
+   │    never by re-reading yt-dlp prose (§14)                                 │
+   │         ▼                                                                 │
+   │    run_mpv:  mpv --no-ytdl <stream_urls[0]>                               │
+   │              [--audio-file=<stream_urls[1]> when the format merged]       │
+   │              [--http-header-fields=… from http_headers]                   │
    └───────────────────────────────────────────────────────────────────────────┘
                         │
                         ▼
-   ┌───────────────────────────────────────────────────────────────────────────┐
-   │ PROCESS 2 :  yt (core again, YT_DETACHED=1, YT_IPC_SOCK=<sock>)           │
-   │    play_url_directly → play_url_with_probe                                │
-   │         ├── no cookies ─────────────────────────────► probe SKIPPED       │
-   │         └── cookies + curl → probe_media_fetchable                        │
-   │                  yt-dlp -g  (with cookies)                          [#6]  │
-   │                  yt-dlp -g  (anonymous, only if #6 failed)          [#6'] │
-   │                  the resolved URL is DISCARDED — the probe only picks     │
-   │                  WHICH CLIENT mpv will be told to use (§8.2)              │
-   │         └── play_mode_url → run_mpv                                       │
-   │                  mpv --ytdl-format=<fmt> --ytdl-raw-options=<k=v,…>       │
-   │                      --input-ipc-server=<sock>  <PAGE URL>   ◄─ BOUNDARY 2│
-   └───────────────────────────────────────────────────────────────────────────┘
-                        │   mpv brings its own extractor
+              PROCESS 3 : mpv — decodes a direct URL. Runs NO extractor.
+```
+
+**B′. Detached playback — one more process, and the parent returns in milliseconds**
+
+```
+   $ ut-play -d -j --engine yt -- <handle>
+         │
+         ▼
+   PROCESS 1 : ut-play, the RETURNING parent
+        detach_play: ensure_state_dir · new_player_id · lock_player_state
+             ├── nohup bash "$SELF" -f MODE --engine <name> -- <handle> &
+             │      a FRESH ut-play, not mpv directly. set -m + disown, so the
+             │      player survives this parent's exit (§9.1); stdin → /dev/null (D11)
+             └── emit {status:"started", id, pid, sock, log, title:null} and EXIT
+                        │
                         ▼
-   ┌───────────────────────────────────────────────────────────────────────────┐
-   │ PROCESS 3 :  mpv                                                          │
-   │    player/lua/ytdl_hook.lua                                               │
-   │         ├── runs yt-dlp as a subprocess   ◄── THE resolution that is      │
-   │         │      page URL ─► direct media URL + http_headers    PLAYED [#7] │
-   │         └── set_http_headers()  ─► file-local-options/user-agent          │
-   │                                    file-local-options/http-header-fields  │
-   │                                    (whitelist: User-Agent + Cookie,       │
-   │                                     Referer, X-Forwarded-For — nothing    │
-   │                                     else is forwarded, and the whole      │
-   │                                     block is skipped if the caller        │
-   │                                     already set either option)            │
-   │    demux → decode → audio out;  serves JSON IPC on the unix socket        │
-   └───────────────────────────────────────────────────────────────────────────┘
+   PROCESS 2 : ut-play (YT_DETACHED=1, YT_IPC_SOCK=<sock>) → B above, and it
+               patches `title` and `format` into its OWN record from the resolve
+               envelope, under the lock, while the pid still matches.
 ```
 
-**C. Lifecycle control — no yt-dlp, and no new mpv**
+**The background title updater is gone.** It existed only because the thing being played was
+a URL and nobody upstream had the title; the resolve envelope carries `title`, so the child
+patches its own record and a whole extra `yt-dlp --print "%(title)s"` per detached play
+disappeared with it.
+
+**C. Lifecycle control — no extraction, no new mpv**
 
 ```
-   $ yt-play --status -j    |    --set-volume 60 --id <id>    |    --stop --all
-         │   exec
+   $ ut-play --status -j    |    --set-volume 60 --id <id>    |    --stop --all
+         │
          ▼
    ┌──────────────────────────────────────────────────────────────────┐
-   │ PROCESS 1 :  yt (core)                                           │
+   │ ut-play                                                          │
    │    reap_dead_players → resolve_target                            │
    │    read_player_live → live_props ──► nc -U <sock> ──┐            │
    │    do_stop → stop_group ──► kill the process group  │            │
@@ -454,38 +434,43 @@ itself.** Everything downstream in this section follows from that.
          no yt-dlp · no new mpv · one socket round-trip per player
 ```
 
-`yt-tui` adds no fourth shape: it runs **A** (`yt-search -j`) and **B** (`yt-play -d -j`) as
-child processes, then talks to the player's socket with its own `nc -U` rather than going
-back through `yt-play` (§11).
+`uting` adds no fourth shape: it runs **A** (`<engine>-search -j`) and **B′**
+(`ut-play -d -j --engine`) as child processes, then talks to the player's socket with its own
+`nc -U` rather than going back through `ut-play` (§11).
 
-**The seven invocation sites**
+**The extraction sites**
 
 | # | Where | Command | Whose process | What the result is used for |
 |---|---|---|---|---|
-| 1 | `fetch_results` | `yt-dlp ytsearch<N>:…` | core | the search envelope |
-| 2 | `resolve_info` | `yt-dlp --dump-single-json` | core | the `--info` envelope |
-| 3 | `resolve_transcript` | `yt-dlp --skip-download` | core | caption file → text |
-| 4 | `resolve_stream_url` | `yt-dlp -g` | core | the `--get-url` envelope |
-| 5 | `detach_title_updater` | `yt-dlp --print "%(title)s"` | core (bg sibling) | `.title` in the player record |
-| 6 | `probe_media_fetchable` | `yt-dlp -g` (×1, ×2 on fallback) | detached child | **discarded** — only picks the client (§8.2) |
-| 7 | `ytdl_hook.lua` | `yt-dlp` | **mpv** | **the stream that is actually played** |
+| 1 | `fetch_results` (`yt-search`) | `yt-dlp ytsearch<N>:…` | engine | the search envelope |
+| 2 | `fetch_page_once` (`bili-search`) | `curl` on `search/type` | engine | the search envelope |
+| 3 | `resolve_stream` / `dump_once` | `yt-dlp --dump-single-json -f` | engine | **the stream that is played** |
+| 4 | `probe_raw` (`yt-resolve`) | `curl` 1 byte, then a 2nd resolve if it failed | engine | picks the client; sets `retried` (§8.2) |
+| 5 | `resolve_info` | `yt-dlp --dump-single-json --skip-download` | engine | the `--info` envelope |
+| 6 | `resolve_transcript` (`yt-resolve`) | `yt-dlp --skip-download --no-simulate` | engine | caption file → text |
 
 **Three consequences worth stating plainly**
 
-1. **Site 7 is not ours.** The only channel from the core to it is `--ytdl-format` and
-   `--ytdl-raw-options`; the core cannot append arbitrary yt-dlp argv to the call that
-   matters. Anything a future extractor needs at play time has to fit through those two.
-2. **Headers reach mpv but not a `--get-url` caller.** Site 7's `http_headers` are applied
-   by `set_http_headers`, so playback of a CDN that demands a `Referer` works. Site 4 emits
-   the URL alone and the envelope has no field for headers (§10, §14) — so the same video
-   can play correctly and hand a caller a URL that the CDN refuses.
-3. **One detached play can run yt-dlp up to four times** (#5, #6, #6', #7), each an
-   independent extraction of the same video. #6/#6' are skipped without cookies or without
-   `curl`; #5 exists only because the core is handed a URL, never a title.
+1. **Every extraction is ours now.** The old site #7 — `ytdl_hook.lua` inside mpv — is gone
+   with `--no-ytdl`, and with it the asymmetry where the last and most important extraction
+   of a play was one we could neither classify nor pass arbitrary argv to. Anything a future
+   extractor needs at play time is an engine change, not an mpv flag.
+2. **Headers are contract, not luck.** `http_headers` is a required key of the resolve
+   envelope and the player puts it on mpv's argv. The old `--get-url` handed out a bare URL
+   with no field for headers, so the same video could play correctly and hand a caller a URL
+   the CDN refused with 403 — measured on Bilibili, which is why the key is load-bearing
+   rather than theoretical (§14).
+3. **A detached play runs yt-dlp once, twice at worst** (#3, plus #4′ when the cookie'd
+   client fails the probe) — down from four. mpv contributes none.
 
----
+## 7. Search subsystem — a verb of the ENGINE
 
-## 7. Search subsystem
+Search is half of an engine (§4), so this section describes `yt-search`; `bili-search` is
+the same envelope over a different transport and is specified in §12. Everything below —
+the single jq program, the internal `FILTERED_JSON` shape, the duration rules, the error
+contract — is what BOTH halves implement, and the two files each carry their own copy on
+purpose: an engine that shared a library with another engine would be a library the player
+would eventually have to know about (§4).
 
 ```
   QUERY, NUM_RESULTS, MIN/MAX_DURATION, SORT_FIELD, FORMAT_SORT, cookies
@@ -507,9 +492,13 @@ back through `yt-play` (§11).
       OUTPUT=list │            OUTPUT=json │ json_full
                   ▼                        ▼
            print_list()            emit_search_json()
-        "♫ N. title / dur /       {query,count,results:[ project ]}
+        "♫ N. title / dur /       {status,engine,query,count,results:[ project ]}
          views / url"             json: 8 lean fields; json_full: raw
 ```
+
+`engine` is in the envelope because a caller holding a result must be able to route it back
+to the resolver that understands it — `ut-play --engine <that value>` (§14, D12). It is the
+field the host allowlist (ROADMAP D12) exists to keep honest.
 
 `print_list()` reads the **`FILTERED_JSON` variable**, not the emitted `-j` stream.
 Projection happens only at the emit point, so the JSON contract can change without
@@ -526,7 +515,7 @@ shaping JSON with jq, so a bash implementation existed only to be forked once pe
 bash `convert_seconds` it replaced is gone. An unknown duration now yields **`null`**, not a
 fake `00h:00m:00s`, and each surface decides how to render that: `print_list` prints `LIVE`
 for a live stream / `--` otherwise (it used to leak a raw `null views` into human output),
-and `yt-tui` shows `● LIVE`.
+and `uting` shows `● LIVE`.
 
 **Duration bounds (`-m`/`-M`) are enforced CLIENT-SIDE, in that same jq pass.**
 `--match-filter` is only a cheap server-side pre-filter, and is sent **only when a bound was
@@ -538,39 +527,63 @@ entries as the flag implies.
 
 **Search has an error contract like every other surface.** A yt-dlp failure used to abort on
 `set -e` with raw stderr even under `-j`, handing an agent a jq parse error. `fetch_results`
-captures stderr, classifies it with the shared `classify_playback_error` taxonomy, and emits
-`{status:"error", query, count:0, results:[], reason}` for `-j`/`-J` (prose: the captured
+captures stderr, classifies it with the engine's own `classify_yt_dlp_error` (the enum is
+shared, the classifier is not — §14), and emits
+`{status:"error", engine, query, count:0, results:[], reason}` for `-j`/`-J` (prose: the captured
 stderr plus a `die`). Exit is 2+ — never 1, which §15 reserves for usage/validation.
 
 ## 8. Playback subsystem
 
-### 8.1 Mode → format → mpv
+### 8.1 Mode → format → mpv — **the mode is shared, the format table is the engine's**
+
+`-f MODE` is a player flag and travels to the engine unchanged; what a mode MEANS as a
+format string is site knowledge, so `format_for_mode()` lives in each `<engine>-resolve`,
+never in `ut-play`. The player never sees a format string except as an opaque value it
+records in the player file and never reads (§14).
 
 ```
-  PLAYBACK_MODE   format_for_mode()          mpv option set
-  ─────────────   ───────────────────        ───────────────────────────────
-  audio           YT_AUDIO_FORMAT (ba/b)      --no-video (audio only)
-  video           YT_VIDEO_FORMAT (bv*+ba/b)  default VO
-  fast            YT_VIDEO_FORMAT_FAST        default VO (progressive, fast start)
-  ascii           YT_VIDEO_FORMAT             --vo=<YT_ASCII_VO> --profile=sw-fast
-  viz             YT_AUDIO_FORMAT             --vo=tct + showwaves lavfi filter
+  MODE (player flag)   <engine>-resolve: format_for_mode()   ut-play: mpv option set
+  ──────────────────   ─────────────────────────────────     ───────────────────────────────
+  audio                YT_AUDIO_FORMAT (ba/b)                 --no-video (audio only)
+  video                YT_VIDEO_FORMAT (bv*+ba/b)             default VO
+  fast                 YT_VIDEO_FORMAT_FAST                   default VO (progressive)
+  ascii                YT_VIDEO_FORMAT                        --vo=<YT_ASCII_VO> --profile=sw-fast
+  viz                  YT_AUDIO_FORMAT                        --vo=tct + showwaves lavfi filter
+                       (-S SORT, when given, is forwarded verbatim as --format-sort)
 
-  run_mpv(url, format, mpv_opts…):
-     mpv --ytdl-format=<format>
-         [--ytdl-raw-options=cookies-from-browser=<B>]   # when login on (the default)
-         [--ytdl-raw-options=extractor-args=youtube:player_client=android] # anonymous fallback
-         <mpv_opts…> <url>
+  run_mpv(mpv_opts…):   # reads the RESOLVED_* globals the engine call filled in
+     mpv --no-ytdl
+         [--volume=N] [--input-ipc-server=<sock>]            # detached only
+         [--http-header-fields-append=K:V …]                 # from http_headers
+         [--force-media-title=<title>]                       # from the envelope
+         <stream_urls[0]> [--audio-file=<stream_urls[1]>]     # merged formats
+         [--no-term-osd-bar --msg-level=all=error]           # detached only: bounded log
 ```
 
-mpv drives yt-dlp internally (its `ytdl_hook`); cookies (when login is on) pass through
-`--ytdl-raw-options` (one comma-joined key/value flag).
+**`--no-ytdl`, and the three things `ytdl_hook` used to do for free.** mpv is handed a
+direct URL and makes no extraction of its own (§6.1). Three jobs the hook did implicitly are
+now explicit, each from a field of the resolve envelope: headers (`--http-header-fields-append`,
+repeated rather than one comma-joined `--http-header-fields`, because that option is a LIST and
+a header value containing a comma would split into two broken headers), the media title
+(`--force-media-title`, or the OSD would read a googlevideo path), and the video+audio pair
+(`--audio-file`, mpv's native join, where the hook synthesised an EDL).
+
+**Header values land on mpv's argv and are therefore visible in `ps`.** An engine must not
+return a credential header (`Cookie`, `Authorization`) in `http_headers`; the YouTube engine
+returns only `User-Agent` / `Accept` / `Accept-Language` / `Sec-Fetch-Mode`. This is a
+contract on engines, stated once here and once in §14.
+
+**Cookies are no longer an mpv concern at all.** They were passed through
+`--ytdl-raw-options` when mpv did the extracting; now the cookie decision belongs entirely to
+the engine that makes the yt-dlp call (§8.2), and the player has no cookie code, no
+`YT_COOKIE_BROWSER` read, and no way to leak one.
 
 **Terminal-noise quieting & viewport shielding (video and audio modes).** `video`/`fast` render the media
 **title** as a video OSD via libass. When the title carries glyphs no font covers (emoji —
 pervasive on YouTube), libass emits a per-frame `[osd/libass] fontselect: failed to find
 any fallback with glyph …` warning and macOS CoreText emits a `CoreText note: … .LastResort
 …` line. Furthermore, mpv's default startup dumps 8–10 lines of metadata (`File tags:`, `Date:`,
-`Uploader:`), which pushes `yt-tui`'s menu into scrollback and displaces the progress bar.
+`Uploader:`), which pushes `uting`'s menu into scrollback and displaces the progress bar.
 The fix keeps the on-window OSD/OSC and terminal progress bar stable via two parts:
 
 1. **`--msg-level=display-tags=warn,osd/libass=error`** suppresses the libass `fontselect` warnings
@@ -591,7 +604,7 @@ log. And it costs correctness: the process substitution is not waited on, so
 late-flushed error line and classify a real 403 as `unknown`. The filter drops only
 non-error lines, so on the prose path the `-j` error taxonomy is unaffected — the classifier still sees `403`/unavailable/etc., and the JSON status line
 (emitted on real stdout) is never routed through the filter. `audio` mode avoids vertical menu
-displacement (`--no-video` + suppressed tags), keeping `yt-tui`'s menu intact while mpv's in-place
+displacement (`--no-video` + suppressed tags), keeping `uting`'s menu intact while mpv's in-place
 status bar (`A: ...`) updates directly below it; `ascii` uses `--really-quiet`.
 
 Three alternatives were tested and rejected: **`--osd-level=0`** kills the noise at the root
@@ -602,9 +615,16 @@ below the `os_log` activity layer). Measured on an emoji-titled video (window VO
 `fontselect` + 7 `CoreText` → 0/0, with the status bar and window OSD both intact, and the
 `-j` JSON contract verified (single valid line, correct `reason`, exit code propagated).
 
-### 8.2 Login, PO tokens, and the probe-then-play client pick
+### 8.2 Login, PO tokens, and the probe-then-play client pick — **inside `yt-resolve`**
 
-**Login is ON by default (`YT_COOKIE_BROWSER=chrome`)** so login-gated / members /
+This whole subsection is YouTube-engine knowledge and lives in `shell/yt-resolve`. It is
+specified here because it is the reason the resolve envelope carries `retried`, and because
+"probe **then** play" is now literally true: the probe happens one process before mpv starts,
+in the engine, and the player only relays the verdict. `bili-resolve` has no probe — the site
+has no PO-token equivalent — which is the model for what a second engine may simply not have.
+
+**Login is ON by default (`YT_COOKIE_BROWSER=chrome`)** — a setting each ENGINE reads for
+itself — so login-gated / members /
 age-restricted videos — invisible to an anonymous client — play. The trade-off: with
 cookies, yt-dlp switches to YouTube's authenticated client set, whose googlevideo media
 URLs can require a **GVS Proof-of-Origin (PO) token**, minted by Google's BotGuard
@@ -616,7 +636,8 @@ public videos*, while the anonymous client's URLs need no token and fetch cleanl
 The naive fix — play, let mpv 403, replay anonymous — works but dumps mpv's error wall
 on screen before the retry. Instead the default **probes which client can actually
 fetch the media BEFORE launching mpv**, then plays **once** with the winner.
-`probe_media_fetchable` resolves the direct media URL (`yt-dlp -g`) and issues an
+`probe_raw` takes the first media URL out of the record already resolved — it makes no
+second extraction — and issues an
 **open-ended ranged request** (`curl -I -r 0-`): 206/200 ⇒ authorized; 403 ⇒ missing PO token — the
 same verdict mpv would reach mid-load (and for HLS `.m3u8` playlists, probes the first segment).
 Anonymous fallback and anonymous probe use `extractor-args=youtube:player_client=android` to ensure
@@ -638,8 +659,9 @@ YouTube's CDN serves streams that do not 403 on range requests.
 ```
 
 Implementation notes: `local YT_COOKIE_ARGS=()` shadows the global (bash dynamic
-scoping) so `run_mpv` drops cookies for the chosen play without touching the real
-setting; `PLAYBACK_RETRIED` surfaces as `retried` in the playback JSON. Cost: one extra
+scoping) so the chosen resolve drops cookies without touching the real setting; the verdict
+surfaces as `retried` in the RESOLVE envelope, and `ut-play` relays it into the playback
+envelope's `retried` rather than observing it (§14). Cost: one extra
 resolve + 1-byte GET per play (two on a cookie-403 video). `curl` is a soft dependency —
 without it the probe is skipped and the old play-fail-replay retry runs (the error-dump
 regression reappears only there). `YT_COOKIE_BROWSER=none` forces anonymous-only (no
@@ -649,25 +671,35 @@ anonymous rather than erroring.
 ### 8.3 Playback output modes & error taxonomy
 
 ```
-   yt-play <url>        → play_url_directly  → prose ("Playing audio: …") [DEFAULT]
-   yt-play -j <url>     → play_url_json      → one final JSON line, chatter suppressed
-   yt-play -d <url>     → detach_play        → background; JSON/prose "started"
-   yt-play --get-url    → resolve_stream_url → stream URL(s), no playback
+   ut-play -- <handle>       → play_url_directly → prose ("Playing audio: …") [DEFAULT]
+   ut-play -j -- <handle>    → play_url_json     → one final JSON line, chatter suppressed
+   ut-play -d -- <handle>    → detach_play       → background; JSON/prose "started"
+   (resolving a stream URL without playing is `<engine>-resolve -j`, not a player verb —
+    §10; the old `--get-url` spelling is retired and answers with that call.)
 ```
 
 `play_url_json` captures the player's stdout+stderr (suppressing chatter) and emits one
-JSON line, reusing `play_url_with_probe` unchanged. `classify_playback_error(text, rc)`
-maps captured output to a fixed enum — never raw mpv wording, which is not a contract:
+JSON line. `classify_playback_error(text, rc)` maps captured output to the fixed enum —
+never raw mpv wording, which is not a contract:
 
 ```
    rc == 130 ......................................... stopped_by_user
-   "HTTP Error 403" | "Forbidden" ................... forbidden
-   "Video unavailable"|private|removed|members-only . unavailable
-   "Requested format is not available" .............. format_unavailable
-   name-resolution|connection|timeout ............... network
-   (anything else — conservative default) ........... unknown
-   rc == 0 .......................................... reason = null (status ok)
+   text matches yt_reason=<member> ................... that member, VERBATIM
+                                                       (the engine already classified it)
+   "HTTP Error 403" | 403 | "Forbidden" .............. forbidden
+   name-resolution|connection|timeout|429 ............ network
+   (anything else — conservative default) ............ unknown
+   rc == 0 ........................................... reason = null (status ok)
 ```
+
+**Two classifiers, one enum, and the player's is the small one.** Since B-2 the wordings that
+identify *why an extraction failed* — video unavailable, requested format, sign in to confirm
+— are only ever seen by the engine, which classifies them and reports a `reason`. The player
+replays that verdict through the `yt_reason=` marker rather than re-deriving it from prose
+it would have to guess at; what it classifies itself is only what mpv can fail at with a URL
+already in hand: transport, and rc 130. `forbidden` stays reachable on both sides because a
+signed media URL can expire or be refused between resolve and open. **No member may be added
+by either classifier that §14 does not already list.**
 
 `exit_code` is the real mpv exit status; the process exit code stays truthful (130 is
 normalized to 0 — an intentional stop). (Schema → §14.)
@@ -676,9 +708,9 @@ normalized to 0 — an intentional stop). (Schema → §14.)
 
 ### 9.1 Process-group model (why, not a PID tree)
 
-A detached playback is `bash yt` with the probe's short-lived `yt-dlp`/`curl` children,
-then `mpv` — and, on a curl-less machine, possibly a **second (retry) mpv spawned
-later**. Two facts break naive process-tree killing:
+A detached playback is `bash ut-play` with the engine's short-lived
+`<engine>-resolve`/`yt-dlp`/`curl` children, then `mpv` — and, on a curl-less machine,
+possibly a **second (retry) mpv spawned later**. Two facts break naive process-tree killing:
 
 1. A late-spawned mpv appears *after* any one-time PID snapshot.
 2. Once the parent `bash` exits, mpv **reparents to init** (`ppid=1`) — a walk from the
@@ -692,7 +724,7 @@ explicitly.** bash redirects a background job's stdin to `/dev/null` on its own 
 while job control is OFF, which is exactly what `set -m` turns on for the sake of the group
 above. So the two lines that buy the pgid silently hand the child the LAUNCHER's stdin, and
 for an interactive caller that is the terminal. mpv then keeps `input-terminal` on and reads
-the same tty its launcher reads: under `yt-tui` the two processes raced for every byte, and
+the same tty its launcher reads: under `uting` the two processes raced for every byte, and
 mpv's own default bindings own `[`/`]` (playback **speed**), `9`/`0`, `Space`, `q`, `s` and
 `m` — the same keys the TUI binds. Whichever `read()` won got the byte, so keys "did
 nothing" nondeterministically and `[`/`]` silently changed the speed of the stream when mpv
@@ -709,18 +741,18 @@ child differently.
       ensure_state_dir()              # 0700 STATE_DIR + players/ (socket = a control channel)
       id = new_player_id()            # mktemp token; socket path known before launch
       set -m                          # monitor mode: backgrounded job = pgroup leader
-      YT_IPC_SOCK=mpv-<id>.sock YT_DETACHED=1 \
-        nohup bash SELF -f MODE [--volume N] [-S SORT] -- URL \
+      YT_IPC_SOCK=mpv-<id>.sock YT_DETACHED=1 YT_PLAYER_ID=<id> \
+        nohup bash SELF -f MODE --engine NAME [--volume N] [-S SORT] -- HANDLE \
             </dev/null >mpv-<id>.log 2>&1 &        # pgid == pid ($!); stdin: see below
       set +m ; disown
-      players/<id>.json ← {id,pid,url,mode,format,started_at,log,sock,title:null,volume}
+      players/<id>.json ← {id,pid,url,mode,format:null,started_at,log,sock,title:null,volume}
       rm PLAYERS_DIR/<id>              # drop bare mktemp token; state lives in <id>.json
-      detach_title_updater(id,pid,url) >/dev/null 2>&1 &   # async backfill; fds MUST be closed
+                                       # title/format are backfilled BY THE CHILD (below)
 
    ┌─ process group  pgid = 57678  (player <id>) ───────────┐
-   │  57678  bash yt -f audio URL   (leader)                │
-   │    ├─ (probe: yt-dlp + curl, short-lived)               │
-   │    └─ 57712  mpv --input-ipc-server=mpv-<id>.sock       │  ← reparents to init
+   │  57678  bash ut-play -f audio --engine yt HANDLE (leader)│
+   │    ├─ <engine>-resolve  (yt-dlp + curl, short-lived)     │
+   │    └─ 57712  mpv --no-ytdl --input-ipc-server=…sock      │  ← reparents to init
    └──────────────────────────────────────────────────────────┘     but pgid stays
 
    stop_group(pgid):  kill -INT -pgid ; wait (pgrep -g); escalate kill -KILL -pgid
@@ -733,16 +765,28 @@ terminal, so nobody ever reads mpv's status line — but mpv kept writing it int
 exactly the long-lived players `-d` exists for. The child's `run_mpv` therefore appends
 `--no-term-osd-bar --msg-level=all=error` (after the mode options, so they win) and skips
 the stderr noise filter. Measured after: 59-byte log, zero growth over 12s, and a real
-failure still recorded (`[ytdl_hook] ERROR: …`). `-S` is forwarded to the child like
-`--volume` — it used to be silently dropped on the detached path — and the URL is passed
+failure still recorded (`[ytdl_hook] ERROR: …`). `-S` and `--engine` are forwarded to the child like
+`--volume` — `-S` used to be silently dropped on the detached path — and the handle is passed
 after `--`.
 
-**The title updater's fds must be redirected (`>/dev/null 2>&1 &`).** A background job
-inherits the shell's stdout, and a caller that *captures* our output — `out=$(yt-play -d -j
-…)`, exactly what `yt-tui` does — blocks until every writer closes that pipe, not just until
-we exit. Without the redirect the updater held the pipe for its whole ~3s yt-dlp round trip,
-so the "instant" detach measured **1.67s captured vs 0.04s uncaptured**, reintroducing the
-very latency the async backfill exists to remove. Measured after the fix: **0.03s captured**.
+**`title` and `format` are backfilled by the CHILD, not by a background sibling
+(`patch_player_meta`).** The parent must return in milliseconds and therefore cannot know
+either field; the child learns both from the resolve envelope it was going to fetch anyway,
+and patches its own record. It self-guards the way the old updater did: the jq program emits
+nothing unless the record's `pid` is still this process, so a `--stop` landing inside the
+resolve window wins and is never clobbered. It waits for the record with a bounded poll
+(50 × 0.1s) rather than a fixed sleep, because `detach_play` writes `players/<id>.json`
+*after* launching the child and a fast resolve can arrive first; the ordinary case costs one
+`stat`.
+
+> **What the retired background updater cost, kept because the trap is generic.** It was a
+> whole extra `yt-dlp --print "%(title)s"` per detached play, run as a background job — and a
+> background job inherits the shell's stdout, so a caller that *captures* our output
+> (`out=$(ut-play -d -j …)`, exactly what `uting` does) blocks until every writer closes that
+> pipe, not just until we exit. Before its fds were redirected the "instant" detach measured
+> **1.67s captured vs 0.04s uncaptured**. The envelope-fed backfill has no background job at
+> all, so the trap cannot reappear here — but any future `… &` inside a verb that a caller may
+> capture must close its fds.
 
 ### 9.2 State machine (multi-player)
 
@@ -751,7 +795,7 @@ very latency the async backfill exists to remove. Measured after the fix: **0.03
    is NOT refused — it starts an independent player. Lifecycle verbs pick a target.
 
         ┌───────────────── (no live players) ◄─────────────────┐
-        │              yt-play -d URL   (any number of times)    │
+        │              ut-play -d -- HANDLE   (any number of times)│
         │                             ▼                          │
         │                   ┌────────────────────┐               │
         │  --status → list  │ N live players      │ --set-volume N│
@@ -793,12 +837,19 @@ Two pieces close it, and the split is forced by what each process knows:
 - **The reaper turns it into a tombstone** (`record_player_death`), read at the one moment
   both the record and the log still exist, and writes `players/dead/<id>.json`.
 
-The bounds are the contract, not politeness — they are what keeps this an error record rather
-than the listening history `ROADMAP.md` §0 rules out: **failures only** (a normal finish
+The bounds are the contract, not politeness — they are what keeps this an **error record** and
+not a listening history: **failures only** (a normal finish
 writes no epitaph; a `--stop` kills the process group before the child can write one — the
 same rule from the other side), **at most 8**, **nothing older than an hour**, and it lives
 in the state dir, so it dies with it. No epitaph means no tombstone: a truncated log or a
 `kill -9` is reported as silence rather than as an inferred death.
+
+> **This bound survived the scope change and matters more because of it.** Listening history
+> used to be a `ROADMAP.md` §0 non-goal, which made "`failed[]` is not history" easy. Since
+> ROADMAP D14 history is *planned* (P4) — so the rule is now a **separation** rule rather than
+> an absence one: history gets its own durable, user-level store, and `failed[]` stays an
+> ephemeral, bounded, failures-only diagnostic in `$TMPDIR`. Growing this array into the
+> history feature would put a user-facing record in a directory that is erased on reboot.
 
 **Async title backfill (why detach stays instant).** The title is the semantic handle a
 caller — a small model especially — uses to refer to what's playing ("is the Adagio still
@@ -818,13 +869,13 @@ nothing on a pid mismatch; the empty temp is dropped). Best-effort: any fetch fa
 terminal-rendering modes have nowhere to draw; the guard is now enforced at parse time
 (`die`) instead of silently starting a player that scribbles escape sequences into its log.
 `audio` is the norm; `video`/`fast` are accepted because their mpv window is a GUI surface
-that does not need this terminal. `yt-tui` validates `-f` against the same list.
+that does not need this terminal. `uting` validates `-f` against the same list.
 
 **The `-d -j` envelope carries `sock` and `log`.** They are already in the state file, and
-without them in the envelope a client had to RECONSTRUCT the socket path from the core's
-private state layout — which `yt-tui` did, hardcoding
+without them in the envelope a client had to RECONSTRUCT the socket path from the player's
+private state layout — which `uting` did, hardcoding
 `$TMPDIR/yt-cli-$(id -u)/mpv-<id>.sock` in a second script that would have broken silently
-if the core moved its state dir (§9.3). (Schemas → §14.)
+if the player moved its state dir (§9.3). (Schemas → §14.)
 
 ### 9.3 Runtime IPC control (`--set-volume`)
 
@@ -846,51 +897,51 @@ everything; swapping a track is `--stop --id X` + a fresh `-d`.)
 **Data flow (one `--set-volume` round-trip).**
 
 ```
-   LLM caller          yt-play (wrapper)     yt (impl)                    mpv #<id>
-      |-- --set-volume 70 --id <id> ------->|                                 |
-      |                   |-- exec yt --set-volume 70 --id <id>               |
-      |                   |                 |-- resolve_target <id> (reap dead)|
-      |                   |                 |-- sock = players/<id>.json.sock  |
-      |                   |                 |-- [[ -S sock ]]  (socket-ness)   |
-      |                   |                 |-- {"command":["set_property","volume",70],"request_id":1}
-      |                   |                 |     | nc -U -w1 sock ----------->|
-      |                   |                 |<-- {"request_id":1,"error":"success"} ---|
-      |                   |                 |-- atomic temp+mv patch .volume=70 |
-      |<-- {"status":"ok","id":<id>,"volume":70} (exit 0) --------------------|
+   LLM caller                    ut-play                              mpv #<id>
+      |-- --set-volume 70 --id <id> --->|                                    |
+      |                                 |-- resolve_target <id> (reap dead)  |
+      |                                 |-- sock = players/<id>.json.sock    |
+      |                                 |-- [[ -S sock ]]  (socket-ness)     |
+      |                                 |-- {"command":["set_property","volume",70],"request_id":1}
+      |                                 |     | nc -U -w1 sock ------------->|
+      |                                 |<-- {"request_id":1,"error":"success"} ---|
+      |                                 |-- atomic temp+mv patch .volume=70  |
+      |<-- {"status":"ok","id":<id>,"volume":70} (exit 0) -------------------|
+         one process, not two: the gating wrapper is gone (§4)
 ```
 
 Per-file state (a directory of `players/<id>.json`) is chosen over one shared JSON
 array on purpose: writes stay atomic per-file (the temp-file+`mv` idiom), there is no
 read-modify-write race *across* players, and reaping a dead player is just
 `rm <id>.json` (+ its `.sock`/`.log`). Socket/log paths derive from the id, so nothing
-else stores them. Within a *single* player's file one RMW hazard remains: the async
-title backfill (`detach_title_updater`) and a `--set-volume` can both temp+mv-patch the
+else stores them. Within a *single* player's file one RMW hazard remains: the child's
+metadata backfill (`patch_player_meta`) and a `--set-volume` can both temp+mv-patch the
 same `<id>.json` at once, and whichever `mv` lands last silently clobbers the other's
 field. A per-id `mkdir` lock (`lock_player_state`/`unlock_player_state` on
 `STATE_DIR/lock-<id>`; `mkdir` is atomic on POSIX and needs no `flock` binary, which
 stock macOS lacks) serializes those two writers. It bounded-spins ~5s then proceeds
 unlocked, so a crashed lock holder can't wedge callers — the same best-effort risk the
-patches carried before the lock existed. `detach_title_updater` *additionally* pid-guards
+patches carried before the lock existed. `patch_player_meta` *additionally* pid-guards
 (it patches only while the file's `.pid` still equals its own pid), so a `--stop` during
-the fetch window wins and its reap is never clobbered by a late title write.
+the resolve window wins and its reap is never clobbered by a late title write.
 
 **The IPC socket is a PUBLIC part of the `-d` contract (and `volume` is read live).**
-`yt-tui` drives pause / seek / volume / progress straight over the socket rather than
+`uting` drives pause / seek / volume / progress straight over the socket rather than
 forking a verb per keypress: its Now-Playing views refresh once a second and would
-otherwise need three `yt-play` → `yt` process chains per tick. That is a deliberate
+otherwise need three `ut-play` invocations per tick. That is a deliberate
 exception to D8, so the socket path is *handed to the client* in the `-d -j` envelope
 (`sock`) instead of being reconstructed from the state-dir layout, and this document — not
 an implementation detail — is where the JSON-RPC channel is sanctioned. Consequence for
 `--status`: the state file's `volume` only knows about launch `--volume` and `--set-volume`,
 so a client moving volume over the socket would make it lie. `--status` therefore reports
 **live** volume, falling back to the recorded value. It is soft-gated on `nc`, keeping
-`--status`'s jq-only dependency (§15). Verified: two `0` presses in `yt-tui` moved a player
+`--status`'s jq-only dependency (§15). Verified: two `0` presses in `uting` moved a player
 launched at `--volume 0` to `10`, and `--status` reported `10` (it used to report `0`
 forever).
 
 **Four properties, one round trip (`live_props` / `read_player_live`).** The same argument
 covers `pause`, `time-pos` and `duration`, only worse: the state file has never held them at
-all, so the socket was the *only* place they existed and only `yt-tui` was reading it. They
+all, so the socket was the *only* place they existed and only `uting` was reading it. They
 are now part of the player record (§14), read by `live_props(sock, prop…)` — which sends the
 whole property list down ONE connection and emits `<request_id><US><value>` lines — and
 correlated by `read_player_live`, which both `--status` output modes share so the
@@ -930,7 +981,7 @@ touch it, so it would otherwise leak one file per launch.
 `resolve_target` → `[[ -S "$sock" ]]` (tests socket-ness, not mere existence, so a stale
 socket from a `SIGKILL`'d mpv reports `ipc_failed` instead of hanging) → one-shot `nc` →
 check `.error=="success"` → atomic `temp`+`mv` patch of `.volume` (same temp+mv idiom as
-`detach_title_updater`, serialized against it by a per-id `mkdir` lock — see below) →
+`patch_player_meta`, serialized against it by a per-id `mkdir` lock — see below) →
 `{status:"ok",id,volume}`; any miss → exit 4.
 
 **`request_id` correlation (why `head -1` alone is wrong).** mpv multiplexes **async
@@ -978,60 +1029,125 @@ never demands it (§15).
 - lwilletts/mpvc — reference for the `set_volume` command shape; its reply parsing
   (greps `"success"`, no `request_id`) is deliberately **not** copied.
 
-## 10. Resolve-only (`--get-url`)
+## 10. Resolve — the engine's half two
 
-Non-blocking, side-effect-free composability primitive:
+`<engine>-resolve` turns a **handle** into everything needed to play it, and carries the
+site's read-only verbs. It never plays: no mpv, no lifecycle, no `players/`.
 
 ```
-   resolve_stream_url(url):
-      yt-dlp -g -f <format_for_mode(MODE)>
-             [--cookies-from-browser B]   # only when login opted in
-             --no-warnings --quiet url
-      prose: print stream URL(s)          (die on failure)
-      -j:    {status, url, mode, format, stream_urls:[…]}   (exit = yt-dlp rc)
+   <engine>-resolve [-f MODE] [-S SORT] [-j|-J] -- <handle>   stream URLs + headers
+   <engine>-resolve --info [-j|-J] -- <handle>                metadata only
+   yt-resolve --transcript [--sub-lang L] [-j|-J] -- <handle> captions as clean text
 ```
+
+**The handle grammar is per-engine, and so is the host allowlist (ROADMAP D12).**
+`normalize_target` accepts a URL on one of THIS engine's hosts, or this engine's own media
+id shape:
+
+| Engine | Hosts accepted | Bare id shape |
+|---|---|---|
+| `yt-resolve` | `youtube.com`, `youtu.be`, `youtube-nocookie.com` + their subdomains | exactly 11 chars of `[A-Za-z0-9_-]` |
+| `bili-resolve` | `bilibili.com`, `b23.tv` + their subdomains | `BV…` / `av…` |
+
+An **explicit list, not a substring test**: `*.youtube.com` matches `music.youtube.com` and
+refuses `evilyoutube.com`, which a bare `*youtube.com*` would wave through.
+
+**A URL from another site is a usage error (1), not an extraction failure (2+).** Nothing
+was attempted and nothing is retryable — the caller named the wrong engine, which is the
+same mistake as `--engine nope` and scores the same. This closes a hole that *worked*, which
+is why it survived so long: both resolvers used to hand any http(s) URL to yt-dlp (1700+
+supported sites), so a Bilibili URL resolved fine through `yt-resolve` and came back labelled
+`engine:"yt"` — a lie in the one field whose entire job is routing a result back to the
+resolver that understands it. The cost is recorded honestly: URL-only sources (Bandcamp,
+Apple Podcasts) that used to play by accident no longer do, and the fix for those is a pair
+of their own, never a looser host check.
+
+```
+   resolve_stream(handle):                      # the bare verb — what ut-play calls
+      yt-dlp --dump-single-json --no-playlist -f <format_for_mode(MODE)>
+             [--format-sort SORT] [--cookies-from-browser B]
+      → probe (yt only, §8.2) may re-resolve anonymously and set retried
+      prose: print the stream URL(s)
+      -j:    {status,engine,id,url,title,duration,mode,format,stream_urls[],http_headers{},retried}
+      -J:    the full raw yt-dlp record
+      error: {status:"error",engine,url,mode,reason}, exit 2+
+```
+
+`stream_urls` is **video first**: element 0 is what a player opens, element 1 — present only
+when the chosen format merged two streams — is its separate audio track. `http_headers` is
+**required, possibly `{}`**. Full schema and the reasoning for both: §14.
 
 ### 10.1 Metadata-only (`--info`)
 
-Sibling of `--get-url`: read-only, non-blocking, side-effect-free, needs yt-dlp+jq
-but NOT mpv (dispatched before the playback dependency check, like `--status`/`--stop`).
-Reason it exists: without it an agent that wants to know *what* a video is (description,
+Read-only, non-blocking, side-effect-free; needs yt-dlp+jq but never mpv. **Both engines have
+it.** Reason it exists: without it an agent that wants to know *what* a video is (description,
 chapters, uploader, date, like count) has to leave the ecosystem and drop to raw
 `yt-dlp --dump-json` — the same escape-hatch failure the JSON search surface removed.
-LLM-first, not human ergonomics (contrast the rejected `--url-only`, which strips
-grounding signal): `--info` *adds* the grounding an agent reasons over. `duration_fmt` comes
-from the shared `JQ_PRELUDE` `fmt_dur` (§7), so `--info` and search cannot drift on the
-format — and it is `null`, not `"00h:00m:00s"`, when the duration is unknown.
+LLM-first, not human ergonomics (contrast the rejected `--url-only`, which strips grounding
+signal): `--info` *adds* the grounding an agent reasons over. `duration_fmt` comes from the
+engine's own `JQ_PRELUDE` `fmt_dur` (§7), so within an engine `--info` and search cannot
+drift on the format — and it is `null`, not `"00h:00m:00s"`, when the duration is unknown.
 
 ```
-   resolve_info(url):
+   resolve_info(handle):
       yt-dlp --dump-single-json --skip-download
              [--cookies-from-browser B]   # only when login opted in
-             --no-warnings --quiet url
+             --no-warnings --quiet
       prose: readable block (title/channel/date/duration/views/likes/live/url,
              then Chapters M:SS, then Description)          (die on failure)
       -j:    lean, high-signal projection mirroring search -j field discipline:
-             {status,id,title,url,channel,uploader,upload_date,duration,duration_fmt,
+             {status,engine,id,title,url,channel,uploader,upload_date,duration,duration_fmt,
               view_count,like_count,live_status,description,chapters}
              chapters = [{start_time,end_time,title}] | null
       -J:    full raw yt-dlp record (fidelity escape hatch, same role as search -J)
-      error: -j/-J → {status:"error",url,reason} exit 1 ; prose → die
+      error: -j/-J → {status:"error",engine,url,reason} exit 1 ; prose → die
 ```
 
-## 11. `yt-tui` orchestration (owned glue, zero YouTube logic)
+`bili-resolve --info` fills `channel` from `.channel // .uploader` because that extractor
+populates one or the other by record — **the envelope's shape must not depend on which**.
+That is the general rule for an engine: normalise to the contract, never publish the
+extractor's variance.
+
+### 10.2 Captions (`--transcript`) — a verb `bili-resolve` does not have (D13)
+
+`yt-resolve --transcript` fetches a caption track and cleans it into text that can be dropped
+straight into a prompt. Envelope, the `-j`/`-J` split, and the one-yt-dlp-call constraint:
+§14, which is also where the `no_subtitles_available` reason is specified.
+
+**Bilibili serves no captions, so `bili-resolve` has no `--transcript` at all** — the flag is
+not accepted and the help does not list it. This is the capability rule in the small: an
+engine says what it cannot do by *not having the verb*, rather than by publishing one that
+always answers "none", which a caller cannot tell apart from a bad day or a rate limit.
+
+## 11. `uting` orchestration (owned glue, zero SITE logic)
 
 The diagram is *what*; the bullets after it are the non-obvious *why*.
 
+**Engine discovery, and why this file holds no source list.** At start-up `scan_engines`
+globs its own directory for `*-search` and keeps a name only if `<name>-resolve` is
+executable beside it — a half-installed engine is not an engine. PATH is scanned only if the
+checkout yielded nothing, so the ordinary case costs one glob and a bare checkout runs with
+nothing installed. Zero engines is a fatal start-up error naming the pair that is missing.
+The session starts on `UT_DEFAULT_ENGINE` — **the same variable `ut-play` reads**, not a
+second one, because a user who set a default source once should not set it again per surface
+— falling back to the first installed engine when that name is not present. `e` cycles
+(`cycle_engine`) and re-fetches, restoring the previous engine if the new one's fetch fails;
+with fewer than two engines it returns immediately and the affordance is not drawn.
+
 ```
-   yt-tui "lofi" -n 40
+   uting "lofi" -n 40
         │  parse: SEARCH_ARGS=(-n 40) ; PLAY_MODE=audio ; reject cross-flags
+        │  discover engines; ENGINE ← --engine | UT_DEFAULT_ENGINE | ENGINES[0]
+        │  ENGINE_SEARCH ← engine_search_bin(ENGINE)   # "<name>-search", concatenated
         │  require: jq + verbs; TTY on BOTH -t 0 and -t 1 (reads keys AND draws)
-        │  no query on argv → prompt "❯ Search YouTube: " via read_query_input
+        │  no query on argv → prompt "❯ Search: " via read_query_input
+        │  (the prompt says "Search", not "Search YouTube" — the last site-specific
+        │   string in the UI went with the engine registry)
         │  (Esc / empty / Ctrl-D on an empty line all cancel, exit 0) — the SAME reader
         │  the `n` prompt uses, so Esc means the same thing at the first prompt as
         │  everywhere else; that is why the prompt sits after the input layer is defined
         ▼
-   SEARCH  fetch_json:  json = yt-search -j -n "$RESULT_N" "${SEARCH_ARGS[@]}" -- "lofi"
+   SEARCH  fetch_json:  json = "$ENGINE_SEARCH" -j -n "$RESULT_N" "${SEARCH_ARGS[@]}" -- "lofi"
         │  the ONLY search path — the initial fetch, `n` new-search, and `m` more-results
         │  all use it, then the same build_all_rows → load_rows, so they can never drift
         │  spin_start/spin_stop bracket the call, so all four fetch paths (startup, n, m,
@@ -1047,7 +1163,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
         ▼
    load_rows → urls[] · R_TITLE/R_DUR/R_VIEWS/R_CHAN/R_LIVE · NUM_ENTRIES / NUM_PAGES
         ▼
-    ┌─ SELF-RENDERED MENU LOOP (yt-tui draws every line, reads every key; plain ─────┐
+    ┌─ SELF-RENDERED MENU LOOP (uting draws every line, reads every key; plain ─────┐
     │  text + ANSI — 2-view switchable cycling: List ↔ Now Playing card              │
     │  display_menu:                                                                 │
     │    List View:     title · status · live Now-Playing banner · result rows       │
@@ -1061,10 +1177,10 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     │  read_nav_input: one keypress; decodes ESC-[/O arrow sequences                 │
     │    ↑/↓  move selection (paginate at edges)      ←/→  page (list) / seek 5s (card)│
     │    [ ] seek   ∓10s from ANY view                ↑/↓  volume (card)             │
-    │    Enter → play_selected:   yt-play -d -j -f MODE -- url  (NON-BLOCKING)       │
+    │    Enter → play_selected:   ut-play -d -j --engine E -f MODE -- url (NON-BLK) │
     │    Tab/p → toggle view:     List View ◄──► Now Playing card                    │
     │    Space → toggle pause:    sends IPC cycle pause over UNIX socket             │
-    │    s     → stop playback:   yt-play --stop --id ID                             │
+    │    s     → stop playback:   ut-play --stop --id ID                             │
     │    9/0   → volume:          read-modify-set over socket IPC, clamped 0-100     │
     │    v     → cycle_mode:      PLAY_MODE audio→video→fast (local; next Enter)     │
     │    n     → new_search:      read query → fetch_json → reload (music continues) │
@@ -1077,10 +1193,11 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     └────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **PLAY is asynchronous & non-blocking via `yt-play -d -j`.** `play_selected` reads
+- **PLAY is asynchronous & non-blocking via `ut-play -d -j --engine`.** The engine is taken
+  from the search envelope, never left to the player's default (§13). `play_selected` reads
   `id`/`pid`/**`sock`** out of that envelope in one `jq` pass and never rebuilds the socket
   path itself (§9.3). Playback launches in an
-  independent, detached process group so `yt-tui` retains full terminal control. Audio
+  independent, detached process group so `uting` retains full terminal control. Audio
   streams uninterrupted while users browse results, change pages, or initiate a new search
   (`n`). A single `Enter` on any track cleanly stops the previous player and starts the
   new selection without latency.
@@ -1182,7 +1299,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     attached, which mpv cannot provide — and draws no bar. `CURRENT_PLAY_IS_LIVE`/`CURRENT_PLAY_STARTED` carry it;
     both reset on stop.
   - **The client learns of the player's death by asking, once per loop turn.** A detached
-    player owns its own lifecycle: nothing calls back into `yt-tui` when a track ends or mpv
+    player owns its own lifecycle: nothing calls back into `uting` when a track ends or mpv
     crashes, and the IPC layer is deliberately quiet about it (`send_mpv_ipc` swallows every
     failure, `mpv_get_prop` answers empty on a dead socket) so a lost player cannot kill the
     UI. Quiet is not the same as noticed — so `check_player_alive` runs at the top of the main
@@ -1190,11 +1307,11 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     loop while `/` is open), and clears the whole `CURRENT_PLAY_*` block through
     `clear_play_state` the moment the player is gone. The test is `kill -0` on the envelope's
     pid, which is the **bash wrapper's**: the wrapper blocks on mpv, so "wrapper alive" is
-    exactly "still playing", and this is the same truth the core reaps on (§9.3, process group
+    exactly "still playing", and this is the same truth the player reaps on (§9.3, process group
     alive) reached from the client side for one builtin and no fork — cheap enough for the
     card's 1 s tick. An **empty** pid means "unknown", not "dead" (`play_selected` requires
     only id and sock), so it leaves the chrome alone. Pid reuse can false-positive it, exactly
-    as §25 records for the core's own `group_alive`. The clear is silent: the empty states
+    as §25 records for the player's own `group_alive`. The clear is silent: the empty states
     already say it, and in list view it lands on the next keypress because that read blocks.
   - **The TUI owns the terminal's echo, and every typed character is assembled before it is
     a key.** `read -rsn1` hands back one BYTE on bash 3.2, so a CJK character typed at the
@@ -1254,7 +1371,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
   - **The chrome speaks ONE theme per run — and it is the terminal's theme, not ours.**
     The default palette (`minimal`) is ANSI 16 indexed codes only; deliberately no
     RGB or 256-color (grep gate: the only escapes the minimal/mono paths can emit
-    are 0/1/2/32/34/36 and 1;3x compounds), so by default yt-tui renders in
+    are 0/1/2/32/34/36 and 1;3x compounds), so by default uting renders in
     whatever scheme the user's terminal already has — One Dark, Catppuccin,
     anything — instead of imposing a second palette inside it. The community
     themes (`catppuccin | tokyonight | nord | gruvbox | onedark`) are a second
@@ -1318,7 +1435,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
   - **The chrome's own glyphs are tabled at their true one cell**, which is what makes the
     layout exact rather than merely safe. This is only sound because the suite's glyph
     inventory is deliberately **non-graphical** — text presentation, no emoji anywhere in
-    `yt` / `yt-search` / `yt-play` / `yt-tui` — so none of these characters can carry a
+    `ut-play` / `yt-search` / `yt-resolve` / `bili-*` / `uting` — so none of these characters can carry a
     U+FE0F and become a 2-cell emoji glyph behind the table's back. All 17 measured at one
     cell (`tmux display-message -p '#{cursor_x}'`):
 
@@ -1622,7 +1739,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     rather than carried as a seventh field. `play_selected` reads the arrays directly, which
     also retired its old habit of re-parsing the composed display string by splitting on
     ` · ` — a title containing that separator mis-split. The same tab trap was latent in the
-    `yt-play -d -j` envelope parse (`id`/`pid`/`sock`, all defaulting to `""`, `@tsv`-joined:
+    `ut-play -d -j` envelope parse (`id`/`pid`/`sock`, all defaulting to `""`, `@tsv`-joined:
     a player reporting no pid put its socket path in `pid` and the guard then rejected a play
     that had actually started); it reads US now too.
   - **An absent view count is not zero views.** The envelope reports `view_count: null` when
@@ -1700,7 +1817,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     mpv's clock only to discard it (it describes the broadcast, not this listen). The live
     path now asks for `pause` and nothing else — one property on one connection — because the
     pause chrome was the one thing that path got WRONG for free: `toggle_pause` flips a local
-    flag, so anything else driving the socket (`yt-play`, an agent's own `nc`, a second TUI)
+    flag, so anything else driving the socket (`ut-play`, an agent's own `nc`, a second TUI)
     left the banner asserting a state the player had left. The local flip stays — it is what
     repaints the banner on the keypress rather than up to a second later — and the tick's
     read corrects it. Optimism, then truth. The card's
@@ -1711,7 +1828,7 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
     like the rest of the width layer, so a redraw costs no subshell for them.
   - Pressing `Tab` toggles the two views; pressing `Esc` in the card instantly returns to List View.
 - **PROCESS CLEANUP GUARANTEE.** An `EXIT INT TERM HUP` trap ensures any background player
-  spawned during the `yt-tui` session is automatically and cleanly stopped upon quit (`q`).
+  spawned during the `uting` session is automatically and cleanly stopped upon quit (`q`).
 - **FILTER is a LIVE pure-bash narrow** of the fetched rows — no network, no re-fetch, no
   external tool (this is what makes D5 hold). `/` enters filter mode; **each keystroke** re-runs
   `apply_filter` over `ALL_ROWS` and redraws, so the list narrows *as you type* (best practice
@@ -1786,14 +1903,14 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
   disappears — no percent (a live stream, or the first second before mpv answers) draws the
   static divider at the identical `nav_cols` width, and `clear_play_state` resets `PT_PCT` so a
   stopped player cannot leave a position drawn behind it.
-- **Three play states, not two.** `-d` returns as soon as the core
+- **Three play states, not two.** `-d` returns as soon as the player
   has forked, but mpv still has to resolve the stream through yt-dlp and fill its cache, and on
   a cold URL that is *seconds* (measured: ~9 s on a first-play lofi mix). The banner claimed
   `▶ Playing` for the whole silent window. There is now a `Starting` state between launched and
   audible, carrying the fetch spinner's quadrant frames so the wait looks like the wait that
   preceded it. Four things make it work:
   - **`core-idle`, not `time-pos`.** mpv answers IPC long before it plays a note. `core-idle` is
-    true while the core is producing nothing — loading, seeking, waiting on cache — and flips
+    true while the player is producing nothing — loading, seeking, waiting on cache — and flips
     false the instant output begins, which is exactly the edge the label should turn on.
     `time-pos` goes non-null when the file is merely *loaded*, so it would call a still-buffering
     stream "playing" and put the problem back where it started.
@@ -1830,112 +1947,158 @@ The diagram is *what*; the bullets after it are the non-obvious *why*.
 
 ## 12. Command specifications
 
-### 12.1 `yt` — core engine (full, non-interactive)
-- **Owns:** search (list/JSON), URL playback (prose + JSON + taxonomy), stream resolve,
-  detached lifecycle. Full flag set; the wrappers delegate to it.
-- **Flags:** `-n -m -M -s -S -l -j -J -f -d` + long `--json --json-full --detach
-  --status --stop --get-url --info --transcript --sub-lang --set-volume --id --all
-  --color --volume` (color is
-  `--color` only — no `-c` short form; `-S` is the format-sort override — no `-F`).
-  `--` ends option parsing: everything after it is the query/URL, verbatim (§6). At most
-  one action per call; `--id`/`--all` belong to `--stop`/`--set-volume`; `-d` combines with
+Six peers, three shapes: the player, an engine's two halves, and the UI. Every one of them
+parses its own argv and holds its own gate (§4) — there is no core to delegate to.
+
+### 12.1 `ut-play` — the player (source-agnostic, non-interactive)
+
+- **Owns:** playback, the detached lifecycle, the playback envelope, the exit-code taxonomy,
+  `players/`. **Owns no site knowledge:** no yt-dlp call, no cookie decision, no format
+  string, no id shape.
+- **Flags:** `-f -S -d -j -l -h -V` + long `--engine --volume --detach --json --list
+  --status --stop --set-volume --id --all --color --help --version`. Color is `--color`
+  only (no `-c`); `-S` is the format-sort override (no `-F`) and is forwarded to the engine
+  verbatim. `--` ends option parsing: everything after it is the handle (§6). At most one
+  action per call; `--id`/`--all` belong to `--stop`/`--set-volume`; `-d` combines with
   neither an action nor `-f ascii|viz`.
 - **Behavior:**
   ```
-   yt <url>            play (prose)         yt -j <url>    playback status JSON
-   yt --get-url <url>  resolve stream URL   yt -d <url>    detach; concurrent players OK
-   yt --status         list players         yt --set-volume N [--id ID]  live volume
-   yt --stop [--id ID | --all]  stop one/all  (--id from --status)
-   yt --info <url>     metadata (prose)     yt --info -j <url>  metadata JSON (-J raw)
-   yt --transcript <url>  captions as text   yt --transcript -j <url>  + timed segments
-   yt "query"          LIST (D2, default)   yt -j "query"  search JSON envelope
-   yt -J "query"       full-field JSON      yt             → error (D3)
+   ut-play -- <handle>          play (prose)      ut-play -j -- <handle>   playback JSON
+   ut-play -d -- <handle>       detach; concurrent players OK
+   ut-play --status             list players      ut-play --set-volume N [--id ID]
+   ut-play --stop [--id ID | --all]               stop one/all (--id from --status)
+   ut-play                      → usage error naming yt-search / uting (D3)
+   ut-play -- "some query"      → usage error naming yt-search (whitespace ⇒ not a handle)
   ```
+- **Engine selection:** `--engine NAME`, defaulting to `UT_DEFAULT_ENGINE` (default `yt`).
+  The name is the command prefix; an unknown one exits 1 naming it (§4). **v1 does no URL
+  sniffing** — `uting` always knows the engine because it did the search, and an agent
+  playing a bare URL says which engine it is. Sniffing (engines declaring URL patterns) is
+  deferred until a third engine makes it worth a registry.
+- **Gate arms that name the right verb** (what the deleted wrapper's rejections became):
+  `-n`/`-m`/`-M`/`-s` → "that is a search flag — use yt-search"; `-J` → "that is an engine
+  flag — try `yt-resolve --info -J`"; `--info`/`--transcript`/`--sub-lang` → "that is an
+  engine verb"; `--get-url` → the `yt-resolve -j` call that replaced it; any other unknown
+  long flag → the list of play flags.
 
-### 12.2 `yt-search` / 12.3 `yt-play` — headless verbs
-Narrow gates over the core; the full allow/reject surface is the table in §13.
+### 12.2 `<engine>-search` — an engine's half one
 
-### 12.4 `yt-tui` — interactive terminal UI
-- Surface: `yt-tui [-n N] [-m S] [-M S] [-s field] [-f audio|video|fast] [--volume N]
-  [-p ROWS] [--color auto|always|never] [query]` — search-shaping flags forwarded to `yt-search`;
-  `-f`/`--volume` playback settings forwarded to `yt-play` on every play; `-p`
-  rows/page; rejects all else. `--volume` is launch-time only (no live cycle key,
-  unlike `-f`'s `v` — see §26). Query optional (prompts if
-  absent). Requires a TTY on both stdin and stdout, `jq`, and the sibling verbs.
+- **Owns:** one site's query path, its own transport, its own cookie decision, its own
+  result shaping and duration formatter, its own gate. **Zero playback or lifecycle logic.**
+- **Flags:** `-n -m -M -s -S -l -j -J --color -h -V`. Positional: a QUERY. A URL is
+  rejected, pointing at `ut-play` — including after `--`, which is where the check has to be
+  re-applied because `--` stops flag parsing, not argument validation.
+- **Envelope:** `{status, engine, query, count, results[]}`, one line (§14).
+- **Today:** `yt-search` (yt-dlp) and `bili-search` (curl + jq). Same envelope, different
+  transport — the seam is the envelope, not the tool (ROADMAP D11).
+
+### 12.3 `<engine>-resolve` — an engine's half two
+
+- **Owns:** the handle grammar and host allowlist, the mode→format table, the cookie
+  decision, the site's read-only verbs, the yt-dlp error vocabulary.
+- **Flags:** `-f -S -j -J --color -h -V` + the verbs it has: `--info` (both engines),
+  `--transcript --sub-lang` (`yt-resolve` only, D13).
+- **Behavior:** §10. Non-own-site host → usage error (1).
+- **Capability by presence (D13):** what an engine cannot do, it does not have a verb for.
+
+### 12.4 `uting` — interactive terminal UI
+
+- Surface: `uting [--engine NAME] [-n N] [-m S] [-M S] [-s field] [-f audio|video|fast]
+  [--volume N] [-p ROWS] [--color auto|always|never] [query]` — search-shaping flags
+  forwarded to `<engine>-search`; `-f`/`--volume` playback settings forwarded to `ut-play`
+  on every play; `-p` rows/page; rejects all else. `--volume` is launch-time only (no live
+  cycle key, unlike `-f`'s `v` — see §26). Query optional (prompts if absent). Requires a
+  TTY on both stdin and stdout, `jq`, and the sibling verbs.
   `-f` is validated against `audio|video|fast`: playback is detached, and `ascii`/`viz`
   need a terminal (§9.2).
   Keys: arrows nav/page · Enter non-blocking play · `Tab`/`p` toggle the two views ·
   `Esc` back to list · `Space` pause · `[`/`]` seek ∓10s · `9`/`0` volume · `s` stop ·
-  `v` cycle mode (audio→video→fast) · `l` switch chrome language (en↔zh, any view) ·
-  `t` cycle palette family (any view) · `n` new search · `m` more results · `o` sort ·
-  `/` filter · `q` quit.
+  `v` cycle mode (audio→video→fast) · `e` switch source (hidden with one engine) ·
+  `l` switch chrome language (en↔zh, any view) · `t` cycle palette family (any view) ·
+  `n` new search · `m` more results · `o` sort · `/` filter · `q` quit.
 
-## 13. Wrapper gating model
+## 13. Gating model — one tier, six self-gating verbs
 
-Each wrapper accepts only its own surface and points the caller at the correct tool on
-a cross-flag — this is what makes the two contracts non-overlapping.
+There is **no wrapper tier**. Each verb accepts only its own surface and points the caller at
+the correct tool on a cross-flag; that is what keeps the contracts non-overlapping now that
+nothing sits between a caller and an implementation.
 
 ```
-   yt-search                                  yt-play
+   <engine>-search                            ut-play
    ─────────────────────────────────         ─────────────────────────────────
-   allow: -n -m -M -s -S -l -j -J            allow: -f -d -j -J --detach --get-url
-          --color -h                                --info --transcript --sub-lang
-                                                    --status --stop --set-volume
-                                                    --id --all --color -h --volume
-   reject (→ "use yt-play"):                  reject (→ "use yt-search"):
-          -f -d --detach --status                   -n -m -M -s -S -l --list
-          --stop --get-url --info                 also rejects -f/-d/--volume when
-          --transcript --sub-lang                 they appear alongside --transcript,
-          --set-volume --id --all                 which is read-only and never plays
-   positional: a QUERY (reject URLs)         positional: a URL
-   default: inject -l if no -l/-j/-J         URL required unless
+   allow: -n -m -M -s -S -l -j -J            allow: -f -S -d -j -l --engine --volume
+          --color -h -V                             --status --stop --set-volume
+                                                    --id --all --color -h -V
+   reject (→ "use ut-play"):                  reject (→ "use yt-search"):
+          -f -d --detach --status                   -n -m -M -s
+          --stop --set-volume --id --all      reject (→ "use <engine>-resolve"):
+   reject (→ "use <engine>-resolve"):                --info --transcript --sub-lang
+          --info --transcript                       --get-url  -J
+   positional: a QUERY (reject URLs)         positional: a HANDLE (reject whitespace)
+   default: inject -l if no -l/-j/-J         handle required unless
                                              --status/--stop/--set-volume
-   both: emit `<flags> -- <positional>`  (the `--` is FORWARDED, not just consumed)
+   both: `--` ends flags; the positional check is RE-APPLIED after it
 ```
 
-**`--` stops FLAG parsing, not argument validation.** Each wrapper re-applies its
-positional check inside its own `--` drain loop, and the reason is that the check is the
-wrapper's whole purpose. `yt-search` always did (`reject_url` runs on every token after
-`--`); `yt-play` did not, so `yt-play -- "some query"` walked past the "not a URL" rejection
-that `yt-play "some query"` gives, reached the core, and ran a SEARCH — printing a prose list
-or, under `-j`, a full search envelope from the verb whose contract says it plays URLs. That
-is the same bypass D7 removed `yt` from PATH to prevent (§4), reappearing *inside* the verb
-that exists to prevent it, and reachable by adding two characters. A gate that only guards
-the spelling without `--` is not a gate.
+**`--` stops FLAG parsing, not argument validation.** Each verb re-applies its positional
+check inside its own `--` drain loop, because that check is the verb's whole point. The
+lesson is paid for: `yt-play -- "some query"` once walked past the "not a URL" rejection
+that `yt-play "some query"` gave, reached the core, and ran a SEARCH — printing a prose list
+or, under `-j`, a full search envelope from the verb whose contract said it plays URLs. A
+gate that only guards the spelling without `--` is not a gate. The rule survived the wrapper
+that taught it: `ut-play` applies the whitespace test to whatever follows `--`, and
+`<engine>-search` applies `reject_url` to every token after it.
 
-The core implements the *full* set; the wrapper only restricts which subset each verb
-exposes. **Unified `-j` semantics** work because the wrapper guarantees the operation
-type: `yt-search` guarantees non-URL → core `-j` = SEARCH envelope; `yt-play`
-guarantees URL → core `-j` = PLAYBACK status.
+**Why the gate stopped being a layer (D7, retired).** The old model was one core plus two
+wrappers, and the gate was the wrapper's reason to exist: the core implemented a wide
+polymorphic surface (`yt "query"` searched, `yt <url>` played) and the wrapper's job was to
+guarantee which half a caller reached. Once search moved to `<engine>-search` and extraction
+to `<engine>-resolve`, the player had exactly one verb left — there is no other operation
+for a bypass to reach, so there is nothing left for a layer to defend. What the wrapper
+contributed that was worth keeping is its ERROR TEXT, and that is what its arms became
+(§12.1).
 
-**Why yt-tui composes the verbs, never the core (D8).** The same guarantee is what the
-TUI relies on. `fetch_json` parses the search envelope, and only `yt-search`'s URL
-rejection makes "core `-j` = search envelope" unconditional — a URL pasted into the
-TUI's `n` (new search) prompt would otherwise route to `play_url_json`: a *blocking
-playback* while the TUI waits for search JSON. Calling the core directly would force that URL guard up
-into the UI — the wrong direction per §4's governing principle. Two side benefits, at
-zero cost (the wrappers `exec` into the core): the human surface exercises the exact
-agent contracts daily, so a broken verb contract is caught by human use before an agent
-trips on it; and yt-tui depends on two narrow contracts instead of the core's wide
-polymorphic surface.
+**Why `uting` composes the verbs, never their internals (D8).** `fetch_json` parses the
+search envelope, and `<engine>-search`'s URL rejection is what makes "`-j` = search
+envelope" unconditional — a URL pasted into the TUI's `n` (new search) prompt must not
+become anything but a rejected search. The TUI also passes `--engine` **explicitly, taken
+from the envelope's own `engine` field**, never letting `ut-play`'s default decide: with two
+engines installed, that default would send the second engine's URL to the first engine's
+resolver, which since ROADMAP D12 is a hard usage error instead of the silent mislabel it
+used to be. The one sanctioned exception to D8 is the mpv socket (§9.3), whose path the
+player publishes in the `-d -j` envelope precisely so a client may use it.
 
 ## 14. Data contracts (JSON schemas)
 
-Search envelope (`yt-search -j` / `yt -j "query"`):
+Search envelope (`<engine>-search -j`):
 ```json
-{ "query": "lofi", "count": 25,
+{ "status":"ok", "engine":"yt", "query": "lofi", "count": 25,
   "results": [ { "id":"…", "title":"…", "url":"https://www.youtube.com/watch?v=…",
     "channel":"…", "duration":213, "duration_fmt":"00h:03m:33s",
     "view_count":12345, "live_status":"not_live" } ] }
 ```
-`-j` = the 8 fields above (high-signal, ~4× smaller than the raw ~23-field yt-dlp
+`-j` = the 8 result fields above (high-signal, ~4× smaller than the raw ~23-field yt-dlp
 entry). `-J`/`--json-full` = same envelope, `results` holds every raw field.
 `duration` and `duration_fmt` are **`null` together** when the duration is unknown (a live
 stream); `view_count` can be `null` too. On failure the envelope is instead
-`{status:"error", query, count:0, results:[], reason}` with the same `reason` enum as
+`{status:"error", engine, query, count:0, results:[], reason}` with the same `reason` enum as
 playback, and the exit code is 2+ (§7/§15).
 
-Resolve envelope (`<engine>-resolve -j -f MODE -- <handle>`) — **new at PLAN step B-2**:
+- **`engine` is a REQUIRED key of every engine envelope** — search, resolve, `--info`,
+  `--transcript`, and each of their error shapes. It is the token that is also the command
+  prefix, so a caller holding a result reaches the matching resolver by concatenation
+  (`yt` → `yt-resolve`) and `uting` can pass `ut-play --engine <that value>` without a
+  mapping table. **This is the field the host allowlist protects** (§10, ROADMAP D12): a
+  resolver that accepted another site's URL would emit its own name here and the routing
+  claim would be false. Every engine emits its own name from one constant (`ENGINE_NAME`)
+  rather than deriving it, so the envelope and the filename cannot disagree.
+- **`status` is a REQUIRED key too**, `"ok"` or `"error"` — so a caller can branch on one
+  field before it looks at anything else, in every envelope the suite writes.
+- **Both keys are engine-level, not YouTube-level:** `bili-search` emits the identical
+  envelope with `engine:"bili"`. A third engine that omitted either would be
+  indistinguishable from a truncated read.
+
+Resolve envelope (`<engine>-resolve -j -f MODE -- <handle>`):
 ```json
 { "status":"ok", "engine":"yt", "id":"dQw4w9WgXcQ",
   "url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -1967,7 +2130,9 @@ load-bearing:
   playback and **exit 2+** — floored to 2, because yt-dlp exits 1 for an unavailable video
   and 1 is reserved for usage errors.
 
-Playback status (`ut-play -j -- <handle>`):
+Playback status (`ut-play -j -- <handle>`) — the player's envelope, and the only one with no
+`engine` key: the player is source-agnostic and the handle it echoes back is whatever it was
+given (§4).
 ```json
 { "status":"ok"|"error", "url":"…", "mode":"audio",
   "exit_code":0, "reason":null, "retried":false }
@@ -2010,7 +2175,8 @@ Lifecycle / resolve:
               failed[] is the tombstone list — players that DIED on their own, newest first,
               at most 8, nothing older than an hour (§9.2). reason is the shared playback
               enum. A player that finished normally or was --stopped is never in it, so the
-              array is an error record and not listening history (ROADMAP.md §0).
+              array is an error record, NOT the listening history feature (ROADMAP D14/P4),
+              which gets its own durable store — this one lives in $TMPDIR and is bounded.
    --set-volume : {status:"ok", id, volume}          (live-adjusted via mpv IPC socket)
                 | {status:"not_playing"}             (no target; exit 4)
                 | {status:"ambiguous", reason:"multiple_players", players:[{id,pid,title,url}…]}  (exit 4)
@@ -2045,7 +2211,8 @@ Lifecycle / resolve:
               is_auto = the track came from YouTube's auto-generated captions rather than
               a human-authored one; decided from the printed human-caption dict, not from
               the file (manual and auto land under the same name).
-              error → {status:"error", url, reason} with exit 1, mirroring --info. reason
+              error → {status:"error", engine, url, reason} with exit 1, mirroring --info
+              (engine, like everywhere else, is required). reason
               is the shared enum plus `no_subtitles_available`, which also covers a track
               that parses to zero usable cues (an empty transcript is a miss, not an
               empty success — a caller handed {"text":""} would summarise silence).
@@ -2066,18 +2233,27 @@ fall out of the same two filters: cleaned text, then drop the empties. Filtering
 cleaned text rather than on `aAppend == 1` is deliberate: it removes every rollup marker
 observed while keeping any `aAppend` event that actually carries words.
 
+**Wrong-engine handles are a USAGE error, not an envelope.** `<engine>-resolve` given a URL
+whose host is not its own site's exits **1** with a message on stderr and writes no envelope
+at all — nothing was attempted and nothing is retryable, so it is the same class as
+`--engine nope` and must not be confused with an extraction failure (2+) that a caller might
+retry. This is a contract on every engine, present and future: the host allowlist is an
+explicit list per engine (§10), never a substring match. The bare-id path is the same rule
+in the other direction — an id that does not match this engine's shape is also 1.
+
 **One envelope, one line.** Every `-j` / `-J` payload the suite writes to stdout is a single
-line of JSON — search, `--info`, `--transcript`, `--get-url`, `-d`, `--status`, `--stop`,
+line of JSON — search, resolve, `--info`, `--transcript`, `-d`, `--status`, `--stop`,
 `--set-volume`, and every error shape above. That is what makes the output usable as NDJSON:
 a caller can read one line, parse it, and be done, without a streaming parser or a brace
 counter. It also makes `-J` a *strict superset of `-j`* in shape as well as in fields.
 
 The rule was violated for a long time by the two oldest read verbs. Search emitted 26 lines
-for `-j -n 3` and 76 for `-J`, `--info -j` emitted 16, `--get-url -j` was pretty too, and
+for `-j -n 3` and 76 for `-J`, `--info -j` emitted 16, the resolve verb (then spelled
+`--get-url`) was pretty too, and
 `--status` was compact only while the player list was **empty** — it pretty-printed as soon
 as a player existed, i.e. exactly when something is polling it. Every one of those was a bare
 `jq` where the lifecycle verbs had always used `jq -nc`; the fix was `-c` at five sites
-(`emit_search_json` ×2, `resolve_info`, `resolve_stream_url`, the `--status` `jq -s`). The
+(`emit_search_json` ×2, `resolve_info`, `emit_stream`, the `--status` `jq -s`). The
 state files under `players/` are *not* covered by this rule and stay pretty — they are an
 on-disk record read by jq, not an envelope.
 
@@ -2085,26 +2261,37 @@ on-disk record read by jq, not an envelope.
 
 ```
    0    success; also --status/--stop (always); 130 normalized (SIGINT; clean q already exits 0)
-   1    usage/validation error (die), wrapper flag-gating rejection, resolve failure
-        (prose), empty-query (D3), yt-tui non-TTY refusal, conflicting actions,
-        --info / --transcript fetch failure (incl. no_subtitles_available),
-        --id/--all outside a lifecycle verb, -d with an action or with -f ascii|viz
-   2+   propagated yt-dlp / mpv failure (playback, resolve -j, SEARCH failure — search
-        reports 2 even when yt-dlp exits 1, so a tool failure is never confused with 1)
+   1    usage/validation error (die), a verb's flag-gating rejection, uting's non-TTY
+        refusal, conflicting actions, no handle (D3), a handle with whitespace in it,
+        --id/--all outside a lifecycle verb, -d with an action or with -f ascii|viz,
+        an unknown --engine, a URL whose host is not this engine's (§10/§14),
+        --info / --transcript fetch failure (incl. no_subtitles_available)
+   2+   propagated yt-dlp / mpv / HTTP failure (playback, resolve -j, SEARCH failure —
+        search reports 2 even when yt-dlp exits 1, so a tool failure is never confused
+        with 1). A handle the engine cannot resolve lands HERE, not in 1: the player
+        cannot judge an id's shape, so "bad id" is an extraction outcome (§6).
    4    --set-volume / --stop: did not take effect — no such player, no player,
         ambiguous target, or mpv IPC failure. The -j status/reason says which.
         Distinct from 1 (usage) and 2+ (propagated player failure). --stop treats
         "nothing playing" as idempotent success (exit 0); only ambiguity is exit 4.
 
-   TTY  : yt-tui requires BOTH stdin and stdout (§11); the core never needs a TTY —
-          it errors on empty input rather than prompting (D1/D3).
-   deps : core needs yt-dlp jq mpv before search/play/geturl; --status/--stop need
-          only jq (--status uses nc opportunistically for the live read and degrades to
-          the recorded volume plus three nulls without it), --set-volume needs jq+nc (nc gated lazily so a
-          bare search never demands it), and --info / --transcript need only yt-dlp+jq
-          (all checked before the mpv gate). yt-tui needs only jq and the verbs. curl is an OPTIONAL soft dep for
-          the play-time client probe (§8.2). BSD `nc -U` is stock on macOS; the Linux
-          netcat `-U` gap is a known, documented limitation (§26 / script comment).
+   TTY  : uting requires BOTH stdin and stdout (§11). No other verb ever needs one —
+          each errors on empty input rather than prompting (D1/D3).
+   deps : they are per-FILE now, which is the point of the split —
+          ut-play      : jq + mpv to play; --status/--stop need only jq (--status uses
+                         nc opportunistically for the live read and degrades to the
+                         recorded volume plus three nulls without it); --set-volume
+                         needs jq+nc (nc gated lazily so a plain play never demands it).
+                         It needs NO yt-dlp and no curl.
+          yt-search / yt-resolve / bili-resolve : yt-dlp + jq. curl is an OPTIONAL soft
+                         dep of yt-resolve, for the client probe (§8.2).
+          bili-search  : curl + jq — curl is REQUIRED here; it is the transport.
+          uting        : jq, plus the verbs it composes.
+          BSD `nc -U` is stock on macOS; the Linux netcat `-U` gap is a known,
+          documented limitation (§26 / script comment).
+   -V   : every entry point answers it BEFORE any dependency gate, reading shell/VERSION
+          and printing its own name — needing yt-dlp installed to learn your version is
+          backwards, and six executables must not be able to disagree (§4).
 ```
 
 ## 16. Configuration surface
@@ -2113,21 +2300,30 @@ Per-request choices are flags; set-once tuning is environment variables — deli
 kept out of flags to keep each verb's flag surface narrow.
 
 ```
-   Flags (per call):  -n -m -M -s -f -S -l -j -J -d --color --theme
-                      --detach --status --stop --get-url --info --set-volume --id --all --volume
-   Env (set once):    YT_COOKIE_BROWSER   (default chrome = login on; "none" = anon-only)
+   Flags (per call):  -n -m -M -s -f -S -l -j -J -d -h -V --color --theme --engine
+                      --detach --status --stop --info --transcript --sub-lang
+                      --set-volume --id --all --volume
+   Env (set once):    UT_DEFAULT_ENGINE   (default yt) = which engine --engine defaults
+                        to. Read by BOTH ut-play and uting, deliberately the same
+                        variable: a user who picks a default source once should not
+                        have to pick it again per surface. uting falls back to the
+                        first installed engine when the name is not present.
+                      YT_COOKIE_BROWSER   (default chrome = login on; "none" = anon-only)
+                        — read by each ENGINE, never by the player.
                       YT_AUDIO_FORMAT (ba)  YT_VIDEO_FORMAT (bv*+ba/b)
-                      YT_VIDEO_FORMAT_FAST  YT_ASCII_VO (tct)  YT_MPV_INPUT_CONF
+                      YT_VIDEO_FORMAT_FAST  — the mode→format table's values; they live
+                        with the table, i.e. in each <engine>-resolve.
+                      YT_ASCII_VO (tct)  YT_MPV_INPUT_CONF  — player-side, mpv knobs.
                       YT_ASCII (1 = ASCII glyph fallbacks; auto-on for a non-UTF-8 locale;
-                        read by BOTH the core and yt-tui — legacy alias YT_TUI_ASCII).
+                        read by the player and uting — legacy alias YT_TUI_ASCII).
                         Covers the WHOLE glyph set: ♫ ● ○ ❯ · ▶ ❚❚ • … → — ↑/↓ ←/→ ↵ ▘▝▗▖
                         and the bar/rail runs. Verified by asserting a rendered pane
                         holds no non-ASCII beyond the label text.
-                      YT_LANG (en|zh) = language of yt-tui's menu chrome; default zh
+                      YT_LANG (en|zh) = language of uting's menu chrome; default zh
                         under a zh* locale, English otherwise. Help output, errors and
                         the card's field labels stay English in both.
                       YT_THEME (minimal|mono|catppuccin|tokyonight|nord|gruvbox|
-                        onedark) = yt-tui palette family (§11: one accent + one status
+                        onedark) = uting palette family (§11: one accent + one status
                         hue; community themes are 24-bit only under COLORTERM=truecolor).
                         --theme beats env; the t key cycles it live at runtime.
                       YT_BG (auto|light|dark) = background mode; auto chain:
@@ -2138,31 +2334,42 @@ kept out of flags to keep each verb's flag surface narrow.
                       YT_BRAND (=1: header wordmark in math sans-serif bold, §11 glyph
                         section; opt-in, ASCII mode wins).
                       NO_COLOR (=1: --color auto renders plain; explicit --color wins).
-   Internal (set by the core for its own detached child, not a user knob):
+   Internal (set by the player for its own detached child, not a user knob):
                       YT_IPC_SOCK (per-player mpv IPC socket)  YT_DETACHED (=1: no
-                      terminal, so quiet mpv + no stderr filter)
+                      terminal, so quiet mpv + no stderr filter)  YT_PLAYER_ID (which
+                      record the child backfills title/format into, §9.1)
+   Test-only:         YT_TEST_LIFECYCLE (=1 arms tests/lifecycle.sh, which starts real
+                      players; unset it and the rig skips rather than making noise)
    (color MODE is the --color flag, NOT an env var — the scripts hardcode
     COLOR_MODE=auto at startup and only --color changes it, so a COLOR_MODE env
     value is never read. Theme and background ARE env-read: YT_THEME / YT_BG.)
 ```
 
+**The `YT_` prefix is historical and deliberately not churned.** The suite is `uting` and
+the new engine knob is `UT_DEFAULT_ENGINE`, but renaming a dozen working variables would
+break every user's shell profile to buy consistency in a doc. New knobs use `UT_`; existing
+ones keep `YT_`.
+
 Cookie handling: `YT_COOKIE_BROWSER` is presence-checked per platform (does the
 browser's profile dir exist); if absent, extraction runs without cookies rather than
 breaking. Reading a browser's cookie DB while it is running can yield a locked read and
 silently degrade to unauthenticated extraction — closing the browser is the workaround.
+**Only engines read it**, so the player has no cookie code path to leak one.
 
 ## 17. Function map & provenance
 
 ```
-   Core (shell/ut-play)
+   Player (shell/ut-play) — no yt-dlp, no site knowledge
      Setup/util : usage, die, is_non_negative_int, validate_enum,
                   require_cmd/require_deps, mpv_supports_vo, normalize_playback_mode,
-                  set_action, JQ_PRELUDE (jq p2/fmt_dur — the one duration formatter)
-     Search     : fetch_results, print_list, emit_search_json
-     Playback   : run_mpv, play_{audio,video,fast,ascii,viz}_url,
-                  play_mode_url, have_probe_tools, probe_media_fetchable,
-                  play_url_with_probe, play_url_directly,
-                  play_url_json, classify_playback_error, format_for_mode
+                  set_action
+     Engine call: engine_resolve_bin (name → executable, by concatenation),
+                  resolve_media (run <engine>-resolve -j, fill the RESOLVED_* globals),
+                  patch_player_meta (child backfills title/format into its own record)
+     Playback   : run_mpv (the single mpv seam), play_{audio,video,fast,ascii,viz}_url,
+                  play_mode_url, play_url_directly, play_url_json,
+                  classify_playback_error (mpv wordings + the engine's yt_reason marker),
+                  emit_play_json (the ONE writer of the playback envelope)
      Lifecycle  : group_alive, stop_group, ensure_state_dir, live_props (multi-property
                   IPC read), read_player_live (correlate + normalise, shared by both
                   --status modes), detached_epitaph (the child's last log line),
@@ -2170,12 +2377,31 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
                   (tombstones, §9.2),
                   player_state/player_sock/player_log/player_lock_dir,
                   lock_player_state/unlock_player_state, new_player_id, detach_play,
-                  detach_title_updater, reap_dead_players, resolve_target,
-                  do_status, do_stop, do_set_volume
-     Resolve    : resolve_stream_url (--get-url), resolve_info (--info),
-                  resolve_transcript / transcript_fail (--transcript)
-   Wrappers     : yt-search, yt-play   (parse → gate → exec yt)
-   Interactive  : yt-tui   (fetch_json → build_all_rows → load_rows → menu loop:
+                  reap_dead_players, resolve_target, do_status, do_stop, do_set_volume
+
+   Engine, search half (shell/yt-search · shell/bili-search)
+     Shared shape: die, is_non_negative_int, validate_enum, require_cmd/require_deps,
+                  cleanup_scratch/ensure_scratch, fetch_results, print_list,
+                  emit_search_json, print_usage, reject_url, JQ_PRELUDE (fmt_dur — each
+                  engine's own copy of the one duration formatter)
+     yt-search  : classify_yt_dlp_error
+     bili-search: classify_http_error, search_fail, ensure_buvid (locally generated
+                  random cookie — a correctness requirement, not an optimisation, §12),
+                  fetch_page_once (the ONLY hand-built HTTP request in the suite),
+                  fetch_page
+
+   Engine, resolve half (shell/yt-resolve · shell/bili-resolve)
+     Shared shape: die, validate_enum, require_cmd/require_deps,
+                  cleanup_scratch/ensure_scratch, normalize_playback_mode,
+                  format_for_mode (the mode→format table), url_host, is_own_host,
+                  normalize_target (handle grammar + host allowlist, ROADMAP D12),
+                  dump_once, emit_stream, resolve_fail, resolve_stream, resolve_info,
+                  classify_yt_dlp_error, print_usage
+     yt-resolve only : have_probe_tools, probe_raw (the PO-token probe, §8.2),
+                  resolve_transcript / transcript_fail (§10.2)
+     bili-resolve    : no transcript half at all — the capability rule (D13)
+
+   Interactive  : uting   (fetch_json → build_all_rows → load_rows → menu loop:
                   display_menu · read_nav_input · move_selection · play_selected ·
                   new_search [read_query_input, Esc cancels] · filter_live → apply_filter)
                   Startup prompt: same read_query_input, run with echo off before the
@@ -2203,17 +2429,27 @@ silently degrade to unauthenticated extraction — closing the browser is the wo
                   detect_bg/init_colorterm/cycle_theme, init_glyphs, init_sync
      Failures   : report_fetch_failure, play_failed_notice, press_any_key
      Formatters : fmt_sec (clock), short_dur (duration_fmt → 6:10:58), commas
+     Engines    : scan_engines / engine_seen / engine_search_bin (discovery by pair,
+                  §11), cycle_engine (the `e` key: switch source and re-fetch)
 ```
+
+**The repetition across the four engine files is deliberate, not drift.** `die`,
+`require_deps`, `fmt_dur`, `ensure_scratch` and the envelope emitters appear once per
+engine. A shared library would be a seventh file that every engine — and therefore,
+transitively, the player looking for an engine — would have to know about; the split's whole
+claim is that an engine is a self-contained pair you can drop in. What must NOT diverge is
+the ENVELOPE, and that is pinned by §14 and by `tests/contract.sh` running the same
+assertions against both engines, rather than by shared code.
 
 Not every helper is listed — `print_usage`, `die`, `is_uint` and the other one-line guards
 are omitted on purpose. Every *subsystem* is, which is the point of the map: a function this
 file discusses by behaviour should be findable by name from here.
 
 **Provenance.** The suite descends from an all-in-one `yt-search-n-play.sh`: its
-non-interactive core moved into `yt` behind the verbs, and its self-rendered TUI
-(menu chrome, `display_menu`, `read_nav_input`, `read_query_input`, arrow-key paging,
-blocking-play semantics) was re-homed in `yt-tui` — same menu, now delegating to the
-verbs. Little of that original's *playback* behaviour survives: play is detached now, so
+non-interactive core became `shell/yt` behind two gating verbs, then split again into the
+player and the engine pairs this document describes; its self-rendered TUI (menu chrome,
+`display_menu`, `read_nav_input`, `read_query_input`, arrow-key paging, blocking-play
+semantics) was re-homed in what is now `uting` — same menu, now delegating to the verbs. Little of that original's *playback* behaviour survives: play is detached now, so
 "no `clear` before play" and "no stdin flush after playback" describe a foreground mpv the
 TUI no longer runs, and rows are measured and elided rather than left to wrap. What did
 survive is the menu's shape and its key map; the `/` filter, the two-view toggle and the
@@ -2226,12 +2462,13 @@ whole width layer are net-new.
 ## 18. Human — interactive browse & play
 
 ```
-   $ yt-tui "lofi hip hop" -n 40 [-f video] [-p 15] [--theme nord]
+   $ uting "lofi hip hop" -n 40 [-f video] [-p 15] [--theme nord] [--engine bili]
      → self-rendered menu (§11), TWO views toggled with Tab/p:
        List  : ↑/↓ nav · ←/→ page · Enter play (DETACHED, non-blocking — the menu keeps
                its terminal and the music keeps playing across n / m / o / filter) ·
                / filter (live narrow) · n new search · m more results · o sort ·
-               v cycle mode (audio→video→fast, applies to the next Enter)
+               v cycle mode (audio→video→fast, applies to the next Enter) ·
+               e switch source and re-fetch (only drawn when 2+ engines are installed)
        Card  : ←/→ seek ∓5s · ↑/↓ volume · Esc back to the list
        Both  : Space pause/resume · s stop · 9/0 volume · [ ] seek ∓10s ·
                l chrome language (en↔zh) · t palette family · q quit (reaps its player)
@@ -2240,36 +2477,60 @@ whole width layer are net-new.
 ## 19. Agent — search, then play
 
 ```
-   # 1) Search → structured, token-frugal envelope; pick programmatically:
-   url=$(yt-search -j -n 10 "lofi" | jq -r '.results[0].url')
+   # 1) Search → structured, token-frugal envelope; pick programmatically.
+   #    Take the ENGINE from the same envelope — never assume it.
+   env=$(yt-search -j -n 10 -- "lofi")
+   url=$(jq -r '.results[0].url'  <<<"$env")
+   eng=$(jq -r '.engine'          <<<"$env")
    # 2) Play (blocking prose), or capture a machine-readable outcome:
-   yt-play "$url"                       # prose
-   yt-play -j "$url" | jq -r .reason    # → null on ok; enum on failure
+   ut-play --engine "$eng" -- "$url"                       # prose
+   ut-play -j --engine "$eng" -- "$url" | jq -r .reason    # → null on ok; enum on failure
 ```
+
+Another source is the same three lines with `bili-search`; nothing else changes, which is
+what the `engine` field is for (§14). Getting it wrong is loud rather than silent: a
+Bilibili URL sent to `yt-resolve` exits 1 saying so (§10).
 
 ## 20. Agent — compose without playing (resolve)
 
 ```
-   # Resolve a direct stream URL and hand it to another tool (non-blocking):
-   yt-play --get-url "$url"                         # prose: stream URL(s)
-   yt-play -j --get-url "$url" | jq -r '.stream_urls[0]'   # structured
+   # Resolve a direct stream URL and hand it to another tool (non-blocking).
+   # This is an ENGINE verb — the player has no resolve-only spelling (§10).
+   yt-resolve -- "$url"                                  # prose: stream URL(s)
+   yt-resolve -j -- "$url" | jq -r '.stream_urls[0]'     # structured
+   yt-resolve -j -- "$url" | jq -r '.http_headers | to_entries[] | "\(.key): \(.value)"'
+```
+
+**Take the headers with the URL.** A bare stream URL is not enough on a host that checks
+`Referer` or pins a `User-Agent` — measured: Bilibili's CDN answers 403 to the URL alone and
+206 to the same URL with these headers. The old `--get-url` had no field for them, which is
+the hole this envelope closes (§14).
+
+```
+   # Read-only metadata and captions are engine verbs too:
+   yt-resolve --info -j -- "$url" | jq -r '.chapters[]?.title'
+   yt-resolve --transcript -j -- "$url" | jq -r .text     # ready to drop into a prompt
 ```
 
 ## 21. Agent — background playback with lifecycle control
 
 ```
-   yt-play -d "$u1"                       # detach player 1 (returns immediately)
-   yt-play -d "$u2"                       # detach player 2 (NOT refused — runs concurrently)
-   yt-play -j --status                    # {"status":"players","players":[{id,…},{id,…}]} (exit 0)
-   id=$(yt-play -j --status | jq -r '.players[0].id')
-   yt-play -j --set-volume 70 --id "$id"  # live volume on player 1 → {"status":"ok",id,volume:70}
-   yt-play --stop --id "$id"              # stop just player 1 (idempotent)
-   yt-play --stop --all                   # stop every player; leaves zero orphans
+   ut-play -d --engine yt -- "$u1"        # detach player 1 (returns immediately, ~0.03s)
+   ut-play -d --engine bili -- "$u2"      # a SECOND engine's player, side by side
+   ut-play -j --status                    # {"status":"players","players":[{id,…},{id,…}]} (exit 0)
+   id=$(ut-play -j --status | jq -r '.players[0].id')
+   ut-play -j --set-volume 70 --id "$id"  # live volume on player 1 → {"status":"ok",id,volume:70}
+   ut-play --stop --id "$id"              # stop just player 1 (idempotent)
+   ut-play --stop --all                   # stop every player; leaves zero orphans
 ```
 
-Why this shape: a blocking-only player isn't composable for an agent. `--get-url`
-(resolve), `-d`+`--status`/`--stop`/`--set-volume` (background + poll + live control),
-and `-j` (structured outcome) are the escapes from "returns only when the video
+`players/` has exactly one owner, so `--status` and `--stop --all` see every player
+regardless of which engine started it — the player is the only thing that ever writes there
+(§9.2).
+
+Why this shape: a blocking-only player isn't composable for an agent. `<engine>-resolve`
+(resolve without playing), `-d`+`--status`/`--stop`/`--set-volume` (background + poll + live
+control), and `-j` (structured outcome) are the escapes from "returns only when the video
 ends," and `--status` (always) and `--stop` (except an ambiguous target, which is
 exit 4) exit 0 so a polling loop never misreads a normal state as failure.
 
@@ -2281,31 +2542,38 @@ exit 4) exit 0 so a polling loop never misreads a normal state as failure.
 
 | Dimension | Rationale | Status |
 |---|---|---|
-| Discoverability | `--help` is ground truth for a caller with no tribal knowledge | ✅ per-verb narrow help + full `yt -h` |
+| Discoverability | `--help` is ground truth for a caller with no tribal knowledge | ✅ per-verb narrow help; each one names the OTHER verbs a caller may have wanted |
 | Structured output | parse without string-matching prose | ✅ search (`-j`/`-J`) + playback (`-j`) |
 | Token efficiency | high-signal beats complete | ✅ 8-field `-j` (~4× smaller); `-J` opt-in; `--transcript -j` drops the duplicated `segments` (3.1×) |
 | Exit-code contract | success/failure must be detectable | ✅ `cmd \|\| rc=$?`; 130 normalized |
 | Trust boundary | agent strings never hit a shell interpolation point | ✅ query/URL single argv elements; `--` guard |
-| Refuse-don't-hang | never block on absent stdin | ✅ core non-interactive; `yt-tui` requires a TTY |
+| Refuse-don't-hang | never block on absent stdin | ✅ every verb but `uting` is non-interactive; `uting` requires a TTY |
 | Contract stability | changes fail loud, not silently | ✅ invalid enum + cross-flag rejection |
 | Process lifecycle | background / query / stop long playback | ✅ `-d`/`--status`/`--stop`, group-stop |
-| Composability | playback that only blocks isn't composable | ✅ `--get-url` resolve-only |
+| Composability | playback that only blocks isn't composable | ✅ `<engine>-resolve` (stream URL **+ headers**), `-d` + lifecycle |
 | Error taxonomy | branch on a cause, not raw wording | ✅ fixed `reason` enum |
 | Config surface | per-request in flags; set-once as env | ✅ flags per-call; env for tuning |
-| Ownership | no client lock-in; both surfaces portable | ✅ owned core + glue; primitives behind seams |
-| Entry-point shape | separate verbs beat one mode-flagged command | ✅ narrow real wrappers + owned glue |
+| Ownership | no client lock-in; both surfaces portable | ✅ owned player + engines + glue; primitives behind seams |
+| Entry-point shape | separate verbs beat one mode-flagged command | ✅ six narrow verbs, no dispatcher, no wrapper tier |
+| Extensibility | a new capability must not edit the caller | ✅ a new source = one engine PAIR; player and TUI unchanged (proved by step C) |
 
 ## 23. Clean / Safe / Modular / DRY adherence
 
 ```
-   Clean   : the core shed ~334 lines of fragile ESC-parsing/paging; each command is
-             single-purpose; no menu state machine in the agent path.
-   Safe    : exit-code contracts preserved; TTY guards; interactive path never absent
-             during change (§24); destructive edits grep-gated.
-   Modular : four commands, one explicit dependency graph; each primitive behind a
-             single seam.
-   DRY     : search/play/lifecycle logic exists ONCE, in the core; wrappers + yt-tui
-             only shape argv and delegate.
+   Clean   : each command is single-purpose; no menu state machine in the agent path;
+             the player carries no `if site ==` anywhere.
+   Safe    : exit-code contracts preserved across two restructures; TTY guards;
+             interactive path never absent during change (§24); destructive edits
+             grep-gated.
+   Modular : six peers, one layer, one explicit dependency graph; each primitive behind
+             a single seam, and the seams split by file (§5).
+   DRY     : the rule is one fact one PLACE, which is not the same as one COPY.
+             Playback and lifecycle exist once (the player). One site's knowledge exists
+             once (its engine pair). Boilerplate — die, require_deps, fmt_dur — is
+             duplicated per engine ON PURPOSE (§17): a shared library would be a file
+             every engine, and transitively the player, would have to know about, which
+             is exactly the coupling the split removed. The ENVELOPE is what must not
+             diverge, and §14 plus a rig that runs both engines is what holds it.
 ```
 
 ## 24. Safe-evolution methodology (how this suite is changed)
@@ -2314,17 +2582,26 @@ The refactor that produced this architecture followed a staged, reversible order
 reusable template for future structural change:
 
 ```
-   A  Build the new interactive path (yt-tui) against the CURRENT tools; validate in a
-      tmux PTY.  → an interactive path is never absent.
-   B  Rename core → yt; repoint wrappers/glue + symlinks; run the headless regression.
-   C  Delete the old bespoke TUI + add non-interactive routing (the destructive step —
-      kept LAST and small); grep-gate every removed symbol before deleting; regress.
-   D  Update docs (this file, READMEs, usage()).
+   A  Build the new path against the CURRENT tools; validate it in a tmux pty.
+      → an interactive path is never absent.
+   B  Repoint callers / wrappers / symlinks; run the headless regression.
+   C  Delete the old path — the destructive step, kept LAST and small; grep-gate every
+      removed symbol before deleting it; regress again.
+   D  Update docs (this file, README, usage()).
    E  Final headed (tmux) + headless sweep.
 ```
 
 Principle: put the single destructive step last and smallest; prove its replacement
 first; gate deletions by grep so no dangling reference survives.
+
+**Used twice, and the second time is the evidence it works.** The player/engine split
+(ROADMAP D9) ran A → E over six steps with the destructive one late and alone: rename the
+core (A), lift search out non-breakingly (B-1), lift extraction out and retire `ytdl_hook`
+in the one coupled step (B-2), **delete the `yt-play` wrapper** (B-3), add a second engine to
+prove the seam (C), then the TUI's registry and rename (D). Two properties made it
+reversible: every step but B-3 left the old path working, and the second engine was added
+*after* the seam existed, so "a new source changes nothing else" was a test rather than a
+hope.
 
 ## 25. Risk register (design mitigations)
 
@@ -2335,10 +2612,16 @@ first; gate deletions by grep so no dangling reference survives.
    Title with tab/newline breaks the row    jq @tsv escapes; IFS=$'\t' split in load_rows
    URL mis-recovery from a rendered line     url/display kept in parallel arrays (index pick)
    Filter over-matches / injects a glob      pure-bash: nocasematch + AND tokens + quoted "$tok"
-   URL pasted as a search query               yt-search rejects URLs → no blocking mis-play (D8)
-   yt-tui run without a TTY (agent/pipe)     require -t 0 && -t 1 → die (no hang)
-   Core rename breaks wrapper locate         Step B repoints + validates before Step C
-   yt-dlp prefix "ytsearch<N>:" clobbered    literal in core only; never rewritten
+   URL pasted as a search query               <engine>-search rejects URLs → no blocking mis-play (D8)
+   uting run without a TTY (agent/pipe)      require -t 0 && -t 1 → die (no hang)
+   A rename breaks sibling location          every script resolves its own symlink chain
+                                             (§4); step B repoints before step C deletes
+   yt-dlp prefix "ytsearch<N>:" clobbered    literal in yt-search only; never rewritten
+   One engine's URL sent to another's        explicit host allowlist per engine → exit 1,
+   resolver (silently mislabelled engine)    never a resolved stream (§10, ROADMAP D12)
+   A new source needs edits in the player    it cannot: the player finds a resolver by
+   or the TUI                                concatenating the engine name (§4), and the
+                                             TUI discovers pairs by glob (§11)
    Orphan fallback mpv after stop            process groups (pgid), not a PID-tree walk
    Empty arg array under set -u (bash 3.2)   guard array expansion before use
    Peer connects to a player's IPC socket    STATE_DIR/players 0700; macOS $TMPDIR is
@@ -2349,31 +2632,41 @@ first; gate deletions by grep so no dangling reference survives.
                                              its group is gone — but group_alive is still
                                              pgrep -g, so a recycled pid leading a group
                                              inside that window would look live (§9.3)
-   Captured -d stdout blocks on a bg job     detach_title_updater's fds redirected to
-                                             /dev/null (a command substitution waits for
-                                             every writer of the pipe, not just for us)
+   Captured -d stdout blocks on a bg job     no background job remains on the detach path:
+                                             the child backfills its own record from the
+                                             resolve envelope (§9.1). Any FUTURE `… &`
+                                             in a capturable verb must redirect its fds —
+                                             a command substitution waits for every writer
+                                             of the pipe, not just for us
    Detached mpv status line fills the disk   YT_DETACHED → --no-term-osd-bar
                                              --msg-level=all=error in the child (§9.1)
-   Search failure hands an agent no shape    captured stderr → classify_playback_error →
-                                             {status:"error",…,reason} envelope (§7)
-   Query that looks like a flag becomes an   `--` ends option parsing in the CORE and is
-   action                                    forwarded by both wrappers (§6)
+   Search failure hands an agent no shape    captured stderr → classify_yt_dlp_error /
+                                             classify_http_error → {status:"error",…,reason}
+                                             envelope, exit 2+ (§7)
+   Query that looks like a flag becomes an   `--` ends option parsing in EVERY verb, and
+   action                                    each re-applies its positional check after
+                                             it (§6, §13)
+   An engine invents a new reason value      the enum is §14's and is closed; three
+                                             classifiers implement it, none may extend it
    Client moves volume behind --status'      --status reads volume live off the socket,
    back                                      recorded value only as fallback (§9.3)
-   Concurrent title-backfill + set-volume  per-id mkdir lock (lock_player_state)
-   clobber the same <id>.json              serializes the two temp+mv patches (§9.3)
+   Concurrent meta-backfill + set-volume   per-id mkdir lock (lock_player_state)
+   clobber the same <id>.json              serializes the two temp+mv patches; the
+                                           backfill additionally pid-guards (§9.3)
+   A credential header reaches mpv's argv  engines must not put Cookie/Authorization in
+   (visible in ps)                         http_headers; stated in §8.1 and §14
    Stale socket after SIGKILL'd mpv          [[ -S sock ]] test → ipc_failed, never hangs
    nc waits full -w1 if the peer does not  request_id filter + head -1; a HEALTHY mpv
    close (a wedged mpv, not a healthy one)   closes on half-close, so a call is ~0.016s.
-                                             yt-tui's redraw path is a tight loop, so it does
+                                             uting's redraw path is a tight loop, so it does
                                              not WAIT for nc at all: it reads the replies out
                                              of a process substitution and breaks on the last
                                              one, which bounds the wedged case too (§25.1 F19)
 ```
 
-### 25.1 Open defect register — `yt-tui` hardening pass
+### 25.1 Open defect register — TUI hardening pass
 
-Audited against `shell/yt-tui`. **Batch 1 (the one-line edits), batch A (the cheap
+Audited against `shell/uting`. **Batch 1 (the one-line edits), batch A (the cheap
 correctness/UX edits), batch B (the IPC layer), batch C (the liveness poll), batch D (the
 failure reporters), batch E (the input layer), the views-cleanup pass and the i18n pass are
 ALL fixed — the register is empty** — this is a register of known defects, not a description of the code. It is kept here rather than as a loose `PLAN-` file
@@ -2410,9 +2703,9 @@ list at the end of this section. F2's *reporting* half — a failed Enter that w
 survivable no-op with no message — shipped in batch D, in the same "press any key" style as
 the `n`/`m`/`o` failures, which is why it was batched with F7. **Correction, kept because a fix
 was very nearly built on it:** the reason cannot come from the envelope's `reason`. The §14
-taxonomy belongs to the *blocking* play path; for a synchronous `-d` failure the core `die`s
-with prose on **stderr** and emits nothing on stdout (verified: `yt-play -d -j -f ascii --
-<url>` → rc 1, empty stdout). yt-tui captures that stderr, the way `fetch_json` already does
+taxonomy belongs to the *blocking* play path; for a synchronous `-d` failure the player `die`s
+with prose on **stderr** and emits nothing on stdout (verified: `ut-play -d -j -f ascii --
+<url>` → rc 1, empty stdout). uting captures that stderr, the way `fetch_json` already does
 for search.
 
 Audited clear in the same pass: every other case-arm function returns 0 on all paths
@@ -2420,7 +2713,7 @@ Audited clear in the same pass: every other case-arm function returns 0 on all p
 `stop_current_playback`, `apply_filter`); `mpv_get_prop` ends in `|| true` and is only ever
 used in command substitution.
 
-**Call-stack boundary — yt-tui reaching past a seam it already has.** Empty: this category is
+**Call-stack boundary — uting reaching past a seam it already has.** Empty: this category is
 closed. Both members shipped — the liveness poll (F3, batch C) and the input layer's byte-split
 readers (F10 + F9, batch E).
 
@@ -2442,7 +2735,7 @@ arithmetic changed.
 `q`/`s`/`9`/`0`/`l` is intentional modality; a failed play in filter mode consuming one
 keystroke on "press any key" matches the `n`/`m`/`o` failure behavior. Pid reuse can
 false-positive the shipped `check_player_alive`'s `kill -0`, exactly as §25 records for the
-core's own `group_alive` — narrowed by the monotonic id, not closed, and not worth a second
+player's own `group_alive` — narrowed by the monotonic id, not closed, and not worth a second
 mechanism in the client.
 
 **Order — by ROI, not by severity.** None left. F11 — the cosmetic i18n pass — was ranked last
@@ -2486,8 +2779,8 @@ after):
   `apply_search_results`. Measured on a 40-result page-2 selection: `m` used to snap back to
   row 1, and now stays on the row the user was looking at. `cycle_sort` keeps the reset and
   now carries the comment saying why.
-- **F16** — `-m`, `-M` and `--volume` are validated at startup in the core's own wording,
-  including the core's `-M > -m` cross-check. They were forwarded verbatim, so the core did
+- **F16** — `-m`, `-M` and `--volume` are validated at startup in the verbs' own wording,
+  including the search half's `-M > -m` cross-check. They were forwarded verbatim, so the verb did
   reject them — but only at the first fetch (as "search failed") or the first Enter (as a play
   that silently never starts).
 - **F6** — `require_cmd jq nc`.
@@ -2529,7 +2822,7 @@ So F19 stands as a real but much smaller change, and F5 is the defect of this ba
 - **F5** — `adjust_volume` is read-modify-set with a 0–100 clamp instead of `add volume ±5`,
   so the socket path can no longer walk past the contract the rest of the suite speaks (mpv's
   own ceiling is 130). Verified end to end against real mpv: a player launched at
-  `--volume 10`, then twenty `0` presses, reads **volume 100** in `yt-play --status` — the old
+  `--volume 10`, then twenty `0` presses, reads **volume 100** in `ut-play --status` — the old
   `add` would have left it at 110. The extra round trip is what tied this to F19; at 0.016 s
   it was affordable either way, which is the one place the false measurement changed a
   decision rather than just a sentence.
@@ -2569,8 +2862,8 @@ with 23 assertions, run three times for flake):
   global *before* reporting, so the query is passed in as an argument rather than read off
   `QUERY_LABEL`, which by then is back to the one that still works. Verified per key: the
   message, then the state (label, `RESULT_N`, `SORT_FIELD`) intact behind it.
-- **F2b** — a failed Enter now says why. `play_selected` keeps the core's stderr in a temp file
-  the way `fetch_json` keeps the search's, and reports its **last line** with the core's own
+- **F2b** — a failed Enter now says why. `play_selected` keeps the player's stderr in a temp file
+  the way `fetch_json` keeps the search's, and reports its **last line** with the player's own
   `Error: ` prefix stripped (`die` can print context above the reason). Empty stderr degrades to
   "playback failed"; `rc` 0 with an envelope carrying no id or sock reports "malformed launch
   envelope" instead of dropping the keypress. The `|| true` at both call sites stays — that is
@@ -2583,11 +2876,11 @@ with 23 assertions, run three times for flake):
   so reading a retired global would have bought nothing. The status-accent pass took the last
   real read of it with the card's paused branch, so it is now assigned and never read.
 - **Correction — the plan's own repro for F2b was already unreachable.** It said to force
-  `-f ascii` through the detached path and watch the core refuse. F16 (batch A) validates `-f`
+  `-f ascii` through the detached path and watch the player refuse. F16 (batch A) validates `-f`
   against `MODE_CYCLE` at startup, so `ascii` now dies in argument parsing and never reaches
   `play_selected`: one shipped fix closed the door the next one wanted to test through. The
   reason path is observable only from a stub, so the rig carries fixture stand-ins for
-  `yt-search`/`yt-play` in a directory behind a `yt-tui` symlink — `SCRIPT_DIR` resolves the siblings, which is
+  the engine verbs in a directory behind a `uting` symlink — `SCRIPT_DIR` resolves the siblings, which is
   what makes stub injection possible at all — each failure selected by a marker file so the
   TUI's own startup fetch still succeeds and the failure lands on a keypress. Its `want`
   assertions poll rather than sleep: the reporters print below a
@@ -2627,7 +2920,7 @@ new tmux rigs; the premise was measured before a line was written):
   across the line on the same burst — it was simply invisible while every multi-byte key was
   mojibake anyway. A UI that draws its own input has no use for the driver's echo, so `stty
   -echo` now covers the whole session and is restored through the same trap as the cursor
-  (a two-path rig asserts the restore after `q` AND after a signal, because a yt-tui that
+  (a two-path rig asserts the restore after `q` AND after a signal, because a uting that
   exits without putting `echo` back leaves the user typing blind in their shell).
 - **A harness lesson, recorded because it produced a false failure first.** The signal-path test
   reported the tty left at `-echo` when nothing was wrong: the harness blocked in `sleep`, a
@@ -2813,11 +3106,23 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 - Detached `ascii`/`viz` (no terminal to render into) — rejected at parse time (§9.2);
   `audio` is the norm and `video`/`fast` open their own GUI window.
-- Blocking playback (`yt-play <url>` / `-j`) returns only when playback ends; use
-  `--detach`+`--status`/`--stop` or `--get-url` for non-blocking agent flows.
-- `yt-tui` rows are one jq pass over the cached results per search — fine for small N;
+- Blocking playback (`ut-play -- <handle>` / `-j`) returns only when playback ends; use
+  `--detach`+`--status`/`--stop`, or `<engine>-resolve`, for non-blocking agent flows.
+- **Scope note (ROADMAP D14/D15):** a queue, playlist management and listening history are
+  planned work in the shell version (ROADMAP P4) — not specified here until one lands, at which
+  point its data model and its agent verb arrive together. Favourites is deliberately not a
+  feature (a playlist with a fixed name); a downloader and channel subscriptions are
+  unscheduled. Nothing in them is specified here yet; when one lands, its data
+  model and its agent verb come with it. The constraint they inherit from this document: a
+  feature with a keybinding and no verb + `-j` envelope is half-built.
+- `uting` rows are one jq pass over the cached results per search — fine for small N;
   not intended for thousands of results.
-- No MCP wrapper (§1). No third-party YouTube client dependency (§2).
+- **URL sniffing in the player** — `ut-play` never guesses which engine a bare URL belongs
+  to; the caller says (`--engine`), and `uting` always knows because it did the search.
+  Deferred until a third engine makes a pattern registry worth its weight (§12.1).
+- **A shared engine library** — deliberately not built; the duplication is the price of an
+  engine being a self-contained pair (§23).
+- No MCP wrapper (§1). No third-party media-client dependency (§2).
 - Runtime volume control on DETACHED players IS supported (`--set-volume N [--id ID]`,
   §9.2/§14): each detached mpv runs with `--input-ipc-server=mpv-<id>.sock`, and
   `do_set_volume` sends one `set_property volume` command over that per-instance socket.
@@ -2825,29 +3130,30 @@ new-search/more-results instead of `n`/`m`; also corrected.
   the launch-time STARTING volume; `--set-volume` adjusts it live thereafter.
   Deliberately still OUT of scope:
     - Live volume for FOREGROUND playback — it has a real TTY, so mpv's own volume keys
-      already work; no IPC needed. (`yt-tui` is no longer foreground: it plays detached
+      already work; no IPC needed. (`uting` is no longer foreground: it plays detached
       and adjusts volume over the socket, which `--status` then reports live.)
     - `--pause` / `--seek` / mute and other runtime properties as *verbs* — the same
-      per-instance socket carries them today, and `yt-tui` uses it directly (a verb per
+      per-instance socket carries them today, and `uting` uses it directly (a verb per
       keypress would mean a process chain per 1s refresh tick). The socket is therefore a
       documented part of the `-d` contract (§9.3) and is handed to clients in the `-d -j`
       envelope; a verb is added only when a caller genuinely cannot speak to the socket.
       **That condition is not met today**: a shell-capable agent can drive the socket
       itself (`printf … | nc -U "$sock"`), and the socket path is handed to it precisely
       so it can. The caller that genuinely cannot is one confined to a declared tool
-      surface — an MCP face — which `ROADMAP.md` §0 still lists as a non-goal, gated by
+      surface — an MCP face — which `ROADMAP.md` §0 still lists as a non-goal (D14 reopened
+      the FEATURE non-goals; it left this one alone), gated by
       its §9 triggers. So these verbs are blocked on THAT decision, not on effort.
       Two constraints, decided in advance so the decision does not have to be reopened
       to design them:
         - `--seek` must require a SIGNED value for a relative move (`+30` / `-15`) and a
           distinct spelling for an absolute one (`--seek-to 120`). A bare `--seek 30`
           reading as absolute contradicts both mpv's own default (relative) and
-          `yt-tui`'s `seek_relative`, and would silently jump a caller who meant +30s —
+          `uting`'s `seek_relative`, and would silently jump a caller who meant +30s —
           the failure mode §22's *contract stability* row exists to prevent.
         - `--toggle-pause` is NOT to be added. mpv's `cycle pause` returns no value, so
           the resulting state in the envelope could only be a guess. `--pause` /
           `--resume` are strictly better for a machine caller anyway: idempotent, with no
-          read-modify-write race. Toggling stays a `yt-tui` keypress.
+          read-modify-write race. Toggling stays a `uting` keypress.
       Their prerequisite is now MET: `--status` reports live `paused` (§9.3/§14), so an
       agent that paused could observe that it had. The verbs stay blocked on the decision
       above, not on observability.
@@ -2857,10 +3163,24 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 ## 27. Verification matrix
 
+**Last run: 2026-08-24, all three rigs green** — `contract.sh` **78 ok / 0 failed / 0 known
+drift**, `tui_pane.sh` **13 ok / 0 failed**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **15 ok /
+0 failed**, with `pgrep mpv` empty afterwards.
+
+> **Observed flakiness, recorded rather than smoothed over.** On the first of three
+> consecutive runs on 2026-08-23, ten checks failed — the live-read and death-record clusters plus
+> one network check — and the next two runs passed 78/78 unchanged. Those clusters fabricate
+> state files under the shared `${TMPDIR}/yt-cli-$(id -u)/players`, which is keyed by uid and
+> nothing else, so **two overlapping runs (or a stray detached player) corrupt each other's
+> fixtures**. Treat a single red run as inconclusive until it repeats; the durable fix is a
+> per-run state dir, which is not built yet.
+
 **No *scratch* rig is named by path here, on purpose.** The exception is the five harnesses
 that earned a permanent home and are committed under `tests/` — `contract.sh`, `tui_pane.sh`,
 `lifecycle.sh`, `assert_pane.py`, `mpv_ipc_mock.py` — which the root README describes by name
-because a contributor cannot run what nothing points at. Everything else this suite has been
+because a contributor cannot run what nothing points at. (The two pty-based rigs that
+preceded `tui_pane.sh` were deleted: tmux IS the terminal, and a pty harness starting at 0×0
+produced plausible-looking one-row frames — a wrong green.) Everything else this suite has been
 verified with is a throwaway under a `tmp/` the repo does not track (`.gitignore`:
 `**/tmp/`), so citing one of those by path is a promise the checkout cannot keep — it resolves on exactly one machine, until that
 machine's scratch directory is cleaned. What is durable is the *shape* of each check, and that
@@ -2870,29 +3190,48 @@ when the file it names is gone; §25.1's harness lessons are here for the same r
 the part of a rig worth keeping.
 
 ```
-   Syntax     : bash -n on core + all three wrappers/glue (+ repo-wide shell check)
-   Search     : yt-search -j → 8-field envelope + count; -J → full; default list;
+   Syntax     : bash -n on all six scripts (+ repo-wide shell check), gated by
+                .githooks/pre-commit on staged content and pre-push on the worktree
+   Engine seam: an unknown --engine is USAGE (1), not a tool failure — an agent must not
+                retry a name that will never exist; `--engine ../evil` is rejected too;
+                a well-formed id that resolves to nothing is 2+ WITH a reason, which is
+                the semantic the split bought by moving the shape check into the engine
+   Engine      : the two engines' envelopes are compared KEY SET AGAINST KEY SET — search,
+   parity       result records, and resolve — so a field renamed, added or dropped in
+                EITHER engine fails, including one added years from now and forgotten on
+                the other side. Nothing else in the suite would notice: each engine's own
+                checks would still pass and playback would break only for the engine
+                nobody happened to run. bili-search additionally: names its engine,
+                one line, duration is a NUMBER (the site sends "222:28"), titles carry
+                no surviving <em> markup or entities
+   Search     : <engine>-search -j → 8-field envelope + count; -J → full; default list;
                 flag-after-query ordering; empty-query error; zero-result query →
                 count:0; a live entry renders "LIVE"/"n/a views" (never a raw null);
                 -m 999999 excludes unknown-duration (live) entries; yt-dlp failure →
                 {status:"error",…,reason:"network"} under -j, exit 2 (prose: stderr + die)
-   Argv       : `yt -l -- --status` SEARCHES for that text (does not list players);
-                same via `yt-search -- --status`; --status --stop → conflicting actions;
-                --status --id X / --all --status → rejected; -d --stop → rejected;
-                -d -f ascii|viz → rejected
-   Core       : yt "q" → list (D2); yt (no args) → D3 error; yt <url> prose play;
-                yt -j "q" → envelope; -p rejected; invalid --color rejected
-   Gating     : yt-search rejects -f/--detach/URL; yt-play rejects -n/-s/bare-query —
-                each of those in BOTH spellings, bare and after `--`: `yt-play -- "a query"`,
-                `-j -- "a query"`, `-d -- "a query"`, `--get-url -- "not a url"` and
-                `--transcript -- "a query"` all exit 1 with the "use yt-search" redirect,
-                and `yt-search -- <URL>` still exits 1 with the mirror message
+   Argv       : `yt-search -- --status` SEARCHES for that text (does not list players) —
+                the check lives on the search verb because that is where searching lives
+                now; --status --stop → conflicting actions; --status --id X → rejected;
+                -d --stop → rejected; -d -f ascii|viz → rejected
+   Player     : ut-play (no args) → D3 error; ut-play "a query" and ut-play -- "a query"
+                → 1, naming yt-search; invalid --color rejected
+   Gating     : one tier, six self-gating verbs (§13). <engine>-search rejects
+                -f/--detach/URL (URL rejection re-applied after `--`); ut-play rejects
+                -n/-s/bare-query. Three checks exist specifically to prove the deleted
+                wrapper took its gate WITH it rather than dropping it: an unknown long
+                flag (`--json-full`) exits 1 instead of reaching getopts as a bare `-`,
+                `--get-url` exits 1 as retired, and `--info` exits 1 naming the engine
    Envelopes  : every -j/-J payload is ONE line (§14) — search -j/-J, a zero-result search,
                 --info -j/-J, --get-url -j, -d -j, --status with 0 AND with 2 players,
                 --stop, an ambiguous --set-volume — measured with `| wc -l`, and each still
                 parses with the same fields (jq -e on .query/.count/.results[0], .status)
-   Resolve    : yt-play --get-url (prose + -j envelope, no playback)
-   Transcript : yt-play --transcript → one line of clean text on stdout, ZERO bytes on
+   Resolve    : <engine>-resolve (prose + -j envelope, no playback); the envelope carries
+                stream_urls[] and http_headers{}, and lifecycle.sh proves the headers are
+                load-bearing: a detached bili player reaches position 1s, which the bare
+                URL cannot do (403 without them)
+   Host gate  : a URL from the other site is rejected by each resolver with exit 1 —
+                usage, not extraction failure (§10, ROADMAP D12)
+   Transcript : yt-resolve --transcript → one line of clean text on stdout, ZERO bytes on
                 stderr; -j → single-line {status,id,url,lang,is_auto,text,segments} with
                 is_auto:false on a human-captioned video and 60 cues recovered; -J → the
                 SAME envelope + segments, asserted a strict superset (del(.segments) is
@@ -2901,22 +3240,24 @@ the part of a rig worth keeping.
                 the video does not carry → {status:"error",reason:"no_subtitles_available"}
                 exit 1 under -j and a die() sentence in prose mode — note yt-dlp exits 0
                 for an absent language, so the miss is detected by NO FILE WRITTEN, never
-                by the exit status; --transcript with -d/-f/--volume rejected by the
-                wrapper; --transcript --info → conflicting actions; a bad --sub-lang is
+                by the exit status; --transcript with a playback flag is rejected by the
+                engine's own gate; --transcript --info → conflicting actions; a bad --sub-lang is
                 refused in 0.016s (before any network round trip); the temp caption dir
                 under the 0700 state dir is gone afterwards on every path
                 Parser: driven offline against a saved human track and a saved auto track
                 — 60 and 52 cues, zero residual tags, newlines or empty cues in either,
                 and the auto track's rollup duplicates absent from the output
-   Playback   : yt-play -j <bad-id> → {status:error, reason:unavailable, retried:false}
-                (both probes fail to resolve → keep cookies, mpv emits the real error)
+   Playback   : ut-play -j -- <bad-id> → {status:error, reason:unavailable, retried:false}
+                — the reason is the ENGINE's verdict, replayed (§8.3), not re-derived
    Lifecycle  : -d ×2 → --status lists BOTH players → --set-volume --id (only that
                 player changes) → ambiguous --set-volume w/o --id (exit 4) →
                 --stop --id one → --stop --all → --status(empty); assert ZERO orphan
                 mpv after stop; players/ holds only <id>.json (no bare token leak)
-                Detach latency: `out=$(yt-play -d -j -- URL)` returns in ~0.03s (the
-                title updater must not hold the captured pipe) and --status shows the
+                Detach latency: `out=$(ut-play -d -j -- URL)` returns in ~0.03s (no
+                background job may hold the captured pipe) and --status shows the
                 title a few seconds later; -d -j envelope carries sock+log
+                Two engines at once: a yt player and a bili player run side by side and
+                --stop --all clears both — one owner for players/ (§9.2)
                 Detached log: mpv-<id>.log stays ~59 bytes with ZERO growth while
                 playing, and still records a real ytdl_hook ERROR
                 IPC window : --set-volume --id on a JUST-launched player answers
@@ -2924,7 +3265,7 @@ the part of a rig worth keeping.
                 listening — measured at t=3s vs exit 0 from t=6s on a cold URL. That is the
                 taxonomy working (4 = did not take effect), not a defect; a rig that sets a
                 property inside the start-up window reads it as a false red
-   Live volume: yt-tui 9/0 on a --volume 0 player → --status reports the
+   Live volume: uting 9/0 on a --volume 0 player → --status reports the
                 moved value (not the stale launch value); from 98, three 0 presses stop
                 at 100 and never reach mpv's own 130 ceiling
    Live read  : the four properties in ONE round trip (§9.3), driven against the IPC mock
@@ -2946,7 +3287,7 @@ the part of a rig worth keeping.
                 with NO epitaph line (the kill -9 / --stop shape) writes none either, and
                 10 failures leave 8 on disk and 8 in the envelope, newest first. A real
                 --stop of a live player leaves failed[] empty and zero orphan mpv
-   yt-tui     : (tmux PTY) Enter → background play + banner; Tab → card (live
+   uting      : (tmux PTY) Enter → background play + banner; Tab → card (live
                 time/progress via the envelope's sock) → Tab → list; Esc → list;
                 IPC: against real mpv the card's meta row shows a new reading on
                 every one-second sample (6/6 on a VOD row — the LIVE branch returns
@@ -3045,7 +3386,7 @@ the part of a rig worth keeping.
                 -c never → no ANSI; Enter → DETACHED play: the envelope's id/pid/sock
                 land in CURRENT_PLAY_*, the banner appears on the next redraw and the
                 menu never blocks; Enter on another row switches track without a gap;
-                a launch that fails prints the core's own last stderr line and waits on
+                a launch that fails prints the player's own last stderr line and waits on
                 "press any key"; non-TTY (piped stdin or stdout) → dies cleanly
    Input      : (pty, timed) Enter at the startup prompt reaches the `searching` line in
                 32 ms against 1038 ms before the utf8_complete guard; the same query on
@@ -3072,7 +3413,7 @@ the part of a rig worth keeping.
 
 ## 28. Portability contract — bash 3.2
 
-**All four scripts must run under bash 3.2** (macOS's frozen system `/bin/bash`, which
+**All six scripts must run under bash 3.2** (macOS's frozen system `/bin/bash`, which
 `#!/usr/bin/env bash` resolves to on stock macOS). This is a deliberate floor: zero
 install step, identical behavior across macOS, Linux, containers, CI, and cron/launchd
 (where PATH may not surface a newer bash). We do *not* depend on Homebrew bash — a
@@ -3087,7 +3428,7 @@ Rules for anyone editing these scripts:
    Empty-array + set -u:  a bare "${arr[@]}" on an EMPTY array ABORTS on 3.2
                           ("unbound variable"). Use one of the two portable forms:
                             ((${#arr[@]})) && cmd "${arr[@]}"          (guard, as in core)
-                            cmd ${arr[@]+"${arr[@]}"}                  (inline, as in yt-tui)
+                            cmd ${arr[@]+"${arr[@]}"}                  (inline, as in uting)
    Arithmetic + set -e:   a bare ((expr)) is a COMMAND, and its exit status is 1 when
                           the expression evaluates to 0. Under set -e that aborts the
                           script. So never write ((x = 1 - x)) or ((n += w)) as a
@@ -3096,7 +3437,7 @@ Rules for anyone editing these scripts:
    read -rsn1 = one BYTE: not one character, on 3.2. A CJK character typed at a prompt
                           arrives as 2-3 separate "keys" (verified: 你 → e4 bd a0), so
                           any reader that accumulates keypresses into text has to
-                          reassemble the UTF-8 sequence from its lead byte (yt-tui's
+                          reassemble the UTF-8 sequence from its lead byte (uting's
                           utf8_complete). Classify the lead byte by TABLE MEMBERSHIP,
                           the way char_w does — NOT by byte-range comparison:
                             `LC_ALL=C [[ … ]]`  is not valid bash at all. An assignment

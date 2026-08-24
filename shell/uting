@@ -624,8 +624,8 @@ CURRENT_PLAY_PAUSED=0
 # Third state, between "launched" and "playing": the -d envelope comes back as soon as the player
 # has forked, but the detached child still has to ask the engine to resolve the stream and let
 # mpv fill its cache, and that window is seconds long on a cold URL. (The extraction moved into
-# the child at PLAN step B-2; the window it opens is the same one, so this state still earns its
-# keep.) The banner used to claim "Playing" for all of it.
+# the child when the player started resolving (SPEC-system.md §6.1); the window it opens is the
+# same one, so this state still earns its keep.) The banner used to claim "Playing" for all of it.
 CURRENT_PLAY_LOADING=0
 # A live stream has no meaningful position: mpv reports time-pos on the whole
 # broadcast-so-far timeline with duration = the live edge, so percent-pos sits at

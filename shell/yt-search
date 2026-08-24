@@ -5,7 +5,7 @@
 # (`ut-play`) is source-agnostic and knows neither. This file owns everything that is
 # YouTube-specific about searching: the yt-dlp invocation, the cookie decision, the
 # result shaping, and the duration formatter. It has NO playback, lifecycle, or mpv
-# logic and never starts a process that outlives it. See docs/PLAN-ut-restructure.md.
+# logic and never starts a process that outlives it. See docs/SPEC-system.md §4.
 #
 # It used to be a gating wrapper that exec'd the core. The gate and the implementation
 # are merged here because after the engine/player split there is no longer a second
@@ -46,7 +46,7 @@ fi
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
 # executables carry. Name == prefix is deliberate: it lets `ut-play --engine yt` find
 # `yt-resolve` by string concatenation, with no name->command registry to keep in sync in
-# both the player and the TUI. docs/PLAN-ut-restructure.md §2.2.
+# both the player and the TUI. docs/SPEC-system.md §4.
 ENGINE_NAME="yt"
 
 # ==============================================================================

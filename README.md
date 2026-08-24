@@ -57,18 +57,25 @@ survives the terminal that started it.
 
 ## What it is not
 
-Not a general-purpose terminal music player. That layer is full and well maintained — cmus,
-ncmpcpp, rmpc, musikcube, kew, termusic. So there is **no queue, no playlist management, no
-listening history, no favourites, no downloader, no channel subscriptions**, and their absence is a
-scope decision rather than a gap. The TUI's job ends at: find it, play it, watch it play, control it.
+Not a general-purpose terminal music player: that layer is full and well maintained — cmus,
+ncmpcpp, rmpc, musikcube, kew, termusic — and this is not a replacement for it. What plays here
+comes from an engine, not from `~/Music`.
+
+Today there is no queue, no playlist management and no listening history. Those three are
+**planned work in the shell version** (`docs/ROADMAP.md` D14/D15, P4), each with one rule
+attached: it ships an agent surface — a verb and a `-j` envelope — alongside its keybinding, or
+it is not done. **Favourites is deliberately not a feature**: it is a playlist with a fixed name.
+A downloader and channel subscriptions are unscheduled. Until those land, the TUI's job ends at:
+find it, play it, watch it play, control it.
 
 ## Requirements
 
 - **macOS first.** Linux is not currently usable: the stock netcat has no `-U`, which the mpv IPC
   path needs.
-- `yt-dlp`, `jq`, `mpv`, `nc` (BSD netcat ships with macOS). `curl` is an optional soft dependency.
-  They are not all needed by all of it: `yt-dlp` (+ optional `curl`) belongs to the engines, `mpv`
-  and `nc` to the player, `jq` to both.
+- `yt-dlp`, `jq`, `mpv`, `nc` (BSD netcat ships with macOS), `curl`.
+  They are not all needed by all of it: `yt-dlp` belongs to the engines, `mpv` and `nc` to the
+  player, `jq` to both. **`curl` is required by `bili-search`** — it IS that engine's transport —
+  and optional everywhere else (the YouTube engine's play-time client probe).
 - bash 3.2 — the version macOS ships. The suite is written to that floor on purpose; see
   `docs/SPEC-system.md` §28.
 
@@ -127,8 +134,11 @@ addition bumps `z`; `1.0.0` is a promise this reference implementation does not 
 ## Keys
 
 `↑/↓` select · `←/→` page · `Enter` play · `Tab` focus card · `/` filter · `n` new search ·
-`m` more results · `o` sort · `v` playback mode · `Space` pause · `9/0` volume · `s` stop ·
-`l` language · `q` quit
+`m` more results · `o` sort · `v` playback mode · `e` switch source · `Space` pause ·
+`9/0` volume · `[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
+
+`e` is drawn only when a second engine is installed — the TUI discovers engines by looking for
+`<name>-search` and `<name>-resolve` pairs, so it holds no list of sources.
 
 ## Tests
 
