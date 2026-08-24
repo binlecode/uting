@@ -1398,12 +1398,16 @@ with fewer than two engines it returns immediately and the affordance is not dra
     the card's once-a-second tick. Backspace then works in characters, not bytes: `${q%?}`
     already strips a whole one on 3.2, but the `\b \b` erase is one CELL and a CJK glyph
     occupies two, so the removed character is measured with `disp_w` and that many cells are
-    erased. And the driver's own echo is off for the whole session (`stty -echo`, restored
-    through the same trap as the cursor): `read -s` suppresses it per read only, so between
+    erased. And the driver's own echo is off for the whole session — with canonical mode,
+    `stty -echo -icanon min 1 time 0`, restored to the `stty -g` state saved on the way in
+    through the same trap as the cursor: `read -s` suppresses echo per read only, so between
     reads the driver echoes whatever a burst left queued — on top of the echo this UI already
-    draws itself. The filter's catch-all had to widen from `?)` (one byte, so never a whole
-    CJK character) to `*)`, which is exactly why the two shipped together — and it stops short
-    of escape sequences the arrow arms did not claim, or PageUp would type `[5~` into the query.
+    draws itself. ICANON goes down with the echo because `-echo` while canonical mode is
+    still on is the termios signature of `getpass()`, and terminals act on that pair (§25,
+    §28); `min 1 time 0` keeps a raw read blocking on one byte instead of spinning on zero.
+    The filter's catch-all had to widen from `?)` (one byte, so never a whole CJK character)
+    to `*)`, which is exactly why the two shipped together — and it stops short of escape
+    sequences the arrow arms did not claim, or PageUp would type `[5~` into the query.
   - **Terminal size comes from `stty size </dev/tty`, not `$(tput cols)`.** Inside command
     substitution ncurses can miss the window-size ioctl and answer with terminfo's default
     80x24 — measured: a 60-column pane reported 80, so the card drew 80-wide rails and every
@@ -2625,19 +2629,23 @@ new tmux rigs; the premise was measured before a line was written):
   -echo` now covers the whole session and is restored through the same trap as the cursor
   (a two-path rig asserts the restore after `q` AND after a signal, because a uting that
   exits without putting `echo` back leaves the user typing blind in their shell).
-- **Echo off is only half of it: `-echo` with ICANON still set is `getpass()`.** Terminals poll
-  the pty for that exact pair — Ghostty flips macOS Secure Input on the heuristic
-  (`macos-auto-secure-input`) and draws its indication, iTerm2 draws a padlock at the cursor —
-  and `bash`'s `read -rsn1` clears ICANON only for the duration of ONE read. So every gap
-  between keystrokes, and the whole length of a fetch (where no read is running at all),
-  advertised a password prompt; the padlock landed **on the spinner glyph** because the spinner
-  parks the cursor there (`printf '%s\b'`). Reported as "a lock icon on the spin glyph", and it
-  was never a glyph we drew — a tmux capture of that frame contains `▖` and nothing else. A
-  full-screen app is `-echo -icanon` (which is why vi is never flagged), so `tty_echo_off` sets
-  both (`min 1 time 0`, keeping a raw read blocking on one byte) and `tty_echo_restore` puts
-  back the `stty -g` state saved on the way in rather than re-asserting defaults over a tty the
-  caller had set up deliberately. `contract.sh` samples the pane's termios from inside the
-  boot-wait loop — the fetch — and fails if the getpass pair is ever observed.
+- **Echo off was only half of it, and the other half read as a password prompt.** Reported as
+  "a lock icon on the spin glyph" — and it was never a glyph we drew: a tmux capture of that
+  frame holds `▖` and nothing else. A terminal cannot see an application, only the pty's two
+  switches, and it polls them: echo off while canonical mode is still ON is what `getpass()`
+  looks like, so Ghostty flipped macOS Secure Input on that heuristic
+  (`macos-auto-secure-input`) and iTerm2 drew a padlock at the cursor. `bash`'s `read -rsn1`
+  clears ICANON for the duration of its own read and puts it back, so the only moments uting
+  did NOT look like a password prompt were the moments a key was being read: every gap between
+  keystrokes advertised one, and so did the whole length of a fetch, where no read is running
+  at all. The padlock landed on the spinner because the spinner parks the cursor on its own
+  glyph (`printf '%s\b'`, so each frame overwrites in place) and the cursor is where the
+  indicator is drawn. **Not merely cosmetic on Ghostty** — Secure Input really engaged for the
+  length of every search, taking the keyboard from every other app on the machine. What the
+  code does now is stated once, in §11; the trap for anyone writing terminal code here is in
+  §28; the check that keeps it fixed is in §27. The lesson worth carrying: this UI had been
+  reasoning about what it *draws*, and the terminal was reading what it *sets* — a UI owning a
+  tty owns every flag on it, not only the one it meant to change.
 - **A harness lesson, recorded because it produced a false failure first.** The signal-path test
   reported the tty left at `-echo` when nothing was wrong: the harness blocked in `sleep`, a
   CHILD process, and bash defers a trap until the current command finishes. The TUI blocks in
@@ -2880,7 +2888,7 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 ## 27. Verification matrix
 
-**Last run: 2026-08-24, both suites green** — `contract.sh` **126 ok / 0 failed / 0 known
+**Last run: 2026-08-24, both suites green** — `contract.sh` **128 ok / 0 failed / 0 known
 drift**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **16 ok / 0 failed**, with `pgrep mpv` empty
 afterwards.
 
@@ -3040,7 +3048,10 @@ the part of a deleted harness worth keeping.
    uting      : HISTORICAL RECORD, NOT A GUARDED CHECK. Everything under this heading was
                 proved by the renderer rig that has since been removed (functional-only
                 suite — CLAUDE.md); the suite now asserts only that the TUI boots, survives
-                two resizes and exits 0 on `q`. These entries are kept because they record
+                two resizes, never leaves the tty in the getpass pair (sampled from inside
+                the boot wait, which IS the fetch — the one stretch with no read running),
+                exits 0 on `q` and hands the tty back with echo and ICANON on, both read
+                out of a pane that outlives it. These entries are kept because they record
                 that the layout WAS correct, measured, at a point in time — but a regression
                 in any of them today is caught by the next `capture-pane` proof, not by a
                 test. Re-proving one means driving it by hand through that skill.
@@ -3212,8 +3223,19 @@ Rules for anyone editing these scripts:
                           multi-byte character) leaves behind — measured: pasting 咖啡 at
                           a prompt echoed the last character twice, and byte-at-a-time it
                           sprayed U+FFFD. A UI that draws its own input must own the echo
-                          for the whole session (stty -echo) and restore it from the same
-                          trap that restores the cursor.
+                          for the whole session — see the next rule for the flags — and
+                          restore it from the same trap that restores the cursor.
+   -echo needs -icanon:   echo off with canonical mode still ON is the termios signature of
+                          getpass(), and terminals act on the pair, not on the program:
+                          Ghostty flips macOS Secure Input on that heuristic
+                          (macos-auto-secure-input), iTerm2 draws a padlock at the cursor. A
+                          full-screen app is -echo -icanon, which is why vi is never flagged.
+                          read -rsn1 clears ICANON for its own duration only, so owning the
+                          echo for a session and leaving ICANON alone looks like a password
+                          prompt in every gap between keys and for the whole of any blocking
+                          call (§25). Take both down together — stty -echo -icanon min 1
+                          time 0 — and restore the stty -g state saved on the way in rather
+                          than re-asserting defaults over a tty the caller set up itself.
    Verify:                run the empty-argument paths under /bin/bash explicitly —
                           this class is a runtime bash-version behavior, so `bash -n`
                           and shellcheck do NOT catch it; only executing on 3.2 does.
