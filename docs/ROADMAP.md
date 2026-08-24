@@ -60,13 +60,15 @@ envelope 的功能，在这里算半个。
 
 ---
 
-## 2. 待决的问题
+## 2. 三个驱动问题 —— §3–§7 是调研，§8 是答案
 
-1. 现在这版 shell 值得单立 OSS 仓库并打包（curl 安装 + Homebrew）吗？
-2. 真正值得做的是不是 Go TUI 重写？
+1. 这版 shell 值得单立 OSS 仓库并打包（curl 安装 + Homebrew）吗？ → **D1**（不打包）+ **D2**（照样公开）
+2. 真正值得做的是不是 Go TUI 重写？ → **D4**（Go 的第一步只做 TUI）
 3. 若 TUI 走 Go，agent 侧的 `ut-play` 与两对引擎要不要跟着走 —— 还是 Go TUI 直接对接现有
-   shell 播放器与引擎才是 best of both worlds？（D9 之后这一问的答案面变宽了：可以只移植播放器，
-   把引擎留在 shell —— 引擎才是会随站点变化而频繁改的那一半。）
+   shell 播放器与引擎才是 best of both worlds？ → **D5 + D9**：只移植播放器，引擎整条留在
+   shell —— 引擎才是会随站点变化而频繁改的那一半。而移植本身由 §9 的触发条件把关。
+
+真正还开着的问题在 §12。
 
 贯穿三问的约束：这套东西是**人机双驱动** —— 人用 TUI，agent 调动词 —— 任何一面都不能为另一面牺牲。
 
@@ -187,18 +189,18 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
   它们是缺口 —— 但**只有这三条**：拿 kew / ncspot / termusic 当基准评这套东西仍然是错的，
   那是通用本地播放器的清单，不是这里的。
 
-### 6.3 发布硬件：D8 那三件齐了，剩下的都是可选项
+### 6.3 发布硬件：剩下的都是可选项
 
 | 缺项 | 后果 |
 |---|---|
-| 无 `CONTRIBUTING` / `CHANGELOG` | 次要 |
+| 无 `CONTRIBUTING` / `CHANGELOG` | 次要（`CHANGELOG` 是 D13 明确不设的） |
 | Linux 实际不可用 | §5 已述，且由 §9 触发条件 3 把关 |
 
 ### 6.4 分身份结论
 
 | 以什么身份公开 | 现在够吗 |
 |---|---|
-| **参考实现 + 设计文档** | **够。** 发布硬件（D8）齐了 |
+| **参考实现 + 设计文档** | **够。** 剩下的条件在 P1，全是文字工作 |
 | **agent 可驱动的那个**（即 §0 的定位；今天占着 YouTube 与 B 站两格） | **功能够**，只差 P0 的独立契约文档 |
 | brew / curl 分发的产品 | 不够，卡点不在功能，在 §5 的环境账 |
 
@@ -219,7 +221,7 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
    `ut-play` 与四个引擎都是平级 peer。所以可移植的单位是**播放器**，而引擎可以整条留在 shell：
    它们才是随外部网站变动而频繁改的那一半（迭代速度论证见第 6 条）。
 
-4. **两个 agent 侧诉求落在播放器/新脸上，且 bash 都给不了**（第三个已还清）。
+4. **两个 agent 侧诉求落在播放器/新脸上，且 bash 都给不了。**
 
    | 想要的 | bash 为何不行 | 归属 |
    |---|---|---|
@@ -251,8 +253,8 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
   **D9 之后冻结面多了一项：引擎契约**（`<engine>-search` 的结果 envelope、`<engine>-resolve` 的
   `{stream_urls[], http_headers{}, title, duration, format}`、`engine` 字段的路由含义、非本站 URL
   = 1）。它是"加一个音源 = 加一对脚本"这句话的全部兑现手段，所以 P0 抽契约文档时必须一并抽出。
-  同一轮里被**故意收窄**的只有一处：`--get-url` / `--info` / `--transcript` 不再是播放器的动词
-  （详见 `SPEC-system.md` §13）。
+  冻结面上**刻意排除**的只有一处：`--get-url` / `--info` / `--transcript` 不是播放器的动词，
+  它们是引擎的（`SPEC-system.md` §13）。
 - **D4 —— Go 的第一步只做 TUI**（`uting` → Go），调用今天原封不动的 `<engine>-search` 与
   `ut-play`。被否方案 —— 一次性全量移植：把生命周期语义和渲染器重写放进同一次变更，回归无法二分定位。
   **D9 让这一步更干净了**：Go TUI 要复刻的只剩"扫 `*-search` 建注册表 + 切源"，它不需要认识任何站。
@@ -274,7 +276,6 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
   `resolve` 刻意不进子命令表（它只被播放器调），per-engine 那一层的最终形状留到 Go 真正开工时定 ——
   它不影响 shell 版。
 
-- **D8 —— 三件发布硬件先于任何公开动作**（§6.3）：`LICENSE`、rig 入库、`--version`。
 - **D9 —— 套件按「播放器 + 可扩展搜索引擎」重切，不按站点开命令。**
 
   论据来自接入第二个音源时的实测：一个"什么都做"的核心里必然有**只对某一个站成立**的逻辑
@@ -299,8 +300,6 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
     `--get-url` 那个「裸 URL 无 Referer 即 403」的洞（B 站实测 403/206）随重切一并关闭。
   - 契约**本体不变**（envelope schema、player record、退出码表、生命周期语义 = D3 冻结的那些）；
     变的是命令名与新增一个 `resolve` 动词 —— 按 `CLAUDE.md` 属「deliberate, documented act」。
-  - 施工计划 `docs/PLAN-ut-restructure.md` 已随 E 步落地删除（plan 的规矩）；契约现在全在
-    `SPEC-system.md`，怎么落的在 git 历史里。
 
 - **D10 —— 三类命令，三条命名规则，按"谁在敲它"分。**
 
@@ -448,13 +447,9 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
   不需要读 `yt-resolve`。
 - **状态：未开工。**
 
-### P1 —— 独立仓库（D2 + D8）
+### P1 —— 把仓库转公开（D2）
 
-仓库在 `~/workspace_fullstack/uting`，含 `LICENSE`（MIT）、`README.md`、`tests/`、
-`shell/VERSION`；每个脚本自解析符号链接定位同伴，所以 checkout 可以放在任何地方。D8 那三件
-发布硬件齐了。
-
-**剩下的是一个决定，不是一件工作：仓库是否公开。** 现为 private。公开前要成立的条件：
+**这是一个决定，不是一件工作。** 仓库现为 private；转公开前要成立的条件：
 
 - README 直说依赖与平台现实（macOS 优先；Linux 需要支持 `nc -U` 的 netcat），并直说 §0 的
   non-goals —— 省掉一半"为什么没有队列"的 issue。
@@ -470,7 +465,7 @@ agent 面用规范长名 `ut-play` / `<engine>-search` / `<engine>-resolve`。�
 - 交给库因而可删的清单：显示宽度表、resize 处理、事件循环、`\033[K`/`\033[J` 记账、每次按键的
   `stty` fork。
 - 验收：对着 `SPEC-system.md` §27 与 shell TUI 并排比对 —— 窄终端网格、reflow 下限用例、中英、
-  `YT_ASCII=1`、播放态迁移。渲染 rig 已删（测试面改为 functional-only，见 `CLAUDE.md`），所以这一步
+  `YT_ASCII=1`、播放态迁移。测试面是 functional-only、没有渲染 rig（`CLAUDE.md`），所以这一步
   的并排比对要么用 `capture-pane` skill 的 `assert_pane.py` 手动做，要么为 Go 版另起一份
   —— 连同教训：等就绪标记而不是 sleep，屏幕类断言下在 `capture-pane` 的单元格网格上、
   字节类断言下在 `pipe-pane` 的流上。

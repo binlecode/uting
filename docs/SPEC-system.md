@@ -813,7 +813,7 @@ resolve window wins and is never clobbered. It waits for the record with a bound
    • --set-volume / an ambiguous --stop exit 4 (did-not-take-effect; -j reason says why).
    • a player that dies ON ITS OWN leaves a tombstone: --status reports it once in
      failed[] instead of just going empty (see below).
-   • state: ${TMPDIR:-/tmp}/yt-cli-$(id -u)/players/<id>.json (+ mpv-<id>.sock, mpv-<id>.log)
+   • state: ${TMPDIR:-/tmp}/uting-$(id -u)/players/<id>.json (+ mpv-<id>.sock, mpv-<id>.log)
             plus players/dead/<id>.json for the tombstones
 ```
 
@@ -874,7 +874,7 @@ that does not need this terminal. `uting` validates `-f` against the same list.
 **The `-d -j` envelope carries `sock` and `log`.** They are already in the state file, and
 without them in the envelope a client had to RECONSTRUCT the socket path from the player's
 private state layout — which `uting` did, hardcoding
-`$TMPDIR/yt-cli-$(id -u)/mpv-<id>.sock` in a second script that would have broken silently
+`$TMPDIR/uting-$(id -u)/mpv-<id>.sock` in a second script that would have broken silently
 if the player moved its state dir (§9.3). (Schemas → §14.)
 
 ### 9.3 Runtime IPC control (`--set-volume`)
@@ -3179,7 +3179,7 @@ the screen will not be caught by a test — only by the next doc capture.
 > **Observed flakiness, recorded rather than smoothed over.** On the first of three
 > consecutive runs on 2026-08-23, ten checks failed — the live-read and death-record clusters plus
 > one network check — and the next two runs passed 78/78 unchanged. Those clusters fabricate
-> state files under the shared `${TMPDIR}/yt-cli-$(id -u)/players`, which is keyed by uid and
+> state files under the shared `${TMPDIR}/uting-$(id -u)/players`, which is keyed by uid and
 > nothing else, so **two overlapping runs (or a stray detached player) corrupt each other's
 > fixtures**. Treat a single red run as inconclusive until it repeats; the durable fix is a
 > per-run state dir, which is not built yet.
