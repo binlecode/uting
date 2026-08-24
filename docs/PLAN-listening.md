@@ -5,7 +5,7 @@
 > | # | 条目 | 状态 | 已并入 / 落地后并入 |
 > |---|---|---|---|
 > | 1 | 播放列表管理（`ut-playlist` + 用户级状态层） | **已落地 2026-08-24** | `AS-BUILT-contract.md` §1.4/§1.5/§2/§3/§4/§5 · `ARCHITECTURE.md` §4/§9.4/§17/§27 · README · CLAUDE.md |
-> | 2 | 播放队列（`ut-play` 长出队列动词） | 未开工 | `AS-BUILT-contract.md` §1.1/§3 · `ARCHITECTURE.md` §9.2 |
+> | 2 | 播放队列 **+ 运行时播控动词**（`ut-play` 长出 `--queue/--enqueue/--next` 与 `--pause/--resume/--seek/--seek-to`） | 未开工 | `AS-BUILT-contract.md` §1.1/§3 · `ARCHITECTURE.md` §9.2 |
 > | 3 | 收听历史（`ut-history`） | 未开工 | `AS-BUILT-contract.md` §1.6/§3/§5 · `ARCHITECTURE.md` §9.2 的分离规则 |
 >
 > §1/§2/§3 的三条决定（状态住在哪、记录形状、队列归谁）在第 1 步里全部落地并经过实跑，
@@ -147,13 +147,22 @@ resolve**，而 stream URL 会过期（YouTube 约 6 小时）—— 一个 20 �
 - 名字合法性：拒绝 `/`、NUL、控制字符、`.` 开头、> 64 字节。**文件名就是名字**（UTF-8 直接落盘），
   不做 slug —— slug 会让 `--ls` 显示的名字和磁盘上的名字变成两件事，就有了两个真相。
 
-### 4.2 `ut-play` 的队列动词（步骤 2）
+### 4.2 `ut-play` 的队列动词 + 运行时播控动词（步骤 2）
 
 ```
   ut-play -d --queue -                   从 stdin 读 items（JSON 数组）启动：播 items[0]，其余入队
   ut-play --enqueue [--id ID] -          往一个在跑的播放器队列尾部追加（stdin 同一形状）
   ut-play --next [--id ID]               跳到下一首
+  ut-play --pause  [--id ID]             暂停
+  ut-play --resume [--id ID]             继续
+  ut-play --seek ±N [--id ID]            相对跳转，秒，符号必需
+  ut-play --seek-to N [--id ID]          绝对跳转，秒
 ```
+
+**后四个为什么在这一步、而不是继续挂在 §9 触发条件 1 上**：判据已作废，理由记在
+`ROADMAP.md` §11（一句话：`--set-volume` 是同一形状的反例，而它早就发货了；`--next` 会第二次
+推翻它；D3 冻结面开一次比开两次便宜）。**不解除任何 MCP 相关的 non-goal** —— 这批动词与 MCP
+脱钩。
 
 - **为什么是 stdin 而不是 argv 上的多个 handle**：播放列表是**引擎无关**的，一条队列可以同时有
   `yt` 和 `bili` 的条目，而 `--engine` 一次调用只有一个值。argv 表达不了 per-item 的 engine，
@@ -166,6 +175,32 @@ resolve**，而 stream URL 会过期（YouTube 约 6 小时）—— 一个 20 �
 - `--status` 的 player 记录加一个键：`"queue":{"pos":0,"len":3,"next":{"title":…,"url":…}|null}`。
   没有队列时 `"queue":null` —— 一个键恒在，值可为 null，和 `title`/`duration` 的既有做法一致。
 - **v1 不做**：`--dequeue`、重排、循环/随机。记在 §7，不是遗漏。
+
+**播控四个动词的设计（决定，不是待议）**：
+
+- **`--pause` / `--resume`，不做 `--toggle-pause`**（§26 早已定）：`cycle pause` 不回值，
+  envelope 只能猜；两个幂等动词对机器调用方本来就更好，没有 read-modify-write 竞态。
+  切换留给 `uting` 的按键。
+- **`--seek` 的值必须带符号**（`+30` / `-15`），绝对跳转另用 `--seek-to N`。裸 `--seek 30` 同时
+  违背 mpv 自己的默认（相对）和 `uting` 的 `seek_relative`，会把想 +30s 的调用方静默弹走。
+  不带符号 → **1**（用法错），不是 4。
+- **envelope 报的是回读的状态，不是推算的**：
+  `--pause`/`--resume` → `{status:"ok", id, paused:true|false}`；
+  `--seek`/`--seek-to` → `{status:"ok", id, position:<秒>}`。
+  两者都在命令成功后**再读一次属性**填值 —— `--set-volume` 今天就是这么做的，而"算出来的位置"
+  在被 clamp（seek 越过片尾）时就是谎话。
+- **退出码沿用 `--set-volume` 那张表**：无目标 / 歧义 → **4**；IPC 失败 → 4 + `reason:"ipc_failed"`；
+  值的形状不对 → 1。**seek 越过片尾不是错**：mpv 自己 clamp，回读到什么就报什么，退 0。
+- **直播**（`duration` 为 null）上 `--seek` 让 mpv 自己拒绝，把它的失败翻成 4 + `ipc_failed`；
+  不在播放器里预判"这是直播所以不能 seek" —— 那是站点知识，播放器不持有。
+
+**`uting` 这一侧：写路径改调动词，读路径原样不动。**
+`toggle_pause` / `seek_relative` 三个按键各自改成 `"$UT_PLAY" --pause|--resume|--seek`，
+**净删** TUI 里的 IPC 写代码。但每秒刷新的 `fetch_play_times`（一次连接读四个属性）**保持直连
+socket** —— 每 tick fork 一条进程链是真代价，原判据里这一半是对的。
+`adjust_volume`（`9`/`0` 键）**先量再定**：它已经有 `--set-volume` 可用，但音量键会被连按，
+fork 成本要对着今天的 ~16 ms IPC 量一次再决定，**量出来 > 50 ms 就留在 socket 上**，
+并把这个例外写进 as-built 的理由，而不是留成一处没解释的不一致。
 
 ### 4.3 `ut-history` —— 第八个命令（步骤 3）
 
@@ -230,13 +265,19 @@ resolve**，而 stream URL 会过期（YouTube 约 6 小时）—— 一个 20 �
   `ut-play --set-volume` 找不到播放器退 4 同一条线。§4.1 只写了 "0/1/4 locked",以本条为准,
   as-built 已同步。新增 reason `corrupt` 同时覆盖"文件坏了"和"schema 比本 build 新"。
 
-### 步骤 2 —— 队列（唯一动到 D3 冻结面的一步）
+### 步骤 2 —— 队列 + 播控动词（唯一动到 D3 冻结面的一步）
 
 1. `shell/ut-play`：detached child 的播放循环、`players/<id>.queue.json`、三个动词、`--status` 的 `queue` 键。
 2. `shell/uting`：把结果加入当前播放器的队列；焦点卡显示 `next`。
 3. 验收：
-   - `contract.sh`：`--enqueue` 无目标 → 4、有歧义 → 4、`--next` 空队列 → 4、`--queue -` 收到非法
-     JSON → 1、`--status` 的 `queue` 键在有/无队列两种情况下都在。
+   - `contract.sh`（**空闲态**，无播放器）：`--enqueue` 无目标 → 4、有歧义 → 4、`--next` 空队列
+     → 4、`--queue -` 收到非法 JSON → 1、`--status` 的 `queue` 键在有/无队列两种情况下都在；
+     **播控四个动词同样在空闲态各退 4 并带 `not_playing`**（与 `--set-volume` 今天那条同形，
+     所以这几条是**加强既有检查**而不是新开一类）；`--seek 30`（无符号）→ **1**，
+     `--seek +30` 在空闲态 → 4 —— 这两条一起才证明"形状错"和"没生效"没有被混成一个码。
+   - `lifecycle.sh`（真播放器）：`--pause` 后 `--status` 的 `paused` 变 true、`--resume` 变回
+     false（**回读，不是相信自己的返回值**）；`--seek +5` 后 `position` 真的前进；
+     `--seek-to 0` 回到起点。
    - `lifecycle.sh`：一条**两条目**的队列真的走完第一首自动进第二首，`--stop` 之后 `pgrep mpv` 为空。
    - **这一步需要一个新测试资产：`tests/mock-engine/`（一对 `mock-search`/`mock-resolve`，返回
      `av://lavfi:sine`）。** 它有资格存在，因为它点名了一个现有检查抓不到的生产故障：**队列没能推进**
@@ -274,6 +315,10 @@ resolve**，而 stream URL 会过期（YouTube 约 6 小时）—— 一个 20 �
   bash 3.2 没有 `${var,,}`，而 `tr` 那条路在 UTF-8 名字上是错的。
 - **`ut-play` / `ut-playlist` 名字相近**：由 gate arm 互指（§4.1）。不改名 —— D10 的"一名一物"意味着
   播放列表这个能力只能有一种拼法，而它就叫播放列表。
+- **`uting` 的音量键要不要也改走动词**：`9`/`0` 会被连按，一次按键 fork 一条进程链的成本要对着
+  今天的 ~16 ms 直连 IPC 量一次。**量出来 > 50 ms 就留在 socket 上**，并把这个例外连同数字写进
+  as-built —— 一处有理由的不一致可以接受，一处没解释的不行。pause / seek 不受这条影响（一次按键
+  一次调用，不是每 tick 一次）。
 - **队列的重排 / 出队 / 循环 / 随机**：v1 不做。它们是队列**编辑**，而第一版要先证明队列**推进**是对的。
 - **历史的体积**：一行约 200B，一天 50 首 ≈ 300KB/年。不需要轮转，`--clear --before` 足够。
 - **下载器、频道订阅**：仍未排期（ROADMAP P4），本 plan 不碰。
