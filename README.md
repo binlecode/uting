@@ -118,6 +118,12 @@ The older `yts` / `ytp` / `ytt` spellings are **deprecated**, and so is `ut-tui`
 has not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. All
 six entry points report the same number: it is declared once, in `shell/VERSION`.
 
+That number is **semver over the CLI contract, not over the code**: the command names, their
+flags, the exit-code table, the JSON envelopes, and the player lifecycle are the public API — a
+renderer or a comment is not. While the suite is `0.y.z`, a breaking change bumps `y` and an
+addition bumps `z`; `1.0.0` is a promise this reference implementation does not make yet, and
+`docs/ROADMAP.md` D13 says what would change that.
+
 ## Keys
 
 `↑/↓` select · `←/→` page · `Enter` play · `Tab` focus card · `/` filter · `n` new search ·

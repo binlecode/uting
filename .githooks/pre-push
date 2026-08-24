@@ -5,8 +5,8 @@
 # that are actually unrecoverable, and warns on the rest:
 #
 #   BLOCK  a non-fast-forward (force) push to main, and deleting main
-#   BLOCK  a syntax error in any of the four scripts (the last gate before it is public)
-#   WARN   pushing a v* tag (shell/VERSION must match it)
+#   BLOCK  a syntax error in any of the six scripts (the last gate before it is public)
+#   WARN   pushing a v* tag (shell/VERSION must match it; semver policy is ROADMAP D13)
 #
 # Enable once per clone:  git config core.hooksPath .githooks
 set -euo pipefail

@@ -22,7 +22,7 @@ The suite is exposed **directly** to shell-capable agents with no MCP wrapper, s
 git config core.hooksPath .githooks   # RUN ONCE PER CLONE — fresh clones have no hooks
 ```
 
-`.githooks/pre-commit` blocks a staged secret / cookie export, a **bash-4 idiom on an added line**, a staged shell script that does not parse under `/bin/bash -n`, and a force-added `tmp/` file. `.githooks/pre-push` blocks a force-push or deletion of `main` and a syntax error in any of the four scripts, and warns when a `v*` tag is pushed (the tag must match `shell/VERSION`). A direct push to `main` is **not** blocked — see the commit guidelines.
+`.githooks/pre-commit` blocks a staged secret / cookie export, a **bash-4 idiom on an added line**, a staged shell script that does not parse under `/bin/bash -n`, and a force-added `tmp/` file. `.githooks/pre-push` blocks a force-push or deletion of `main` and a syntax error in any of the six scripts, and warns when a `v*` tag is pushed (the tag must match `shell/VERSION`). A direct push to `main` is **not** blocked — see the commit guidelines.
 
 ## Build, Test, and Development Commands
 
@@ -135,7 +135,7 @@ These are **verification rigs, not a unit-test suite.** What this code gets wron
 
 ### Accept a check when it drives a real surface:
 
-a pty running the actual script; a real mpv or the IPC mock over a real unix socket; `bash -n` on all four scripts; the JSON envelope parsed out of a real `-j` invocation; the exit code of a real failure path; a captured pane measured in cells.
+a pty running the actual script; a real mpv or the IPC mock over a real unix socket; `bash -n` on all six scripts; the JSON envelope parsed out of a real `-j` invocation; the exit code of a real failure path; a captured pane measured in cells.
 
 ### Two lessons that each cost a wrong green result first
 
@@ -213,7 +213,7 @@ The live files:
 |---|---|
 | `run-uting` | You need to *see* the TUI. It requires a real TTY on both stdin and stdout, so a Bash-tool call proves nothing — this covers the tmux drive, the pty-size trap, the ready markers, the keymap, and the detached-player cleanup a session kill does **not** do |
 | `capture-pane` | A terminal frame in `README.md` / `docs/SPEC-system.md` is stale. Capture → clean (`clean_capture.py`, which refuses a mid-fetch frame) → **prove with `tests/assert_pane.py`** → splice with a Python replace. Never hand-draw a frame |
-| `audit-conformance` | Periodically, not per-commit. Whole-suite scan against 12 rules (surface layering, DRY, bash 3.2, dead code, swallowed errors, contract and doc drift) → `docs/PLAN-conformance-YYYY-MM-DD.md`. Ships `fn_graph.py` (defs vs call sites across all four scripts) as a manual aid — **never** as a gate or a `tests/` member |
+| `audit-conformance` | Periodically, not per-commit. Whole-suite scan against 12 rules (surface layering, DRY, bash 3.2, dead code, swallowed errors, contract and doc drift) → `docs/PLAN-conformance-YYYY-MM-DD.md`. Ships `fn_graph.py` (defs vs call sites across all six scripts) as a manual aid — **never** as a gate or a `tests/` member |
 
 A skill may propose a *structural detector as a manual aid*; it may never propose one as a test. The rigs-only mandate above binds skills too.
 
@@ -230,9 +230,9 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 - **`main` is the working branch** — 54 commits, zero merges, single author. Commit straight to it for ordinary work; take a branch when the change is structural enough to want the staged A→E order below, or when it may need to be abandoned. No stacked branches.
 - Imperative, scoped commit subjects in the existing style — the file or surface first when it helps: `uting: stop Enter stalling a second in utf8_complete`, `add --version, declared once`, `docs: resync DESIGN with the detached-playback TUI`.
 - One logical change per commit. Renderer changes come with the capture or the rig output that proves them.
-- `bash -n` on all four scripts before every commit; the relevant rig before every push.
+- `bash -n` on all six scripts before every commit; the relevant rig before every push.
 - **Always ask before `git push`.** Never force-push `main`.
-- There is no release process to run: the shell suite is not packaged (`docs/ROADMAP.md` D1). The version in `shell/VERSION` is bumped deliberately, alone, when the contract or a user-visible surface changes — not once per commit.
+- **Versioning is semver 2.0.0 over the CLI contract, not over the code** (`docs/ROADMAP.md` D13 defines what counts as the public API). While the suite is `0.y.z`: a breaking change bumps **y**, an addition or a fix bumps **z**. `shell/VERSION` is bumped deliberately, **alone, in its own commit**, and never once per commit. There is no release process to run and no CHANGELOG: the suite is not packaged (`docs/ROADMAP.md` D1), so a `v<VERSION>` tag is for a real release only — `1.0.0` waits for D1/D2 to reverse.
 
 ## Security & Configuration Tips
 
