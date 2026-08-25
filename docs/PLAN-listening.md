@@ -5,7 +5,7 @@
 > | # | 条目 | 状态 | 已并入 / 落地后并入 |
 > |---|---|---|---|
 > | 1 | 播放列表管理（`ut-playlist` + 用户级状态层） | **已落地 2026-08-24** | `AS-BUILT-contract.md` §1.4/§1.5/§2/§3/§4/§5 · `ARCHITECTURE.md` §4/§9.4/§17/§27 · README · CLAUDE.md |
-> | 2 | 播放队列 **+ 运行时播控动词**（`ut-play` 长出 `--queue/--enqueue/--next` 与 `--pause/--resume/--seek/--seek-to`） | **播控四个动词已落地 2026-08-24**；队列未开工 | 已并入：`AS-BUILT-contract.md` §1.1/§3/§4 · `ARCHITECTURE.md` §9.3/§26/§27 · README。队列落地后并入：`AS-BUILT-contract.md` §1.1/§3 · `ARCHITECTURE.md` §9.2 |
+> | 2 | 播放队列 **+ 运行时播控动词**（`ut-play` 长出 `--queue/--enqueue/--next` 与 `--pause/--resume/--seek/--seek-to`） | **已落地 2026-08-25**（播控四动词 `0.3.2`，队列 `0.3.3`）；**唯一未兑现的验收项是曲间空隙实测**（见 §5 步骤 2 的交付记录第 3 条） | `AS-BUILT-contract.md` §1.1/§3/§4/§5 · `ARCHITECTURE.md` §9.2/§9.5/§17/§27 · README · CLAUDE.md |
 > | 3 | 收听历史（`ut-history`） | 未开工 | `AS-BUILT-contract.md` §1.6/§3/§5 · `ARCHITECTURE.md` §9.2 的分离规则 |
 >
 > §1/§2/§3 的三条决定（状态住在哪、记录形状、队列归谁）在第 1 步里全部落地并经过实跑，
@@ -334,6 +334,65 @@ resolve**，而 stream URL 会过期（YouTube 约 6 小时）—— 一个 20 �
    **p90 > 8s 则预取进 v1**（第 N 首播放期间解析第 N+1 首），不再延后。理由：
    `ARCHITECTURE.md` §25.1 已经有一次被限流污染的计时事故，一个没量过的"约 3 秒"就是下一次。
    这条是**手工测量，不进 `tests/`** —— 它对着真实站点，正是不该进套件的那一类。
+
+**实际交付与偏差（对照上面的原计划；播控那一半已提交，队列那一半在工作树里）**
+
+已提交的四个 commit：`9d2a5fe`（lifecycle 用真播放器证四个动词）· `274c4af`（`uting` 的
+Space/`[`/`]` 改调动词）· `2d93d67`（as-built 同步）· `ba8d021`（`0.3.2`）。队列的代码、
+`uting` 的两个键、两套测试的新检查都写完并跑绿（`contract.sh` 145 ok / 0 failed、
+`lifecycle.sh` 37 ok / 0 failed），**但没有提交**，剩下的收尾列在本节末尾。
+
+偏差，逐条对照：
+
+- **队列文件不在 `players/` 里**（§3 写的是 `players/<id>.queue.json`，实际是
+  `$STATE_DIR/queue-<id>.json`，与 `mpv-<id>.sock`/`.log` 并排）。理由是硬的：`players/*.json`
+  这个 glob **就是播放器记录的命名空间** —— `reap_dead_players` 遍历它，会把 `<id>.queue.json`
+  读成一个 `.id` 为空的坏记录，然后 `rm` 掉。归属一个字没变，只是换了目录。
+- **每一次 detached 启动都写一份队列**，一条裸 handle 就是长度 1 的队列。于是 `--enqueue` /
+  `--next` 不需要"这个播放器有没有队列"的分支，`--status` 的 `queue` 键**恒非 null**（§4.2 原写
+  "没有队列时 `queue:null`"，以本条为准；`next` 仍然在末尾时为 null）。
+- **`--next` 的推进发生在父进程，子进程用 compare-and-swap 跟进**（§3 只说了发信号）。父进程先在
+  锁里把 `pos+1` 写下去、再发 SIGUSR1，于是它的 envelope 报的是**读回来的**队列，与播控动词
+  "报回读、不报推算"同一条规矩；子进程曲终时只在 `pos` 仍等于它播的那一位时才自增,所以两边同时
+  发生也不会跳过两首。
+- **第三条循环形状的实测规则，§3 只写了两条**：**子进程捕获不到 SIGINT**。bash 给异步命令的
+  SIGINT 是 SIG_IGN，而"进程启动时被忽略的信号无法 trap"，所以 `stop_group` 的
+  `kill -INT -pgid` 只杀得掉 mpv，子进程照旧播下一首，要等 3 秒后的 SIGKILL 才停。现在
+  `stop_group` **额外对组长发一发 SIGTERM**（可捕获），停止耗时从 3s 降到 ~0.4s。
+  `lifecycle.sh` 用**停止耗时**守这条 —— 两种情况的末态完全一样（KILL 兜底总会赢），只有延迟
+  能分辨,所以这是一条本地信号路径上的计时断言（~0.3s vs 3s,阈值 2s）,不是 `CLAUDE.md` 禁止的
+  那种挂在网络上的计时。
+- **stdin 收三种形状**（item 数组 / `.items` / `.results`+envelope 的 `engine`），与
+  `ut-playlist --add` 同一条规矩、同一个理由：搜索结果每一条**不带 `engine`**,只有整包收进来才
+  贴得对引擎标签。于是 `yt-search -j | ut-play -d --queue -` 也端到端成立。
+- **新增两个 reason**：`queue_empty`（`--next` 后面没有了 → 4）、`queue_failed`（队列写不进去 → 4）。
+- **失败墓碑记成 `<id>-q<pos>`，且只在队列还推得动时记**：推不动说明死的是**播放器**，那份记录归
+  父进程从日志里的 epitaph 写（`record_player_death`）。先写后推会把一次失败记两次 —— 实测过,
+  一条坏 handle 同时产出 `<id>` 和 `<id>-q0`。
+- **`uting` 多做了一件必须做的事**：曲目会在没有任何按键的情况下变,于是这个屏幕缓存的 title/url
+  会开始描述一首已经播完的曲子。探针是**把 `media-title` 挂在 `fetch_play_times` 已有的那一次
+  round trip 上**（零额外 fork）,只有它变了才花一次 `ut-play --status` 重读记录。键是 `+`（入队）
+  与 `>`（跳下一首）,两个键都只在"有播放器/有队列"时才出现在被测量的提示块里。
+- **撤掉了一条检查**：`lifecycle.sh` 里"停掉的队列不留墓碑"弄不红（把子进程的 `stopped` 分支
+  整个禁用,`failed[]` 依然是空的）,按 `CLAUDE.md` 的规矩不留,原因写在它原来的位置上。
+
+**收尾时又抓出两个真 bug —— 都在 `--stop` 与队列的交界上,都已修**：
+
+- **`stopped` 必须是终态。** 两个信号可以同时挂起:曲间的引擎调用是前台命令,bash 3.2 在它跑
+  完之前不派发任何 trap,于是一个 `--next` 和随后的 `--stop` 一起排队,而 bash 派发它们的顺序
+  不归我们选。晚到的 `next` 覆盖掉 `stopped`,循环就在一个已经被叫停的播放器上重启 —— 停止耗时
+  3.5s(3/3)对 0.4s。`child_signal` 现在一旦是 `stopped` 就不再被降级。
+- **`stop_group` 每一拍都要重发信号。** 进程组不是一个固定集合:曲间那次引擎调用会**在第一发
+  信号之后**再拉起进程(yt-dlp,然后它的匿名重试,再加探针的 curl),晚生的那个从没见过信号 ——
+  而它在跑,子进程自己的 TERM trap 也派发不了。一个漏网的后生进程就足以让 `--stop` 耗满整个
+  升级窗口。现在升级循环的每一拍(0.2s)都重发 TERM(组长)+ INT(组),两发都是幂等的。
+
+**收尾**：
+
+1. ~~契约与 as-built 同步~~ —— 已并入(见上表第 2 行)。
+2. ~~`shell/VERSION` 的 z,单独一个 commit~~ —— `0.3.3`。
+3. **§7 的曲间空隙还没量** —— 本步骤第 5 条要求手工跑一条 5 条目 yt+bili 混合队列,把
+   median 与 p90 填回 §7,**p90 > 8s 则预取进 v1**。这是这一步唯一还没兑现的验收项。
 
 ### 步骤 3 —— 收听历史
 

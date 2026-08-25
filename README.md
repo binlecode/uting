@@ -14,6 +14,8 @@ ut-play -d -j -- "<url>"               # machine: launch detached, get {id, pid,
 yt-resolve --transcript -j -- "<url>"  # machine: captions as clean text + timed segments
 ut-play --status -j                    # machine: what is playing, where, how loud
 ut-play --pause --id <id> -j           # machine: also --resume, --seek ±N, --seek-to N
+ut-playlist --show chill -j | ut-play -d --queue -   # machine: play a list, one player
+ut-play --enqueue - --id <id> -j       # machine: append to it; --next skips a track
 ut-play --stop --id <id> -j            # machine: stop it
 ```
 
@@ -32,7 +34,9 @@ sets for you.
 ## What it is
 
 - **`ut-play`** — the player. Source-agnostic: it drives mpv, owns the detached player lifecycle
-  (id / pid / socket / lock / state dir / reap), and defines the contract. It never searches and
+  (id / pid / socket / lock / state dir / reap) and the **queue** a player consumes — a lone
+  handle is a queue of one, each item resolved when it is reached because a stream URL expires —
+  and defines the contract. It never searches and
   never extracts, so it knows nothing about YouTube. Deliberately single-purpose, with mutually
   exclusive flags rejected up front and a flag that moved to an engine answered by naming that
   engine — because that is what makes it safe for a small model to call.
@@ -68,13 +72,13 @@ Not a general-purpose terminal music player: that layer is full and well maintai
 ncmpcpp, rmpc, musikcube, kew, termusic — and this is not a replacement for it. What plays here
 comes from an engine, not from `~/Music`.
 
-**Playlist management landed** (`ut-playlist`, plus the `a` and `b` keys). The queue and the
-listening history have not — they are **planned work in the shell version**
-(`docs/ROADMAP.md` D14/D15, P4; in flight in `docs/PLAN-listening.md`), each with one rule
-attached: it ships an agent surface — a verb and a `-j` envelope — alongside its keybinding, or
-it is not done. **Favourites is deliberately not a feature**: it is a playlist with a fixed name.
-A downloader and channel subscriptions are unscheduled. Until the other two land, playback is
-still one track at a time: find it, play it, watch it play, control it.
+**Playlist management and the queue have landed** (`ut-playlist` with the `a` and `b` keys;
+`ut-play --queue/--enqueue/--next` with `+` and `>`). The listening history has not — it is
+**planned work in the shell version** (`docs/ROADMAP.md` D14/D15, P4; in flight in
+`docs/PLAN-listening.md`), with the rule all three carry: it ships an agent surface — a verb and
+a `-j` envelope — alongside its keybinding, or it is not done. **Favourites is deliberately not a
+feature**: it is a playlist with a fixed name. A downloader and channel subscriptions are
+unscheduled.
 
 ## Requirements
 
@@ -144,14 +148,16 @@ addition bumps `z`; `1.0.0` is a promise this reference implementation does not 
 
 `↑/↓` select · `←/→` page · `Enter` play · `Tab` focus card · `/` filter · `n` new search ·
 `m` more results · `o` sort · `v` playback mode · `e` switch source · `a` add to playlist ·
-`b` open a playlist · `Space` pause · `9/0` volume · `[`/`]` seek · `s` stop · `l` language ·
-`t` theme · `q` quit
+`b` open a playlist · `+` add to the queue · `>` next track · `Space` pause · `9/0` volume ·
+`[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
 
 `e` is drawn only when a second engine is installed — the TUI discovers engines by looking for
 `<name>-search` and `<name>-resolve` pairs, so it holds no list of sources. `a` and `b` are
 drawn only when `ut-playlist` is installed, by the same rule. With a playlist on screen the
 three keys that re-fetch a query — `m`, `o`, `e` — say so and do nothing; a playlist can mix
-sources, and each row plays under the engine that produced it.
+sources, and each row plays under the engine that produced it. `+` and `>` appear only while
+something is playing: the queue belongs to the player, so with no player there is nothing to
+append to.
 
 ## Tests
 
@@ -164,8 +170,14 @@ one runs, or it is not claimed. Each file's header says what it proves; run eith
 
 | Suite | What it is for |
 |---|---|
-| `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the idle lifecycle verbs, the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), and the TUI booting / surviving a resize / leaving on `q` under tmux. |
-| `tests/lifecycle.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, and zero orphan mpv at the end. It also owns the **live read** — the `--status` fields off a real mpv socket, `paused:false` distinguished from `paused:null`, and a really-running player whose socket is really removed degrading to nulls with volume off the record — because the peer has no stand-in and never will. It also plays a real Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. Starts real players at `--volume 0`, so it is gated behind `YT_TEST_LIFECYCLE=1`. |
+| `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the idle lifecycle verbs (including the queue verbs, where a
+payload this process cannot use is a usage error and a well-formed one with nothing playing is
+"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), and the TUI booting / surviving a resize / leaving on `q` under tmux. |
+| `tests/lifecycle.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, and zero orphan mpv at the end. It also owns the **live read** — the `--status` fields off a real mpv socket, `paused:false` distinguished from `paused:null`, and a really-running player whose socket is really removed degrading to nulls with volume off the record — because the peer has no stand-in and never will. It drives a **queue** end to end for the same reason — a mock engine would skip the
+resolve between two tracks, which is the thing most likely to break: `--queue` launches,
+`--enqueue` appends (six concurrent writers, no lost update), `--next` moves the position and
+the player follows, and a track reaching its own end starts the next. It also plays a real
+Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. Starts real players at `--volume 0`, so it is gated behind `YT_TEST_LIFECYCLE=1`. |
 
 One more file in `tests/` is not a suite and asserts nothing. `tests/drive.sh` is a **driver** for the TUI, which needs a real tty and so cannot be run from
 a pipe. It launches tmux at a declared geometry, waits on the ready marker, optionally sends
@@ -209,8 +221,8 @@ Lessons these paid for, every one of which produced a wrong result first:
 - [`docs/AS-BUILT-workflow.md`](docs/AS-BUILT-workflow.md) — how a unit of work moves through this repo.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — positioning and non-goals, the naming survey, the OSS
   readiness assessment, and the conditions under which the core would move to Go.
-- [`docs/PLAN-listening.md`](docs/PLAN-listening.md) — the feature in flight: playlists (landed),
-  queue, listening history. Deleted when the last of the three lands.
+- [`docs/PLAN-listening.md`](docs/PLAN-listening.md) — the feature in flight: playlists and
+  the queue (landed), listening history. Deleted when the last of the three lands.
 
 ## License
 

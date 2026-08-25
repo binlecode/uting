@@ -126,7 +126,8 @@ written `ROADMAP D9`, never a bare `D9`.
       owns the user-level store; the player's `players/` stays runtime-only and dies
       with the reboot. The stored record is {engine, url, …} — the two arguments of
       `ut-play`, so a record is a CALL, not a reference. The queue is the deliberate
-      exception: it is a playlist being consumed, so it belongs to the player.  (§9.4)
+      exception: it is a playlist being consumed, so it belongs to the player, in the
+      player's runtime state and dying with it.  (§9.4, §9.5)
 ```
 
 ## 4. Command topology & file layout
@@ -816,6 +817,9 @@ resolve window wins and is never clobbered. It waits for the record with a bound
         │    optional)      resolve_target        → {ambiguous,   │
         └──── rm its state/sock/log               players:[...]} exit 4)
 
+   • a player consumes a QUEUE (§9.5): --queue at launch, --enqueue and --next after.
+     A lone handle is a queue of one, so `queue` is never null and the state machine
+     above is unchanged — one player, one lifecycle, however many tracks it plays.
    • --status ALWAYS exit 0. --stop exits 0 for every case EXCEPT an ambiguous target
      (2+ live players, no --id) which exits 4 — see the next bullet. Idempotent otherwise:
      a polling agent must not read a non-ambiguous non-zero exit as failure. Every
@@ -823,8 +827,9 @@ resolve window wins and is never clobbered. It waits for the record with a bound
    • --set-volume / an ambiguous --stop exit 4 (did-not-take-effect; -j reason says why).
    • a player that dies ON ITS OWN leaves a tombstone: --status reports it once in
      failed[] instead of just going empty (see below).
-   • state: ${TMPDIR:-/tmp}/uting-$(id -u)/players/<id>.json (+ mpv-<id>.sock, mpv-<id>.log)
-            plus players/dead/<id>.json for the tombstones
+   • state: ${TMPDIR:-/tmp}/uting-$(id -u)/players/<id>.json (+ mpv-<id>.sock, mpv-<id>.log,
+            queue-<id>.json) plus players/dead/<id>.json for the tombstones — where a
+            queued TRACK that failed is <id>-q<pos>.json, the same shape (§9.5)
 ```
 
 **The other half of the lifecycle: a player that dies unasked (`failed[]`).** `launch →
@@ -1114,7 +1119,87 @@ a playlist does not have.
 
 **What is NOT here: the queue.** A queue is a playlist being consumed, and it belongs to the
 player, in the player's runtime state. A queue that survives a reboot IS a playlist — that
-judgement is what keeps the two stores apart. ROADMAP P4 / `docs/PLAN-listening.md` §3.
+judgement is what keeps the two stores apart. It is built in §9.5.
+
+### 9.5 The queue — a playlist being consumed (`--queue`, `--enqueue`, `--next`)
+
+A detached player plays a QUEUE. A lone handle is a queue of one, so there is one code path
+rather than two: every `-d` launch writes a queue file before it forks, which is what lets
+`--enqueue`, `--next` and `--status` address any player without a does-this-one-have-a-queue
+branch, and why `--status`'s `queue` key is never `null` on a live player.
+
+```
+   ${TMPDIR:-/tmp}/uting-$(id -u)/queue-<id>.json    {schema:1, pos, items:[{engine,url,…}]}
+                                  lock-queue-<id>/   its own mkdir lock
+```
+
+**Not under `players/`, and that is not a filing preference.** `players/*.json` IS the player-
+record namespace: `reap_dead_players` walks the glob, and a `<id>.queue.json` parked there
+would be read as a record whose `.id` is empty — and then deleted. The queue sits beside the
+socket and the log instead, and `rm_player_files` removes all three (plus both lock dirs) in
+ONE function, because three call sites clean up after a player — the reaper and both `--stop`
+paths — and a file added to two of them is a leak in the third.
+
+**Two locks, never nested.** The queue does not share `lock_player_state`: the record and the
+queue are updated at rates an order of magnitude apart (one title backfill per track against
+one advance per track plus every `--enqueue`), and one lock for both would make each wait on
+the other's clock. The hard rule is that no path holds both — take one, write, release, take
+the other. One lock can only stall; two can deadlock, and under these bounded spins the
+symptom would not even be a hang, it would be two five-second pauses followed by a SILENT
+unlocked write.
+
+**JIT resolve, one track at a time.** A stream URL expires in hours, so a queue resolved up
+front would 403 halfway down; each item is resolved when it is reached. The price is a gap
+between tracks, and it is paid on purpose. Two consequences are contractual (AS-BUILT-contract.md §3):
+a resolve failure ADVANCES the queue instead of killing the player — otherwise an upstream's
+bad minute is welded to the player's lifetime — and the track that failed gets its own
+tombstone in `failed[]`, keyed `<id>-q<pos>`. The advance happens BEFORE the tombstone is
+written: when the queue is exhausted it is the PLAYER that died, and that record belongs to
+the parent, from the epitaph in the log. Written the other way round, one failure was
+recorded twice — measured, as `<id>` and `<id>-q0` for a single bad handle.
+
+**The record follows the track.** `patch_player_meta` patches `url` as well as `title` and
+`format`, so a `--status` taken ten minutes in describes what is playing rather than what was
+launched.
+
+**Three bash 3.2 facts shape the child loop, and each was measured rather than reasoned.**
+
+1. **A trap is not dispatched while a FOREGROUND child runs.** A `sleep 5` sent SIGUSR1 ran
+   its handler five seconds later and still returned 0; `cmd & wait "$!"` entered the handler
+   inside a second and `wait` returned 158. So the child runs mpv in the BACKGROUND and
+   `wait`s on it — otherwise `--next` would mean "skip a track once this one is over", which
+   is not a skip.
+2. **An async command cannot trap SIGINT.** Bash starts one with SIGINT set to `SIG_IGN`, and
+   a signal ignored on entry can never be trapped. The detached child IS such a command, so
+   its `trap … INT` is silently a no-op: a group INT killed mpv while the child sailed on into
+   the next track, and only the KILL escalation three seconds later stopped it. `stop_group`
+   therefore tells the LEADER with SIGTERM and the group with SIGINT — which is what makes
+   `--stop` stop a queue rather than one track of it — and it repeats BOTH on every 0.2s tick
+   of the escalation, because the group is not a fixed set: the engine call between two tracks
+   spawns a fresh yt-dlp, then its anonymous retry, then curl for the probe, and one that
+   started a millisecond after the first signal never saw it. While such a straggler runs the
+   child's own trap cannot run either (fact 1 again), so a single late process is enough to
+   make a stop wait out the whole escalation.
+3. **Both signals can be pending at once, and the order is not ours to pick.** The engine call
+   between two tracks is a foreground command, so a `--next` delivered during it waits, and a
+   `--stop` arriving behind it waits too; when the resolve returns bash runs both handlers.
+   A `next` allowed to land after a `stopped` restarts the loop on a player that was told to
+   die — 3.5s to stop instead of 0.4s, reproduced 3/3. So **`stopped` is final** in
+   `child_signal`: once set, no later signal may downgrade it.
+
+**The reason a track ended comes from `CHILD_REASON`, never from mpv's exit code.** mpv 0.41
+answers 4 for "quit due to a signal" — one code covering "`--next` killed it", "`--stop`
+killed it" and "the user killed it" alike. The handler sets the reason BEFORE it kills mpv, so
+the epitaph describes what happened instead of guessing. A sentinel file was considered and
+rejected: that is another lock, and it would let the death record lie in a new way.
+
+**`--next` moves the position in the PARENT, then signals.** The envelope therefore reports a
+queue it read off disk rather than one it predicted — the rule `--seek` already follows for
+`position` (§9.3). The child's own end-of-track advance is a compare-and-swap against the
+position it just played, so if a track ends in the same instant a `--next` lands, whoever
+moves first wins and the other is a no-op: nothing is ever skipped twice. The signal is
+SIGUSR1 to the child's PID and never to the group — USR1's default disposition is to
+terminate, so a group-wide one would kill the mpv the loop is supposed to advance past.
 
 ## 10. Resolve — the engine's half two
 
@@ -2080,7 +2165,18 @@ Moved → `AS-BUILT-contract.md` §5.
                   (tombstones, §9.2),
                   player_state/player_sock/player_log/player_lock_dir,
                   lock_player_state/unlock_player_state, new_player_id, detach_play,
-                  reap_dead_players, resolve_target, do_status, do_stop, do_set_volume
+                  reap_dead_players, resolve_target, do_status, do_stop, do_set_volume,
+                  do_playback_verb (the four socket verbs, one shape), rm_player_files
+                  (sock+log+queue+both locks, the ONE cleanup, §9.5)
+     Queue      : player_queue/queue_lock_dir, lock_queue_state/unlock_queue_state (the
+                  SECOND lock, never nested with the first, §9.5), read_queue_items
+                  (stdin → items, the three shapes, all rejections are usage errors),
+                  queue_write_new/queue_append/queue_bump (the parent's writers),
+                  queue_advance_from (the child's compare-and-swap), queue_current,
+                  queue_snapshot ({pos,len,next} for every envelope that reports one),
+                  queue_note_failure (a TRACK's tombstone, <id>-q<pos>),
+                  child_signal + detached_child_loop (the child: one player, one queue),
+                  do_enqueue, do_next
 
    Engine, search half (shell/yt-search · shell/bili-search)
      Shared shape: die, is_non_negative_int, validate_enum, require_cmd/require_deps,
@@ -2134,6 +2230,12 @@ Moved → `AS-BUILT-contract.md` §5.
      Input      : read_nav_input/read_query_input, utf8_complete + init_lead_tables
                   (one key per CHARACTER), tty_echo_off/tty_echo_restore,
                   cursor_hide/cursor_show
+     Queue      : enqueue_selected (`+`), skip_next (`>`), focused_payload (the focused
+                  row as a one-item envelope — ONE builder, because ut-playlist --add and
+                  ut-play --enqueue read exactly the same two shapes), apply_player_record
+                  / refresh_player_record (the track can change with no keypress here, so
+                  media-title rides the round trip fetch_play_times already makes and only
+                  a CHANGE costs an ut-play --status, §26)
      Player     : play_verb (the WRITE side: one keypress, one ut-play verb),
                   send_mpv_ipc, mpv_get_prop, fetch_play_times (one connection for
                   pos/dur/pct + pause; pause ALONE on the live path),
@@ -2906,8 +3008,8 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 ## 27. Verification matrix
 
-**Last run: 2026-08-24, both suites green** — `contract.sh` **128 ok / 0 failed / 0 known
-drift**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **26 ok / 0 failed**, with `pgrep mpv` empty
+**Last run: 2026-08-25, both suites green** — `contract.sh` **145 ok / 0 failed / 0 known
+drift**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **36 ok / 0 failed**, with `pgrep mpv` empty
 afterwards.
 
 **Functional only, and two files.** The renderer rig (`tui_pane.sh`) and its cell-grid prover
@@ -3047,6 +3149,28 @@ the part of a deleted harness worth keeping.
    Live volume: uting 9/0 on a --volume 0 player → --status reports the
                 moved value (not the stale launch value); from 98, three 0 presses stop
                 at 100 and never reach mpv's own 130 ceiling
+   Queue      : the idle half in contract.sh, where no player exists and no socket is
+                opened (17 checks): --next and --enqueue answer not_playing and exit 4, the
+                SAME shape the socket verbs use, while a payload this process cannot use is
+                1 — driven through --enqueue rather than --queue on purpose, because a
+                --queue that got past its gate would LAUNCH a player and that file starts
+                none. The 1-vs-4 pairing is the point: bad JSON, none of the three stdin
+                shapes, an empty list, a url with whitespace, an empty url and an engine
+                name that is not [a-z0-9_-] are all 1; a well-formed payload with nothing
+                running is 4. Both --show and search envelopes parse (the engine tag lives
+                on the envelope, so only the whole thing can label an item); a shapeless
+                object does not. --queue without -d, with a handle on argv, or with an
+                action is 1, each naming what to do instead
+                The live half in lifecycle.sh, against a real player and a real engine
+                (10 checks): --queue - launches and --status carries {pos,len,next} before
+                mpv has decoded a frame; --enqueue appends and reports the queue it wrote;
+                six CONCURRENT --enqueue calls all land (3+6=9, and fewer with
+                lock_queue_state stubbed to fail); --next moves the position and the
+                player's own record follows the track; a track reaching its END advances
+                the queue on its own (seek to duration-4 rather than waiting out a stream);
+                --stop takes the whole queue down and leaves no orphan mpv. A mock engine
+                would skip the JIT resolve — the thing most likely to break between two
+                tracks — so nothing here stands in for either end
    Playback   : the idle half in contract.sh, where no player exists: all four verbs answer
    verbs        not_playing and exit 4 (the --set-volume shape, reused rather than re-argued),
                 `--seek 30` without a sign is 1 while `--seek +30` with nothing playing is 4

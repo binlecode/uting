@@ -29,13 +29,15 @@ there is no core to delegate to.
   `players/`. **Owns no site knowledge:** no yt-dlp call, no cookie decision, no format
   string, no id shape.
 - **Flags:** `-f -S -d -j -l -h -V` + long `--engine --volume --detach --json --list
-  --status --stop --set-volume --pause --resume --seek --seek-to --id --all --color --help
-  --version`. Color is `--color`
+  --status --stop --set-volume --pause --resume --seek --seek-to --queue --enqueue --next
+  --id --all --color --help --version`. Color is `--color`
   only (no `-c`); `-S` is the format-sort override (no `-F`) and is forwarded to the engine
   verbatim. `--` ends option parsing: everything after it is the handle (ARCHITECTURE.md §6). At most one
   action per call; `--id` belongs to every verb that ADDRESSES one running player (`--stop`,
-  `--set-volume`, `--pause`, `--resume`, `--seek`, `--seek-to`) and `--all` only to `--stop`;
-  `-d` combines with neither an action nor `-f ascii|viz`.
+  `--set-volume`, `--pause`, `--resume`, `--seek`, `--seek-to`, `--enqueue`, `--next`) and
+  `--all` only to `--stop`; `-d` combines with neither an action nor `-f ascii|viz`.
+  `--queue` is not an action but a LAUNCH modifier: it requires `-d`, refuses a handle on
+  argv, and takes its items from stdin (`-` is its only legal value, as for `--enqueue`).
 - **Behavior:**
   ```
    ut-play -- <handle>          play (prose)      ut-play -j -- <handle>   playback JSON
@@ -45,6 +47,9 @@ there is no core to delegate to.
    ut-play --pause | --resume [--id ID]           two idempotent verbs, never a toggle
    ut-play --seek ±N [--id ID]                    RELATIVE; the sign is required
    ut-play --seek-to N [--id ID]                  absolute, seconds
+   ut-play -d --queue - < items.json              launch on a QUEUE; the first item plays
+   ut-play --enqueue - [--id ID] < items.json     append to a running player's queue
+   ut-play --next [--id ID]                       drop this track, start the next (4: none)
    ut-play                      → usage error naming yt-search / uting (D3)
    ut-play -- "some query"      → usage error naming yt-search (whitespace ⇒ not a handle)
   ```
@@ -322,7 +327,8 @@ Lifecycle / resolve:
    -d       : {status:"started", id, pid, url, mode, started_at, title:null, sock, log}
               sock/log are handed over so a client never rebuilds the state-dir layout
    --status : {status:"players",
-               players:[{id,pid,url,mode,volume,paused,position,duration,title,started_at}…],
+               players:[{id,pid,url,mode,volume,paused,position,duration,title,started_at,
+                         queue:{pos,len,next}}…],
                failed:[{id,url,mode,started_at,ended_at,exit_code,reason}…]}
               empty arrays when nothing playing / nothing failed (still exit 0)
               title is null for the first second or two after a detach: the detached CHILD
@@ -334,6 +340,12 @@ Lifecycle / resolve:
               player answered null — null is "could not ask", NOT false/0. position and
               duration are integer seconds and are null until mpv starts decoding (~8s on a
               cold start); duration stays null for a live stream.
+              queue is NEVER null on a live player: every detached launch writes one, and a
+              lone handle is a queue of length 1 (ARCHITECTURE.md §9.5). It is read off the player's own
+              queue file, not off the socket — mpv is handed one URL at a time and never
+              learns there is a list. `next` is the item AFTER pos, `null` on the last track.
+              url and title follow the TRACK: the child patches its own record each time it
+              resolves, so a --status taken ten minutes in describes what is playing now.
               failed[] is the tombstone list — players that DIED on their own, newest first,
               at most 8, nothing older than an hour (ARCHITECTURE.md §9.2). reason is the shared playback
               enum. A player that finished normally or was --stopped is never in it, so the
@@ -356,6 +368,17 @@ Lifecycle / resolve:
               it landed, exit 0. A live stream has no seekable timeline and mpv refuses;
               that refusal surfaces as ipc_failed (exit 4) rather than as a prediction the
               player made from a null duration — that would be site knowledge it does not hold.
+   --enqueue: {status:"ok", id, added:<n>, queue:{pos,len,next}}
+   --next   : {status:"ok", id, queue:{pos,len,next}}
+              Both take the not_playing / ambiguous shapes above — same target resolution,
+              same exit taxonomy — but never ipc_failed: a queue is the player's state on
+              disk and no socket is opened. Their two own failures are
+                {status:"error", reason:"queue_empty"}   --next with nothing after this track
+                {status:"error", reason:"queue_failed"}  the queue file could not be written
+              both exit 4, both well-formed calls that did not take effect. `queue` is READ
+              BACK off the file after the write, never predicted — the same rule --seek
+              follows for `position`: --next moves the position in the PARENT and only then
+              signals the child, so the envelope reports a queue that is already on disk.
    --stop   : {status:"stopped", id, stopped:bool}   (single target)
             | {status:"stopped", scope:"all", stopped:bool}   (--all)
             | {status:"ambiguous", …}                (2+ players, no --id; exit 4)
@@ -391,6 +414,32 @@ Lifecycle / resolve:
               is the shared enum plus `no_subtitles_available`, which also covers a track
               that parses to zero usable cues (an empty transcript is a miss, not an
               empty success — a caller handed {"text":""} would summarise silence).
+```
+
+**The queue's input is stdin, in three shapes** — the same three `ut-playlist --add` takes,
+for the same reason: a search result does not carry `engine` (that field is on the
+ENVELOPE), so only taking the whole envelope can label an item with the source it came from.
+`--queue -` and `--enqueue -` accept a bare item array, a `ut-playlist --show -j` envelope
+(`.items`), or a search envelope (`.results`); an item is
+`{engine, url, title?, duration?}` and `--engine` is only the fallback for an item without
+one, so ONE queue may mix sources. Everything else about the payload is a usage error (**1**)
+raised in the caller's own shell before any player is addressed: unparseable JSON, none of the
+three shapes, zero items, a url with whitespace in it, an engine name that is not
+`[a-z0-9][a-z0-9_-]*`. The url is checked no further than a handle on argv is — which ids are
+good is engine knowledge — but the engine NAME is validated here because it becomes a command
+name inside a detached child, where a `die` would only reach a log.
+
+**A queue is resolved JUST IN TIME, one track at a time.** A stream URL expires in hours, so
+a queue resolved at enqueue time would 403 halfway down; the price is a gap between tracks
+(the engine round trip) and the design decision is ARCHITECTURE.md §9.5. One consequence is
+contractual: a queued item that fails to resolve does NOT kill the player. The queue advances
+and the track gets its own tombstone in `failed[]`, keyed `<id>-q<pos>` — a track that did
+not play, in the same shape as a player that did not play, so a caller reading `failed[]`
+sees a named gap rather than a silent one.
+
+On disk (runtime state, dies with the player — it is not a playlist):
+```json
+{"schema":1,"pos":0,"items":[{"engine":"yt","url":"https://…","title":null,"duration":null}]}
 ```
 
 **Why `--transcript` is one yt-dlp call.** `--print` implies `--simulate`, and a simulating
@@ -440,15 +489,21 @@ on-disk record read by jq, not an envelope.
         refusal, conflicting actions, no handle (D3), a handle with whitespace in it,
         --id/--all outside a lifecycle verb, -d with an action or with -f ascii|viz,
         a `--seek` value without a sign (`--seek 30`) or a negative `--seek-to`,
+        a queue payload this process could not use (`--queue`/`--enqueue`: bad JSON, none
+        of the three stdin shapes, no items, a url with whitespace, a bad engine name) —
+        refused in the PARENT, so a malformed queue never reaches a player,
+        `--queue` without `-d`, with an action, or with a handle on argv,
         an unknown --engine, a URL whose host is not this engine's (ARCHITECTURE.md §10 / §3 here),
         --info / --transcript fetch failure (incl. no_subtitles_available)
    2+   propagated yt-dlp / mpv / HTTP failure (playback, resolve -j, SEARCH failure —
         search reports 2 even when yt-dlp exits 1, so a tool failure is never confused
         with 1). A handle the engine cannot resolve lands HERE, not in 1: the player
         cannot judge an id's shape, so "bad id" is an extraction outcome (ARCHITECTURE.md §6).
-   4    --set-volume / --pause / --resume / --seek / --seek-to / --stop: did not take
-        effect — no such player, no player, ambiguous target, or mpv IPC failure. The -j
-        status/reason says which. The split is the point: a MALFORMED call is 1 and never
+   4    --set-volume / --pause / --resume / --seek / --seek-to / --enqueue / --next /
+        --stop: did not take effect — no such player, no player, ambiguous target, or mpv
+        IPC failure; for the two queue verbs also `queue_empty` (--next with nothing after
+        the current track) and `queue_failed` (the queue file could not be written), which
+        are the only two that never involve a socket. The -j status/reason says which. The split is the point: a MALFORMED call is 1 and never
         reaches a player (`--seek 30`), a well-formed one mpv would not do is 4
         (`--seek +30` with nothing playing).
         Distinct from 1 (usage) and 2+ (propagated player failure). --stop treats
@@ -472,6 +527,8 @@ on-disk record read by jq, not an envelope.
                          recorded volume plus three nulls without it); every socket verb
                          (--set-volume, --pause, --resume, --seek, --seek-to)
                          needs jq+nc (nc gated lazily so a plain play never demands it).
+                         The queue verbs (--queue, --enqueue, --next) need only jq: a
+                         queue is a file, and --next reaches the player with a SIGNAL.
                          It needs NO yt-dlp and no curl.
           yt-search / yt-resolve / bili-resolve : yt-dlp + jq. curl is an OPTIONAL soft
                          dep of yt-resolve, for the client probe (ARCHITECTURE.md §8.2).
@@ -495,7 +552,8 @@ kept out of flags to keep each verb's flag surface narrow.
 ```
    Flags (per call):  -n -m -M -s -f -S -l -j -J -d -h -V --color --theme --engine
                       --detach --status --stop --info --transcript --sub-lang
-                      --set-volume --id --all --volume
+                      --set-volume --pause --resume --seek --seek-to --queue --enqueue
+                      --next --id --all --volume
    Env (set once):    UT_STATE_DIR  (default ${XDG_STATE_HOME:-~/.local/state}/uting) =
                         the USER-LEVEL, durable state root — today `playlists/`. Distinct
                         from the player's runtime state in ${TMPDIR}/uting-$(id -u), which
