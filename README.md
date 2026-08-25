@@ -17,6 +17,7 @@ ut-play --pause --id <id> -j           # machine: also --resume, --seek ±N, --s
 ut-playlist --show chill -j | ut-play -d --queue -   # machine: play a list, one player
 ut-play --enqueue - --id <id> -j       # machine: append to it; --next skips a track
 ut-play --stop --id <id> -j            # machine: stop it
+ut-history --ls -n 20 -j               # machine: what was played, when, for how long
 ```
 
 ## Status
@@ -58,6 +59,13 @@ sets for you.
   under a lock. It knows no site and no playback — `engine` + `url` are exactly the two arguments
   of `ut-play`, so a stored record is a call rather than a reference. Optional: without it the
   rest of the suite is unchanged.
+- **`ut-history`** — the listening log, and the other half of that store: one line of
+  `history/<YYYY-MM>.jsonl` per track, written by the player itself as each track ends —
+  whether it ended on its own, was skipped, or was stopped. Append-only and lock-free, which
+  is why every line is kept under 4 KB. A row is the same record a playlist holds plus the
+  four fields a listening has (`played_at`, `ended_at`, `seconds`, `reason`), so
+  `ut-history --ls -j` pipes straight into `ut-playlist --add` or `ut-play -d --queue -`.
+  `UT_HISTORY=0` turns the writing off; optional, like the playlist store.
 - **`uting`** — the human face. Self-rendered list and focus card, live filter, pagination that
   reflows against the measured chrome, three playback states, en/zh chrome, ASCII fallback, themes.
   No TUI framework, no fzf.
@@ -72,13 +80,12 @@ Not a general-purpose terminal music player: that layer is full and well maintai
 ncmpcpp, rmpc, musikcube, kew, termusic — and this is not a replacement for it. What plays here
 comes from an engine, not from `~/Music`.
 
-**Playlist management and the queue have landed** (`ut-playlist` with the `a` and `b` keys;
-`ut-play --queue/--enqueue/--next` with `+` and `>`). The listening history has not — it is
-**planned work in the shell version** (`docs/ROADMAP.md` D14/D15, P4; in flight in
-`docs/PLAN-listening.md`), with the rule all three carry: it ships an agent surface — a verb and
-a `-j` envelope — alongside its keybinding, or it is not done. **Favourites is deliberately not a
-feature**: it is a playlist with a fixed name. A downloader and channel subscriptions are
-unscheduled.
+**All three listening features have landed** (`docs/ROADMAP.md` D14/D15, P4): playlist
+management (`ut-playlist`, the `a` and `b` keys), the queue (`ut-play
+--queue/--enqueue/--next`, `+` and `>`), and the listening history (`ut-history`, the `h` key).
+Each shipped with the rule they all carry: an agent surface — a verb and a `-j` envelope —
+alongside its keybinding, or it is not done. **Favourites is deliberately not a feature**: it is
+a playlist with a fixed name. A downloader and channel subscriptions are unscheduled.
 
 ## Requirements
 
@@ -112,6 +119,7 @@ ln -s "$PWD/shell/yt-resolve"   ~/bin/yt-resolve
 ln -s "$PWD/shell/bili-search"  ~/bin/bili-search
 ln -s "$PWD/shell/bili-resolve" ~/bin/bili-resolve
 ln -s "$PWD/shell/ut-playlist"  ~/bin/ut-playlist
+ln -s "$PWD/shell/ut-history"   ~/bin/ut-history
 ```
 
 Only `uting` is strictly required: every command resolves its siblings from its own location,
@@ -148,14 +156,16 @@ addition bumps `z`; `1.0.0` is a promise this reference implementation does not 
 
 `↑/↓` select · `←/→` page · `Enter` play · `Tab` focus card · `/` filter · `n` new search ·
 `m` more results · `o` sort · `v` playback mode · `e` switch source · `a` add to playlist ·
-`b` open a playlist · `+` add to the queue · `>` next track · `Space` pause · `9/0` volume ·
+`b` open a playlist · `h` listening history · `+` add to the queue · `>` next track ·
+`Space` pause · `9/0` volume ·
 `[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
 
 `e` is drawn only when a second engine is installed — the TUI discovers engines by looking for
 `<name>-search` and `<name>-resolve` pairs, so it holds no list of sources. `a` and `b` are
-drawn only when `ut-playlist` is installed, by the same rule. With a playlist on screen the
-three keys that re-fetch a query — `m`, `o`, `e` — say so and do nothing; a playlist can mix
-sources, and each row plays under the engine that produced it. `+` and `>` appear only while
+drawn only when `ut-playlist` is installed and `h` only when `ut-history` is, by the same rule.
+`h` asks for no name — the log is one thing — and shows the 50 newest listenings. With a
+playlist or the log on screen the three keys that re-fetch a query — `m`, `o`, `e` — say so and
+do nothing; both can mix sources, and each row plays under the engine that produced it. `+` and `>` appear only while
 something is playing: the queue belongs to the player, so with no player there is nothing to
 append to.
 
@@ -172,12 +182,12 @@ one runs, or it is not claimed. Each file's header says what it proves; run eith
 |---|---|
 | `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the idle lifecycle verbs (including the queue verbs, where a
 payload this process cannot use is a usage error and a well-formed one with nothing playing is
-"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), and the TUI booting / surviving a resize / leaving on `q` under tmux. |
+"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux. |
 | `tests/playback.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, and zero orphan mpv at the end. It also owns the **live read** — the `--status` fields off a real mpv socket, `paused:false` distinguished from `paused:null`, and a really-running player whose socket is really removed degrading to nulls with volume off the record — because the peer has no stand-in and never will. It drives a **queue** end to end for the same reason — a mock engine would skip the
 resolve between two tracks, which is the thing most likely to break: `--queue` launches,
 `--enqueue` appends (six concurrent writers, no lost update), `--next` moves the position and
 the player follows, and a track reaching its own end starts the next. It also plays a real
-Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. Starts real players at `--volume 0` in a state dir of its own, so it never touches what you are listening to; ~35s, and it needs the network. |
+Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. And it owns the **listening log's wiring**, since only here does a real track really end: a 19-second handle is played out, and the row that appears for it carries no reason — which is what separates a history from a death record. Starts real players at `--volume 0` in a state dir of its own, and points `UT_STATE_DIR` somewhere disposable too, so it never touches what you are listening to nor what you listened to; ~55s, and it needs the network. |
 
 One more file in `tests/` is not a suite and asserts nothing. `tests/drive.sh` is a **driver** for the TUI, which needs a real tty and so cannot be run from
 a pipe. It launches tmux at a declared geometry, waits on the ready marker, optionally sends
@@ -221,8 +231,6 @@ Lessons these paid for, every one of which produced a wrong result first:
 - [`docs/AS-BUILT-workflow.md`](docs/AS-BUILT-workflow.md) — how a unit of work moves through this repo.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — positioning and non-goals, the naming survey, the OSS
   readiness assessment, and the conditions under which the core would move to Go.
-- [`docs/PLAN-listening.md`](docs/PLAN-listening.md) — the feature in flight: playlists and
-  the queue (landed), listening history. Deleted when the last of the three lands.
 
 ## License
 

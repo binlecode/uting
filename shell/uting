@@ -63,6 +63,18 @@ elif command -v ut-playlist >/dev/null 2>&1; then
     UT_PLAYLIST=$(command -v ut-playlist)
 fi
 
+# The listening log, located the same way and just as optionally. _BIN, not UT_HISTORY: that
+# name is already the player's set-once switch for whether a row is written at all
+# (AS-BUILT-contract.md §5), and one word must not mean a path here and a boolean there.
+# This file only READS it, and only when h is pressed — the writing is the player's, where
+# the fact "a track ended, and why" exists.
+UT_HISTORY_BIN=""
+if [[ -x "$SCRIPT_DIR/ut-history" ]]; then
+    UT_HISTORY_BIN="$SCRIPT_DIR/ut-history"
+elif command -v ut-history >/dev/null 2>&1; then
+    UT_HISTORY_BIN=$(command -v ut-history)
+fi
+
 # THE ENGINE REGISTRY — discovered, not listed. The suite's whole claim is that adding a
 # source is adding a PAIR of scripts and changing nothing else; a hardcoded list of engine
 # names in this file would make that claim false at the third source, and it would be false
@@ -532,6 +544,8 @@ set_ui_lang() {
         S_PL_PROMPT_ADD="加入哪个列表（Esc 取消）"; S_PL_PROMPT_OPEN="打开哪个列表（Esc 取消）"
         S_PL_ADDED="已加入"; S_PL_EMPTY="该列表是空的"; S_PL_FAILED="操作失败"
         S_PL_ABSENT="未安装 ut-playlist"; S_PL_SEARCH_ONLY="该键只在搜索结果里可用（按 n 重新搜索）"
+        S_HIST_KEY="历史"; S_HIST_ACT="收听历史"; S_HIST_LABEL="最近收听"
+        S_HIST_EMPTY="还没有收听记录"; S_HIST_ABSENT="未安装 ut-history"
         S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_NEXT="下一首"; S_Q_ACT="队列"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
     else
@@ -554,6 +568,8 @@ set_ui_lang() {
         S_PL_PROMPT_ADD="Add to which playlist (Esc cancels)"; S_PL_PROMPT_OPEN="Open which playlist (Esc cancels)"
         S_PL_ADDED="Added to"; S_PL_EMPTY="that playlist is empty"; S_PL_FAILED="failed"
         S_PL_ABSENT="ut-playlist is not installed"; S_PL_SEARCH_ONLY="that key needs search results (press n to search)"
+        S_HIST_KEY="history"; S_HIST_ACT="History"; S_HIST_LABEL="newest first"
+        S_HIST_EMPTY="nothing listened to yet"; S_HIST_ABSENT="ut-history is not installed"
         S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_NEXT="next"; S_Q_ACT="Queue"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
     fi
@@ -1950,7 +1966,7 @@ display_list_menu() {
     # The field NAME says where the rows came from. `query='chill'` for a playlist would be
     # a false statement about the one line that tells you what you are looking at.
     local head_field="query"
-    [[ "$LIST_SOURCE" == "playlist" ]] && head_field="playlist"
+    stored_rows && head_field="$LIST_SOURCE"
     local t_head="${GL_NOTE:+$GL_NOTE }$GL_BRAND  $head_field="
     disp_w "$t_head"
     truncate_disp "'$QUERY_LABEL'" $((nav_cols - DISP_W))
@@ -1965,7 +1981,7 @@ display_list_menu() {
     # engine= leads the line: with more than one source installed it is the field that
     # changes what every other field means.
     local st_items
-    if [[ "$LIST_SOURCE" == "playlist" ]]; then
+    if stored_rows; then
         st_items=("engine=${PLAYLIST_ENGINES:-?}" "items=$NUM_ENTRIES")
     else
         st_items=("engine=$ENGINE" "results=$NUM_ENTRIES" "sort=$SORT_FIELD")
@@ -2037,6 +2053,10 @@ display_list_menu() {
     # measured block. With no ut-playlist installed, `a` and `b` genuinely do nothing.
     if [[ -n "$UT_PLAYLIST" ]]; then
         nav_items+=("a	$S_PL_ADD" "b	$S_PL_OPEN")
+    fi
+    # Same rule again: with no ut-history installed, h genuinely does nothing.
+    if [[ -n "$UT_HISTORY_BIN" ]]; then
+        nav_items+=("h	$S_HIST_KEY")
     fi
     # The queue keys are offered only while something is PLAYING: with no player they say
     # "nothing is playing" and nothing else, and a measured block must not spend cells on a
@@ -2784,9 +2804,12 @@ FOCUSED_PAYLOAD=""
 focused_payload() {
     local url="${urls[$selected]}"
     FOCUSED_PAYLOAD=""
-    if [[ "$LIST_SOURCE" == "playlist" ]]; then
+    if stored_rows; then
+        # [0:1], because the url is a KEY here and a store may hold it twice — trivially in a
+        # playlist, by design in the history, where listening to one track five times is five
+        # rows. Without the slice, `a` on a much-played row adds five copies of it.
         FOCUSED_PAYLOAD=$(printf '%s' "$json" | jq -c --arg u "$url" \
-            '{items: [.items[] | select(.url == $u)]}' 2>/dev/null) || FOCUSED_PAYLOAD=""
+            '{items: [.items[] | select(.url == $u)][0:1]}' 2>/dev/null) || FOCUSED_PAYLOAD=""
     else
         FOCUSED_PAYLOAD=$(printf '%s' "$json" | jq -c --arg u "$url" \
             '{status: "ok", engine: .engine, count: 1, results: [.results[] | select(.url == $u)]}' 2>/dev/null) || FOCUSED_PAYLOAD=""
@@ -2863,6 +2886,15 @@ open_playlist() {
 # every earlier duplication this file has had (ARCHITECTURE.md's F11/F12), and the
 # no-shared-library trade that licenses copies BETWEEN the six commands does not license
 # them WITHIN one file.
+# The other half of search_only: rows that came from a STORE rather than from a search — a
+# playlist, or the listening log. Everywhere the difference between those two is not the
+# LABEL they are one case (same item record, same renderer, same one-item payload shape), and
+# one predicate is what stops that from becoming three copies of a two-way test that drift
+# apart the way F11/F12 did (ARCHITECTURE.md).
+stored_rows() {
+    [[ "$LIST_SOURCE" == "playlist" || "$LIST_SOURCE" == "history" ]]
+}
+
 search_only() {
     [[ "$LIST_SOURCE" == "search" ]] && return 0
     store_notice "$S_PL_ACT:" "$S_PL_SEARCH_ONLY"
@@ -2878,6 +2910,55 @@ browse_playlists() {
     "$UT_PLAYLIST" --ls || true
     prompt_name "$S_PL_PROMPT_OPEN" || { display_menu "$page_index"; return 0; }
     open_playlist "$PROMPT_NAME" || return 0
+}
+
+have_history() {
+    [[ -n "$UT_HISTORY_BIN" ]] && return 0
+    store_notice "$S_HIST_ACT:" "$S_HIST_ABSENT"
+    return 1
+}
+
+# Open the listening log as the row source (key: h). There is no new renderer and no new key
+# handling, because a history row IS the item record a playlist holds — ut-history derives
+# duration_fmt on read for exactly this reason — so build_playlist_rows reads its envelope
+# unchanged and every key that works on a stored row already works here.
+#
+# NO PROMPT, unlike b: the log is one thing, so there is nothing to name. 50 rows rather than
+# ut-history's own default 20 — this is a list to page through, not a line to glance at — and
+# it is a constant, not a knob: a number a user would set once is only a setting when someone
+# would set it differently, and pagination already answers "show me more".
+open_history() {
+    have_history || return 0
+    local out rc=0 cnt errfile
+    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-hist-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-hist-err.$$"
+    out=$("$UT_HISTORY_BIN" --ls -n 50 -j 2>"$errfile") || rc=$?
+    local msg; msg=$(<"$errfile")
+    rm -f "$errfile"
+    if ((rc != 0)); then
+        msg=${msg##*$'\n'}
+        msg=${msg#ut-history: }
+        store_notice "$S_HIST_ACT:" "${msg:-$S_PL_FAILED}"
+        return 1
+    fi
+    cnt=$(printf '%s' "$out" | jq -r '.count // 0' 2>/dev/null || echo 0)
+    if [[ "$cnt" == "0" ]]; then
+        store_notice "$S_HIST_ACT:" "$S_HIST_EMPTY"
+        return 1
+    fi
+    json="$out"
+    LIST_SOURCE="history"
+    PLAYLIST_NAME=""
+    # The same one-label rule a mixed playlist follows: the rows carry their own engine, and
+    # the status line must not claim the session's for them.
+    PLAYLIST_ENGINES=$(printf '%s' "$out" | jq -r '[.items[].engine] | unique | join("+")' 2>/dev/null) || PLAYLIST_ENGINES=""
+    QUERY_LABEL="$S_HIST_LABEL"
+    build_playlist_rows
+    FILTER_LABEL=""
+    FILTER_MODE=0
+    selected=0
+    page_index=1
+    load_rows "$ALL_ROWS"
+    return 0
 }
 
 # ── MODE action (key: v) ────────────────────────────────────────────────────────────────
@@ -3405,6 +3486,7 @@ while true; do
     t | T) cycle_theme ;;     # cycle palette family live
     a | A) add_to_playlist ;; # add the focused row to a playlist
     b | B) browse_playlists ;;# open a stored playlist as the row source
+    h | H) open_history ;;    # open the listening log as the row source
     "+") enqueue_selected ;;  # append the focused row to the running player's queue
     ">") skip_next ;;         # skip to the next queued track
     "/") filter_live ;;       # LIVE incremental filter

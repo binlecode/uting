@@ -99,7 +99,7 @@ written `ROADMAP D9`, never a bare `D9`.
   D5  No fzf / interactive dependency anywhere in the suite.                  (§11)
   D6  No third-party media-client dependency.                                 (§2)
   D7  RETIRED and inverted at the split. Was: one shared core, verbs are thin gates
-      that exec into it. There is no core: seven peers, each self-gating, each owning
+      that exec into it. There is no core: eight peers, each self-gating, each owning
       its own primitive calls. What they share is the ENVELOPE, not code.     (§4)
   D8  uting composes the VERBS only — never an engine's internals, never mpv
       except through the socket the player published.                        (AS-BUILT-contract.md §2)
@@ -132,7 +132,7 @@ written `ROADMAP D9`, never a bare `D9`.
 
 ## 4. Command topology & file layout
 
-**Seven commands, one layer, no library.** There is no core and there are no wrappers. Each
+**Eight commands, one layer, no library.** There is no core and there are no wrappers. Each
 file is a complete, PATH-exposed executable that gates its own flags and calls its own
 primitives. They divide by *what kind of knowledge they hold*, not by who calls whom:
 
@@ -140,8 +140,9 @@ primitives. They divide by *what kind of knowledge they hold*, not by who calls 
 - **an engine** is a PAIR — `<name>-search` (query → results) and `<name>-resolve`
   (handle → stream URL + headers, plus whatever read-only verbs the site supports) — and
   holds **all** of one site's knowledge;
-- **the store** (`ut-playlist`) holds durable user-level state and knows neither site nor
-  playback — its record is `{engine, url}`, which is a CALL rather than a reference (§9.4);
+- **the stores** (`ut-playlist`, `ut-history`) hold durable user-level state and know neither
+  site nor playback — a record is `{engine, url}`, which is a CALL rather than a reference
+  (§9.4); the playlist is what a person put there, the log is what a player wrote (§9.6);
 - **the human face** (`uting`) holds rendering and holds none of them.
 
 ```
@@ -153,19 +154,22 @@ primitives. They divide by *what kind of knowledge they hold*, not by who calls 
         ├── yt-resolve   → <checkout>/shell/yt-resolve     agent surface
         ├── bili-search  → <checkout>/shell/bili-search    agent surface
         ├── bili-resolve → <checkout>/shell/bili-resolve   agent surface
-        └── ut-playlist  → <checkout>/shell/ut-playlist    agent surface (optional)
+        ├── ut-playlist  → <checkout>/shell/ut-playlist    agent surface (optional)
+        └── ut-history   → <checkout>/shell/ut-history     agent surface (optional)
               ONE name per command; no short form ships (ROADMAP D10)
 
    Runtime graph — site knowledge ONLY in an engine pair, playback ONLY in the player:
 
      uting ──► <engine>-search -j ──► render ──► ut-play -d -j --engine <row's engine>
         │  ▲                                           │
-        │  └──── ut-playlist --show -j   same rows, other source (§9.4)
+        │  ├──── ut-playlist --show -j   same rows, other source (§9.4)
+        │  └──── ut-history  --ls   -j   same rows again (§9.6)
         └──► nc -U <sock>  (the player published the path; §9.3)
                                                        ▼
                                    ut-play ──► <engine>-resolve -j -f MODE
                                         │            (yt-dlp / curl live HERE)
-                                        └──► mpv --no-ytdl <direct URL>
+                                        ├──► mpv --no-ytdl <direct URL>
+                                        └──► ut-history --record -   (one row per track)
 ```
 
 **The engine name IS the command prefix (D12).** `--engine yt` reaches `yt-resolve` by
@@ -192,7 +196,7 @@ models: in practice `ut-play` is its caller, and what a model sees is `<engine>-
 file, sources nothing from it, and holds no list of valid names — an unknown `--engine` is
 discovered by the concatenated path not existing. This is the same dependency-direction rule
 that put the version in `VERSION`: a one-line data file, because a variable inside any
-one of seven independent executables would make the other six ask *that* file for the version,
+one of eight independent executables would make the other seven ask *that* file for the version,
 and the player asking an engine anything except "resolve this" is the coupling the split
 removed.
 
@@ -204,7 +208,7 @@ symlink into the checkout (ROADMAP D1/D2), so a plain `dirname` yields `~/bin`, 
 `VERSION` and no engines. `ut-play` was the one entry point that did not do that walk and
 answered `--version` with `unknown` through a symlink; it now resolves the way its six
 siblings always did. `tests/contract.sh` pins the value to the file **through a real symlink**,
-because seven entry points all printing `unknown` agree with each other perfectly.
+because eight entry points all printing `unknown` agree with each other perfectly.
 
 **Why each verb holds its own gate (D7, inverted).** The old shape was one core plus two
 gating wrappers, and the gate was a *layer*. With search and extraction moved out, the player
@@ -228,7 +232,7 @@ directory that does not exist. bash 3.2 has no `readlink -f`, hence the hand-rol
 dotfiles layout; extracting the suite into its own repo is what exposed it.)
 
 Anything that calls these by name through PATH — agent tool definitions, Claude Code Bash
-allowlist entries — uses exactly the seven names above. Callers INSIDE the checkout (the suites in
+allowlist entries — uses exactly the eight names above. Callers INSIDE the checkout (the suites in
 `tests/`, the skills) use the repo-relative `shell/<name>` form instead: they run beside the
 code and must not depend on the user's PATH at all — a check that resolved through `~/bin`
 would be testing the install, not the suite.
@@ -776,7 +780,8 @@ child differently.
    │    └─ 57712  mpv --no-ytdl --input-ipc-server=…sock      │  ← reparents to init
    └──────────────────────────────────────────────────────────┘     but pgid stays
 
-   stop_group(pgid):  kill -INT -pgid ; wait (pgrep -g); escalate kill -KILL -pgid
+   stop_group(pgid):  kill -TERM pgid (the leader, ALONE — §9.5 fact 2) ; then each 0.2s
+                      tick: kill -TERM pgid + kill -INT -pgid ; escalate kill -KILL -pgid
    group_alive(pgid): pgrep -g pgid has ≥1 member
 ```
 
@@ -871,10 +876,12 @@ in the state dir, so it dies with it. No epitaph means no tombstone: a truncated
 
 > **This bound survived the scope change and matters more because of it.** Listening history
 > used to be a `ROADMAP.md` §0 non-goal, which made "`failed[]` is not history" easy. Since
-> ROADMAP D14 history is *planned* (P4) — so the rule is now a **separation** rule rather than
-> an absence one: history gets its own durable, user-level store, and `failed[]` stays an
-> ephemeral, bounded, failures-only diagnostic in `$TMPDIR`. Growing this array into the
-> history feature would put a user-facing record in a directory that is erased on reboot.
+> ROADMAP D14 it is a FEATURE, and it has landed (§9.6) — so the rule is now a **separation**
+> rule rather than an absence one, and both sides of it are real files: history is durable,
+> user-level, every track, in `$UT_STATE_DIR`; `failed[]` stays ephemeral, bounded,
+> failures-only, in `$TMPDIR`. The two are written at the same instant by the same child and
+> are not a duplication. Growing this array into the history feature would have put a
+> user-facing record in a directory that is erased on reboot.
 
 **Async title backfill (why detach stays instant).** The title is the semantic handle a
 caller — a small model especially — uses to refer to what's playing ("is the Adagio still
@@ -1179,17 +1186,32 @@ launched.
    inside a second and `wait` returned 158. So the child runs mpv in the BACKGROUND and
    `wait`s on it — otherwise `--next` would mean "skip a track once this one is over", which
    is not a skip.
-2. **An async command cannot trap SIGINT.** Bash starts one with SIGINT set to `SIG_IGN`, and
-   a signal ignored on entry can never be trapped. The detached child IS such a command, so
-   its `trap … INT` is silently a no-op: a group INT killed mpv while the child sailed on into
-   the next track, and only the KILL escalation three seconds later stopped it. `stop_group`
-   therefore tells the LEADER with SIGTERM and the group with SIGINT — which is what makes
-   `--stop` stop a queue rather than one track of it — and it repeats BOTH on every 0.2s tick
-   of the escalation, because the group is not a fixed set: the engine call between two tracks
-   spawns a fresh yt-dlp, then its anonymous retry, then curl for the probe, and one that
-   started a millisecond after the first signal never saw it. While such a straggler runs the
-   child's own trap cannot run either (fact 1 again), so a single late process is enough to
-   make a stop wait out the whole escalation.
+2. **An async command cannot trap SIGINT — ONLY WITHOUT JOB CONTROL, which is not this
+   child.** The rule as usually stated (bash starts an async command with SIGINT set to
+   `SIG_IGN`, and a signal ignored on entry can never be trapped) is what this file believed
+   for two revisions, and it is half of the truth: bash applies that `SIG_IGN` only when
+   **job control is off**, and `detach_play` launches under `set -m`. Measured on 3.2.57,
+   the same child with and without monitor mode: WITH it, `trap … INT` fires and `wait`
+   returns 130; WITHOUT it, a group INT does not reach the child at all. So the detached
+   child's INT is an ordinary, trappable signal — and an UNtrapped one is a plain kill.
+
+   That distinction was invisible until the child had something to say before dying. Once it
+   writes a listening row (§9.6), it showed up as data loss: `--stop` sends the leader a TERM
+   and the group an INT back to back, and on 3.2 the second signal takes the process down
+   BETWEEN the two handlers, before the first one runs a line. Measured, reproducibly: 0 rows
+   out of 2 for a `--stop --all` over two players, while either signal ALONE reached the
+   handler every time. Two changes, and both are load-bearing rather than defensive: the child
+   traps `TERM INT` (same handler, `stopped` is final either way), and `stop_group`'s FIRST
+   tick is TERM alone — the 0.2s before the INT joins it is the child's whole opportunity to
+   record what happened. mpv does not need that tick, because the child's own handler kills it.
+
+   The escalation still repeats BOTH signals on every 0.2s tick, because the group is not a
+   fixed set: the engine call between two tracks spawns a fresh yt-dlp, then its anonymous
+   retry, then curl for the probe, and one that started a millisecond after the first signal
+   never saw it. While such a straggler runs the child's own trap cannot run either (fact 1
+   again), so a single late process is enough to make a stop wait out the whole escalation.
+   Measured after the change: `--stop --all` over three players, 956 ms — the same
+   ~0.3s-per-player it was before, with every row written.
 3. **Both signals can be pending at once, and the order is not ours to pick.** The engine call
    between two tracks is a foreground command, so a `--next` delivered during it waits, and a
    `--stop` arriving behind it waits too; when the resolve returns bash runs both handlers.
@@ -1210,6 +1232,65 @@ position it just played, so if a track ends in the same instant a `--next` lands
 moves first wins and the other is a no-op: nothing is ever skipped twice. The signal is
 SIGUSR1 to the child's PID and never to the group — USR1's default disposition is to
 terminate, so a group-wide one would kill the mpv the loop is supposed to advance past.
+
+### 9.6 The listening log (`ut-history`) — the second half of the durable store
+
+A playlist is what a person put there. The log is what a player wrote. They share the state
+root, the item record and nothing else:
+
+```
+   $UT_STATE_DIR/history/<YYYY-MM>.jsonl      append-only, one line per listening
+```
+
+**JSONL, and it is the one place in the suite that breaks "one entity, one file".** A
+listening is not an entity, it is an EVENT: one file per event is thousands of inodes by
+spring. Three consequences follow, and all three are load-bearing:
+
+1. Appending is not a read-modify-write, so this is the **one write in the suite that takes
+   no lock** — `>>` opens `O_APPEND` and a single write under `PIPE_BUF` lands whole. A JSON
+   array on disk would make every write a race, which is the shape ROADMAP P4 already ruled out.
+2. Therefore **every line must stay under 4096 bytes.** That is not a style rule, it is the
+   premise of point 1. The title is truncated to 200 bytes on a UTF-8 boundary (the jq
+   spelling of what `utf8_complete` does for a keypress — a truncation that can leave a broken
+   sequence produces a line that is not JSON, the one thing an append-only log cannot
+   recover from), and the finished row is then MEASURED, with the free-text fields dropped in
+   order until it fits. A premise checked only on typical input is not a premise, so
+   `tests/contract.sh` records an 8 KB title and asserts on the bytes on disk.
+3. Sharding by month makes `--clear --before` mostly an `rm`, not a rewrite of the whole log.
+
+**The record point is "a track ended", not "a player died" — and that is the whole design.**
+`--stop` takes the process group down, so a row written only on a natural finish would record
+just the tracks nobody interrupted: a systematically skewed log, and more misleading than
+none, because "what I listen to" would read out as "what I never skipped". The call therefore
+sits after EVERY play in the child's loop, before the branch that leaves it, and the reason
+comes from `CHILD_REASON` — never from mpv's exit code, which spells a skip and a stop the
+same way (§9.5). A clean finish carries no reason at all; a skip and a stop are both
+`stopped_by_user`, and `seconds` is what separates a skip at 0:05 from a stop at 3:20. What it
+cost to make that true under `--stop` is §9.5's fact 2.
+
+**A track that never opened and never failed is not a listening.** A stop or a skip landing in
+the gap between two tracks — the engine round trip — writes nothing; the same gap ending in a
+FAILURE does write a row, because "I tried to play this and it would not play" is exactly what
+a history is for, and it is the one row whose `seconds` being 0 says something true.
+
+**The player writes, the store stores.** `ut-play` calls `ut-history` BY NAME, the way it
+calls an engine, and knows nothing about JSONL or month shards; `ut-history` never plays.
+Absent from PATH, nothing is logged and nothing is said — a capability this suite does not
+have is declared by not having the command, the rule that also gives `bili-resolve` no
+`--transcript`. The write runs inside a subshell that has ignored INT and TERM first, and
+`SIG_IGN` survives `exec`, so once it is forked the row lands even if the child that produced
+it is killed a millisecond later.
+
+**`UT_HISTORY=0` turns it off, and the default is on** — a history that ships off is not a
+history, because nobody finds the knob before the feature has ever produced a row. What it
+buys is bounded on purpose: a local file, on this machine, with a `--clear` verb of its own.
+The reopen condition is a SHARED account, where "what this login listened to" stops being one
+person's record.
+
+**The TUI reads it and stores nothing** (`h`, §11). The log's `--ls` envelope is the same
+`.items` shape a playlist's `--show` is, so `build_playlist_rows` renders it unchanged and
+every key that works on a stored row works here — which is why the view cost one loader, one
+predicate (`stored_rows`) and no renderer at all.
 
 ## 10. Resolve — the engine's half two
 
@@ -2187,6 +2268,21 @@ Moved → `AS-BUILT-contract.md` §5.
                   queue_note_failure (a TRACK's tombstone, <id>-q<pos>),
                   child_signal + detached_child_loop (the child: one player, one queue),
                   do_enqueue, do_next
+     History    : history_bin (find ut-history by name, once, or answer "not installed"),
+                  history_record (one row per track, after EVERY play, inside a subshell
+                  that has ignored INT/TERM — §9.6). The player's only knowledge of the
+                  log is the row shape; the file is ut-history's.
+
+   Store, the log (shell/ut-history)
+     Verbs      : do_ls (newest first across month shards, reading only as many as -n
+                  needs; one unreadable line is counted and skipped, never fatal),
+                  do_record (the row is CONSTRUCTED field by field, so a caller's stray
+                  key cannot reach disk; then measured against LINE_MAX), do_clear
+                  (whole shards by rm, only the boundary shard rewritten)
+     Shape      : JQ_TRUNC (truncate to a BYTE budget on a UTF-8 boundary), line_bytes,
+                  count_rows, collect_history_files (shards newest first — YYYY-MM sorts
+                  lexicographically exactly as it sorts chronologically, which is the whole
+                  reason the shard is named that way), ensure_store
 
    Engine, search half (shell/yt-search · shell/bili-search)
      Shared shape: die, is_non_negative_int, validate_enum, require_cmd/require_deps,
@@ -2261,11 +2357,15 @@ Moved → `AS-BUILT-contract.md` §5.
      Formatters : fmt_sec (clock), short_dur (duration_fmt → 6:10:58), commas
      Engines    : scan_engines / engine_seen / engine_search_bin (discovery by pair,
                   §11), cycle_engine (the `e` key: switch source and re-fetch)
-     Playlists  : build_playlist_rows (a playlist envelope → the same seven-field row a
-                  search builds), add_to_playlist (`a`), browse_playlists / open_playlist
-                  (`b`), prompt_name (the `n` prompt's reader, reused), have_store /
-                  store_notice — all of them shelling out to ut-playlist, storing nothing
-                  here (§9.4)
+     Stores     : build_playlist_rows (a stored envelope → the same seven-field row a
+                  search builds; a playlist's --show and the log's --ls are one shape, so
+                  one builder serves both), add_to_playlist (`a`), browse_playlists /
+                  open_playlist (`b`), open_history (`h`, no prompt — the log is one
+                  thing), stored_rows (the predicate search_only is the other half of:
+                  "these rows came from a store", the three-site test that would otherwise
+                  be three drifting copies), prompt_name (the `n` prompt's reader, reused),
+                  have_store / have_history / store_notice — all of them shelling out to
+                  ut-playlist or ut-history, storing nothing here (§9.4, §9.6)
 ```
 
 **The repetition across the four engine files is deliberate, not drift.** `die`,
@@ -2389,7 +2489,7 @@ exit 4) exit 0 so a polling loop never misreads a normal state as failure.
 | Error taxonomy | branch on a cause, not raw wording | ✅ fixed `reason` enum |
 | Config surface | per-request in flags; set-once as env | ✅ flags per-call; env for tuning |
 | Ownership | no client lock-in; both surfaces portable | ✅ owned player + engines + glue; primitives behind seams |
-| Entry-point shape | separate verbs beat one mode-flagged command | ✅ seven narrow verbs, no dispatcher, no wrapper tier |
+| Entry-point shape | separate verbs beat one mode-flagged command | ✅ eight narrow verbs, no dispatcher, no wrapper tier |
 | Extensibility | a new capability must not edit the caller | ✅ a new source = one engine PAIR; player and TUI unchanged (proved by step C) |
 
 ## 23. Clean / Safe / Modular / DRY adherence
@@ -2400,7 +2500,7 @@ exit 4) exit 0 so a polling loop never misreads a normal state as failure.
    Safe    : exit-code contracts preserved across two restructures; TTY guards;
              interactive path never absent during change (§24); destructive edits
              grep-gated.
-   Modular : seven peers, one layer, one explicit dependency graph; each primitive behind
+   Modular : eight peers, one layer, one explicit dependency graph; each primitive behind
              a single seam, and the seams split by file (§5).
    DRY     : the rule is one fact one PLACE, which is not the same as one COPY.
              Playback and lifecycle exist once (the player). One site's knowledge exists
@@ -2962,12 +3062,12 @@ new-search/more-results instead of `n`/`m`; also corrected.
   `audio` is the norm and `video`/`fast` open their own GUI window.
 - Blocking playback (`ut-play -- <handle>` / `-j`) returns only when playback ends; use
   `--detach`+`--status`/`--stop`, or `<engine>-resolve`, for non-blocking agent flows.
-- **Scope note (ROADMAP D14/D15):** of the three listening features, **playlist management
-  has landed** — it is specified in §9.4 and AS-BUILT-contract.md §1.5, and it arrived with
-  its agent verb and its `-j` envelope in the same commit as its keybinding, which is the
-  constraint all three inherit: a feature with a keybinding and no verb is half-built. The
-  **queue** and **listening history** remain planned work in the shell version (ROADMAP P4,
-  in flight in `docs/PLAN-listening.md`) and are not specified here until they land.
+- **Scope note (ROADMAP D14/D15): all three listening features have landed**, in the shell
+  version, in the order they depended on each other — playlist management (§9.4,
+  AS-BUILT-contract.md §1.5), the queue (§9.5, §1.1), the listening log (§9.6, §1.6). Each
+  arrived with its agent verb and its `-j` envelope in the same commit as its keybinding,
+  which is the constraint they all inherited: a feature with a keybinding and no verb is
+  half-built.
   Favourites is deliberately not a feature (a playlist with a fixed name); a downloader and
   channel subscriptions are unscheduled.
 - `uting` rows are one jq pass over the cached results per search — fine for small N;
@@ -3018,10 +3118,15 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 ## 27. Verification matrix
 
-**Last run: 2026-08-25, both suites green** — `contract.sh` **144 ok / 0 failed**,
-`playback.sh` **36 ok / 0 failed**, with `pgrep mpv` empty afterwards. Both files point
-`TMPDIR` at a directory of their own, so neither reaches the state dir of a player the user
-is listening to.
+**Last run — a measurement, filled in from the run, not a constant kept in sync.** Each suite
+prints its own count on the last line, which is that number's one home; the entry here records
+what a particular run on a particular day cost, and goes stale by design rather than by drift.
+*2026-08-25, both suites green*: `contract.sh` **177 ok / 0 failed in ~90s**, `playback.sh`
+**42 ok / 0 failed in ~55s**, with `pgrep mpv` empty afterwards. Both files point `TMPDIR` at a
+directory of their own, so neither reaches the state dir of a player the user is listening to,
+and both now point `UT_STATE_DIR` at one too — a detached player writes a listening row per
+track (§9.6), so without it every run would append a dozen tracks nobody listened to to the
+user's real history, which unlike a player is not something `--stop` takes back.
 
 **Functional only, and two files.** The renderer rig (`tui_pane.sh`) and its cell-grid prover
 were removed: layout is proved when a frame enters a doc (`.claude/skills/capture-pane`, which
@@ -3029,24 +3134,38 @@ still carries `assert_pane.py`), and the suite asserts *survival* instead — th
 holds through two resizes, and leaves on `q` with 0. `playback.sh` lost its banner-tick case
 for the same reason and no longer needs tmux at all. What that trade gives up is named
 plainly: a CJK title that wraps, a rail that stops being right-flush, or a repaint that clears
-the screen will not be caught by a test — only by the next doc capture.
+the screen will not be caught by a test — only by the next doc capture. **One timing claim goes
+with them, and is named here because nothing else names it:** that a detached player flips the
+TUI's card from *Starting* to *Playing* on its own 1 s tick, with no keypress. That needed a
+pty; `playback.sh` deliberately has no terminal, `contract.sh`'s TUI section deliberately
+starts no player, and `drive.sh -k Enter -w Playing` waits for the banner without asserting on
+it. So it is proved nowhere today, and the honest entry is that sentence rather than a check
+somewhere that half-covers it.
 
-> **Observed flakiness, recorded rather than smoothed over.** On the first of three
-> consecutive runs on 2026-08-23, ten checks failed — the live-read and death-record clusters plus
-> one network check — and the next two runs passed 78/78 unchanged. Those clusters fabricate
-> state files under the shared `${TMPDIR}/uting-$(id -u)/players`, which is keyed by uid and
-> nothing else, so **two overlapping runs (or a stray detached player) corrupt each other's
-> fixtures**. Treat a single red run as inconclusive until it repeats; the durable fix is a
-> per-run state dir, which is not built yet.
+> **Observed flakiness — the shared-state one is CLOSED, and this is the record of it.** On
+> 2026-08-23 ten checks failed on the first of three runs and the next two passed 78/78
+> unchanged; on 2026-08-24 the same cluster went red twice while an ordinary interactive
+> `uting` was open in another window, then passed 3/3 minutes later with nothing changed. The
+> mechanism was sharper than "two overlapping runs": the death-record fixtures lived under
+> `${TMPDIR}/uting-$(id -u)/players`, keyed by uid and nothing else, and **every lifecycle verb
+> reaps** — so one `ut-play --status` from anywhere, a TUI's liveness poll included, deleted a
+> tombstone fixture between its creation and the assertion that read it. The durable fix was
+> the per-run state dir, and it is now built in both suites (`contract.sh:38-40`,
+> `playback.sh:39-41`): each exports a `TMPDIR` of its own, so no other uting on the uid shares
+> the directory. What survives is the ordering rule the same mechanism still implies inside a
+> single run — the death-record section must precede the TUI section, since the pane's own
+> `--status` poll reaps — and that is written at the section itself rather than left to layout.
 >
-> **2026-08-24 sharpens the mechanism, and it is worse than "two overlapping runs".** The same
-> cluster went red twice while an ordinary interactive `uting` was open in another window, then
-> passed 3/3 in a row (40 checks, isolated) minutes later with nothing else changed. The reaper
-> is not the other RUN — it is **any concurrent reader of the state dir**: every lifecycle verb
-> reaps, so one `ut-play --status` from anywhere, including a TUI's liveness poll, deletes the
-> tombstone fixtures between the `mkfake` and the assertion. A green suite therefore means
-> "green with no other uting on this uid", which is a condition the file does not enforce and
-> the reason the per-run state dir is the real fix rather than a tidy-up.
+> **The open one is different, and it has a fix rather than an acceptance.** On 2026-08-25
+> `playback.sh` ran 34s/35 ok/1 failed and then 41s/36 ok/0 failed, same machine, no code
+> change; the red one was *"no duration on the queued player"*. That is not shared state — it
+> is a **live field read exactly once**: after `--next` the poll waits for the recorded `url`
+> to flip, which the parent does the moment it advances the queue, while `duration` comes off
+> the socket, where the new mpv may not have reported one yet. It is a race with a bounded
+> poll for a fix (`wait_live <id> <field>`), so it is logged as located-and-scheduled, not as
+> accepted flakiness. It also cost more than one check: a red there skips the arm of the
+> `case` that proves a track ending advances the queue, so the score dropped by one while the
+> coverage dropped by two.
 
 **No *scratch* check is named by path here, on purpose.** The exception is the three files
 that earned a permanent home and are committed under `tests/` — the two suites `contract.sh`
@@ -3089,7 +3208,7 @@ the part of a deleted harness worth keeping.
                 -d --stop → rejected; -d -f ascii|viz → rejected
    Player     : ut-play (no args) → D3 error; ut-play "a query" and ut-play -- "a query"
                 → 1, naming yt-search; invalid --color rejected
-   Gating     : one tier, seven self-gating verbs (AS-BUILT-contract.md §2). <engine>-search rejects
+   Gating     : one tier, eight self-gating verbs (AS-BUILT-contract.md §2). <engine>-search rejects
                 -f/--detach/URL (URL rejection re-applied after `--`); ut-play rejects
                 -n/-s/bare-query. Three checks exist specifically to prove the deleted
                 wrapper took its gate WITH it rather than dropping it: an unknown long
@@ -3157,6 +3276,35 @@ the part of a deleted harness worth keeping.
                 watched, so the check is known to be able to fail), a held lock is 4 with
                 reason locked rather than an unlocked write, and a lock older than a
                 minute is stolen
+   History    : the LOG's own contract in contract.sh, from fixtures and under a disposable
+                UT_STATE_DIR (32 checks): an empty log is ok/count 0; a recorded row comes
+                back out of --ls; both _fmt fields are derived on read; a key the caller
+                carried in (`channel`) never lands on disk; --ls is newest first and one
+                line; -n bounds it; the envelope drops straight into ut-playlist --add,
+                which is the claim the row shape exists for. The 4096-byte premise is
+                driven rather than argued: an 8 KB title is recorded, reports truncated,
+                still parses back, and NO line in the shard reaches 4096 bytes — watched
+                red with the truncation removed. One hand-broken line and one row from a
+                newer schema are both skipped without hiding the rest; --clear --before
+                takes the older shard and leaves the current one; --clear on an empty log
+                is idempotent 0. The gate: two actions, no action, -n on --clear, --before
+                on --ls, a playback flag, a playlist verb, a positional after `--`, and
+                --record without `-` are each 1, and bad stdin is 1 with the error
+                envelope under -j. Each validated field has its own check — a bad engine
+                name, a url with whitespace, a malformed played_at, a reason off the
+                playback enum
+                The WIRING in playback.sh, where a real track really ends (6 checks): a
+                19-second handle is played to its end and the log is POLLED for its row —
+                that row exists, carries no reason (the claim that separates a history from
+                a death record), and holds the engine's own title and a played length near
+                the length of the thing. An interrupted track is in there too, from the
+                players every section above stopped, so the log is not a record of what
+                went uninterrupted. Every row is a CALL (an engine NAME and a
+                whitespace-free handle, asserted as grammar so a third engine passes it
+                unedited) and both engines this run drove are present under one shape.
+                UT_HISTORY=0 then plays one more real player and writes nothing — counted
+                by url, since this file leaves players stopping in the background. Watched
+                red with the child's history_record call removed
    Live volume: uting 9/0 on a --volume 0 player → --status reports the
                 moved value (not the stale launch value); from 98, three 0 presses stop
                 at 100 and never reach mpv's own 130 ceiling

@@ -18,6 +18,12 @@
 #
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md §28.
 #
+# Cost: ~85s and the network (measured 2026-08-25). CLAUDE.md asks for this file before every
+# commit, so the number belongs at the door: roughly 15 live engine round trips, one 5s lock
+# spin the stale-lock check has to sit through, and ~25s of tmux bringing the TUI up. It
+# starts no process it did not have to and talks to no peer — every live claim is
+# tests/playback.sh's.
+#
 # Usage:  tests/contract.sh            all checks
 # Exit:   0 = every check held, 1 = at least one regression
 
@@ -440,7 +446,14 @@ report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - -
 # a stand-in that runs in place of a component. Nothing here simulates a player; a record whose
 # pid is gone IS a dead player, which is the whole condition under test. The code (reap,
 # classify, prune, envelope) is the real one, driven through the real verb. Like --stop --all
-# above, this writes in the live state dir.
+# above, this writes in the private TMPDIR this file exports at the top (:27-40), never in the
+# user's.
+#
+# ORDER IS LOAD-BEARING: this section must stay AHEAD of the TUI section. The pane's `uting`
+# polls --status once a second, every lifecycle verb reaps, and a reaped fixture is a fixture
+# deleted before the assertion that reads it — the failure docs/ARCHITECTURE.md §27 already
+# has on record. Today the order holds by accident of layout; this comment is what makes it
+# hold on purpose.
 echo "── the death record: failures only, bounded, never inferred ───────"
 SD="${TMPDIR:-/tmp}/uting-$(id -u)"
 dead_record() { # <id> <rc|""> [ended_at]   — a dead player, with or without an epitaph
@@ -557,6 +570,88 @@ report "…with reason locked"            0 "$(printf '%s' "$PL_OUT" | jq -e '.r
 # A lock left by a SIGKILLed writer must not wedge a playlist forever.
 touch -t 202001010000 "$UT_STATE_DIR/playlists/.lock-race"
 report "a stale lock is stolen"         0 "$(printf '[{"engine":"yt","url":"https://x/z"}]' | $PL --add race -j >/dev/null 2>&1; echo $?)"
+rm -rf "$UT_STATE_DIR"
+
+echo "── the listening log: append-only, one line, bounded ──────────────"
+# The eighth entry point, and the second half of the user-level store. Same disposable
+# UT_STATE_DIR discipline as the playlist section above, and for a sharper reason: without it
+# these checks append to the log of what the user actually listened to, and --clear deletes
+# from it.
+UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/uting-histore.XXXXXX")
+HL=shell/ut-history
+# A listening is the ITEM record plus the four fields a listening has and a list entry does
+# not. `channel` is in here on purpose: it is the field a caller would carry in by accident,
+# and the row on disk must not have it.
+H_ROW='{"engine":"yt","id":"a1","url":"https://www.youtube.com/watch?v=a1","title":"One","duration":213,"channel":"c","played_at":"2026-06-02T10:00:00Z","ended_at":"2026-06-02T10:01:37Z","seconds":97,"reason":null}'
+
+report "empty log: ok, count 0"        0 "$(jq_ok '.status=="ok" and .count==0 and .items==[]' $HL --ls -j)"
+printf '%s' "$H_ROW" | $HL --record - -j >/dev/null 2>&1
+report "--record then --ls reads it"   0 "$(jq_ok '.count==1 and .items[0].url=="https://www.youtube.com/watch?v=a1"' $HL --ls -j)"
+report "--ls is ONE line"              1 "$($HL --ls -j | wc -l | tr -d ' ')"
+# DERIVED on read, never stored — the same rule --show follows for duration_fmt. A stored
+# copy would be a second truth about the same number.
+report "both _fmt derived on read"     0 "$(jq_ok '.items[0].duration_fmt=="00h:03m:33s" and .items[0].seconds_fmt=="00h:01m:37s"' $HL --ls -j)"
+# The row is CONSTRUCTED field by field, so a key the caller happened to carry cannot land on
+# disk: `channel` expires into a lie, and this is the check that keeps it out.
+report "an unknown key never lands"    0 "$(jq_ok '(.items[0]|has("channel"))==false' $HL --ls -j)"
+# Newest first, sorted by played_at rather than trusted in file order — a record can arrive
+# back-dated (a track that started last month and ended this one).
+printf '%s' "$H_ROW" | jq -c '.played_at="2026-08-02T10:00:00Z" | .id="a2" | .url="https://www.youtube.com/watch?v=a2"' | $HL --record - -j >/dev/null 2>&1
+report "--ls is newest first"          0 "$(jq_ok '.items[0].id=="a2" and .items[1].id=="a1"' $HL --ls -j)"
+report "-n bounds what is printed"     0 "$(jq_ok '.count==1 and .items[0].id=="a2"' $HL --ls -n 1 -j)"
+# THE CLAIM THE ROW SHAPE EXISTS FOR: a listening is a CALL, so --ls drops into --add with no
+# field mapping in between. If the two envelopes ever drift, this is what says so.
+$HL --ls -j | shell/ut-playlist --add rediscover -j >/dev/null 2>&1
+report "--ls feeds ut-playlist --add"  0 "$(jq_ok '.count==2 and ([.items[].engine]|unique==["yt"])' shell/ut-playlist --show rediscover -j)"
+
+# THE 4096-BYTE PREMISE. The lock-free append is only atomic while one line fits under
+# PIPE_BUF, so the title is truncated to 200 bytes and the whole row is measured after. A
+# check that only ever sees ordinary input is not a check of a premise.
+H_BIG=$(printf '%s' "$H_ROW" | jq -c --arg t "$(printf 'x%.0s' $(seq 1 8000))" '.title=$t | .id="big" | .url="https://www.youtube.com/watch?v=big" | .played_at="2026-08-03T10:00:00Z"')
+H_OUT=$(printf '%s' "$H_BIG" | $HL --record - -j 2>/dev/null)
+report "an 8KB title is recorded"      0 "$(jqv '.status=="ok" and .recorded==1' "$H_OUT")"
+report "…and reports truncated"        0 "$(jqv '.truncated==true' "$H_OUT")"
+report "…and --ls still parses it"     0 "$(jq_ok '.count==3 and ([.items[]|select(.id=="big")]|length)==1' $HL --ls -j)"
+# Bytes, not characters: the budget is PIPE_BUF and awk counts what the kernel writes.
+report "…and no line reaches 4096B"    0 "$(LC_ALL=C awk 'length($0) >= 4096 { bad = 1 } END { print bad + 0 }' "$UT_STATE_DIR"/history/*.jsonl)"
+
+# One unreadable line must not hide the rest — the rule --ls already applies to a corrupt
+# playlist file, on the format where a hand edit is likeliest.
+printf '%s\n' '{ not json' >> "$UT_STATE_DIR/history/2026-08.jsonl"
+report "a broken line hides nothing"   0 "$(jq_ok '.status=="ok" and .count==3' $HL --ls -j)"
+# `schema` is written by every record; this is what makes writing it worth anything.
+printf '%s\n' '{"schema":99,"engine":"yt","url":"https://x/9","played_at":"2026-08-09T10:00:00Z"}' >> "$UT_STATE_DIR/history/2026-08.jsonl"
+report "a newer schema is skipped"     0 "$(jq_ok '.count==3' $HL --ls -j)"
+
+# --clear is mostly an `rm`: shards older than the boundary go whole. Everything above lands
+# in the 2026-08 shard except the very first record, so a cut at that month must take exactly
+# one row and leave the August shard — junk lines and all — untouched.
+report "--clear --before cuts by month" 0 "$(jq_ok '.status=="ok" and .removed==1' $HL --clear --before 2026-08 -j)"
+report "…and left the rest alone"      0 "$(jq_ok '.count==2 and ([.items[].id]|sort==["a2","big"])' $HL --ls -j)"
+report "--clear empties the log"       0 "$(jq_ok '.status=="ok"' $HL --clear -j)"
+# Idempotent, like --stop on a player that already exited: the caller asked for an end state.
+report "--clear on an empty log: 0"    0 "$(jq_ok '.status=="ok" and .removed==0' $HL --clear -j)"
+
+# The gate. Same shape as ut-playlist's, and every arm names the command that owns the flag
+# rather than answering "unknown flag" to a caller who reached for a sibling.
+report "two actions at once: 1"        1 "$(rc $HL --ls --clear)"
+report "no action at all: 1"           1 "$(rc $HL -n 5)"
+report "-n on --clear: 1"              1 "$(rc $HL --clear -n 5)"
+report "--before on --ls: 1"           1 "$(rc $HL --ls --before 2026-01)"
+report "a playback flag: 1"            1 "$(rc $HL --status)"
+report "a playlist verb: 1"            1 "$(rc $HL --add jazz)"
+report "a positional argument: 1"      1 "$(rc $HL --ls -- extra)"
+report "--record without '-': 1"       1 "$(rc $HL --record /tmp/x)"
+report "bad stdin: 1"                  1 "$(rc_in 'not-json' $HL --record -)"
+H_OUT=$(printf 'not-json' | $HL --record - -j 2>/dev/null)
+report "…and an error envelope under -j" 0 "$(jqv '.status=="error" and .reason=="invalid_input"' "$H_OUT")"
+# Every field the row is validated on, one check each: the engine name is a command prefix,
+# the url is a handle, played_at names the shard file, and the reason is the PLAYBACK enum.
+report "a bad engine name: 1"          1 "$(rc_in "$(printf '%s' "$H_ROW" | jq -c '.engine="yt; rm -rf /"')" $HL --record -)"
+report "a url with whitespace: 1"      1 "$(rc_in "$(printf '%s' "$H_ROW" | jq -c '.url="ht tp://x"')" $HL --record -)"
+report "a malformed played_at: 1"      1 "$(rc_in "$(printf '%s' "$H_ROW" | jq -c '.played_at="last tuesday"')" $HL --record -)"
+report "a reason off the enum: 1"      1 "$(rc_in "$(printf '%s' "$H_ROW" | jq -c '.reason="bored"')" $HL --record -)"
+
 rm -rf "$UT_STATE_DIR"
 unset UT_STATE_DIR
 

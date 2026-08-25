@@ -4,11 +4,11 @@ This file is the single source of truth for repository guidelines, used by Claud
 
 ## Project Overview
 
-**uting** (u-ting / 你听) — an agent-first media engine with a terminal face. A seven-script bash suite: search a source, play it through `mpv` detached from the terminal, keep controlling it, and save what you found — from a TUI if you are a human, from a single-line JSON contract if you are a program. Two sources ship today (YouTube, Bilibili); a third is a new pair of scripts and no change anywhere else. Durable user-level state (playlists) lives in its own command, `ut-playlist` — never in the player, never in the TUI.
+**uting** (u-ting / 你听) — an agent-first media engine with a terminal face. An eight-script bash suite: search a source, play it through `mpv` detached from the terminal, keep controlling it, and save what you found — from a TUI if you are a human, from a single-line JSON contract if you are a program. Two sources ship today (YouTube, Bilibili); a third is a new pair of scripts and no change anywhere else. Durable user-level state lives in its own commands — `ut-playlist` for what a person saved, `ut-history` for what a player played — never in the player, never in the TUI.
 
 The suite is exposed **directly** to shell-capable agents with no MCP wrapper, so the **CLI contract itself** (argv, exit codes, output shape, process lifecycle) *is* the product and the safety boundary. Every design choice follows from that. Full rationale: `docs/ARCHITECTURE.md`.
 
-**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `uting` (the human surface) and `ut-play`/`yt-search`/`yt-resolve`/`bili-search`/`bili-resolve`/`ut-playlist` (the agent surface) onto their own PATH. **No short name ships** (`docs/ROADMAP.md` D10) — the human face carries the project's own name, so `~/bin/uting` is a plain symlink with the same word at both ends. A user wanting a short form writes their own alias.
+**Status: reference implementation.** Not packaged — no installer, no Homebrew formula, and none planned for the shell version (`docs/ROADMAP.md` D1/D2). Users symlink `uting` (the human surface) and `ut-play`/`yt-search`/`yt-resolve`/`bili-search`/`bili-resolve`/`ut-playlist`/`ut-history` (the agent surface) onto their own PATH. **No short name ships** (`docs/ROADMAP.md` D10) — the human face carries the project's own name, so `~/bin/uting` is a plain symlink with the same word at both ends. A user wanting a short form writes their own alias.
 
 ## Runtime Environment (Required)
 
@@ -27,17 +27,19 @@ git config core.hooksPath .githooks   # RUN ONCE PER CLONE — fresh clones have
 ## Build, Test, and Development Commands
 
 ```sh
-bash -n shell/ut-play shell/yt-search shell/yt-resolve shell/bili-search shell/bili-resolve shell/ut-playlist shell/uting  # syntax check — run before EVERY commit
+bash -n shell/*                                              # syntax check — run before EVERY commit
 /bin/bash shell/yt-search -j -n 5 -- "lofi hip hop"           # exercise on the 3.2 floor, explicitly
 shell/uting "lofi hip hop"                                   # interactive; needs a real TTY on stdin AND stdout
 shell/ut-play --help                                          # the player's own help (it is on PATH)
 shell/bili-search -j -n 5 -- "周杰伦"                          # the second engine, same envelope
 shell/ut-playlist --ls -j                                     # the store: durable, user-level state
 UT_STATE_DIR=$(mktemp -d) shell/ut-playlist --ls -j           # …never against the real one, in a test
+shell/ut-history --ls -n 20 -j                                # the log: what a player played, written by it
+UT_HISTORY=0 shell/ut-play -d -- URL                          # …and the switch that stops it being written
 shell/uting --version                                        # answers before any dependency gate
 
-tests/contract.sh                                             # the CLI contract, 144 checks
-tests/playback.sh                                             # real detached players; silent, ~35s
+tests/contract.sh                                             # the CLI contract; ~90s, needs the network
+tests/playback.sh                                             # real detached players; silent, ~55s
 tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
 tests/drive.sh -k Enter -w Playing                            # …including a real detached play
 ```
@@ -48,16 +50,17 @@ Each suite runs directly and says in its own docstring what it proves. Read the 
 
 | File | Role |
 |------|------|
-| `shell/ut-play` | **The player** (2.3k lines) — play + detached-playback lifecycle, non-interactive, never prompts. Owns the player lifecycle (id / pid / socket / lock / state dir / reap), the **queue** a player consumes (`--queue/--enqueue/--next`; a lone handle is a queue of one, resolved just in time — `docs/ARCHITECTURE.md` §9.5), the JSON envelope and the exit-code taxonomy, and **its own flag gate** (one verb, so there is no bypass to defend against — `docs/AS-BUILT-contract.md` §2). **Source-agnostic** — it does not search, does not extract, and carries no yt-dlp call, cookie decision or format string. It asks an engine, by name: `--engine yt` → `yt-resolve` |
+| `shell/ut-play` | **The player** (2.5k lines) — play + detached-playback lifecycle, non-interactive, never prompts. Owns the player lifecycle (id / pid / socket / lock / state dir / reap), the **queue** a player consumes (`--queue/--enqueue/--next`; a lone handle is a queue of one, resolved just in time — `docs/ARCHITECTURE.md` §9.5), the JSON envelope and the exit-code taxonomy, and **its own flag gate** (one verb, so there is no bypass to defend against — `docs/AS-BUILT-contract.md` §2). It is also the one process that knows a track ended and why, so it writes the listening row — by calling `ut-history` by name, exactly as it calls an engine (`UT_HISTORY=0` turns it off). **Source-agnostic** — it does not search, does not extract, and carries no yt-dlp call, cookie decision or format string. It asks an engine, by name: `--engine yt` → `yt-resolve` |
 | `shell/yt-search` | **The YouTube engine, half one** (560 lines) — query → result envelope. Owns its own yt-dlp call, cookie decision, result shaping and duration formatter, and its own flag gate. Zero playback or lifecycle logic |
 | `shell/yt-resolve` | **The YouTube engine, half two** (1.0k lines) — handle → `{stream_urls[], http_headers{}, title, duration, format}`, plus `--info` and `--transcript`. Owns the PO-token probe, the cookie decision, the mode→format table and the yt-dlp error vocabulary. Every site-specific fact in the suite lives in this file or in `yt-search`; adding a source is adding a pair like it |
 | `shell/bili-search` | **The Bilibili engine, half one** (658 lines) — query → result envelope, over `curl` + `jq`. It talks HTTP rather than shelling out to yt-dlp because yt-dlp's Bilibili search returns **no metadata at all** (flat) and recurses into every part of every collection (non-flat, >120s for 10 results). Sends no credential: one public endpoint, a Referer, and a locally generated random `buvid3` |
 | `shell/bili-resolve` | **The Bilibili engine, half two** (778 lines) — handle → the same resolve envelope, over `yt-dlp`. No request signing, no stream selection, no CDN logic: that is a thousand lines to redo what the dependency maintains. Owns the BV/av handle shapes, the cookie decision, the mode→format table. No `--transcript` — the site has no captions, and an engine states a missing capability by not having the verb |
 | `VERSION` | The suite version, declared once — a one-line data file, not a shell variable, and at the **repo root** rather than under `shell/`: it versions the suite, not the script directory. The player and the engines are independent executables sharing no library, so a variable in any one of them would make the others ask *it* for the version — the wrong dependency direction for a player that must not know its engines. Each entry point reads it one level up from its own **resolved** location, so a symlink on PATH still finds it |
 | `shell/ut-playlist` | **The playlist store** (636 lines) — durable, user-level, engine-agnostic state: `$UT_STATE_DIR/playlists/<name>.json`, one file per list, `mkdir` lock + atomic temp+mv, six verbs (`--ls --show --add --rm --del --rename`) and its own state-error enum (`not_found`, `exists`, `invalid_name`, `invalid_input`, `locked`, `corrupt` — the last four split 1 vs 4 the way the rest of the suite does). Knows **no site and no playback**: its record is `{engine, url, …}`, which is exactly `ut-play --engine E -- URL`, so a stored record is a CALL, not a reference. Input is stdin JSON only — a search envelope, its own `--show` envelope, or an item array. **The queue is NOT here**: a queue is a playlist being consumed and belongs to the player (`docs/ARCHITECTURE.md` §9.5) |
+| `shell/ut-history` | **The listening log** (627 lines) — the other half of the durable store, and the only one written by a program: `$UT_STATE_DIR/history/<YYYY-MM>.jsonl`, append-only, three verbs (`--ls --record --clear`). **The one write in the suite that takes no lock** — `>>` is `O_APPEND` and a line under `PIPE_BUF` lands whole — so **every line must stay under 4096 bytes**: the title is truncated to 200 bytes on a UTF-8 boundary and the finished row is then MEASURED. A row is the playlist's item record plus `played_at`/`ended_at`/`seconds`/`reason`, so `--ls -j` pipes into `ut-playlist --add` and `ut-play -d --queue -` unmapped. Knows no site and no playback; the PLAYER decides when a track ended and why (`docs/ARCHITECTURE.md` §9.6) |
 | `shell/uting` | The human face (3.4k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
 
-**Dependency graph — one layer, seven peers. Site knowledge exists ONLY in an engine pair, playback ONLY in the player. An engine's two halves need not use the same primitive: the seam is the ENVELOPE, not the tool behind it:**
+**Dependency graph — one layer, eight peers. Site knowledge exists ONLY in an engine pair, playback ONLY in the player. An engine's two halves need not use the same primitive: the seam is the ENVELOPE, not the tool behind it:**
 
 ```
   ~/bin/yt-search    → shell/yt-search ───► yt-dlp · jq            (engine: query → results)
@@ -66,8 +69,11 @@ Each suite runs directly and says in its own docstring what it proves. Read the 
   ~/bin/bili-resolve → shell/bili-resolve ► yt-dlp · jq            (engine: handle → stream URL + headers)
   ~/bin/ut-play      → shell/ut-play ─────► <engine>-resolve -j ──► mpv · jq · nc   (player)
   ~/bin/ut-playlist  → shell/ut-playlist ─► jq                    (durable state, optional)
-  ~/bin/uting       → shell/uting ──────► (<engine>-search -j | ut-playlist --show -j → render
+  ~/bin/ut-history   → shell/ut-history ──► jq                    (the listening log, optional)
+  ~/bin/uting       → shell/uting ──────► (<engine>-search -j | ut-playlist --show -j
+                                            | ut-history --ls -j → render
                                             → ut-play -d -j --engine <the ROW's engine>)
+                        the player also ──► ut-history --record -  (one row per track ended)
 ```
 
 The player never runs yt-dlp and mpv never runs it either (`--no-ytdl` + a direct URL): **one extraction, and we make it.** The engine name IS the command prefix, which is what lets the player find `yt-resolve` with a string concatenation instead of a registry.
@@ -134,8 +140,8 @@ Two files, one rule:
 
 | File | Drives | Gate |
 |---|---|---|
-| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store under a disposable `UT_STATE_DIR`; the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux | none — run it before every commit |
-| `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), and that an engine's `http_headers` actually reach mpv | none — it starts real players, but in a state dir of its own; ~35s and needs the network, so run it when the player changed |
+| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux | none — run it before every commit |
+| `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), that an engine's `http_headers` actually reach mpv, and the listening log's **wiring** — only here does a real track really end | none — it starts real players, but in a `TMPDIR` and a `UT_STATE_DIR` of its own; ~55s and needs the network, so run it when the player changed |
 
 `tests/drive.sh` is the only other file, and it is not a suite — it asserts nothing. It is a
 **driver**: it launches the TUI in tmux at a declared geometry, waits on the ready marker, optionally sends keys, and **always reaps the detached player** — which killing the tmux session does not do. Use it whenever a TUI change has to be driven rather than reasoned about.
@@ -232,7 +238,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 ## Coding Style & Naming Conventions
 
 - Match the surrounding style: 4-space indentation, `snake_case` functions, `UPPER_SNAKE` globals, `local` for everything inside a function, `set -euo pipefail` semantics respected (see the arithmetic rule above).
-- **One name per command, and no second spelling of any of them.** `ut-play`, `yt-search`, `yt-resolve`, `bili-search`, `bili-resolve`, `ut-playlist`, `uting` are the canonical identity — help text, errors, docs, and the PATH entry itself. The suite ships **no short form** (D10 — the short names are taken on npm/PyPI/crates, and a second official spelling is a second thing to keep in sync). A user wanting one writes their own alias. Never add a second name for an existing command.
+- **One name per command, and no second spelling of any of them.** `ut-play`, `yt-search`, `yt-resolve`, `bili-search`, `bili-resolve`, `ut-playlist`, `ut-history`, `uting` are the canonical identity — help text, errors, docs, and the PATH entry itself. The suite ships **no short form** (D10 — the short names are taken on npm/PyPI/crates, and a second official spelling is a second thing to keep in sync). A user wanting one writes their own alias. Never add a second name for an existing command.
 - Per-request choices are **flags**; set-once tuning is an **environment variable** (`YT_*`) — this keeps each verb's flag surface narrow enough for a small model to call safely. Do not add a flag for something a user sets once.
 - Never add a runtime dependency. The suite's differentiator is that it depends only on primitives everyone already has.
 - Prefer small, incremental edits in the existing scripts over refactors that move logic between files.

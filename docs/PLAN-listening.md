@@ -1,12 +1,12 @@
 # PLAN-listening —— 收听完整度（ROADMAP P4 · D14/D15）
 
-> 状态：**2/3 已落地**。三条目按依赖排序，逐条落地、逐条把契约并入 as-built；最后一条落地时删除本文件。
+> 状态：**3/3 已落地**（步骤 3 落地 2026-08-25）。契约已并入 as-built，本文件待 `VERSION` bump 后删除。三条目按依赖排序，逐条落地、逐条把契约并入 as-built；最后一条落地时删除本文件。
 >
 > | # | 条目 | 状态 | 已并入 / 落地后并入 |
 > |---|---|---|---|
 > | 1 | 播放列表管理（`ut-playlist` + 用户级状态层） | **已落地 2026-08-24** | `AS-BUILT-contract.md` §1.4/§1.5/§2/§3/§4/§5 · `ARCHITECTURE.md` §4/§9.4/§17/§27 · README · CLAUDE.md |
 > | 2 | 播放队列 **+ 运行时播控动词**（`ut-play` 长出 `--queue/--enqueue/--next` 与 `--pause/--resume/--seek/--seek-to`） | **已落地 2026-08-25**（播控四动词 `0.3.2`，队列 `0.3.3`）；曲间空隙已实测（median 4.3s / p90 5.7s，§7），预取按预设条件不进 v1 | `AS-BUILT-contract.md` §1.1/§3/§4/§5 · `ARCHITECTURE.md` §9.2/§9.5/§17/§27 · README · CLAUDE.md |
-> | 3 | 收听历史（`ut-history`） | 未开工 | `AS-BUILT-contract.md` §1.6/§3/§5 · `ARCHITECTURE.md` §9.2 的分离规则 |
+> | 3 | 收听历史（`ut-history`） | **已落地 2026-08-25** | `AS-BUILT-contract.md` §1.6/§3/§5 · `ARCHITECTURE.md` §9.6 与 §9.2 的分离规则 · README · CLAUDE.md |
 >
 > §1/§2/§3 的三条决定（状态住在哪、记录形状、队列归谁）在第 1 步里全部落地并经过实跑，
 > 后两步不再重开；第 1 步的实际交付与偏差记在 §5。

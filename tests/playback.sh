@@ -6,18 +6,16 @@
 #
 # No gate. It used to sit behind YT_TEST_LIFECYCLE=1 because starting players meant starting
 # them ON TOP OF the user's — --stop --all reached whatever they were listening to. The state
-# dir below removes that, and what is left is a ~35s run that needs the network — a reason to
-# run it when the player changed, not a reason for an env var to guard it.
-#
-# It also carries the one timing claim that needs a player: Starting -> Playing flips on the
-# TUI's own 1 s tick with NO keypress. That was the last thing `pty_drive.py` was kept for.
+# dir below removes that, and what is left is a ~40s run that needs the network — a reason to
+# run it when the player changed, not a reason for an env var to guard it. (Measured
+# 2026-08-25; two of the waits below are bounded polls, so a slow network costs more.)
 #
 # And it carries the one claim that needs a SECOND source: that the player applies the
 # http_headers an engine hands it. See the Bilibili section for why only that site can show it.
 #
 # It also owns the LIVE READ (--status off the mpv socket), for the same reason: the peer is
 # real mpv or it is nothing. The suite keeps no stand-in for a component, so a claim about
-# talking to mpv can only be made where mpv is running — here, behind the gate.
+# talking to mpv can only be made where mpv is running — which is here, and only here.
 #
 # Portability: bash 3.2. Needs jq for the envelopes; no tmux and no terminal — every
 # assertion here is an exit code or a field out of a real envelope.
@@ -38,6 +36,12 @@ cd "$REPO" || exit 1
 UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-playback.XXXXXX") || exit 1
 export TMPDIR="$UT_TEST_TMP"
 STATE_DIR="$TMPDIR/uting-$(id -u)"
+
+# And the USER-LEVEL store, for the same reason one line up but a longer-lived consequence:
+# a detached player writes a row to the listening log for every track it finishes, so without
+# this every run of this file would append a dozen tracks nobody listened to into the user's
+# real history — and unlike a player, a log is not something --stop takes back.
+export UT_STATE_DIR="$UT_TEST_TMP/state"
 
 # Two long, stable tracks. Silent at --volume 0; the point is the process, not the audio.
 U1=${YT_TEST_URL1:-https://www.youtube.com/watch?v=n61ULEU7CO0}
@@ -111,8 +115,8 @@ report "only the target moved" "40" \
 
 echo "── the live read: a real socket, a real peer, null is not false ───"
 # The four live fields cost a round trip to mpv itself. Nothing in this repo may stand in for
-# that peer, so the read is proved HERE, against the real one, behind the gate — never in
-# contract.sh against something written to imitate it.
+# that peer, so the read is proved HERE, against the real one — never in contract.sh against
+# something written to imitate it.
 #
 # Poll for the first reading rather than sleeping a guess: position/duration are null until
 # mpv starts decoding (network-bound, ~8s cold), and null there is an honest READING, not a
@@ -308,11 +312,12 @@ case "$dur" in
         ;;
 esac
 
-# --stop takes the whole QUEUE down. The child cannot trap SIGINT — an async command enters
-# with it SIG_IGN — so a group INT alone leaves the leader alive and playing on into the next
-# track until stop_group's KILL escalation. stop_group therefore tells the LEADER with
-# SIGTERM, and repeats both signals on every tick of the escalation because the engine call
-# between two tracks spawns processes that never saw the first one.
+# --stop takes the whole QUEUE down. The child traps BOTH signals stop_group sends it, and
+# the INT half is not belt-and-braces: bash only sets SIGINT to SIG_IGN in an async child when
+# job control is OFF, and detach_play launches under `set -m`, so an untrapped INT here is a
+# plain kill landing while the TERM handler runs (measured — see stop_group). The signals are
+# repeated on every tick of the escalation because the engine call between two tracks spawns
+# processes that never saw the first one.
 shell/ut-play --next -j >/dev/null 2>&1
 sleep 0.5
 report "--stop ends the queue" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; echo $?)"
@@ -328,6 +333,75 @@ report "no orphan mpv after a queue" 0 "${n:-0}"
 # tick nobody has seen fail proves nothing, so the claim stays where it can fail: contract.sh
 # already drives the tombstone boundaries (a normal finish writes none, a log with no epitaph
 # writes none) from fixtures, which is where a rule about what the REAPER records belongs.
+
+echo "── the listening log, written by a player that really played ─────"
+# contract.sh drives ut-history's own contract from fixtures. The WIRING — that a track
+# ending makes a row exist — can only be proved where a real track really ends, so it is
+# proved on a track chosen to end: 19 seconds, permanent and public, the same handle
+# contract.sh resolves. A seek to the end of one of the long tracks above would be cheaper
+# and it is what the queue section does, but it cannot carry this claim: `duration` is null
+# on a live stream, and this file must not have a check that goes green or red depending on
+# whether the fixture was streaming that afternoon.
+SHORT=${YT_TEST_SHORT:-https://www.youtube.com/watch?v=jNQXAC9IVRw}
+# How many rows this one track has, out of an envelope already in hand. Every claim below is
+# keyed by its url rather than by a total: this file leaves players stopping in the background
+# and a row landing from one of them mid-window would move a total for a reason that has
+# nothing to do with what is being asserted.
+h_url() { printf '%s' "$1" | jq -r --arg u "$SHORT" '[.items[]|select(.url==$u)]|length'; }
+
+shell/ut-play -d -j --volume 0 -- "$SHORT" >/dev/null 2>&1
+# Poll the LOG, not the clock: the row appears when the track ends, and how long the track
+# takes to start is network-bound (the rule wait_for_sock follows, applied to the artefact).
+# Poll for THIS track's row: the queue section also ends a track on its own, so a poll for
+# "any row that ended by itself" returns immediately and waits for nothing.
+i=0
+while [ $i -lt 60 ]; do
+    [ "$(h_url "$(shell/ut-history --ls -n 50 -j 2>/dev/null)")" != "0" ] && break
+    sleep 1; i=$((i + 1))
+done
+HIST=$(shell/ut-history --ls -n 50 -j 2>/dev/null)
+# THE RECORD POINT, and the one claim that separates a history from a death record: a track
+# that ended ON ITS OWN is in the log, carrying no reason at all. If the row were written
+# only when a player dies, this is the check that would be empty.
+report "a track that ended is logged" 0 \
+    "$(printf '%s' "$HIST" | jq -e --arg u "$SHORT" 'any(.items[]; .url==$u and .reason==null)' >/dev/null 2>&1; echo $?)"
+# And it is that TRACK's row, not a placeholder: the title the engine returned, and a played
+# length in the neighbourhood of the 19 seconds the thing actually is.
+report "…with its own title and length" 0 \
+    "$(printf '%s' "$HIST" | jq -e --arg u "$SHORT" 'any(.items[]; .url==$u and (.title|type)=="string" and .seconds >= 15 and .seconds <= 40)' >/dev/null 2>&1; echo $?)"
+# The other half, off the players every section above stopped: an interrupted track is
+# recorded too, which is what keeps the log from being a record of what went uninterrupted.
+report "an interrupted track says so" 0 \
+    "$(printf '%s' "$HIST" | jq -e '[.items[]|select(.reason=="stopped_by_user")]|length >= 1' >/dev/null 2>&1; echo $?)"
+# A row is a CALL: `engine` plus `url` is `ut-play --engine E -- <handle>`, which is why the
+# log stores the pair and not a bare handle. Both are asserted as the GRAMMAR each side of
+# that argv has — an engine name the player will paste into `<engine>-resolve`, a handle with
+# no whitespace in it — and not as "yt" or as "starts with http": this run drove two engines,
+# one of them on a bare BV id, and a third must pass this check unedited.
+report "…and every row is a call"    0 \
+    "$(printf '%s' "$HIST" | jq -e 'all(.items[]; (.engine|test("^[a-z0-9][a-z0-9_-]*$")) and (.url|test("^[^[:space:]]+$")))' >/dev/null 2>&1; echo $?)"
+# One shape for every source: the same two engines the sections above drove are both in the
+# log, with no per-site branch anywhere between them and the row.
+report "…from both engines, one shape" 0 \
+    "$(printf '%s' "$HIST" | jq -e '[.items[].engine]|unique|length >= 2' >/dev/null 2>&1; echo $?)"
+
+# The off switch is the whole switch: not a shorter row, no row. One more real player,
+# because a knob only read on a path nothing drives is a knob nobody has tested.
+#
+# The short track is replayed here because exactly one row for it exists by now, and only
+# this player could write a second.
+h_before=$(h_url "$HIST")
+o4=$(UT_HISTORY=0 shell/ut-play -d -j --volume 0 -- "$SHORT" 2>/dev/null)
+sock4=$(printf '%s' "$o4" | jq -r '.sock // empty')
+if wait_for_sock "$sock4"; then
+    sleep 2
+    shell/ut-play --stop --all -j >/dev/null 2>&1
+    sleep 2
+    report "UT_HISTORY=0 writes nothing" "$h_before" \
+        "$(h_url "$(shell/ut-history --ls -n 50 -j 2>/dev/null)")"
+else
+    bad "the UT_HISTORY=0 player never started — the off switch is untested"
+fi
 
 echo
 printf '%s: %d ok, %d failed\n' "$(basename "$0")" "$pass" "$fail"

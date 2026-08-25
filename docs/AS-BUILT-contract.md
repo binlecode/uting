@@ -1,7 +1,7 @@
 # AS-BUILT-contract — the uting CLI contract
 
 The **frozen surface** (ROADMAP D3/D13): the one thing that survives any rewrite, and the
-acceptance spec for a port. Everything here is as built — verified against the seven scripts —
+acceptance spec for a port. Everything here is as built — verified against the eight scripts —
 and versioned by `VERSION` under ROADMAP D13's semver rule. **Changing anything in
 this file is a deliberate, documented act** (CLAUDE.md hard rule 4), never a side effect
 of a feature.
@@ -9,7 +9,7 @@ of a feature.
 Written for two readers, neither of whom should need the source:
 
 - **a test author** — every envelope, exit code and error shape needed to write a JSON
-  diff test against any of the seven commands is in §1–§5;
+  diff test against any of the eight commands is in §1–§5;
 - **a third-engine author** — §1.2/§1.3 (the engine's two command surfaces), §2 (its gate),
   §3 (its envelopes) and §6 (the checklist) are the whole obligation; `bili-search` /
   `bili-resolve` satisfy nothing beyond what is stated here.
@@ -19,7 +19,7 @@ Rationale lives in `ARCHITECTURE.md` (pointed at throughout); process in
 
 ## 1. Command specifications
 
-Seven peers, four shapes: the player, an engine's two halves, the UI, and the playlist
+Eight peers, four shapes: the player, an engine's two halves, the UI, and the two stores
 store. Every one of them parses its own argv and holds its own gate (ARCHITECTURE.md §4) —
 there is no core to delegate to.
 
@@ -53,6 +53,12 @@ there is no core to delegate to.
    ut-play                      → usage error naming yt-search / uting (D3)
    ut-play -- "some query"      → usage error naming yt-search (whitespace ⇒ not a handle)
   ```
+- **Writes the listening log.** A DETACHED player records one row per track through
+  `ut-history --record` (§1.6) — at the end of the track and equally when a `--stop` or a
+  `--next` ended it, since a log of only the uninterrupted tracks would be a systematically
+  skewed record. Best effort: `UT_HISTORY=0` turns it off, an absent `ut-history` is silent,
+  and no failure of it may cost a track. A track that never opened and was not a failure
+  (a stop landing in the gap between two tracks) is not a listening and gets no row.
 - **Engine selection:** `--engine NAME`, defaulting to `UT_DEFAULT_ENGINE` (default `yt`).
   The name is the command prefix; an unknown one exits 1 naming it (ARCHITECTURE.md §4). **v1 does no URL
   sniffing** — `uting` always knows the engine because it did the search, and an agent
@@ -99,9 +105,12 @@ there is no core to delegate to.
   `v` cycle mode (audio→video→fast) · `e` switch source (hidden with one engine) ·
   `l` switch chrome language (en↔zh, any view) · `t` cycle palette family (any view) ·
   `n` new search · `m` more results · `o` sort · `/` filter · `q` quit ·
-  `a` add the focused row to a playlist · `b` open a stored playlist as the row source.
-  `a`/`b` appear only when `ut-playlist` is installed (§1.5), the same rule that hides `e`
-  on a single-engine install. With a playlist on screen the three keys that RE-FETCH a
+  `a` add the focused row to a playlist · `b` open a stored playlist as the row source ·
+  `h` open the listening log as the row source.
+  `a`/`b` appear only when `ut-playlist` is installed (§1.5) and `h` only when `ut-history`
+  is (§1.6), the same rule that hides `e`
+  on a single-engine install. `h` takes no name — the log is one thing — and shows the 50
+  newest rows. With a playlist or the log on screen the three keys that RE-FETCH a
   query — `m` `o` `e` — say so and do nothing; everything that works on the rows
   themselves is unchanged. Rows carry their own `engine`, so a list mixing sources plays
   each row under the engine that produced it.
@@ -134,7 +143,35 @@ there is no core to delegate to.
   does not. The queue (a playlist being consumed) stays with the player — a queue that
   survives a reboot IS a playlist (ARCHITECTURE.md §9.4).
 
-## 2. Gating model — one tier, seven self-gating verbs
+### 1.6 `ut-history` — the listening log (durable, user-level, engine-agnostic)
+
+- **Owns:** the log's file layout, the row's shape and its length bound. **Owns nothing
+  else:** no site knowledge, no playback, no `players/`, no playlist. It is the second half
+  of the user-level store, and the only one written by a program rather than by a person.
+- **Verbs (exactly one per call):** `--ls [-n N]` (newest first, default 20, capped 10000) ·
+  `--record -` (ONE row on stdin) · `--clear [--before DATE]`. Shared: `-l -j --color -h -V`.
+  `-n` belongs to `--ls` and `--before` to `--clear`; either on the other verb is exit 1, the
+  same rule `--index` follows on the playlist store.
+- **Positional: none**, and anything after `--` is a caller who meant a different command.
+- **Input — ONE row, on stdin (`--record -`):** a single JSON object. The singular is the
+  contract, not a limitation: the lock-free append below only holds for one write. Fields are
+  taken one by one, never merged, so a key the caller happens to carry (a search result's
+  `channel`) cannot reach the disk. `engine` and a whitespace-free `url` are required,
+  `played_at` must be an ISO timestamp, and `reason` must be a member of the PLAYBACK enum
+  (§3) or null.
+- **Storage:** `$UT_STATE_DIR/history/<YYYY-MM>.jsonl`, append-only, one line per listening.
+  **The one write in the suite that takes no lock** — `>>` is `O_APPEND` and a single line
+  under `PIPE_BUF` lands whole — which is why **every line must stay under 4096 bytes**: the
+  title is truncated to 200 bytes on a UTF-8 boundary, the row is then MEASURED, and the
+  fields are dropped in order (title, id, url) until it fits. `truncated` in the envelope
+  reports it. A month shard makes "clear the old stuff" an `rm` rather than a rewrite.
+- **Who writes it:** a detached `ut-play` child, once per track, whatever ended the track
+  (§1.1, `UT_HISTORY`). `ut-history` never plays and `ut-play` never opens the log file.
+- **Not the death record.** `players/dead/` is failures only, bounded, in `$TMPDIR`, and gone
+  at the reboot; this is every track, unbounded, and durable. The two are written at the same
+  instant and are the two sides of one rule (ARCHITECTURE.md §9.2).
+
+## 2. Gating model — one tier, eight self-gating verbs
 
 There is **no wrapper tier**. Each verb accepts only its own surface and points the caller at
 the correct tool on a cross-flag; that is what keeps the contracts non-overlapping now that
@@ -165,6 +202,16 @@ nothing sits between a caller and an implementation.
                                     --engine, and ANY positional (incl. after --)
    reject (→ "use <engine>-*"):     -n -m -M -s --info --transcript
    input: stdin JSON for --add; no positional at all
+
+   ut-history
+   ─────────────────────────────────
+   allow: --ls --record --clear -n --before -l -j --color -h -V
+   reject (→ "use ut-play"):        -f -d --detach --status --stop --set-volume --pause
+                                    --resume --seek --seek-to --queue --enqueue --next
+                                    --id --all --engine, and ANY positional (incl. after --)
+   reject (→ "use ut-playlist"):    --add --show --rm --del --rename --index
+   reject (→ "use <engine>-*"):     -m -M -s -S --info --transcript
+   input: ONE json row on stdin for --record; no positional at all
 ```
 
 **`--` stops FLAG parsing, not argument validation.** Each verb re-applies its positional
@@ -312,6 +359,29 @@ Envelopes (`-j`, one line each):
 `duration_fmt` is **derived on read, never stored** — a stored copy would be a second truth
 about the same number. It is emitted so an item is field-for-field row-compatible with a
 search result, which is what lets `uting` render a playlist through the same loader.
+
+Listening log (`ut-history`) — the SAME item record, plus the four fields a listening has
+and a list entry does not:
+```json
+{"schema":1,"engine":"yt","id":"a1","url":"https://…","title":"…","duration":213,
+ "played_at":"…","ended_at":"…","seconds":97,"reason":null}
+```
+One line of `$UT_STATE_DIR/history/<YYYY-MM>.jsonl`, and **under 4096 bytes** — the premise
+the lock-free append rests on (§1.6). `reason` is the PLAYBACK enum or **null, which is what
+a track that played to its end looks like**; a skipped or stopped one is `stopped_by_user`,
+and `seconds` is what tells a skip at 0:05 from a stop at 3:20. `played_at` names the shard
+file. `added_at` is absent by design: when a listening happened is `played_at`.
+
+Envelopes (`-j`, one line each):
+```
+   --ls     : {status:"ok", count, items:[row + {duration_fmt, seconds_fmt}…]}
+   --record : {status:"ok", recorded:1, month:"2026-08", truncated:false}
+   --clear  : {status:"ok", removed:N, before:DATE|null}
+   error    : {status:"error", reason}
+```
+Both `_fmt` fields are derived on read for the same reason `--show`'s is, and the result is
+that `ut-history --ls -j` pipes straight into `ut-playlist --add` and `ut-play -d --queue -`
+with no field mapping in between — the `.items` envelope is the shape those two already read.
 
 **The state-error enum is its own, and deliberately not the playback one:**
 `not_found | exists | invalid_name | invalid_input | locked | corrupt`. Nothing in a file
@@ -536,11 +606,14 @@ on-disk record read by jq, not an envelope.
           uting        : jq, plus the verbs it composes. ut-playlist is OPTIONAL —
                          absent, the two playlist keys say so and nothing else changes.
           ut-playlist  : jq only. No network, no yt-dlp, no mpv.
+          ut-history   : jq only. Same, and OPTIONAL to the player: absent from PATH,
+                         nothing is logged and nothing is said (a capability is declared
+                         by being there). uting's h key is drawn only when it is present.
           BSD `nc -U` is stock on macOS; the Linux netcat `-U` gap is a known,
           documented limitation (ARCHITECTURE.md §26 / script comment).
    -V   : every entry point answers it BEFORE any dependency gate, reading VERSION
           and printing its own name — needing yt-dlp installed to learn your version is
-          backwards, and seven executables must not be able to disagree (ARCHITECTURE.md §4).
+          backwards, and eight executables must not be able to disagree (ARCHITECTURE.md §4).
           Asserted over every file in shell/ that has a shebang, not over a list of names.
 ```
 
@@ -560,8 +633,15 @@ kept out of flags to keep each verb's flag surface narrow.
                         is erased on reboot; nothing a user built by hand may live there.
                         XDG rather than ~/Library/Application Support because the user
                         surface is a terminal and a Linux port needs no second layout.
-                        Not a convenience knob: tests/contract.sh sets it, and without it
-                        the suite would write into the user's real playlists.
+                        Today `playlists/` and `history/`. Not a convenience knob: both
+                        suites in tests/ set it, and without it they would write into the
+                        user's real playlists and real listening history.
+                      UT_HISTORY          (default on; 0 = off) = whether a DETACHED player
+                        writes a row per track to the listening log. Read by ut-play only,
+                        in the child. Default on because a history that ships off is not a
+                        history — nobody finds the knob before the feature has produced a
+                        row. Reopen condition: a shared account, where "what this login
+                        listened to" stops being one person's record.
                       UT_DEFAULT_ENGINE   (default yt) = which engine --engine defaults
                         to. Read by BOTH ut-play and uting, deliberately the same
                         variable: a user who picks a default source once should not

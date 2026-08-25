@@ -55,6 +55,15 @@ SELF="${BASH_SOURCE[0]}"
 # Per-call override: --engine. AS-BUILT-contract.md §1.1
 : "${UT_DEFAULT_ENGINE:=yt}"
 
+# THE LISTENING LOG, on by default; `UT_HISTORY=0` turns it off. A history that ships off is
+# not a history — nobody finds the knob that has to be found before the feature has ever
+# produced a row, so the default is the feature. What it buys is bounded on purpose: a local
+# file, on this machine, with a --clear verb of its own. The reopen condition is a SHARED
+# account, where "what this login listened to" stops being one person's record.
+# The writing happens here (the child is the only process that knows a track ended and why);
+# the storing is ut-history's, called by name like an engine. AS-BUILT-contract.md §5
+: "${UT_HISTORY:=1}"
+
 YT_MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar --no-video)
 # Keep video output auto-selected by mpv for compatibility across terminals/displays.
 # Video-mode terminal-noise fix (video/fast). mpv draws the media TITLE as a video OSD via
@@ -181,6 +190,7 @@ Dependencies: mpv (playback) + jq; nc (every socket verb: --set-volume, --pause,
 
 Environment:
   UT_DEFAULT_ENGINE    Engine used when --engine is not given (default: yt)
+  UT_HISTORY           0 stops a detached player writing to the listening log (default: on)
   YT_ASCII_VO          mpv terminal video output driver (default: tct)
   YT_MPV_INPUT_CONF    Path to an optional custom mpv input.conf
 EOF
@@ -294,6 +304,7 @@ engine_resolve_bin() {
 RESOLVED_URLS=()          # [0] = what mpv opens; [1] = its separate audio track, if any
 RESOLVED_HEADER_ARGS=()   # ready-made --http-header-fields-append=... mpv flags
 RESOLVED_TITLE=""
+RESOLVED_DURATION=""      # seconds, or "" for a live stream: read for the listening row only
 RESOLVED_HANDLE=""        # what was asked for: the queue moves, so the record must follow
 RESOLVED_FORMAT=""        # the engine's format string: recorded verbatim, never read
 RESOLVED_REASON=""        # on failure, the engine's own reason enum member
@@ -312,6 +323,7 @@ resolve_media() {
     RESOLVED_URLS=()
     RESOLVED_HEADER_ARGS=()
     RESOLVED_TITLE=""
+    RESOLVED_DURATION=""
     RESOLVED_FORMAT=""
     RESOLVED_REASON=""
     RESOLVED_RC=0
@@ -347,6 +359,10 @@ resolve_media() {
     fi
 
     RESOLVED_TITLE=$(printf '%s' "$out" | jq -r '.title // ""' 2>/dev/null) || RESOLVED_TITLE=""
+    # Nothing in the PLAYBACK path wants this — mpv learns the length from the stream. It is
+    # read for the listening row, where `seconds` alone cannot tell a track played through
+    # from one abandoned at the third minute. Empty for a live stream, which has no length.
+    RESOLVED_DURATION=$(printf '%s' "$out" | jq -r 'if (.duration | type) == "number" then (.duration | tostring) else "" end' 2>/dev/null) || RESOLVED_DURATION=""
     RESOLVED_FORMAT=$(printf '%s' "$out" | jq -r '.format // ""' 2>/dev/null) || RESOLVED_FORMAT=""
     # The anonymous-client fallback is now the ENGINE's decision, so `retried` is relayed
     # rather than observed — but it is still the playback envelope's field (AS-BUILT-contract.md §3).
@@ -509,6 +525,16 @@ run_mpv() {
         if [[ -n "$CHILD_REASON" ]]; then
             return 0
         fi
+        # WHEN THE TRACK ACTUALLY STARTED, for the listening row — recorded here rather
+        # than around the play in the loop, because the loop's call also contains the engine
+        # round trip (measured median 4.3s between tracks) and four seconds of resolve is not
+        # four seconds of listening. One fork answers both fields. The loop clears them per
+        # track, so an EMPTY epoch means mpv never opened and the row says 0 seconds instead
+        # of billing the listener for a failed extraction.
+        local started
+        started=$(date -u +"%FT%TZ %s" 2>/dev/null) || started=""
+        TRACK_STARTED_AT=${started%% *}
+        TRACK_STARTED_EPOCH=${started##* }
         local wrc=0
         "${mpv_cmd[@]}" "$@" ${detached_opts[@]+"${detached_opts[@]}"} "${media[@]}" &
         MPV_PID=$!
@@ -723,16 +749,28 @@ group_alive() {
 # briefly for graceful exit, then SIGKILL any survivor. Negative PID targets the group.
 stop_group() {
     local pgid=$1
-    # The LEADER is told by SIGTERM and everything else in the group by SIGINT, and that
-    # asymmetry is forced: bash starts an ASYNCHRONOUS command with SIGINT set to SIG_IGN,
-    # and a signal ignored on entry can never be trapped ("Signals ignored upon entry to the
-    # shell cannot be trapped or reset"). The detached child IS such a command, so its
-    # `trap … INT` is silently a no-op — measured: a group INT killed mpv with 130 while the
-    # child sailed on and started the NEXT queued track, and only the KILL escalation three
-    # seconds later stopped it. SIGTERM is not ignored, so it reaches the child's trap, which
-    # is what makes --stop stop a QUEUE rather than one track of it.
+    # The LEADER is told by SIGTERM and everything else in the group by SIGINT: mpv treats
+    # INT as the clean stop `q` is, and the child is told by name so a --stop ends a QUEUE
+    # rather than the one track playing out of it.
+    #
+    # BOTH ARE TRAPPED IN THE CHILD, and that is not the belt-and-braces it looks like. bash
+    # sets SIGINT to SIG_IGN in an asynchronous child ONLY when job control is off, and
+    # detach_play launches under `set -m` — measured on 3.2.57, the same child with and
+    # without monitor mode: with it, `trap … INT` fires and `wait` returns 130; without it,
+    # a group INT does not reach the child at all. So an UNtrapped INT here is a plain kill,
+    # and the child that took a TERM a microsecond earlier dies inside its own handler.
+    # Measured before the INT was added to that trap: three --stop runs out of three left no
+    # listening row at all, because the handler never reached its first line.
+    # THE FIRST TICK IS TERM ALONE, and the 0.2s before the INT joins it is the child's
+    # whole opportunity to say what happened. Measured on 3.2.57: TERM alone reaches the
+    # handler every time and so does a group INT alone, but the two delivered back to back —
+    # which is what this function used to do — kill the child BETWEEN them, before its handler
+    # runs a single line. It cost the listening row of whichever player was signalled first
+    # (0 rows out of 2 for `--stop --all`, reproducibly) and it was invisible before there was
+    # a row to lose: the child was going to die anyway, and dying one way rather than the
+    # other left no trace. mpv does not need this tick — the child's own handler kills it —
+    # and neither does a straggler yt-dlp, which gets the INT 200ms later like everything else.
     kill -TERM "$pgid" 2>/dev/null || true
-    kill -INT -"$pgid" 2>/dev/null || true
 
     # Say it AGAIN on every tick, because the group is not a fixed set. The child spends the
     # gap between two tracks inside an ENGINE call, and that call spawns fresh processes as it
@@ -858,10 +896,12 @@ read_player_live() {
 # not recognise" are the same text in a log (classify_playback_error answers `unknown` to
 # both). The child is the only process that knows rc, so the child writes the epitaph.
 #
-# Nothing is written on success, so a normal finish leaves no trace — this is an error
-# record, not listening history (a ROADMAP.md §0 non-goal), and that distinction is enforced
-# here rather than promised in prose. A player killed by --stop dies with its process group
-# and never reaches this line, which is the same rule from the other direction.
+# Nothing is written on success, so a normal finish leaves no trace here — this is an ERROR
+# record, and the listening log is the other side of that line, not a duplicate of it
+# (history_record, and ARCHITECTURE.md §9.2's separation rule): failures only, bounded, in
+# $TMPDIR, gone at the reboot, against every track and durable in the user-level store. A
+# player told to --stop reaches this line with rc 0 and writes nothing, which is the same
+# distinction from the other direction: a stop is not a failure.
 # ------------------------------------------------------------------------------
 # The detached child: one player, one queue
 # ------------------------------------------------------------------------------
@@ -878,6 +918,10 @@ read_player_live() {
 # that is another lock, and it would let the death record lie in a new way.
 CHILD_REASON=""
 MPV_PID=""
+# Set by run_mpv the instant mpv is launched, cleared by the loop before every play, so
+# "mpv never opened" is representable instead of inferred from the previous track's clock.
+TRACK_STARTED_AT=""
+TRACK_STARTED_EPOCH=""
 child_signal() {
     # STOPPED IS FINAL. Both signals can be pending at once — bash 3.2 defers a trap while a
     # foreground command runs, and the engine call between two tracks IS such a command — and
@@ -895,19 +939,23 @@ child_signal() {
 
 detached_child_loop() {
     local handle=$1 rc=0 played=0
-    # SIGUSR1 is --next's channel; TERM/INT is --stop's (stop_group signals the whole process
-    # group, so mpv gets it too and this trap only decides what the death record says).
-    # SIGUSR1 is --next's channel; SIGTERM is --stop's. INT is deliberately NOT here: this
-    # process is an async child, so it entered with SIGINT ignored and could not trap it if
-    # it wanted to (see stop_group, which sends TERM to this pid for exactly that reason).
+    # SIGUSR1 is --next's channel; TERM and INT are both --stop's, because stop_group sends
+    # the child one of each (mpv gets the INT too, which is how it stops cleanly). CATCHING
+    # THE INT IS LOAD-BEARING, not defensive: untrapped it is a plain kill arriving while the
+    # TERM handler runs, and the child dies before it can say what happened — no listening
+    # row, and the reason a track ended lost with it. The measurement, and why the "an async
+    # child cannot trap INT" rule does not apply under `set -m`, are in stop_group.
     trap 'child_signal next' USR1
-    trap 'child_signal stopped' TERM
+    trap 'child_signal stopped' TERM INT
 
     if [[ ! -f "$(player_queue "${YT_PLAYER_ID:-}")" ]]; then
         # No queue file: an older parent, or someone running this child by hand. Play the
         # handle once, exactly as this path did before queues existed.
         rc=0
+        TRACK_STARTED_AT=""
+        TRACK_STARTED_EPOCH=""
         play_url_directly "$handle" || rc=$?
+        history_record "$handle" "$ENGINE" "$rc" "" ""
         detached_epitaph "$rc"
         exit "$rc"
     fi
@@ -920,8 +968,15 @@ detached_child_loop() {
         ENGINE=$QUEUE_ENGINE
         ENGINE_RESOLVE=""
         CHILD_REASON=""
+        TRACK_STARTED_AT=""
+        TRACK_STARTED_EPOCH=""
         rc=0
         play_url_directly "$QUEUE_URL" || rc=$?
+        # BEFORE the case, because two of its three branches leave the loop or skip the rest
+        # of the body: a row is owed for a stopped track and a skipped one exactly as much as
+        # for one that played out. This is the line that keeps the log from becoming a record
+        # of what went uninterrupted.
+        history_record "$QUEUE_URL" "$ENGINE" "$rc" "$QUEUE_ID" "$QUEUE_TITLE"
         case "$CHILD_REASON" in
         stopped)
             # --stop already took the process group down. Leave WITHOUT an epitaph, which is
@@ -970,6 +1025,127 @@ detached_epitaph() {
     ended_at=$(date -u +%FT%TZ 2>/dev/null || echo unknown)
     jq -nc --argjson rc "$rc" --arg reason "$reason" --arg ended_at "$ended_at" \
         '{yt_event: "exit", rc: $rc, reason: $reason, ended_at: $ended_at}' 2>/dev/null || true
+    return 0
+}
+
+# ------------------------------------------------------------------------------
+# The listening row: written here, stored by ut-history
+# ------------------------------------------------------------------------------
+# WHY THE PLAYER WRITES IT. The child is the only process that knows a track ended and why.
+# The parent's verb returned minutes ago, and mpv's exit code cannot tell "--next killed it"
+# from "--stop killed it" (both 4) — which is the fact CHILD_REASON already exists for, used
+# a second time here.
+#
+# WHY NOT ONLY AT THE END OF A TRACK. --stop takes the whole process group down, so a row
+# written only on a natural finish would record just the tracks nobody interrupted: a
+# systematically skewed log, and more misleading than none, because "what I listen to" would
+# read out as "what I never skipped". The call therefore sits after EVERY play, whatever
+# ended it, and only a SIGKILL loses a row.
+#
+# WHY IT IGNORES THE SIGNAL THAT CAUSED IT. During a --stop the group is signalled every
+# 0.2s for three seconds (stop_group) and ut-history would be a child of this child: the very
+# stop being recorded would kill the recorder. A disposition of SIG_IGN survives exec — the
+# same inheritance rule stop_group's own comment turns on, from the other side — so the write
+# runs in a subshell that has ignored INT/TERM before ut-history is started. It cannot hang
+# the escalation for long: this is a local append with no network in it, and the KILL still
+# backstops it.
+#
+# STORAGE IS NOT OURS. ut-history is called BY NAME, exactly as an engine is; the player owns
+# the row, never the file, and knows nothing about JSONL or month shards. Not on PATH, nothing
+# is written and nothing is said: a capability this suite does not have is stated by not
+# having the command, the rule that also gives bili-resolve no --transcript.
+UT_HISTORY_BIN=""
+UT_HISTORY_LOOKED=0
+history_bin() {
+    if ((UT_HISTORY_LOOKED == 0)); then
+        UT_HISTORY_LOOKED=1
+        if [[ -x "$SCRIPT_DIR/ut-history" ]]; then
+            UT_HISTORY_BIN="$SCRIPT_DIR/ut-history"
+        elif command -v ut-history >/dev/null 2>&1; then
+            UT_HISTORY_BIN=$(command -v ut-history)
+        fi
+    fi
+    [[ -n "$UT_HISTORY_BIN" ]]
+}
+
+# history_record <url> <engine> <rc> <id> <title>   — best-effort, ALWAYS 0. Nothing about a
+# log of what was played may cost the playing of the next thing.
+history_record() {
+    local url=$1 engine=$2 rc=$3 id=$4 title=$5
+    [[ "$UT_HISTORY" == 0 ]] && return 0
+    [[ -n "$url" && -n "$engine" ]] || return 0
+    history_bin || return 0
+
+    # The engine's title when there is one, the queue's stored title when the resolve failed
+    # — a row for a track that would not play should still name it. resolve_media clears
+    # RESOLVED_TITLE on entry, so this can never be the previous track's.
+    [[ -n "$RESOLVED_TITLE" ]] && title=$RESOLVED_TITLE
+
+    # EVERYTHING ELSE HAPPENS INSIDE THE SUBSHELL, and the reason is the four lines above it.
+    # This function is called the instant a track ends, which is most often the instant a
+    # --stop arrived, and stop_group hands the child a TERM and a group INT back to back. On
+    # bash 3.2 a second signal landing while the first one's handler runs can take the process
+    # down between them — measured on the two-player stop, where whichever child was signalled
+    # first lost its row while the second wrote one. Nothing can be done about the window
+    # before the handler; what CAN be done is to make the window this function adds as close
+    # to zero as bash allows. So the reason, the clock, the row and the write all run under
+    # `trap '' INT TERM`, whose SIG_IGN survives into ut-history as well — once this subshell
+    # is forked, the row lands even if the child it came from is killed a millisecond later.
+    (
+        trap '' INT TERM
+
+        # The REASON comes from CHILD_REASON and never from mpv's exit code, which spells a
+        # skip and a stop the same way (4). Both are `stopped_by_user`: the user acted, and
+        # `seconds` is what separates a skip at 0:05 from a stop at 3:20. A clean finish
+        # carries no reason at all — which is what lets a caller ask "did this play through?"
+        local reason=""
+        case "$CHILD_REASON" in
+        stopped | next) reason="stopped_by_user" ;;
+        *)
+            if ((rc != 0)); then
+                reason=$(classify_playback_error "$(tail -c 4000 "${YT_DETACHED_LOG:-/dev/null}" 2>/dev/null)" "$rc")
+            fi
+            ;;
+        esac
+
+        # A TRACK THAT NEVER OPENED AND NEVER FAILED IS NOT A LISTENING. A --stop or a --next
+        # landing in the gap between two tracks (the engine round trip) would otherwise write
+        # a zero-second row for a track nobody heard a note of. A FAILURE in the same gap is
+        # still written: "I tried to play this and it would not play" is exactly what a
+        # history is for, and it is the one row whose seconds being 0 says something true.
+        if [[ -z "$TRACK_STARTED_EPOCH" && "$reason" == "stopped_by_user" ]]; then
+            exit 0
+        fi
+
+        local now now_at now_epoch played_at seconds=0
+        now=$(date -u +"%FT%TZ %s" 2>/dev/null) || now=""
+        now_at=${now%% *}
+        now_epoch=${now##* }
+        [[ "$now_epoch" =~ ^[0-9]+$ ]] || now_epoch=""
+        played_at=$TRACK_STARTED_AT
+        [[ -n "$played_at" ]] || played_at=$now_at
+        # No clock, no row: played_at names the shard file, and ut-history rejects one that is
+        # not a timestamp. Dropping it here keeps that rejection off the track boundary.
+        [[ -n "$played_at" ]] || exit 0
+        if [[ -n "$TRACK_STARTED_EPOCH" && -n "$now_epoch" ]]; then
+            seconds=$((now_epoch - TRACK_STARTED_EPOCH))
+            ((seconds < 0)) && seconds=0
+        fi
+
+        local row
+        row=$(jq -nc --arg engine "$engine" --arg url "$url" --arg id "$id" --arg title "$title" \
+            --arg duration "$RESOLVED_DURATION" --arg played_at "$played_at" \
+            --arg ended_at "${now_at:-$played_at}" --argjson seconds "$seconds" --arg reason "$reason" \
+            '{engine: $engine, url: $url,
+              id: (if $id == "" then null else $id end),
+              title: (if $title == "" then null else $title end),
+              duration: (if $duration == "" then null else ($duration | tonumber? // null) end),
+              played_at: $played_at, ended_at: $ended_at, seconds: $seconds,
+              reason: (if $reason == "" then null else $reason end)}' 2>/dev/null) || exit 0
+        [[ -n "$row" ]] || exit 0
+
+        printf '%s' "$row" | "$UT_HISTORY_BIN" --record - >/dev/null 2>&1
+    ) || true
     return 0
 }
 
@@ -1184,13 +1360,25 @@ queue_bump() {
 QUEUE_POS=0
 QUEUE_URL=""
 QUEUE_ENGINE=""
+# Read for the LISTENING ROW, not for playback: a track whose resolve failed has no engine
+# title to record, and the row that says so should still name what it could not play.
+QUEUE_ID=""
+QUEUE_TITLE=""
 queue_current() {
     local id=$1 qf line
     qf=$(player_queue "$id")
     [[ -f "$qf" ]] || return 1
-    line=$(jq -r '.items[.pos] as $i | if $i == null then empty else [(.pos|tostring), $i.engine, $i.url] | join("\u001f") end'         "$qf" 2>/dev/null) || return 1
+    line=$(jq -r '.items[.pos] as $i
+        | if $i == null then empty
+          else [(.pos|tostring), $i.engine, $i.url, ($i.id // ""), ($i.title // "")]
+               | join("\u001f") end' "$qf" 2>/dev/null) || return 1
     [[ -n "$line" ]] || return 1
-    IFS=$'\037' read -r QUEUE_POS QUEUE_ENGINE QUEUE_URL <<<"$line"
+    # TITLE LAST, which is the only thing that keeps this a parse rather than a guess: it is
+    # the one field that can hold anything (a url and an id carry no whitespace, and the
+    # engine name is validated as a name). Last, it absorbs a stray separator; a title holding
+    # a NEWLINE loses only its own tail, because `read` stops at the first one and every field
+    # the playback path needs has been filled by then.
+    IFS=$'\037' read -r QUEUE_POS QUEUE_ENGINE QUEUE_URL QUEUE_ID QUEUE_TITLE <<<"$line"
     [[ -n "$QUEUE_URL" ]] || return 1
     return 0
 }
