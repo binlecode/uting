@@ -393,6 +393,30 @@ report "--stop --all line"  1 "$(shell/ut-play --stop --all -j | wc -l | tr -d '
 # names the why so a caller can tell it from ambiguity (AS-BUILT-contract.md §3/§4).
 report "idle --set-volume is 4"   4 "$(rc shell/ut-play --set-volume 50 -j)"
 report "idle --set-volume says why" 0 "$(jq_ok '.status=="not_playing"' shell/ut-play --set-volume 50 -j)"
+# Every socket verb answers the empty set the way --set-volume does — ONE taxonomy, not one
+# per verb. Stated as a loop over the verbs so a sixth one is covered the day it lands
+# instead of needing its own copied pair of lines.
+for v in --pause --resume "--seek +30" "--seek-to 0"; do
+    # shellcheck disable=SC2086  # $v carries a flag AND its value on purpose
+    report "idle $v is 4"        4 "$(rc shell/ut-play $v -j)"
+done
+# The envelope text comes from ONE helper (require_live_target), so asserting it once per
+# verb is raising a count, not covering a case — the exit codes above are what catch a verb
+# wired to the wrong helper.
+report "idle --pause says why"   0 "$(jq_ok '.status=="not_playing"' shell/ut-play --pause -j)"
+# The 1-vs-4 split on the one verb that can fail both ways. A malformed value never reaches a
+# player, so it is usage (1); a well-formed call with no player to receive it is 4. Getting
+# these the same way round is what makes an agent retry a call it should have fixed instead.
+report "--seek unsigned is 1"     1 "$(rc shell/ut-play --seek 30 -j)"
+report "--seek non-numeric is 1"  1 "$(rc shell/ut-play --seek abc -j)"
+report "--seek-to negative is 1"  1 "$(rc shell/ut-play --seek-to -5 -j)"
+# --seek -15 is a VALUE, not an unknown flag: the parser must take $2 verbatim.
+report "--seek accepts -15"       4 "$(rc shell/ut-play --seek -15 -j)"
+# --id now names the playback verbs too, so it has to be ACCEPTED by one of them; the arms
+# that reject it elsewhere are already covered by "ut-play selector alone" and
+# "ut-play -d + action" above, which exercise the same case statement.
+report "--id on --pause parses"   4 "$(rc shell/ut-play --pause --id nope -j)"
+
 
 # The four live fields are read off a real unix socket, so the peer is the one thing that
 # cannot be faked away — and mpv will not answer out of order, report a property null, or

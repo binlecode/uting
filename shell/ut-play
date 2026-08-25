@@ -85,6 +85,8 @@ Usage (everything after -- is the handle, so it may start with '-'):
   ut-play --status [-j]                                   list live detached players
   ut-play --stop [--id ID | --all] [-j]                   stop one player (or all)
   ut-play --set-volume N [--id ID] [-j]                   live volume on a detached player
+  ut-play --pause | --resume [--id ID] [-j]               pause/resume a detached player
+  ut-play --seek ±N | --seek-to N [--id ID] [-j]          seek (relative needs the sign)
   ut-play (no handle, no action)                          usage error; use uting to browse
 
 Not here, by design: metadata, captions and stream URLs are extraction, so they are the
@@ -101,15 +103,21 @@ Options:
               (-d rejects ascii/viz: a detached player has no terminal to draw on)
   --volume N  mpv startup volume, 0-100 (default: mpv's own). For -d this is the STARTING
               volume; change it live with --set-volume.
+  --seek ±N   Seek N seconds RELATIVE to the playhead; the sign is required, because a bare
+              number reads as relative to some callers and absolute to others. --seek-to N
+              is the absolute spelling. Past the end is not an error: mpv clamps and the
+              envelope reports where it actually landed.
   -l          Prose output (default)
   -j          JSON output: one-line status JSON for play/lifecycle
-  -d          --detach: background playback; manage with --status/--stop/--set-volume
+  -d          --detach: background playback; manage with --status/--stop/--set-volume/
+              --pause/--resume/--seek
   --color M   auto|always|never (default: auto). No -c short form.
   -h          This help
   -V          Print the suite version (answered before any dependency check)
 
-Long-only flags: --engine --detach --status --stop --set-volume --id --all --json --list
-                 --color --volume  (--help and --version also have short forms: -h, -V)
+Long-only flags: --engine --detach --status --stop --set-volume --pause --resume --seek
+                 --seek-to --id --all --json --list --color --volume
+                 (--help and --version also have short forms: -h, -V)
 
 Output contracts (full schemas: AS-BUILT-contract.md §3):
   play -j   {status, url, mode, exit_code, reason, retried}
@@ -123,6 +131,10 @@ Output contracts (full schemas: AS-BUILT-contract.md §3):
   --stop    {status:"stopped", id, stopped} | {status:"stopped", scope:"all", stopped}
   --set-vol {status:"ok", id, volume} | {status:"not_playing"} | {status:"ambiguous", …}
             | {status:"error", reason:"ipc_failed"}
+  --pause   {status:"ok", id, paused:true|false}   (same not_playing/ambiguous/error shapes)
+  --resume  as --pause
+  --seek    {status:"ok", id, position:<seconds>}  position is READ BACK from mpv after the
+  --seek-to seek, never computed — it is clamped at the ends and refused on a live stream
 
 Exit codes: 0 ok · 1 usage/validation · 2+ propagated engine/mpv failure · 4 lifecycle
             call did not take effect (no such player / ambiguous / IPC failure)
@@ -130,7 +142,8 @@ Exit codes: 0 ok · 1 usage/validation · 2+ propagated engine/mpv failure · 4 
 Playback keys (mpv, during a blocking 'ut-play -- <handle>' playback):
   _  toggle video track on/off        q  stop playback and exit
 
-Dependencies: mpv (playback) + jq; nc (--set-volume); an <engine>-resolve on PATH or next
+Dependencies: mpv (playback) + jq; nc (every socket verb: --set-volume, --pause, --resume,
+              --seek, --seek-to); an <engine>-resolve on PATH or next
               to this file. yt-dlp / curl / cookies are the ENGINE's business, not the
               player's — see 'yt-resolve -h' for those.
 
@@ -162,6 +175,14 @@ die() {
 
 is_non_negative_int() {
     [[ "$1" =~ ^[0-9]+$ ]]
+}
+
+# A SIGNED integer, sign REQUIRED. --seek is relative and mpv's own seek defaults to
+# relative too, so a bare `--seek 30` reads as "+30" to every caller who did not check —
+# and would be an absolute jump to second 30 if we guessed the other way. Neither guess is
+# safe, so the sign is the contract and --seek-to is the absolute spelling.
+is_signed_int() {
+    [[ "$1" =~ ^[+-][0-9]+$ ]]
 }
 
 validate_enum() {
@@ -1208,6 +1229,62 @@ do_stop() {
     exit 0
 }
 
+# Resolve the target of a verb that MUTATES a running player, or emit that verb's
+# "did not take effect" envelope and exit 4. Shared by every socket-driven verb
+# (--set-volume, --pause/--resume/--seek/--seek-to) and by the queue verbs, so the
+# not_playing/ambiguous shapes exist ONCE rather than per verb.
+#
+# --stop deliberately does NOT use this: it treats not_playing as idempotent success
+# (do_stop), which is the whole difference between "stop what is playing" and "change what
+# is playing". On success, resolve_target's RESOLVED_ID is set for the caller.
+require_live_target() {
+    local want_id=$1
+    resolve_target "$want_id" && return 0
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        if [[ "$RESOLVE_ERR" == "ambiguous" ]]; then
+            jq -nc --argjson players "$RESOLVE_PLAYERS_JSON" '{status: "ambiguous", reason: "multiple_players", players: $players}'
+        else
+            echo '{"status":"not_playing"}'
+        fi
+    else
+        if [[ "$RESOLVE_ERR" == "ambiguous" ]]; then
+            echo "multiple players playing; specify --id (see 'ut-play --status')" >&2
+        else
+            echo "nothing playing" >&2
+        fi
+    fi
+    exit 4
+}
+
+# One mpv IPC command, one correlated reply. Returns 0 with IPC_DATA set to the reply's
+# `data` (the literal "null" when mpv answered null, exactly as live_props reports it) when
+# mpv said success; returns non-zero otherwise, INCLUDING when there is no socket to talk to.
+#
+# request_id correlation: mpv multiplexes ASYNC EVENTS to every client, interleaved with
+# replies (mpv ipc.rst), so head -1 alone can grab an event. Filter by request_id.
+# `|| true` is REQUIRED — under set -euo pipefail the pipeline exits non-zero on nc
+# timeout / SIGPIPE (head closing early) and would abort the script AT the assignment.
+IPC_DATA=""
+ipc_command() {
+    local sock=$1 cmd=$2 reply
+    IPC_DATA=""
+    [[ -S "$sock" ]] || return 1
+    reply=$(printf '%s\n' "$cmd" |
+        nc -U -w1 "$sock" 2>/dev/null |
+        jq -c 'select(.request_id==1)' 2>/dev/null | head -1) || true
+    [[ "$(jq -r '.error // empty' <<<"$reply" 2>/dev/null)" == success ]] || return 1
+    IPC_DATA=$(jq -r '.data' <<<"$reply" 2>/dev/null) || IPC_DATA=""
+    return 0
+}
+
+# The "it did not take effect" exit shared by every socket verb: mpv is there but would not
+# do it (or the socket is gone). Always 4, never 1 — the call itself was well formed.
+ipc_failed() {
+    local what=$1
+    [[ "$OUTPUT_MODE" == "json" ]] && echo '{"status":"error","reason":"ipc_failed"}' || echo "failed to $what" >&2
+    exit 4
+}
+
 # Adjust volume on a detached player via mpv's per-instance JSON IPC socket. One-shot:
 # open, send, read the matching ack, close, exit (stateless-per-call). Exit 4 for any
 # "did not take effect" (no such/no player, ambiguous, or IPC failure); the -j
@@ -1217,44 +1294,13 @@ do_set_volume() {
     is_non_negative_int "$n" || die "--set-volume must be a non-negative integer"
     ((n <= 100)) || die "--set-volume must be between 0 and 100" # symmetry w/ launch --volume
 
-    if ! resolve_target "$want_id"; then
-        if [[ "$OUTPUT_MODE" == "json" ]]; then
-            if [[ "$RESOLVE_ERR" == "ambiguous" ]]; then
-                jq -nc --argjson players "$RESOLVE_PLAYERS_JSON" '{status: "ambiguous", reason: "multiple_players", players: $players}'
-            else
-                echo '{"status":"not_playing"}'
-            fi
-        else
-            if [[ "$RESOLVE_ERR" == "ambiguous" ]]; then
-                echo "multiple players playing; specify --id (see 'ut-play --status')" >&2
-            else
-                echo "nothing playing" >&2
-            fi
-        fi
-        exit 4
-    fi
+    require_live_target "$want_id"
 
     local id sock
     id=$RESOLVED_ID
     sock=$(player_sock "$id")
-    if [[ ! -S "$sock" ]]; then
-        [[ "$OUTPUT_MODE" == "json" ]] && echo '{"status":"error","reason":"ipc_failed"}' || echo "failed to set volume (no IPC socket)" >&2
-        exit 4
-    fi
-
-    # request_id correlation: mpv multiplexes ASYNC EVENTS to every client, interleaved
-    # with replies (mpv ipc.rst), so head -1 alone can grab an event. Filter by request_id.
-    # `|| true` is REQUIRED — under set -euo pipefail the pipeline exits non-zero on nc
-    # timeout / SIGPIPE (head closing early) and would abort the script AT the assignment.
-    local reply
-    reply=$(printf '{"command":["set_property","volume",%d],"request_id":1}\n' "$n" |
-        nc -U -w1 "$sock" 2>/dev/null |
-        jq -c 'select(.request_id==1)' 2>/dev/null | head -1) || true
-
-    if [[ "$(jq -r '.error // empty' <<<"$reply" 2>/dev/null)" != success ]]; then
-        [[ "$OUTPUT_MODE" == "json" ]] && echo '{"status":"error","reason":"ipc_failed"}' || echo "failed to set volume" >&2
-        exit 4
-    fi
+    ipc_command "$sock" "$(printf '{"command":["set_property","volume",%d],"request_id":1}' "$n")" ||
+        ipc_failed "set volume"
 
     # Atomic patch of this player's state file (temp+mv, same idiom as patch_player_meta),
     # under the same per-id lock so this can't interleave with a concurrent title backfill.
@@ -1277,6 +1323,69 @@ do_set_volume() {
     exit 0
 }
 
+# Pause / resume / seek on a detached player, over the same one-shot IPC as --set-volume and
+# with the same exit taxonomy: 4 for no target, ambiguity, or an mpv that would not do it;
+# 1 (from the arg parser, before we get here) for a malformed value.
+#
+# THE ENVELOPE REPORTS THE PROPERTY READ BACK, NEVER A COMPUTED ONE. A seek is clamped by
+# mpv at the ends of the file and refused outright on a live stream, so "the position I
+# asked for" and "the position it is at" are different numbers exactly when a caller most
+# needs the truth. One extra round trip buys that, and --set-volume already pays it in
+# spirit (it reports the value mpv accepted). Overshooting the end is NOT an error: mpv
+# clamps, we report where it landed, exit 0.
+#
+# No --toggle-pause: mpv's `cycle pause` does not report the resulting state, so the
+# envelope could only guess it. Two idempotent verbs are also what a machine caller wants —
+# no read-modify-write race. The toggle is a KEY, and keys live in uting.
+do_playback_verb() {
+    local verb=$1 arg=$2 want_id=$3
+    require_live_target "$want_id"
+
+    local id sock cmd prop
+    id=$RESOLVED_ID
+    sock=$(player_sock "$id")
+    # The sign is REQUIRED on the command line (is_signed_int) and ILLEGAL in the JSON that
+    # carries it: JSON numbers have no leading `+`, so `["seek",+10,…]` is not JSON at all
+    # and mpv rejects the whole command — which surfaces as ipc_failed, i.e. a relative seek
+    # that silently never worked while --seek-to did. Strip it here, at the one place the
+    # value crosses from argv into JSON.
+    arg="${arg#+}"
+    case "$verb" in
+    pause) cmd='{"command":["set_property","pause",true],"request_id":1}'; prop=pause ;;
+    resume) cmd='{"command":["set_property","pause",false],"request_id":1}'; prop=pause ;;
+    # A live stream has no seekable timeline; mpv is the one that knows, so let it refuse
+    # and translate that refusal into ipc_failed. Predicting it here from a null duration
+    # would be the player holding a piece of site knowledge it deliberately does not have.
+    seek) cmd=$(printf '{"command":["seek",%s,"relative"],"request_id":1}' "$arg"); prop=time-pos ;;
+    seek-to) cmd=$(printf '{"command":["seek",%s,"absolute"],"request_id":1}' "$arg"); prop=time-pos ;;
+    esac
+
+    ipc_command "$sock" "$cmd" || ipc_failed "$verb"
+    # Read back. A failure HERE is not a failed verb — the command was accepted — so the
+    # value goes null rather than the whole call turning into an error.
+    local value=""
+    ipc_command "$sock" "$(printf '{"command":["get_property","%s"],"request_id":1}' "$prop")" && value="$IPC_DATA"
+
+    if [[ "$prop" == pause ]]; then
+        [[ "$value" == "true" || "$value" == "false" ]] || value=""
+        if [[ "$OUTPUT_MODE" == "json" ]]; then
+            jq -nc --arg id "$id" --argjson paused "${value:-null}" '{status: "ok", id: $id, paused: $paused}'
+        else
+            echo "${verb}d (player $id)"
+        fi
+    else
+        # Integers, the unit the rest of the contract speaks (read_player_live does the same
+        # truncation on the same property).
+        [[ "$value" =~ ^[0-9]+ ]] && value="${value%.*}" || value=""
+        if [[ "$OUTPUT_MODE" == "json" ]]; then
+            jq -nc --arg id "$id" --argjson position "${value:-null}" '{status: "ok", id: $id, position: $position}'
+        else
+            echo "seeked to ${value:-?}s (player $id)"
+        fi
+    fi
+    exit 0
+}
+
 # ==============================================================================
 # 5. CLI OPTIONS PARSING & VALIDATION
 # ==============================================================================
@@ -1290,10 +1399,11 @@ OUTPUT_MODE="list"
 # Playback lifecycle / structured-output state.
 DETACH=0
 ENGINE="$UT_DEFAULT_ENGINE"  # which <engine>-resolve turns a handle into bytes
-ACTION=""            # "" (normal) | status | stop | set-volume
+ACTION=""            # "" (normal) | status | stop | set-volume | pause | resume | seek | seek-to
 ACTION_FLAG=""       # the flag that set ACTION, for conflict messages
 PLAYBACK_RETRIED=0   # relayed from the resolve envelope; surfaced in the playback JSON
 SET_VOLUME_ARG=""    # value from --set-volume N
+SEEK_ARG=""          # value from --seek ±N / --seek-to N
 TARGET_ID=""         # value from --id (target a specific detached player)
 STOP_ALL=0           # --stop --all
 RESOLVED_ID=""       # resolve_target out-param: the resolved player id
@@ -1409,6 +1519,36 @@ while (($#)); do
         SET_VOLUME_ARG="${1#*=}"
         shift
         ;;
+    --pause)
+        set_action pause --pause
+        shift
+        ;;
+    --resume)
+        set_action resume --resume
+        shift
+        ;;
+    --seek)
+        [[ $# -ge 2 ]] || die "--seek requires a value"
+        set_action seek --seek
+        SEEK_ARG="$2"
+        shift 2
+        ;;
+    --seek=*)
+        set_action seek --seek
+        SEEK_ARG="${1#*=}"
+        shift
+        ;;
+    --seek-to)
+        [[ $# -ge 2 ]] || die "--seek-to requires a value"
+        set_action seek-to --seek-to
+        SEEK_ARG="$2"
+        shift 2
+        ;;
+    --seek-to=*)
+        set_action seek-to --seek-to
+        SEEK_ARG="${1#*=}"
+        shift
+        ;;
     --id)
         [[ $# -ge 2 ]] || die "--id requires a value"
         TARGET_ID="$2"
@@ -1427,7 +1567,7 @@ while (($#)); do
         # an unmatched one can never be valid — and left to fall through it reached getopts
         # as `-`, which reported the useless "invalid option: --". The wrapper used to hold
         # this arm; naming the real flags is the half of a gate that helps a caller recover.
-        die "unknown flag '$1' (play flags: -f -S -d -j -l --engine --volume --status --stop --set-volume --id --all --color)"
+        die "unknown flag '$1' (play flags: -f -S -d -j -l --engine --volume --status --stop --set-volume --pause --resume --seek --seek-to --id --all --color)"
         ;;
     *)
         normalized_args+=("$1")
@@ -1492,9 +1632,15 @@ fi
 # Flag combinations that used to be accepted and silently ignored. --id/--all only mean
 # something to the lifecycle verbs, -d is a launch rather than an action, and a detached
 # player has no terminal for the terminal-rendering modes to draw into (§9.2).
-if [[ -n "$TARGET_ID" ]] && [[ "$ACTION" != stop && "$ACTION" != set-volume ]]; then
-    die "--id applies only to --stop and --set-volume"
-fi
+case "$ACTION" in
+stop | set-volume | pause | resume | seek | seek-to) ;;
+*)
+    # --id names ONE running player, so it is meaningless to a verb that does not address
+    # one. Listing the verbs beats "invalid combination": the caller has the right idea and
+    # the wrong verb.
+    [[ -z "$TARGET_ID" ]] || die "--id applies only to --stop, --set-volume, --pause, --resume, --seek and --seek-to"
+    ;;
+esac
 if ((STOP_ALL)) && [[ "$ACTION" != stop ]]; then
     die "--all applies only to --stop"
 fi
@@ -1548,6 +1694,23 @@ if [[ "$ACTION" == "set-volume" ]]; then
     require_cmd nc
     do_set_volume "$SET_VOLUME_ARG" "${TARGET_ID:-}"
 fi
+# The same socket, the same lazy nc gate, the same exit taxonomy. The value is validated
+# HERE rather than inside the verb so a malformed one is a usage error (1) that never
+# reaches a player — "did not take effect" (4) is for a well-formed call mpv refused.
+if [[ "$ACTION" == "seek" ]]; then
+    is_signed_int "$SEEK_ARG" ||
+        die "--seek takes a SIGNED number of seconds (+30 / -15); for an absolute position use --seek-to N"
+fi
+if [[ "$ACTION" == "seek-to" ]]; then
+    is_non_negative_int "$SEEK_ARG" || die "--seek-to takes a non-negative number of seconds"
+fi
+case "$ACTION" in
+pause | resume | seek | seek-to)
+    require_cmd jq
+    require_cmd nc
+    do_playback_verb "$ACTION" "$SEEK_ARG" "${TARGET_ID:-}"
+    ;;
+esac
 # yt-dlp is no longer a dependency of the PLAYER: extraction belongs to the engine, which
 # gates its own tools. What is left here is what actually plays and shapes output.
 require_deps jq mpv
