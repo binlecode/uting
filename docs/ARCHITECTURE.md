@@ -887,11 +887,15 @@ private state layout — which `uting` did, hardcoding
 `$TMPDIR/uting-$(id -u)/mpv-<id>.sock` in a second script that would have broken silently
 if the player moved its state dir (§9.3). (Schemas → AS-BUILT-contract.md §3.)
 
-### 9.3 Runtime IPC control (`--set-volume`)
+### 9.3 Runtime IPC control (`--set-volume`, `--pause` / `--resume`, `--seek` / `--seek-to`)
 
-`--volume N` sets only mpv's *starting* volume; `--set-volume N [--id ID]` changes it
-live on a running detached player without a kill+relaunch. It works across **multiple
-concurrent** players, each independently addressable.
+`--volume N` sets only mpv's *starting* volume; the five runtime verbs change a running
+detached player without a kill+relaunch. They work across **multiple concurrent** players,
+each independently addressable, and they share one shape: resolve the target (or exit 4),
+one command over that player's socket, then a second round trip that READS BACK the property
+the envelope reports (`ipc_command` → `do_set_volume` / `do_playback_verb`;
+AS-BUILT-contract.md §3 has the envelopes, §26 the retired criterion that had kept the four
+playback verbs out).
 
 **Why concurrent detached players are possible (mpv imposes no obstacle).** mpv is
 non-exclusive by default (`--audio-exclusive=no`); the default coreaudio / PulseAudio /
@@ -936,9 +940,11 @@ patches carried before the lock existed. `patch_player_meta` *additionally* pid-
 the resolve window wins and its reap is never clobbered by a late title write.
 
 **The IPC socket is a PUBLIC part of the `-d` contract (and `volume` is read live).**
-`uting` drives pause / seek / volume / progress straight over the socket rather than
-forking a verb per keypress: its Now-Playing views refresh once a second and would
-otherwise need three `ut-play` invocations per tick. That is a deliberate
+`uting` drives the per-tick READ (progress + pause) and the held-down volume keys straight
+over the socket rather than forking a verb per keypress: its Now-Playing views refresh once
+a second and would otherwise pay a process chain per tick. Its pause and seek keys DID move
+to the verbs — one call per keypress is affordable where one per tick is not — and §26
+carries the measurement that drew the line between the two cases. That is a deliberate
 exception to D8, so the socket path is *handed to the client* in the `-d -j` envelope
 (`sock`) instead of being reconstructed from the state-dir layout, and this document — not
 an implementation detail — is where the JSON-RPC channel is sanctioned. Consequence for
@@ -1257,10 +1263,10 @@ with fewer than two engines it returns immediately and the affordance is not dra
     │                   interactive controls                                         │
     │  read_nav_input: one keypress; decodes ESC-[/O arrow sequences                 │
     │    ↑/↓  move selection (paginate at edges)      ←/→  page (list) / seek 5s (card)│
-    │    [ ] seek   ∓10s from ANY view                ↑/↓  volume (card)             │
+    │    [ ] seek   ∓10s, ut-play --seek ±N           ↑/↓  volume (card)             │
     │    Enter → play_selected:   ut-play -d -j --engine E -f MODE -- url (NON-BLK) │
     │    Tab/p → toggle view:     List View ◄──► Now Playing card                    │
-    │    Space → toggle pause:    sends IPC cycle pause over UNIX socket             │
+    │    Space → toggle pause:    ut-play --pause | --resume --id ID (reads back)   │
     │    s     → stop playback:   ut-play --stop --id ID                             │
     │    9/0   → volume:          read-modify-set over socket IPC, clamped 0-100     │
     │    v     → cycle_mode:      PLAY_MODE audio→video→fast (local; next Enter)     │
@@ -1904,11 +1910,12 @@ with fewer than two engines it returns immediately and the affordance is not dra
     same three `nc | jq` pipelines and had already drifted, and the live path used to fetch
     mpv's clock only to discard it (it describes the broadcast, not this listen). The live
     path now asks for `pause` and nothing else — one property on one connection — because the
-    pause chrome was the one thing that path got WRONG for free: `toggle_pause` flips a local
-    flag, so anything else driving the socket (`ut-play`, an agent's own `nc`, a second TUI)
-    left the banner asserting a state the player had left. The local flip stays — it is what
-    repaints the banner on the keypress rather than up to a second later — and the tick's
-    read corrects it. Optimism, then truth. The card's
+    pause chrome was the one thing that path got WRONG for free: anything else driving the
+    socket (`ut-play`, an agent's own `nc`, a second TUI) left the banner asserting a state
+    the player had left. `toggle_pause` no longer guesses either: it calls
+    `ut-play --pause`/`--resume` and takes `paused` out of the envelope, so the banner
+    repaints from a READING on the keypress. The blind flip survives only as the fallback for
+    a call that answered nothing, and the tick's read still corrects that. Optimism, then truth. The card's
     divider rail is built by `repeat_glyph` and cached on `(width, glyph mode)` instead of
     `printf '─%.0s' $(seq 1 "$cols")` — a fork, plus precisely the idiom `repeat_glyph` exists
     to replace, run twice so the Unicode rail could be thrown away in ASCII mode.
@@ -2127,7 +2134,8 @@ Moved → `AS-BUILT-contract.md` §5.
      Input      : read_nav_input/read_query_input, utf8_complete + init_lead_tables
                   (one key per CHARACTER), tty_echo_off/tty_echo_restore,
                   cursor_hide/cursor_show
-     Player     : send_mpv_ipc, mpv_get_prop, fetch_play_times (one connection for
+     Player     : play_verb (the WRITE side: one keypress, one ut-play verb),
+                  send_mpv_ipc, mpv_get_prop, fetch_play_times (one connection for
                   pos/dur/pct + pause; pause ALONE on the live path),
                   player_check_ready (core-idle → clears the Starting state, 20 s cap),
                   play_state_marks (playing/paused/starting → glyph+label+colour, both views),
@@ -2477,7 +2485,8 @@ or, where it was a design decision rather than a defect, folded into §11.
 - **F1** — `toggle_pause` now assigns (`CURRENT_PLAY_PAUSED=$((1 - …))`) instead of running a
   bare `((x = 0))`, whose status-1 result killed the script on every *un*pause.
 - **F17** — `send_mpv_ipc` returns 0, not 1, when the socket file is gone: it is the last
-  command of `toggle_pause`/`seek_relative`/`adjust_volume`, and fire-and-forget was already
+  command of `adjust_volume` (and was of `toggle_pause`/`seek_relative` before those moved to
+  `ut-play`'s verbs; `play_verb` carries the same rule), and fire-and-forget was already
   its contract (the `nc` failure below it was always swallowed).
 - **F2, crash half** — both Enter arms are now `play_selected || true`. A failed play became a
   survivable no-op; batch D gave that no-op something to say (F2b, below).
@@ -2857,40 +2866,40 @@ new-search/more-results instead of `n`/`m`; also corrected.
 - **A shared engine library** — deliberately not built; the duplication is the price of an
   engine being a self-contained pair (§23).
 - No MCP wrapper (§1). No third-party media-client dependency (§2).
-- Runtime volume control on DETACHED players IS supported (`--set-volume N [--id ID]`,
-  §9.2/AS-BUILT-contract.md §3): each detached mpv runs with `--input-ipc-server=mpv-<id>.sock`, and
-  `do_set_volume` sends one `set_property volume` command over that per-instance socket.
-  `nc -U` is gated lazily so a bare search never pays for it (AS-BUILT-contract.md §4). `--volume N` remains
-  the launch-time STARTING volume; `--set-volume` adjusts it live thereafter.
+- **Runtime control of a DETACHED player is a set of verbs** (`--set-volume N`,
+  `--pause`, `--resume`, `--seek ±N`, `--seek-to N`, each `[--id ID]` —
+  §9.2/AS-BUILT-contract.md §1.1/§3): each detached mpv runs with
+  `--input-ipc-server=mpv-<id>.sock`, and one command goes over that per-instance socket
+  (`ipc_command`, shared by all five). `nc -U` is gated lazily so a bare search never pays
+  for it (AS-BUILT-contract.md §4). `--volume N` remains the launch-time STARTING volume.
+  The four playback verbs arrived after `--set-volume`, and **the criterion that had blocked
+  them — "a verb is added only when a caller genuinely cannot speak to the socket" — is
+  retired**; why is a ROADMAP decision and lives in `ROADMAP.md` §11 (the short of it:
+  `--set-volume` was already a counter-example the rule could not explain). What belongs
+  here is what the code IS:
+    - The two constraints this section wrote down in advance shipped verbatim: `--seek`
+      takes a SIGNED value and absolute is a distinct spelling (`--seek-to N`); there is no
+      `--toggle-pause`, because mpv's `cycle pause` returns no value and the envelope could
+      only guess the resulting state. `uting` decides the target and sends one of the two
+      idempotent verbs.
+    - Every envelope reports the property **read back off the socket**, never the value
+      asked for (`do_playback_verb`) — mpv clamps a seek at the ends of the file, so those
+      two numbers differ exactly when a caller most needs the truth.
+    - **What did NOT move, and the number that decided it.** `uting`'s per-tick READ
+      (`fetch_play_times`, four properties on one connection) stays on the socket: a process
+      chain per 1 s tick is a real cost, and that half of the old criterion was always
+      right. So do the `9`/`0` volume keys, which get held down — measured on a live player,
+      10 presses each: **10 ms a press over the socket against 60 ms through
+      `ut-play --set-volume`**, which also resolves the target and patches the state file
+      under a lock. That is over the 50 ms line set for this choice, so the keys stayed and
+      the exception is recorded with its number rather than left as an unexplained
+      inconsistency. Pause and seek are one call per keypress, not one per tick, so they pay
+      it happily — and the TUI net-LOST IPC write code, which is the point: playback
+      correctness now lives in the player, where every caller inherits it.
   Deliberately still OUT of scope:
     - Live volume for FOREGROUND playback — it has a real TTY, so mpv's own volume keys
       already work; no IPC needed. (`uting` is no longer foreground: it plays detached
       and adjusts volume over the socket, which `--status` then reports live.)
-    - `--pause` / `--seek` / mute and other runtime properties as *verbs* — the same
-      per-instance socket carries them today, and `uting` uses it directly (a verb per
-      keypress would mean a process chain per 1s refresh tick). The socket is therefore a
-      documented part of the `-d` contract (§9.3) and is handed to clients in the `-d -j`
-      envelope; a verb is added only when a caller genuinely cannot speak to the socket.
-      **That condition is not met today**: a shell-capable agent can drive the socket
-      itself (`printf … | nc -U "$sock"`), and the socket path is handed to it precisely
-      so it can. The caller that genuinely cannot is one confined to a declared tool
-      surface — an MCP face — which `ROADMAP.md` §0 still lists as a non-goal (D14 reopened
-      the FEATURE non-goals; it left this one alone), gated by
-      its §9 triggers. So these verbs are blocked on THAT decision, not on effort.
-      Two constraints, decided in advance so the decision does not have to be reopened
-      to design them:
-        - `--seek` must require a SIGNED value for a relative move (`+30` / `-15`) and a
-          distinct spelling for an absolute one (`--seek-to 120`). A bare `--seek 30`
-          reading as absolute contradicts both mpv's own default (relative) and
-          `uting`'s `seek_relative`, and would silently jump a caller who meant +30s —
-          the failure mode §22's *contract stability* row exists to prevent.
-        - `--toggle-pause` is NOT to be added. mpv's `cycle pause` returns no value, so
-          the resulting state in the envelope could only be a guess. `--pause` /
-          `--resume` are strictly better for a machine caller anyway: idempotent, with no
-          read-modify-write race. Toggling stays a `uting` keypress.
-      Their prerequisite is now MET: `--status` reports live `paused` (§9.3/AS-BUILT-contract.md §3), so an
-      agent that paused could observe that it had. The verbs stay blocked on the decision
-      above, not on observability.
     - Linux `nc -U` portability — macOS-primary tool; BSD `nc -U` is stock, GNU netcat
       variants differ (`ncat -U` works; `netcat-traditional` has no Unix-socket support).
       Accepted as a known gap, noted in a script comment rather than solved now.
@@ -2898,7 +2907,7 @@ new-search/more-results instead of `n`/`m`; also corrected.
 ## 27. Verification matrix
 
 **Last run: 2026-08-24, both suites green** — `contract.sh` **128 ok / 0 failed / 0 known
-drift**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **16 ok / 0 failed**, with `pgrep mpv` empty
+drift**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **26 ok / 0 failed**, with `pgrep mpv` empty
 afterwards.
 
 **Functional only, and two files.** The renderer rig (`tui_pane.sh`) and its cell-grid prover
@@ -3038,6 +3047,24 @@ the part of a deleted harness worth keeping.
    Live volume: uting 9/0 on a --volume 0 player → --status reports the
                 moved value (not the stale launch value); from 98, three 0 presses stop
                 at 100 and never reach mpv's own 130 ceiling
+   Playback   : the idle half in contract.sh, where no player exists: all four verbs answer
+   verbs        not_playing and exit 4 (the --set-volume shape, reused rather than re-argued),
+                `--seek 30` without a sign is 1 while `--seek +30` with nothing playing is 4
+                — the pair is what proves "malformed" and "did not take effect" were not
+                collapsed into one code — `--seek -15` is a VALUE and not an unknown flag,
+                and --id parses on every one of them
+                The live half in lifecycle.sh, against real mpv: --pause reads back
+                paused:true and --status agrees, --resume the reverse, --seek +30 moves the
+                playhead forward and --seek-to 0 brings it back to the START — in that
+                ORDER, because a --seek-to that secretly seeks relative passes the reverse
+                order (a relative 0 near the start also lands near the start; found by
+                breaking it that way). The seeks run while PAUSED so no assertion races the
+                decoder, and each is anchored to the position BEFORE it so a verb that does
+                nothing cannot ride on wherever mpv happened to be. All six seen red first
+   TUI wiring : uting's Space / [ / ] now call the verbs (§26), driven in tmux against a real
+                detached player: paused flips true then false in --status, `]` moved 3s→13s
+                and `[` came back to 3s. Held-down keys did NOT move — 10 ms a press over
+                the socket vs 60 ms through the verb, measured, §26 carries the number
    Live read  : the four properties in ONE round trip (§9.3), driven against REAL mpv over
                 its own socket and nothing else — the scripted peer this entry used to cite
                 was deleted with the no-stand-in rule, and the shapes only it could produce

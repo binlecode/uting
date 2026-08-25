@@ -5,7 +5,7 @@
 > | # | 条目 | 状态 | 已并入 / 落地后并入 |
 > |---|---|---|---|
 > | 1 | 播放列表管理（`ut-playlist` + 用户级状态层） | **已落地 2026-08-24** | `AS-BUILT-contract.md` §1.4/§1.5/§2/§3/§4/§5 · `ARCHITECTURE.md` §4/§9.4/§17/§27 · README · CLAUDE.md |
-> | 2 | 播放队列 **+ 运行时播控动词**（`ut-play` 长出 `--queue/--enqueue/--next` 与 `--pause/--resume/--seek/--seek-to`） | 未开工 | `AS-BUILT-contract.md` §1.1/§3 · `ARCHITECTURE.md` §9.2 |
+> | 2 | 播放队列 **+ 运行时播控动词**（`ut-play` 长出 `--queue/--enqueue/--next` 与 `--pause/--resume/--seek/--seek-to`） | **播控四个动词已落地 2026-08-24**；队列未开工 | 已并入：`AS-BUILT-contract.md` §1.1/§3/§4 · `ARCHITECTURE.md` §9.3/§26/§27 · README。队列落地后并入：`AS-BUILT-contract.md` §1.1/§3 · `ARCHITECTURE.md` §9.2 |
 > | 3 | 收听历史（`ut-history`） | 未开工 | `AS-BUILT-contract.md` §1.6/§3/§5 · `ARCHITECTURE.md` §9.2 的分离规则 |
 >
 > §1/§2/§3 的三条决定（状态住在哪、记录形状、队列归谁）在第 1 步里全部落地并经过实跑，
@@ -225,13 +225,14 @@ resolve**，而 stream URL 会过期（YouTube 约 6 小时）—— 一个 20 �
 - **直播**（`duration` 为 null）上 `--seek` 让 mpv 自己拒绝，把它的失败翻成 4 + `ipc_failed`；
   不在播放器里预判"这是直播所以不能 seek" —— 那是站点知识，播放器不持有。
 
-**`uting` 这一侧：写路径改调动词，读路径原样不动。**
-`toggle_pause` / `seek_relative` 三个按键各自改成 `"$UT_PLAY" --pause|--resume|--seek`，
-**净删** TUI 里的 IPC 写代码。但每秒刷新的 `fetch_play_times`（一次连接读四个属性）**保持直连
-socket** —— 每 tick fork 一条进程链是真代价，原判据里这一半是对的。
-`adjust_volume`（`9`/`0` 键）**先量再定**：它已经有 `--set-volume` 可用，但音量键会被连按，
-fork 成本要对着今天的 ~16 ms IPC 量一次再决定，**量出来 > 50 ms 就留在 socket 上**，
-并把这个例外写进 as-built 的理由，而不是留成一处没解释的不一致。
+**`uting` 这一侧：写路径改调动词，读路径原样不动 —— 已落地。**
+`toggle_pause` / `seek_relative` 改成经 `play_verb` 调 `--pause|--resume|--seek`，
+**净删** TUI 里的 IPC 写代码；`toggle_pause` 顺带从"盲翻本地标志"变成"读回 envelope 的
+`paused`"，盲翻只留作答不上话时的兜底。每秒刷新的 `fetch_play_times`（一次连接读四个属性）
+**保持直连 socket** —— 每 tick fork 一条进程链是真代价，原判据里这一半是对的。
+`adjust_volume`（`9`/`0` 键）**量过了，留在 socket 上**：真播放器上各按 10 次，直连
+**10 ms/次** vs `ut-play --set-volume` **60 ms/次**（后者还要解析目标 + 带锁改状态文件），
+超过本 plan 定的 50 ms 线。例外连同数字写进 `ARCHITECTURE.md` §26，不留成没解释的不一致。
 
 ### 4.3 `ut-history` —— 第八个命令（步骤 3）
 
@@ -378,10 +379,10 @@ fork 成本要对着今天的 ~16 ms IPC 量一次再决定，**量出来 > 50 m
   bash 3.2 没有 `${var,,}`，而 `tr` 那条路在 UTF-8 名字上是错的。
 - **`ut-play` / `ut-playlist` 名字相近**：由 gate arm 互指（§4.1）。不改名 —— D10 的"一名一物"意味着
   播放列表这个能力只能有一种拼法，而它就叫播放列表。
-- **`uting` 的音量键要不要也改走动词**：`9`/`0` 会被连按，一次按键 fork 一条进程链的成本要对着
-  今天的 ~16 ms 直连 IPC 量一次。**量出来 > 50 ms 就留在 socket 上**，并把这个例外连同数字写进
-  as-built —— 一处有理由的不一致可以接受，一处没解释的不行。pause / seek 不受这条影响（一次按键
-  一次调用，不是每 tick 一次）。
+- ~~**`uting` 的音量键要不要也改走动词**~~ —— **已量、已定（2026-08-24）**：直连 10 ms/次、
+  经动词 60 ms/次（真播放器，各 10 次，两次复测一致），超过 50 ms 线，所以音量键留在 socket 上；
+  例外连同数字进了 `ARCHITECTURE.md` §26。pause / seek 不受这条影响（一次按键一次调用，
+  不是每 tick 一次），已改走动词。
 - **队列的重排 / 出队 / 循环 / 随机**：v1 不做。它们是队列**编辑**，而第一版要先证明队列**推进**是对的。
 - **历史的体积**：一行约 200B，一天 50 首 ≈ 300KB/年。不需要轮转，`--clear --before` 足够。
 - **下载器、频道订阅**：仍未排期（ROADMAP P4），本 plan 不碰。

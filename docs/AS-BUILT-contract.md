@@ -29,17 +29,22 @@ there is no core to delegate to.
   `players/`. **Owns no site knowledge:** no yt-dlp call, no cookie decision, no format
   string, no id shape.
 - **Flags:** `-f -S -d -j -l -h -V` + long `--engine --volume --detach --json --list
-  --status --stop --set-volume --id --all --color --help --version`. Color is `--color`
+  --status --stop --set-volume --pause --resume --seek --seek-to --id --all --color --help
+  --version`. Color is `--color`
   only (no `-c`); `-S` is the format-sort override (no `-F`) and is forwarded to the engine
   verbatim. `--` ends option parsing: everything after it is the handle (ARCHITECTURE.md §6). At most one
-  action per call; `--id`/`--all` belong to `--stop`/`--set-volume`; `-d` combines with
-  neither an action nor `-f ascii|viz`.
+  action per call; `--id` belongs to every verb that ADDRESSES one running player (`--stop`,
+  `--set-volume`, `--pause`, `--resume`, `--seek`, `--seek-to`) and `--all` only to `--stop`;
+  `-d` combines with neither an action nor `-f ascii|viz`.
 - **Behavior:**
   ```
    ut-play -- <handle>          play (prose)      ut-play -j -- <handle>   playback JSON
    ut-play -d -- <handle>       detach; concurrent players OK
    ut-play --status             list players      ut-play --set-volume N [--id ID]
    ut-play --stop [--id ID | --all]               stop one/all (--id from --status)
+   ut-play --pause | --resume [--id ID]           two idempotent verbs, never a toggle
+   ut-play --seek ±N [--id ID]                    RELATIVE; the sign is required
+   ut-play --seek-to N [--id ID]                  absolute, seconds
    ut-play                      → usage error naming yt-search / uting (D3)
    ut-play -- "some query"      → usage error naming yt-search (whitespace ⇒ not a handle)
   ```
@@ -338,6 +343,19 @@ Lifecycle / resolve:
                 | {status:"not_playing"}             (no target; exit 4)
                 | {status:"ambiguous", reason:"multiple_players", players:[{id,pid,title,url}…]}  (exit 4)
                 | {status:"error", reason:"ipc_failed"}   (dead/missing socket; exit 4)
+   --pause  : {status:"ok", id, paused:true}    --resume : {status:"ok", id, paused:false}
+   --seek   : {status:"ok", id, position:<int seconds>}      --seek-to : same shape
+              All four take the THREE not_playing / ambiguous / ipc_failed shapes above,
+              verbatim and for the same reasons — one target resolution, one exit taxonomy.
+              `paused` and `position` are READ BACK off the socket after the command
+              succeeded, never computed from what was asked for: mpv clamps a seek at the
+              ends of the file, so the number asked for and the number arrived at differ
+              exactly when a caller most needs the truth. Both are null if that read-back
+              alone failed — the verb still took effect, so it is not an error.
+              Seeking past the end is NOT an error: mpv clamps, the envelope reports where
+              it landed, exit 0. A live stream has no seekable timeline and mpv refuses;
+              that refusal surfaces as ipc_failed (exit 4) rather than as a prediction the
+              player made from a null duration — that would be site knowledge it does not hold.
    --stop   : {status:"stopped", id, stopped:bool}   (single target)
             | {status:"stopped", scope:"all", stopped:bool}   (--all)
             | {status:"ambiguous", …}                (2+ players, no --id; exit 4)
@@ -421,14 +439,18 @@ on-disk record read by jq, not an envelope.
    1    usage/validation error (die), a verb's flag-gating rejection, uting's non-TTY
         refusal, conflicting actions, no handle (D3), a handle with whitespace in it,
         --id/--all outside a lifecycle verb, -d with an action or with -f ascii|viz,
+        a `--seek` value without a sign (`--seek 30`) or a negative `--seek-to`,
         an unknown --engine, a URL whose host is not this engine's (ARCHITECTURE.md §10 / §3 here),
         --info / --transcript fetch failure (incl. no_subtitles_available)
    2+   propagated yt-dlp / mpv / HTTP failure (playback, resolve -j, SEARCH failure —
         search reports 2 even when yt-dlp exits 1, so a tool failure is never confused
         with 1). A handle the engine cannot resolve lands HERE, not in 1: the player
         cannot judge an id's shape, so "bad id" is an extraction outcome (ARCHITECTURE.md §6).
-   4    --set-volume / --stop: did not take effect — no such player, no player,
-        ambiguous target, or mpv IPC failure. The -j status/reason says which.
+   4    --set-volume / --pause / --resume / --seek / --seek-to / --stop: did not take
+        effect — no such player, no player, ambiguous target, or mpv IPC failure. The -j
+        status/reason says which. The split is the point: a MALFORMED call is 1 and never
+        reaches a player (`--seek 30`), a well-formed one mpv would not do is 4
+        (`--seek +30` with nothing playing).
         Distinct from 1 (usage) and 2+ (propagated player failure). --stop treats
         "nothing playing" as idempotent success (exit 0); only ambiguity is exit 4.
         ALSO ut-playlist, for the same meaning — the call was well formed and the
@@ -447,7 +469,8 @@ on-disk record read by jq, not an envelope.
    deps : they are per-FILE now, which is the point of the split —
           ut-play      : jq + mpv to play; --status/--stop need only jq (--status uses
                          nc opportunistically for the live read and degrades to the
-                         recorded volume plus three nulls without it); --set-volume
+                         recorded volume plus three nulls without it); every socket verb
+                         (--set-volume, --pause, --resume, --seek, --seek-to)
                          needs jq+nc (nc gated lazily so a plain play never demands it).
                          It needs NO yt-dlp and no curl.
           yt-search / yt-resolve / bili-resolve : yt-dlp + jq. curl is an OPTIONAL soft

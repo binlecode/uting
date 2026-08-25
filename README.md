@@ -13,6 +13,7 @@ bili-search -j -n 25 -- "周杰伦"        # machine: the second source, the sam
 ut-play -d -j -- "<url>"               # machine: launch detached, get {id, pid, sock}
 yt-resolve --transcript -j -- "<url>"  # machine: captions as clean text + timed segments
 ut-play --status -j                    # machine: what is playing, where, how loud
+ut-play --pause --id <id> -j           # machine: also --resume, --seek ±N, --seek-to N
 ut-play --stop --id <id> -j            # machine: stop it
 ```
 
