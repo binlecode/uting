@@ -22,7 +22,7 @@ The suite is exposed **directly** to shell-capable agents with no MCP wrapper, s
 git config core.hooksPath .githooks   # RUN ONCE PER CLONE — fresh clones have no hooks
 ```
 
-`.githooks/pre-commit` blocks a staged secret / cookie export, a **bash-4 idiom on an added line**, a staged shell script that does not parse under `/bin/bash -n`, a **non-`.sh` file under `tests/`** (the enforceable half of the no-stand-in rule below), and a force-added `tmp/` file. `.githooks/pre-push` blocks a force-push or deletion of `main` and a syntax error in any script under `shell/` (globbed, not listed), and warns when a `v*` tag is pushed (the tag must match `shell/VERSION`). A direct push to `main` is **not** blocked — see the commit guidelines.
+`.githooks/pre-commit` blocks a staged secret / cookie export, a **bash-4 idiom on an added line**, a staged shell script that does not parse under `/bin/bash -n`, a **non-`.sh` file under `tests/`** (the enforceable half of the no-stand-in rule below), and a force-added `tmp/` file. `.githooks/pre-push` blocks a force-push or deletion of `main` and a syntax error in any script under `shell/` (globbed, not listed), and warns when a `v*` tag is pushed (the tag must match `VERSION`). A direct push to `main` is **not** blocked — see the commit guidelines.
 
 ## Build, Test, and Development Commands
 
@@ -53,7 +53,7 @@ Each suite runs directly and says in its own docstring what it proves. Read the 
 | `shell/yt-resolve` | **The YouTube engine, half two** (1.0k lines) — handle → `{stream_urls[], http_headers{}, title, duration, format}`, plus `--info` and `--transcript`. Owns the PO-token probe, the cookie decision, the mode→format table and the yt-dlp error vocabulary. Every site-specific fact in the suite lives in this file or in `yt-search`; adding a source is adding a pair like it |
 | `shell/bili-search` | **The Bilibili engine, half one** (658 lines) — query → result envelope, over `curl` + `jq`. It talks HTTP rather than shelling out to yt-dlp because yt-dlp's Bilibili search returns **no metadata at all** (flat) and recurses into every part of every collection (non-flat, >120s for 10 results). Sends no credential: one public endpoint, a Referer, and a locally generated random `buvid3` |
 | `shell/bili-resolve` | **The Bilibili engine, half two** (778 lines) — handle → the same resolve envelope, over `yt-dlp`. No request signing, no stream selection, no CDN logic: that is a thousand lines to redo what the dependency maintains. Owns the BV/av handle shapes, the cookie decision, the mode→format table. No `--transcript` — the site has no captions, and an engine states a missing capability by not having the verb |
-| `shell/VERSION` | The suite version, declared once — a one-line data file, not a shell variable. The player and the engines are independent executables sharing no library, so a variable in any one of them would make the others ask *it* for the version — the wrong dependency direction for a player that must not know its engines |
+| `VERSION` | The suite version, declared once — a one-line data file, not a shell variable, and at the **repo root** rather than under `shell/`: it versions the suite, not the script directory. The player and the engines are independent executables sharing no library, so a variable in any one of them would make the others ask *it* for the version — the wrong dependency direction for a player that must not know its engines. Each entry point reads it one level up from its own **resolved** location, so a symlink on PATH still finds it |
 | `shell/ut-playlist` | **The playlist store** (636 lines) — durable, user-level, engine-agnostic state: `$UT_STATE_DIR/playlists/<name>.json`, one file per list, `mkdir` lock + atomic temp+mv, six verbs (`--ls --show --add --rm --del --rename`) and its own state-error enum (`not_found`, `exists`, `invalid_name`, `invalid_input`, `locked`, `corrupt` — the last four split 1 vs 4 the way the rest of the suite does). Knows **no site and no playback**: its record is `{engine, url, …}`, which is exactly `ut-play --engine E -- URL`, so a stored record is a CALL, not a reference. Input is stdin JSON only — a search envelope, its own `--show` envelope, or an item array. **The queue is NOT here**: a queue is a playlist being consumed and belongs to the player (`docs/ARCHITECTURE.md` §9.5) |
 | `shell/uting` | The human face (3.4k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
 
@@ -110,7 +110,7 @@ If a feature genuinely needs bash 4+, the honest move is `((BASH_VERSINFO[0] >= 
 
 ### 2. One fact, one place
 
-`docs/ARCHITECTURE.md` is the as-built doc of the application and each fact lives in exactly ONE of its sections; everything else points at it. Do not restate a contract in the README, in `usage()`, and in the design doc — state it once and cross-reference. The version is declared once, in `shell/VERSION`; each entry point reads that file and prints its own name, so four entry points can never disagree.
+`docs/ARCHITECTURE.md` is the as-built doc of the application and each fact lives in exactly ONE of its sections; everything else points at it. Do not restate a contract in the README, in `usage()`, and in the design doc — state it once and cross-reference. The version is declared once, in `VERSION`; each entry point reads that file and prints its own name, so four entry points can never disagree.
 
 ### 3. Scratch stays under `tmp/`
 
@@ -238,7 +238,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 - One logical change per commit. Renderer changes come with the proved capture (`capture-pane`) that shows them.
 - `bash -n` on every script in `shell/` before every commit; `tests/contract.sh` before every push.
 - **Always ask before `git push`.** Never force-push `main`.
-- **Versioning is semver 2.0.0 over the CLI contract, not over the code** (`docs/ROADMAP.md` D13 defines what counts as the public API). While the suite is `0.y.z`: a breaking change bumps **y**, an addition or a fix bumps **z**. `shell/VERSION` is bumped deliberately, **alone, in its own commit**, and never once per commit. There is no release process to run and no CHANGELOG: the suite is not packaged (`docs/ROADMAP.md` D1), so a `v<VERSION>` tag is for a real release only — `1.0.0` waits for D1/D2 to reverse.
+- **Versioning is semver 2.0.0 over the CLI contract, not over the code** (`docs/ROADMAP.md` D13 defines what counts as the public API). While the suite is `0.y.z`: a breaking change bumps **y**, an addition or a fix bumps **z**. `VERSION` is bumped deliberately, **alone, in its own commit**, and never once per commit. There is no release process to run and no CHANGELOG: the suite is not packaged (`docs/ROADMAP.md` D1), so a `v<VERSION>` tag is for a real release only — `1.0.0` waits for D1/D2 to reverse.
 
 ## Security & Configuration Tips
 

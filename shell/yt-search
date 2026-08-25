@@ -37,8 +37,8 @@ SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
 # any one of them would make the others ask IT for the version, which is the wrong
 # dependency direction for a player that must not know its engines. A one-line file each
 # reads keeps "one fact, one place" with zero code sharing. CLAUDE.md § one fact, one place.
-if [[ -r "$SCRIPT_DIR/VERSION" ]]; then
-    UT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
+if [[ -r "$SCRIPT_DIR/../VERSION" ]]; then
+    UT_VERSION=$(cat "$SCRIPT_DIR/../VERSION")
 else
     UT_VERSION="unknown"
 fi

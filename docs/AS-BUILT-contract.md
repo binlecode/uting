@@ -2,7 +2,7 @@
 
 The **frozen surface** (ROADMAP D3/D13): the one thing that survives any rewrite, and the
 acceptance spec for a port. Everything here is as built — verified against the seven scripts —
-and versioned by `shell/VERSION` under ROADMAP D13's semver rule. **Changing anything in
+and versioned by `VERSION` under ROADMAP D13's semver rule. **Changing anything in
 this file is a deliberate, documented act** (CLAUDE.md hard rule 4), never a side effect
 of a feature.
 
@@ -538,7 +538,7 @@ on-disk record read by jq, not an envelope.
           ut-playlist  : jq only. No network, no yt-dlp, no mpv.
           BSD `nc -U` is stock on macOS; the Linux netcat `-U` gap is a known,
           documented limitation (ARCHITECTURE.md §26 / script comment).
-   -V   : every entry point answers it BEFORE any dependency gate, reading shell/VERSION
+   -V   : every entry point answers it BEFORE any dependency gate, reading VERSION
           and printing its own name — needing yt-dlp installed to learn your version is
           backwards, and seven executables must not be able to disagree (ARCHITECTURE.md §4).
           Asserted over every file in shell/ that has a shebang, not over a list of names.

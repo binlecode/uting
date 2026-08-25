@@ -136,7 +136,7 @@ The older `yts` / `ytp` / `ytt` spellings are **deprecated**, and so is `ut-tui`
 
 `uting --version` (or `-V`) answers before any dependency check, so it works on a machine that
 has not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. Every
-entry point reports the same number: it is declared once, in `shell/VERSION`.
+entry point reports the same number: it is declared once, in `VERSION`.
 
 That number is **semver over the CLI contract, not over the code**: the command names, their
 flags, the exit-code table, the JSON envelopes, and the player lifecycle are the public API — a

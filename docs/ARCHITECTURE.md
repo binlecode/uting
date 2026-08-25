@@ -22,7 +22,7 @@ the family. What this document is NOT: the sequencing (`ROADMAP.md`) or work in 
 - Runtime deps: `yt-dlp` + `jq` in the engines, and `curl` — REQUIRED by `bili-search`
   (it is that engine's transport), optional in `yt-resolve` (the probe); `mpv` + `jq` in the
   player; `nc` for `--set-volume`. No fzf / TUI framework — only foundational primitives.
-- The version is declared once, in `shell/VERSION`; every entry point reads it and prints
+- The version is declared once, in `VERSION`; every entry point reads it and prints
   its own name (§4).
 
 The document flows: **I. System architecture → II. Functional structure →
@@ -191,10 +191,20 @@ models: in practice `ut-play` is its caller, and what a model sees is `<engine>-
 **Why the player must not be able to name its engines.** `ut-play` never reads an engine's
 file, sources nothing from it, and holds no list of valid names — an unknown `--engine` is
 discovered by the concatenated path not existing. This is the same dependency-direction rule
-that put the version in `shell/VERSION`: a one-line data file, because a variable inside any
+that put the version in `VERSION`: a one-line data file, because a variable inside any
 one of seven independent executables would make the other six ask *that* file for the version,
 and the player asking an engine anything except "resolve this" is the coupling the split
 removed.
+
+It sits at the **repo root**, not beside the scripts: it is the version of the suite, not of
+`shell/`, and the root is where a reader — and every other project — looks for it. Each entry
+point reaches it one level up from its own RESOLVED location, which is why the symlink-chain
+walk in front of `SCRIPT_DIR` is load-bearing rather than decorative: `~/bin/ut-play` is a
+symlink into the checkout (ROADMAP D1/D2), so a plain `dirname` yields `~/bin`, which holds no
+`VERSION` and no engines. `ut-play` was the one entry point that did not do that walk and
+answered `--version` with `unknown` through a symlink; it now resolves the way its six
+siblings always did. `tests/contract.sh` pins the value to the file **through a real symlink**,
+because seven entry points all printing `unknown` agree with each other perfectly.
 
 **Why each verb holds its own gate (D7, inverted).** The old shape was one core plus two
 gating wrappers, and the gate was a *layer*. With search and extraction moved out, the player

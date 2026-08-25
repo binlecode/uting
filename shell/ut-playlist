@@ -35,8 +35,8 @@ done
 SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
 
 # THE version of the whole suite, declared once, in a data file. CLAUDE.md § one fact, one place.
-if [[ -r "$SCRIPT_DIR/VERSION" ]]; then
-    UT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
+if [[ -r "$SCRIPT_DIR/../VERSION" ]]; then
+    UT_VERSION=$(cat "$SCRIPT_DIR/../VERSION")
 else
     UT_VERSION="unknown"
 fi

@@ -661,6 +661,19 @@ done
 # so the vacuous case is already caught by the check that does the work.
 report "one version, every entry point" 1 \
     "$(for c in $ENTRY_POINTS; do "$c" --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
+# …and that the one version is the FILE's, asserted through a SYMLINK — the documented
+# install (ROADMAP D1/D2: users symlink these onto their own PATH) and the configuration this
+# breaks in. A script that does not resolve its own symlink chain looks for VERSION next to
+# the LINK, finds none, and prints "unknown". Seven entry points all printing "unknown" agree
+# with each other perfectly, so the check above stays green while every one of them is wrong;
+# pinning the value to the file is what gives it teeth. Real symlinks to real scripts, read by
+# the real command — a fixture, not a stand-in.
+UT_VER=$(cat VERSION)
+LINKDIR="$UT_TEST_TMP/bin"
+mkdir -p "$LINKDIR"
+for c in $ENTRY_POINTS; do ln -sf "$PWD/$c" "$LINKDIR/$(basename "$c")"; done
+report "…and it is VERSION, via a symlink" "$UT_VER" \
+    "$(for c in "$LINKDIR"/*; do "$c" --version | awk '{print $NF}'; done | sort -u | tr -d '\n')"
 report "uting refuses a non-TTY" 1 "$(shell/uting </dev/null >/dev/null 2>&1; echo $?)"
 
 echo
