@@ -2806,8 +2806,8 @@ tmux pane driving real yt-dlp + detached mpv):
   an id-less state are all left untouched. The unit test extracts the real function bodies
   (an `awk` pass over the script, so it cannot drift from a copy) and also asserts that
   `clear_play_state` covers **every** declared `CURRENT_PLAY_*` global — which is how the
-  pre-existing gap it folds in was found: `stop_current_playback` had never cleared
-  `CURRENT_PLAY_URL`, so "cleared" had two definitions and one of them was wrong. A tmux pane
+  pre-existing gap it folds in was found: `stop_current_playback` had never cleared one of the
+  fields the poll path did, so "cleared" had two definitions and one of them was wrong. A tmux pane
   rig covers the end-to-end path.
 - Also in this pass, the last crumb of the withdrawn **F15**: the mini player's bar-sizing
   comment now names the live early-return that makes `${#var}` safe there, instead of only

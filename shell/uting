@@ -662,7 +662,6 @@ TUI_VIEW_MODE="list"       # "list" (Search List) | "card" (Now Playing Focus Ca
 
 CURRENT_PLAY_ID=""
 CURRENT_PLAY_PID=""
-CURRENT_PLAY_URL=""
 CURRENT_PLAY_TITLE=""
 CURRENT_PLAY_CHANNEL=""
 CURRENT_PLAY_DURATION=""
@@ -1525,11 +1524,10 @@ refresh_player_record() {
 # LEFT ALONE rather than blanked: an envelope that carries only `queue` must not erase the
 # title.
 apply_player_record() {
-    local rec=$1 t u d q
-    IFS="$US" read -r t u d < <(printf '%s' "$rec" |
-        jq -r '[(.title // ""), (.url // ""), (.duration // "" | tostring)] | join("\u001f")' 2>/dev/null) || return 0
+    local rec=$1 t d q
+    IFS="$US" read -r t d < <(printf '%s' "$rec" |
+        jq -r '[(.title // ""), (.duration // "" | tostring)] | join("\u001f")' 2>/dev/null) || return 0
     [[ -n "$t" ]] && CURRENT_PLAY_TITLE="$t"
-    [[ -n "$u" ]] && CURRENT_PLAY_URL="$u"
     [[ -n "$d" && "$d" != "null" ]] && CURRENT_PLAY_DURATION=$(fmt_sec "$d")
     q=$(printf '%s' "$rec" | jq -c '.queue // empty' 2>/dev/null) || q=""
     if [[ -n "$q" ]]; then
@@ -1640,8 +1638,8 @@ adjust_volume() {
 
 # One definition of "nothing is attached". Two paths reach it — the user pressing s and the
 # liveness poll finding a dead player — and when each cleared its own list they drifted: the
-# stop path never cleared CURRENT_PLAY_URL. Field order mirrors the declaration block above so
-# a missing one is visible in a diff.
+# stop path was missing a field the poll cleared. Field order mirrors the declaration block
+# above so a missing one is visible in a diff.
 clear_play_state() {
     CURRENT_QUEUE_POS=0
     CURRENT_QUEUE_LEN=0
@@ -1649,7 +1647,6 @@ clear_play_state() {
     CURRENT_PLAY_MPV_TITLE=""
     CURRENT_PLAY_ID=""
     CURRENT_PLAY_PID=""
-    CURRENT_PLAY_URL=""
     CURRENT_PLAY_TITLE=""
     CURRENT_PLAY_CHANNEL=""
     CURRENT_PLAY_DURATION=""
@@ -1902,7 +1899,6 @@ build_playlist_rows() {
 
 apply_search_results() {
     LIST_SOURCE="search"
-    PLAYLIST_NAME=""
     build_all_rows
     FILTER_LABEL=""
     FILTER_MODE=0
@@ -2727,7 +2723,6 @@ play_selected() {
 
     CURRENT_PLAY_ID="$id"
     CURRENT_PLAY_PID="$pid"
-    CURRENT_PLAY_URL="$url"
     CURRENT_PLAY_MODE="$PLAY_MODE"
     CURRENT_PLAY_SOCK="$sock"
     CURRENT_PLAY_PAUSED=0
@@ -2867,7 +2862,6 @@ open_playlist() {
     fi
     json="$out"
     LIST_SOURCE="playlist"
-    PLAYLIST_NAME="$name"
     # One label for the whole list, computed once: a mixed playlist says so rather than
     # claiming the session engine, which is not what its rows will play under.
     PLAYLIST_ENGINES=$(printf '%s' "$out" | jq -r '[.items[].engine] | unique | join("+")' 2>/dev/null) || PLAYLIST_ENGINES=""
@@ -2947,7 +2941,6 @@ open_history() {
     fi
     json="$out"
     LIST_SOURCE="history"
-    PLAYLIST_NAME=""
     # The same one-label rule a mixed playlist follows: the rows carry their own engine, and
     # the status line must not claim the session's for them.
     PLAYLIST_ENGINES=$(printf '%s' "$out" | jq -r '[.items[].engine] | unique | join("+")' 2>/dev/null) || PLAYLIST_ENGINES=""
@@ -3369,7 +3362,6 @@ move_selection() {
 # search-only and tests this; everything that works on the rows themselves (arrows, Enter,
 # /, v, the playback keys) does not care and is left alone.
 LIST_SOURCE="search"
-PLAYLIST_NAME=""
 PLAYLIST_ENGINES=""
 PROMPT_NAME=""
 FILTER_LABEL=""
