@@ -18,11 +18,12 @@
 #
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md §28.
 #
-# Cost: ~75s and the network (measured 2026-08-25). CLAUDE.md asks for this file before every
-# commit, so the number belongs at the door: roughly 15 live engine round trips, one 5s lock
-# spin the stale-lock check has to sit through, and ~25s of tmux bringing the TUI up. It
-# starts no process it did not have to and talks to no peer — every live claim is
-# tests/playback.sh's.
+# Cost: ~80s and the network (four runs on 2026-08-25: 77/80/82/82s). CLAUDE.md asks for this
+# file before every commit, so the number belongs at the door: roughly 15 live engine round
+# trips, one 5s lock spin the stale-lock check has to sit through, and ~25s of tmux bringing
+# the TUI up. The OFFLINE half runs first, so a broken gate is red in about two seconds and
+# the network is not touched for 22 — see the section-order contract below. It starts no
+# process it did not have to and talks to no peer — every live claim is tests/playback.sh's.
 #
 # Usage:  tests/contract.sh            all checks
 # Exit:   0 = every check held, 1 = at least one regression

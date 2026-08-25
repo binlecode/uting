@@ -38,7 +38,7 @@ shell/ut-history --ls -n 20 -j                                # the log: what a 
 UT_HISTORY=0 shell/ut-play -d -- URL                          # …and the switch that stops it being written
 shell/uting --version                                        # answers before any dependency gate
 
-tests/contract.sh                                             # the CLI contract; ~75s, needs the network
+tests/contract.sh                                             # the CLI contract; ~80s, offline half first
 tests/playback.sh                                             # real detached players; silent, ~65s
 tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
 tests/drive.sh -k Enter -w Playing                            # …including a real detached play

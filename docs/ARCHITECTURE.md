@@ -3151,8 +3151,15 @@ new-search/more-results instead of `n`/`m`; also corrected.
 **Last run — a measurement, filled in from the run, not a constant kept in sync.** Each suite
 prints its own count on the last line, which is that number's one home; the entry here records
 what a particular run on a particular day cost, and goes stale by design rather than by drift.
-*2026-08-25, both suites green*: `contract.sh` **177 ok / 0 failed in 76s**, `playback.sh`
-**42 ok / 0 failed in 64s**, with `pgrep mpv` empty afterwards. All THREE entry points under
+*2026-08-25, both suites green*: `contract.sh` **177 ok / 0 failed in 82s**, `playback.sh`
+**42 ok / 0 failed in 69s** (and 68s / 65s / 67s on three consecutive runs before it, because
+the queue's track-end claim rests on a race), with `pgrep mpv` empty afterwards. `contract.sh`
+now runs its **offline half first**: measured on that run, the flag gates are red at 1s, the
+idle lifecycle at 1s, the death record at 2s, and the last offline section finishes at 22s
+before any network call is made — 19 of those 22 being the playlist store's own deliberate 5s
+lock spin and eight concurrent writers. The order is stated as a contract in the file, since
+part of it is load-bearing (offline first; the death-record fixtures and then the TUI section
+last, because the pane's `uting` polls `--status` and every lifecycle verb reaps). All THREE entry points under
 `tests/` point `TMPDIR` at a directory of their own — the two suites and the `drive.sh` driver,
 which was the last one still using the user's — so none of them reaches the state dir of a
 player the user is listening to. The suites point `UT_STATE_DIR` at one too: a detached player
@@ -3239,6 +3246,22 @@ finds the reasoning without the file carrying it twice.
 > are different findings. Confirmed by sabotage — `wait_live` returning failure at once turns
 > all three of its sites red, C4's among them — and then by three consecutive clean runs at
 > 42 ok, since a race check run once proves nothing.
+
+**Four things this suite deliberately does not have, recorded so each is refused on purpose
+rather than re-proposed.** None is a gap; each is a decision with a reason:
+
+- **No `tests/lib.sh`.** That the two suites are independent and each runs alone is the design,
+  not an accident, and CLAUDE.md's "no rig layer" governs it directly. What is duplicated is
+  about twenty lines of `report`/`ok`/`bad` bookkeeping, which is acceptable; a duplicated
+  *argument* is not, which is why the `TMPDIR` reasoning is stated once and pointed at twice.
+- **No `tests/all.sh`.** Two commands, and CLAUDE.md already says when each is run: `contract.sh`
+  before every commit, `playback.sh` when the player changed.
+- **No "skip the network" environment switch.** Set-once tuning is what an environment variable
+  is for, and this would instead create a second meaning for green — *which* green did you get?
+  Running the offline half first buys the same fast feedback with zero new concepts.
+- **No check that exists to raise the count**, and no timing or rendered-picture assertion. The
+  hardening pass this register describes added a net **zero** checks to the two suites: it made
+  existing ones honest, deleted three duplications, and fixed one race.
 
 **No *scratch* check is named by path here, on purpose.** The exception is the three files
 that earned a permanent home and are committed under `tests/` — the two suites `contract.sh`
