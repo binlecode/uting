@@ -19,7 +19,7 @@
 > | C2 | `playback.sh` 两块逐字重复（孤儿检查、position 轮询）+ 一处空值守卫 | C | 未开工 | 文件自身 |
 > | C3 | `contract.sh` 离线段前置、TUI 收尾；TMPDIR 论证只留一份 | C | 未开工 | 文件自身 · `ARCHITECTURE.md` §27 |
 > | C4 | `playback.sh:296` 的 duration 只读一次，与换曲赛跑 —— **已实测变红**，并连带吞掉「曲终推进队列」 | C | 未开工 | 文件自身 · `ARCHITECTURE.md` §27 |
-> | D1 | `ut-history` 的契约段（第八个入口，今天只被 `--version` 遍历碰到） | 随 `PLAN-listening` 步骤 3 | ✅ 已落地 | `AS-BUILT-contract.md` §1.6 · README · `CLAUDE.md` |
+> | D1 | `ut-history` 的契约段（第八个入口，今天只被 `--version` 遍历碰到） | 随收听历史落地 | ✅ 已落地 | `AS-BUILT-contract.md` §1.6 · README · `CLAUDE.md` |
 >
 > 本文件是**核查产出**，不是新功能：除 D1 外没有一条要求测试覆盖新行为，全部是让「文件说的」
 > 和「文件做的」重新对上、删掉三份重复、修掉一条竞态。
@@ -52,7 +52,8 @@
 **检查数只由套件自己打印，文档不再钉数字。**
 
 `f009da3` 加了「通过 symlink 验证 VERSION」这一条之后，`CLAUDE.md:39` 与 `ARCHITECTURE.md:3021`
-的 144 同时过期，而 `PLAN-listening.md:342` 写的 145 是对的——同一个事实住在三个地方，于是漂了。
+的 144 同时过期，而当时另一份施工文档写的 145 是对的（那份文档已随它自己的落地删除）——
+同一个事实住在三个地方，于是漂了。
 按「一个事实一个地方」，这个数字的唯一住所是 `contract.sh` 最后那行 `printf`。
 
 - `CLAUDE.md:39` 的 `# the CLI contract, 144 checks` → 去掉数字，只留这行命令做什么。
@@ -213,7 +214,14 @@ case "$dur" in "" | null) bad "no duration ..." ;;                         # ←
 
 ---
 
-## 7. D1 —— `ut-history` 的契约段（随 `PLAN-listening` 步骤 3 落地）
+## 7. D1 —— `ut-history` 的契约段 —— ✅ 已落地 2026-08-25（`821f69f`）
+
+> **落地记录。** 随收听历史一起进：`contract.sh` 32 条（disposable `UT_STATE_DIR`、`--ls`/`--record`
+> 的信封、8KB 标题证明 4096 字节的原子性前提、坏行不遮蔽其余、`--clear --before`、整套 gate），
+> `playback.sh` 6 条（真播完的播放器写下的行、被打断的行、两个引擎一个形状、`UT_HISTORY=0`）。
+> 组件表、依赖图、README 与 `AS-BUILT-contract.md` §1.6 同时入表，`ut-play` 那条过期注释已清。
+> 那份施工文档（步骤 3 的出处）已按 SDLC 规则删除，本节保留的是**它证明了什么**，不是它在哪。
+
 
 `shell/ut-history` 已经是仓库里第八个入口（656 行、`--ls`/`--record`、自己的
 `$UT_STATE_DIR/history/<YYYY-MM>.jsonl`），而 `tests/` 对它的全部覆盖是 `contract.sh:654-676`
@@ -228,8 +236,8 @@ case "$dur" in "" | null) bad "no duration ..." ;;                         # ←
   `truncated` 的上报、gate（两个动作同时给 → 1、选择器无动作 → 1、播放类 flag → 1）、
   以及 1 vs 4 的划分与 store 的其余部分一致。
 - **`ut-history` 落地时同时入表**：`CLAUDE.md` 的组件表与依赖图、README 的命令表今天仍是七个命令。
-- 顺带清掉 `PLAN-listening.md:29-31` 记的那处漂移（`shell/ut-play:760` 还写着收听历史是
-  ROADMAP §0 的 non-goal）——D14 之后不成立。
+- 顺带清掉那处漂移（`shell/ut-play:760` 还写着收听历史是 ROADMAP §0 的 non-goal）——D14 之后
+  不成立。**已清。**
 
 ---
 

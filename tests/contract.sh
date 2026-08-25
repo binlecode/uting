@@ -18,7 +18,7 @@
 #
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md §28.
 #
-# Cost: ~85s and the network (measured 2026-08-25). CLAUDE.md asks for this file before every
+# Cost: ~75s and the network (measured 2026-08-25). CLAUDE.md asks for this file before every
 # commit, so the number belongs at the door: roughly 15 live engine round trips, one 5s lock
 # spin the stale-lock check has to sit through, and ~25s of tmux bringing the TUI up. It
 # starts no process it did not have to and talks to no peer — every live claim is

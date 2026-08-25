@@ -6,9 +6,11 @@
 #
 # No gate. It used to sit behind YT_TEST_LIFECYCLE=1 because starting players meant starting
 # them ON TOP OF the user's — --stop --all reached whatever they were listening to. The state
-# dir below removes that, and what is left is a ~40s run that needs the network — a reason to
+# dir below removes that, and what is left is a ~65s run that needs the network — a reason to
 # run it when the player changed, not a reason for an env var to guard it. (Measured
-# 2026-08-25; two of the waits below are bounded polls, so a slow network costs more.)
+# 2026-08-25, after the listening-log section, which plays a 19-second track out to its own
+# end rather than seeking there. Several waits below are bounded polls, so a slow network
+# costs more.)
 #
 # And it carries the one claim that needs a SECOND source: that the player applies the
 # http_headers an engine hands it. See the Bilibili section for why only that site can show it.
