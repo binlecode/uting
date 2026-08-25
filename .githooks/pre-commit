@@ -131,7 +131,7 @@ if [ -n "$stand_in" ]; then
     echo ""
     echo "tests/ is functional shell only — every check invokes a real entry point and reads"
     echo "its real answer. No mock, no fake peer, no stub process, no shimmed binary. A claim"
-    echo "that needs a real peer belongs in tests/lifecycle.sh, where the real one runs; a"
+    echo "that needs a real peer belongs in tests/playback.sh, where the real one runs; a"
     echo "claim no real dependency can be made to produce is coverage this suite does without."
   } >&2
   fail=1

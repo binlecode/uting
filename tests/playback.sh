@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# The detached-player lifecycle: the one surface whose bugs are PROCESSES, not output.
-# Everything here starts real players, so it is gated — set YT_TEST_LIFECYCLE=1 to run it.
-# Every player is launched with --volume 0, so it is silent, and the run does not pass until
-# `pgrep` comes back empty: a leaked mpv is the failure this file exists to catch.
+# Real detached playback: the one surface whose bugs are PROCESSES, not output. Everything
+# here starts real mpv players — silent (--volume 0), in a state dir of their own, and the run
+# does not pass until `pgrep` comes back empty: a leaked mpv is the failure this file exists
+# to catch.
+#
+# No gate. It used to sit behind YT_TEST_LIFECYCLE=1 because starting players meant starting
+# them ON TOP OF the user's — --stop --all reached whatever they were listening to. The state
+# dir below removes that, and what is left is a ~35s run that needs the network — a reason to
+# run it when the player changed, not a reason for an env var to guard it.
 #
 # It also carries the one timing claim that needs a player: Starting -> Playing flips on the
 # TUI's own 1 s tick with NO keypress. That was the last thing `pty_drive.py` was kept for.
@@ -17,17 +22,22 @@
 # Portability: bash 3.2. Needs jq for the envelopes; no tmux and no terminal — every
 # assertion here is an exit code or a field out of a real envelope.
 #
-# Usage:  YT_TEST_LIFECYCLE=1 tests/lifecycle.sh
-# Exit:   0 = every check held, 1 = at least one failed, 2 = refused to run (not gated in)
+# Usage:  tests/playback.sh
+# Exit:   0 = every check held, 1 = at least one failed
 
 set -uo pipefail
 REPO=$(cd -P "$(dirname "$0")/.." && pwd -P) || exit 1
 cd "$REPO" || exit 1
 
-if [ "${YT_TEST_LIFECYCLE:-0}" != "1" ]; then
-    echo "lifecycle.sh: starts real players — re-run with YT_TEST_LIFECYCLE=1" >&2
-    exit 2
-fi
+# ---- a state dir of this file's own -------------------------------------------------
+# `ut-play` derives its state dir from TMPDIR ("${TMPDIR:-/tmp}/uting-$(id -u)", shell/ut-play)
+# and takes no override. Left at the user's real TMPDIR, every --stop --all below reaches the
+# player they are listening to and every orphan count is a count of THEIR mpv. Redirecting
+# TMPDIR changes nothing about what runs — the players are real and their state is really
+# written — only whose state it is written on top of.
+UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-playback.XXXXXX") || exit 1
+export TMPDIR="$UT_TEST_TMP"
+STATE_DIR="$TMPDIR/uting-$(id -u)"
 
 # Two long, stable tracks. Silent at --volume 0; the point is the process, not the audio.
 U1=${YT_TEST_URL1:-https://www.youtube.com/watch?v=n61ULEU7CO0}
@@ -57,6 +67,7 @@ wait_for_sock() {
 # Always stop everything, however this exits — a leaked player outlives the shell.
 cleanup() {
     shell/ut-play --stop --all -j >/dev/null 2>&1
+    rm -rf "$UT_TEST_TMP"
     return 0
 }
 trap cleanup EXIT INT TERM
@@ -224,7 +235,9 @@ report "--stop --all again" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; 
 report "no players left"   0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
 
 sleep 1
-n=$(pgrep -f 'mpv .*--input-ipc-server' 2>/dev/null | wc -l | tr -d ' ')
+# Scoped to this file's own socket dir. A bare `mpv .*--input-ipc-server` counts the user's
+# players too, so on any machine where uting is actually used the orphan check was a coin toss.
+n=$(pgrep -f "mpv .*--input-ipc-server=$STATE_DIR" 2>/dev/null | wc -l | tr -d ' ')
 report "no orphan mpv" 0 "${n:-0}"
 
 echo "── a queue is a player consuming a playlist ───────────────────────"
@@ -305,7 +318,9 @@ sleep 0.5
 report "--stop ends the queue" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; echo $?)"
 sleep 2
 report "no players after a queue" 0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
-n=$(pgrep -f 'mpv .*--input-ipc-server' 2>/dev/null | wc -l | tr -d ' ')
+# Scoped to this file's own socket dir. A bare `mpv .*--input-ipc-server` counts the user's
+# players too, so on any machine where uting is actually used the orphan check was a coin toss.
+n=$(pgrep -f "mpv .*--input-ipc-server=$STATE_DIR" 2>/dev/null | wc -l | tr -d ' ')
 report "no orphan mpv after a queue" 0 "${n:-0}"
 # NOT checked here, and the reason is the rule this file lives by: that a stopped queue
 # files no tombstone was TRIED as a check and pulled, because it could not be made to go red
