@@ -312,10 +312,10 @@ resolve**，而 stream URL 会过期（YouTube 约 6 小时）—— 一个 20 �
      **播控四个动词同样在空闲态各退 4 并带 `not_playing`**（与 `--set-volume` 今天那条同形，
      所以这几条是**加强既有检查**而不是新开一类）；`--seek 30`（无符号）→ **1**，
      `--seek +30` 在空闲态 → 4 —— 这两条一起才证明"形状错"和"没生效"没有被混成一个码。
-   - `lifecycle.sh`（真播放器）：`--pause` 后 `--status` 的 `paused` 变 true、`--resume` 变回
+   - `playback.sh`（真播放器）：`--pause` 后 `--status` 的 `paused` 变 true、`--resume` 变回
      false（**回读，不是相信自己的返回值**）；`--seek +5` 后 `position` 真的前进；
      `--seek-to 0` 回到起点。
-   - `lifecycle.sh`：一条**两条目**的队列（两个真实 URL，走真实引擎、真实 mpv）真的推进 ——
+   - `playback.sh`：一条**两条目**的队列（两个真实 URL，走真实引擎、真实 mpv）真的推进 ——
      `--next` 之后 `--status` 的当前条目变成第二条；再把第一首 `--seek-to` 到结尾前几秒，
      **有界轮询**看它自己进第二首。轮询的是"进没进"，不是"多久进"：前者是行为，后者才是
      `CLAUDE.md` 禁止挂在网络上的那种计时断言。`--stop` 之后 `pgrep mpv` 为空。
@@ -327,7 +327,7 @@ resolve**，而 stream URL 会过期（YouTube 约 6 小时）—— 一个 20 �
    - **两把锁的规则要有一条会红的检查**：`--enqueue` 与子进程的 title 回填并发时，两份状态都不丢
      —— 真的把 `lock-queue-<id>` 那个目录 `mkdir` 出来占住（锁本来就是这么工作的，这是制造真实
      争用，不是打桩），看着它转红。
-4. **停止规则**：两个工作时段结束时，若 `lifecycle.sh` 那条"两条目队列自动进第二首"还没绿，
+4. **停止规则**：两个工作时段结束时，若 `playback.sh` 那条"两条目队列自动进第二首"还没绿，
    **停手**，回来重议 §3 的路 C —— 不要继续往一条分支上堆 commit。这一步没有工期估算，
    所以它需要的是一条停止规则，不是一个截止日期。
 5. **收工前必须量一次曲间空隙**：手工跑一条 5 条目 yt+bili 混合队列，median 与 p90 填回 §7。
@@ -340,7 +340,7 @@ resolve**，而 stream URL 会过期（YouTube 约 6 小时）—— 一个 20 �
 已提交的四个 commit：`9d2a5fe`（lifecycle 用真播放器证四个动词）· `274c4af`（`uting` 的
 Space/`[`/`]` 改调动词）· `2d93d67`（as-built 同步）· `ba8d021`（`0.3.2`）。队列的代码、
 `uting` 的两个键、两套测试的新检查都写完并跑绿（`contract.sh` 145 ok / 0 failed、
-`lifecycle.sh` 37 ok / 0 failed），**但没有提交**，剩下的收尾列在本节末尾。
+`playback.sh` 37 ok / 0 failed），**但没有提交**，剩下的收尾列在本节末尾。
 
 偏差，逐条对照：
 
@@ -359,7 +359,7 @@ Space/`[`/`]` 改调动词）· `2d93d67`（as-built 同步）· `ba8d021`（`0.
   SIGINT 是 SIG_IGN，而"进程启动时被忽略的信号无法 trap"，所以 `stop_group` 的
   `kill -INT -pgid` 只杀得掉 mpv，子进程照旧播下一首，要等 3 秒后的 SIGKILL 才停。现在
   `stop_group` **额外对组长发一发 SIGTERM**（可捕获），停止耗时从 3s 降到 ~0.4s。
-  `lifecycle.sh` 用**停止耗时**守这条 —— 两种情况的末态完全一样（KILL 兜底总会赢），只有延迟
+  `playback.sh` 用**停止耗时**守这条 —— 两种情况的末态完全一样（KILL 兜底总会赢），只有延迟
   能分辨,所以这是一条本地信号路径上的计时断言（~0.3s vs 3s,阈值 2s）,不是 `CLAUDE.md` 禁止的
   那种挂在网络上的计时。
 - **stdin 收三种形状**（item 数组 / `.items` / `.results`+envelope 的 `engine`），与
@@ -373,7 +373,7 @@ Space/`[`/`]` 改调动词）· `2d93d67`（as-built 同步）· `ba8d021`（`0.
   会开始描述一首已经播完的曲子。探针是**把 `media-title` 挂在 `fetch_play_times` 已有的那一次
   round trip 上**（零额外 fork）,只有它变了才花一次 `ut-play --status` 重读记录。键是 `+`（入队）
   与 `>`（跳下一首）,两个键都只在"有播放器/有队列"时才出现在被测量的提示块里。
-- **撤掉了一条检查**：`lifecycle.sh` 里"停掉的队列不留墓碑"弄不红（把子进程的 `stopped` 分支
+- **撤掉了一条检查**：`playback.sh` 里"停掉的队列不留墓碑"弄不红（把子进程的 `stopped` 分支
   整个禁用,`failed[]` 依然是空的）,按 `CLAUDE.md` 的规矩不留,原因写在它原来的位置上。
 
 **收尾时又抓出两个真 bug —— 都在 `--stop` 与队列的交界上,都已修**：

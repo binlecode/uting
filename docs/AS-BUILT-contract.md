@@ -597,8 +597,6 @@ kept out of flags to keep each verb's flag surface narrow.
                       YT_IPC_SOCK (per-player mpv IPC socket)  YT_DETACHED (=1: no
                       terminal, so quiet mpv + no stderr filter)  YT_PLAYER_ID (which
                       record the child backfills title/format into, ARCHITECTURE.md §9.1)
-   Test-only:         YT_TEST_LIFECYCLE (=1 arms tests/lifecycle.sh, which starts real
-                      players; unset it and the suite skips rather than making noise)
    (color MODE is the --color flag, NOT an env var — the scripts hardcode
     COLOR_MODE=auto at startup and only --color changes it, so a COLOR_MODE env
     value is never read. Theme and background ARE env-read: YT_THEME / YT_BG.)

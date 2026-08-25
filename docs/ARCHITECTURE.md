@@ -978,7 +978,7 @@ normalisation exists once. Three rules are load-bearing:
   `nc -w1` clock out. That peer was deleted with the no-stand-in rule, and against **real
   mpv** the same read costs **0.04s with `head` or with a bare `cat`**. The guard is
   therefore defence against a peer that behaves that way, not a measured win, and
-  `tests/lifecycle.sh` deliberately carries **no** check for it — none can go red. A
+  `tests/playback.sh` deliberately carries **no** check for it — none can go red. A
   measurement is only as durable as the thing it was taken against. The caller breaking its
   own read loop does NOT achieve it either — nothing writes again to notice the reader is gone.
 - **`|| true` around the pipeline**, or `set -euo pipefail` turns an `nc` timeout into an
@@ -3008,14 +3008,15 @@ new-search/more-results instead of `n`/`m`; also corrected.
 
 ## 27. Verification matrix
 
-**Last run: 2026-08-25, both suites green** — `contract.sh` **145 ok / 0 failed / 0 known
-drift**, `YT_TEST_LIFECYCLE=1 lifecycle.sh` **36 ok / 0 failed**, with `pgrep mpv` empty
-afterwards.
+**Last run: 2026-08-25, both suites green** — `contract.sh` **144 ok / 0 failed**,
+`playback.sh` **36 ok / 0 failed**, with `pgrep mpv` empty afterwards. Both files point
+`TMPDIR` at a directory of their own, so neither reaches the state dir of a player the user
+is listening to.
 
 **Functional only, and two files.** The renderer rig (`tui_pane.sh`) and its cell-grid prover
 were removed: layout is proved when a frame enters a doc (`.claude/skills/capture-pane`, which
 still carries `assert_pane.py`), and the suite asserts *survival* instead — the TUI boots,
-holds through two resizes, and leaves on `q` with 0. `lifecycle.sh` lost its banner-tick case
+holds through two resizes, and leaves on `q` with 0. `playback.sh` lost its banner-tick case
 for the same reason and no longer needs tmux at all. What that trade gives up is named
 plainly: a CJK title that wraps, a rail that stops being right-flush, or a repaint that clears
 the screen will not be caught by a test — only by the next doc capture.
@@ -3039,7 +3040,7 @@ the screen will not be caught by a test — only by the next doc capture.
 
 **No *scratch* check is named by path here, on purpose.** The exception is the three files
 that earned a permanent home and are committed under `tests/` — the two suites `contract.sh`
-and `lifecycle.sh`, and the TUI driver `drive.sh` (which asserts nothing and exists to reap the
+and `playback.sh`, and the TUI driver `drive.sh` (which asserts nothing and exists to reap the
 detached player a session kill leaves behind) — which
 the root README describes by name because a contributor cannot run what nothing points at. (Two pty-based rigs and then a tmux renderer rig preceded today's
 shape: a pty starting at 0×0 produced plausible-looking one-row frames — a wrong green — and
@@ -3089,7 +3090,7 @@ the part of a deleted harness worth keeping.
                 --stop, an ambiguous --set-volume — measured with `| wc -l`, and each still
                 parses with the same fields (jq -e on .query/.count/.results[0], .status)
    Resolve    : <engine>-resolve (prose + -j envelope, no playback); the envelope carries
-                stream_urls[] and http_headers{}, and lifecycle.sh proves the headers are
+                stream_urls[] and http_headers{}, and playback.sh proves the headers are
                 load-bearing: a detached bili player reaches position 1s, which the bare
                 URL cannot do (403 without them)
    Host gate  : a URL from the other site is rejected by each resolver with exit 1 —
@@ -3161,7 +3162,7 @@ the part of a deleted harness worth keeping.
                 on the envelope, so only the whole thing can label an item); a shapeless
                 object does not. --queue without -d, with a handle on argv, or with an
                 action is 1, each naming what to do instead
-                The live half in lifecycle.sh, against a real player and a real engine
+                The live half in playback.sh, against a real player and a real engine
                 (10 checks): --queue - launches and --status carries {pos,len,next} before
                 mpv has decoded a frame; --enqueue appends and reports the queue it wrote;
                 six CONCURRENT --enqueue calls all land (3+6=9, and fewer with
@@ -3177,7 +3178,7 @@ the part of a deleted harness worth keeping.
                 — the pair is what proves "malformed" and "did not take effect" were not
                 collapsed into one code — `--seek -15` is a VALUE and not an unknown flag,
                 and --id parses on every one of them
-                The live half in lifecycle.sh, against real mpv: --pause reads back
+                The live half in playback.sh, against real mpv: --pause reads back
                 paused:true and --status agrees, --resume the reverse, --seek +30 moves the
                 playhead forward and --seek-to 0 brings it back to the START — in that
                 ORDER, because a --seek-to that secretly seeks relative passes the reverse
@@ -3194,7 +3195,7 @@ the part of a deleted harness worth keeping.
                 was deleted with the no-stand-in rule, and the shapes only it could produce
                 on cue (replies out of order, a property answered null, async events
                 interleaved) are coverage this suite now does WITHOUT rather than fake.
-                What a real player proves, in lifecycle.sh: position and duration arrive as
+                What a real player proves, in playback.sh: position and duration arrive as
                 numbers off the socket rather than off the record, a playing player answers
                 paused:false and not null, and a really-running player whose socket is
                 really removed reports paused/position/duration null with volume falling

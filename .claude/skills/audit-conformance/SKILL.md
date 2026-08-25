@@ -147,8 +147,8 @@ scripts are peers, so a misplaced fact is always in one of six files.
    ```
 
    Do not start a detached player as part of an audit — that is audible playback on someone's
-   machine. Lifecycle claims belong to `tests/lifecycle.sh`, which is gated behind
-   `YT_TEST_LIFECYCLE=1` and run deliberately.
+   machine. Playback claims belong to `tests/playback.sh`, which runs its
+   players in a state dir of its own and is run deliberately.
 
 ---
 

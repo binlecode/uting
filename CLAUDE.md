@@ -36,8 +36,8 @@ shell/ut-playlist --ls -j                                     # the store: durab
 UT_STATE_DIR=$(mktemp -d) shell/ut-playlist --ls -j           # …never against the real one, in a test
 shell/uting --version                                        # answers before any dependency gate
 
-tests/contract.sh                                             # the CLI contract, 128 checks
-YT_TEST_LIFECYCLE=1 tests/lifecycle.sh                        # detached players; gated, silent
+tests/contract.sh                                             # the CLI contract, 144 checks
+tests/playback.sh                                             # real detached players; silent, ~35s
 tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
 tests/drive.sh -k Enter -w Playing                            # …including a real detached play
 ```
@@ -129,7 +129,7 @@ Two files, one rule:
 | File | Drives | Gate |
 |---|---|---|
 | `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store under a disposable `UT_STATE_DIR`; the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux | none — run it before every commit |
-| `tests/lifecycle.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), and that an engine's `http_headers` actually reach mpv | `YT_TEST_LIFECYCLE=1` — it starts real players |
+| `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), and that an engine's `http_headers` actually reach mpv | none — it starts real players, but in a state dir of its own; ~35s and needs the network, so run it when the player changed |
 
 `tests/drive.sh` is the only other file, and it is not a suite — it asserts nothing. It is a
 **driver**: it launches the TUI in tmux at a declared geometry, waits on the ready marker, optionally sends keys, and **always reaps the detached player** — which killing the tmux session does not do. Use it whenever a TUI change has to be driven rather than reasoned about.
@@ -141,7 +141,7 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 ### Reject a check when it:
 
 - asserts on an internal function or a private helper instead of invoking the command;
-- **introduces a mock, a fake, a stub or a stand-in of any kind — no exception, including for a peer.** There is exactly one legitimate thing this suite may author: a **fixture**, meaning *data a real command really reads* (a state file for the reaper, a search envelope on `ut-playlist`'s stdin). The moment something in `tests/` *executes* in place of a component — a scripted socket peer, a `sleep` posing as a live pid, a shimmed binary on `PATH` — it is a mock and it does not land. The rule is not "fake the peer, never the subject": it is **no fake at all**. A claim that needs a real peer is proved where the real peer runs (`lifecycle.sh`, gated), or it is not proved. Coverage a real dependency cannot be made to produce on cue is coverage this suite does not have, and saying so is honest; a green check against a scripted peer is not;
+- **introduces a mock, a fake, a stub or a stand-in of any kind — no exception, including for a peer.** There is exactly one legitimate thing this suite may author: a **fixture**, meaning *data a real command really reads* (a state file for the reaper, a search envelope on `ut-playlist`'s stdin). The moment something in `tests/` *executes* in place of a component — a scripted socket peer, a `sleep` posing as a live pid, a shimmed binary on `PATH` — it is a mock and it does not land. The rule is not "fake the peer, never the subject": it is **no fake at all**. A claim that needs a real peer is proved where the real peer runs (`playback.sh`), or it is not proved. Coverage a real dependency cannot be made to produce on cue is coverage this suite does not have, and saying so is honest; a green check against a scripted peer is not;
 - asserts on a rendered **picture** — cell grids, column alignment, glyph widths. Layout is proved when a frame enters a doc, and the `capture-pane` skill owns that; the suite asserts survival, not shape;
 - exists only to raise a count, or asserts a default that a behavioural check already exercises;
 - times a network-dependent path against YouTube when a local synthetic source (`av://lavfi:sine`) would do — throttling has corrupted a timing measurement here before (`docs/ARCHITECTURE.md` §25.1);
@@ -149,15 +149,15 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 
 ### Accept a check when it drives a real surface:
 
-`bash -n` on every script in `shell/`; a real `-j` invocation whose envelope is parsed; the exit code of a real failure path; a real unix socket with real mpv on the far end (gated, `lifecycle.sh`); the TUI under tmux asserted on survival — it booted, it is still up after a resize, it left on `q` with 0.
+`bash -n` on every script in `shell/`; a real `-j` invocation whose envelope is parsed; the exit code of a real failure path; a real unix socket with real mpv on the far end (`playback.sh`); the TUI under tmux asserted on survival — it booted, it is still up after a resize, it left on `q` with 0.
 
 ### Minimum checks before every commit
 
 **The two suites in `tests/` ARE these checks.** A check that exists only as prose for someone to copy out reports green by default. A new check goes in the suite, never in a doc — and a fixed command sequence goes in a script, never in prose.
 
 - `/bin/bash -n shell/*` — enforced by `.githooks/pre-commit` on staged content and by `pre-push` on the worktree, so this is a backstop for a `--no-verify`, not a habit.
-- **Any change at all:** `tests/contract.sh` (it also drives the empty-argument paths on the 3.2 floor). It starts no process it did not have to and talks to no peer — every live claim is `lifecycle.sh`'s.
-- **Any change to the detached player:** `YT_TEST_LIFECYCLE=1 tests/lifecycle.sh`. It starts real players (silent, `--volume 0`) and does not pass until `pgrep mpv` is empty, so it is gated and run deliberately.
+- **Any change at all:** `tests/contract.sh` (it also drives the empty-argument paths on the 3.2 floor). It starts no process it did not have to and talks to no peer — every live claim is `playback.sh`'s.
+- **Any change to the detached player:** `tests/playback.sh`. It starts real players (silent, `--volume 0`, in a state dir of its own) and does not pass until `pgrep` finds none of them left.
 - The shellcheck baseline is a tracked count, not a clean bill — `docs/ROADMAP.md` §6.1.
 
 ## Safe-Evolution Methodology (how this suite is changed)
