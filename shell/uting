@@ -750,9 +750,10 @@ send_mpv_ipc() {
     # hand-escaped quotes.
     local body="$1" rid seen=0
     # return 0, not 1, on a missing socket: fire-and-forget is this function's contract (the
-    # nc failure below is already swallowed), and it is the LAST command of toggle_pause /
-    # seek_relative / adjust_volume — a 1 here becomes the function's status, reaches the
-    # case arm, and set -e kills the TUI on a keypress whose effect is optional anyway.
+    # nc failure below is already swallowed), and it is the LAST command of adjust_volume —
+    # a 1 here becomes the function's status, reaches the case arm, and set -e kills the TUI
+    # on a keypress whose effect is optional anyway. (Pause and seek left for ut-play's
+    # verbs; the volume keys stayed for the cost measured at play_verb.)
     [[ -n "$CURRENT_PLAY_SOCK" && -S "$CURRENT_PLAY_SOCK" ]] || return 0
     # Fire-and-forget still, but now with delivery confirmation it never had: the reply is
     # read only to know it arrived, and a player that answers nothing costs the loop nothing.
@@ -1440,24 +1441,62 @@ print_details() {
     DETAIL_LINES=$((DETAIL_LINES + 1))
 }
 
-toggle_pause() {
+# The WRITE side of playback goes through ut-play's verbs, not through this file's socket.
+# Playback belongs to the player, so a fix there reaches every caller — the TUI, an agent, a
+# script — instead of only this screen (CLAUDE.md: correctness is added DOWN). One keypress
+# is one call, which is what makes the fork affordable here and not on the read path.
+#
+# Two paths deliberately do NOT follow:
+#   - fetch_play_times, which runs on every 1 s tick: a process chain per tick is a real cost.
+#   - the 9/0 volume keys, which are HELD DOWN. Measured on a live player, 10 presses each:
+#     10 ms a press over the socket against 60 ms through `ut-play --set-volume` (that verb
+#     also resolves the target and patches the state file under a lock). Above the 50 ms line
+#     this repo set for the choice, so they stay on the socket — the exception is recorded in
+#     docs/ARCHITECTURE.md §26 with the number, because an unexplained inconsistency is the
+#     thing to avoid, not an explained one.
+# $1.. is the verb and its value; --id and -j are this function's business.
+play_verb() {
     [[ -n "$CURRENT_PLAY_ID" ]] || return 0
+    # Fire-and-forget, like send_mpv_ipc: a failed keypress must not be the status of the
+    # case arm that ran it, or set -e kills the TUI over an optional effect.
+    "$UT_PLAY" "$@" --id "$CURRENT_PLAY_ID" -j 2>/dev/null || true
+}
+
+toggle_pause() {
+    local out state
+    [[ -n "$CURRENT_PLAY_ID" ]] || return 0
+    # Two idempotent verbs, never a toggle: ut-play has no --toggle-pause on purpose (mpv's
+    # `cycle pause` reports no resulting state), so the TARGET is decided here and the
+    # envelope says what mpv actually did. That is strictly better than the old local flip —
+    # it is a reading, not a guess — but the flip stays as the FALLBACK for a call that
+    # answered nothing, because the banner has to repaint on the keypress either way.
+    if ((CURRENT_PLAY_PAUSED)); then out=$(play_verb --resume); else out=$(play_verb --pause); fi
+    state=$(printf '%s' "$out" | jq -r '.paused // empty' 2>/dev/null) || state=""
+    case "$state" in
+    true) CURRENT_PLAY_PAUSED=1 ;;
+    false) CURRENT_PLAY_PAUSED=0 ;;
     # Assignment form, not ((CURRENT_PLAY_PAUSED = 1 - CURRENT_PLAY_PAUSED)): an arithmetic
     # command evaluating to 0 returns status 1, so UNPAUSING (1 -> 0) aborted the whole
     # script under set -e — the second Space press killed the TUI. Same trap as char_w and
     # the banner's b_fixed, which already carry this note.
-    CURRENT_PLAY_PAUSED=$((1 - CURRENT_PLAY_PAUSED))
+    *) CURRENT_PLAY_PAUSED=$((1 - CURRENT_PLAY_PAUSED)) ;;
+    esac
     # Pausing during the load window ends it: `core-idle` stays true while paused, so the probe
     # could never clear the loading state on its own, and "Starting" over a player the user just
     # paused is the wrong sentence anyway. Their keypress is the more specific truth.
     CURRENT_PLAY_LOADING=0
-    send_mpv_ipc '["cycle","pause"]'
+    return 0
 }
 
 seek_relative() {
     local offset="$1"
     [[ -n "$CURRENT_PLAY_ID" ]] || return 0
-    send_mpv_ipc "[\"seek\",$offset,\"relative\"]"
+    # --seek REQUIRES the sign (a bare number is a usage error there, deliberately: it reads
+    # as relative to some callers and absolute to others). The key table passes -10 with one
+    # and 10 without, so this is where the positive case gets its +.
+    [[ "$offset" == -* ]] || offset="+$offset"
+    play_verb --seek "$offset" >/dev/null
+    return 0
 }
 
 adjust_volume() {
