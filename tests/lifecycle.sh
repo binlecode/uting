@@ -126,6 +126,49 @@ report "live paused is false, not null" 0 \
 report "live duration is a number" 0 \
     "$(shell/ut-play --status -j | jq -e --arg i "$id1" \
         '.players[]|select(.id==$i)|.duration|type=="number"' >/dev/null 2>&1; echo $?)"
+echo "── the playback verbs: the envelope reports what mpv answered ───"
+# --pause / --resume / --seek / --seek-to over the same one-shot socket as --set-volume.
+# contract.sh owns the idle half (no player → 4, an unsigned --seek → 1); what only a real
+# player can show is that the verb MOVED something and that the number in the envelope came
+# back off mpv rather than out of the caller's own arithmetic.
+#
+# Pause FIRST and seek while paused: a playing time-pos advances on its own, so any assertion
+# about where a seek landed would be racing the decoder — and a check that depends on how
+# fast this machine decodes is the timing assertion CLAUDE.md forbids. Paused, the playhead
+# holds still and every claim below is about behaviour.
+report "--pause reads back paused"  "true" \
+    "$(shell/ut-play --pause --id "$id1" -j | jq -r '.paused')"
+report "…and --status agrees"         "true" \
+    "$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.paused')"
+# The order is load-bearing: seek FORWARD first, then home. Doing it the other way round
+# leaves a --seek-to that secretly seeks RELATIVE looking correct — a relative 0 from a
+# playhead near the start also lands near the start. Proved by breaking it exactly that way
+# and watching this pass; it only goes red once the absolute seek has somewhere to come back
+# from. Each claim is anchored to the position BEFORE it, so a verb that does nothing at all
+# cannot ride on where the decoder happened to be.
+before=$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.position')
+# A RELATIVE seek lands on a keyframe, so the claim is "forward by about that much", never an
+# exact 30 — asserting the exact number would be asserting mpv's keyframe interval. What is
+# proved here is that the sign was honoured and that the number is READ, not computed.
+p1=$(shell/ut-play --seek +30 --id "$id1" -j | jq -r '.position')
+case "$before$p1" in
+    *null* | "") bad "--seek +30 reported no position — the read-back is unproved" ;;
+    *) if [ "$p1" -ge $((before + 20)) ]; then ok "--seek +30 moved the playhead forward (${before}s → ${p1}s)"
+       else bad "--seek +30 left the playhead at ${p1}s (was ${before}s)"; fi ;;
+esac
+# An ABSOLUTE seek is exact (mpv hr-seeks it), so coming back from ~30s means the start
+# itself, not a keyframe in its neighbourhood.
+p0=$(shell/ut-play --seek-to 0 --id "$id1" -j | jq -r '.position')
+case "$p0" in
+    "" | null) bad "--seek-to 0 reported no position — the read-back is unproved" ;;
+    *) if [ "$p0" -le 2 ]; then ok "--seek-to 0 came back to the start (${p1}s → ${p0}s)"
+       else bad "--seek-to 0 landed at ${p0}s, which is not the start"; fi ;;
+esac
+report "--resume reads back running" "false" \
+    "$(shell/ut-play --resume --id "$id1" -j | jq -r '.paused')"
+report "…and --status agrees"         "false" \
+    "$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.paused')"
+
 # NOT checked here: the `head -n <count>` pipe close in live_props (§9.3). It was tried and
 # pulled the same day — with the real peer it CANNOT go red. Swapping the head for a `cat`
 # and re-running measures 0.04s either way, so a timing assertion on it would be a check that
