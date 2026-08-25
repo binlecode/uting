@@ -88,6 +88,10 @@ jqv() { printf '%s' "$2" | jq -e "$1" >/dev/null 2>&1; echo $?; }
 # that way.
 jq_ok() { local f=$1; shift; local o; o=$("$@" 2>/dev/null); jqv "$f" "$o"; }
 
+# jq_in <jq-filter> <payload> <command...>  — jq_ok for a verb that reads STDIN. Same
+# capture-first discipline and the same reason, so the reason is stated once, above.
+jq_in() { local f=$1 p=$2; shift 2; jqv "$f" "$(printf '%s' "$p" | "$@" 2>/dev/null)"; }
+
 # lines <json>                    — 1 for a single-line envelope.
 lines() { printf '%s\n' "$1" | wc -l | tr -d ' '; }
 
@@ -403,11 +407,7 @@ report "idle --enqueue is 4"     4 "$(rc_in "$Q1" shell/ut-play --enqueue - -j)"
 # for two different reasons (no such player, or a queue it could not write), and only the
 # envelope says which. Proved by making it skip require_live_target — the exit code stayed 4
 # and this line is what went red.
-# Captured FIRST, then filtered — never piped straight into jq. `set -o pipefail` makes the
-# pipeline carry ut-play's exit 4 rather than jq's verdict, which is the same trap jq_ok
-# exists to avoid; written the short way this line reported 4 against correct behaviour.
-ENQ_IDLE=$(printf '%s' "$Q1" | shell/ut-play --enqueue - -j 2>/dev/null)
-report "idle --enqueue says why" 0 "$(printf '%s' "$ENQ_IDLE" | jq -e '.status=="not_playing"' >/dev/null 2>&1; echo $?)"
+report "idle --enqueue says why" 0 "$(jq_in '.status=="not_playing"' "$Q1" shell/ut-play --enqueue - -j)"
 report "--id on --next parses"   4 "$(rc shell/ut-play --next --id nope -j)"
 
 # The 1-vs-4 split again, on the verbs that take a PAYLOAD: a queue this process could not
@@ -543,12 +543,7 @@ report "two actions at once: 1"         1 "$(rc $PL --ls --show mellow)"
 report "a playback flag: 1"             1 "$(rc $PL --status)"
 report "a handle after --: 1"           1 "$(rc $PL -- "https://youtu.be/x")"
 report "bad stdin: 1"                   1 "$(echo not-json | $PL --add mellow >/dev/null 2>&1; echo $?)"
-# Captured first, never piped straight into jq: `set -o pipefail` makes a pipeline carry the
-# LEFT side's status, so `$PL … -j | jq -e` reports the command's own exit 1 as jq's verdict
-# and the check goes red against correct behaviour. Same lesson as jq_ok, which cannot be
-# used here because these commands read stdin.
-PL_OUT=$(echo not-json | $PL --add mellow -j 2>/dev/null)
-report "…and an error envelope under -j" 0 "$(printf '%s' "$PL_OUT" | jq -e '.status=="error" and .reason=="invalid_input"' >/dev/null 2>&1; echo $?)"
+report "…and an error envelope under -j" 0 "$(jq_in '.status=="error" and .reason=="invalid_input"' not-json $PL --add mellow -j)"
 
 # THE LOCK, driven rather than asserted from prose. Without it these eight writers are eight
 # read-modify-write races on one file and the list ends up with ONE item — measured, by
@@ -565,8 +560,7 @@ report "8 concurrent adds keep all 8"   0 "$(jq_ok '.count==8' $PL --show race -
 # added. Costs the 5s spin once.
 mkdir -p "$UT_STATE_DIR/playlists/.lock-race"
 report "a held lock: 4, not 1"          4 "$(printf '[{"engine":"yt","url":"https://x/z"}]' | $PL --add race >/dev/null 2>&1; echo $?)"
-PL_OUT=$(printf '[{"engine":"yt","url":"https://x/z"}]' | $PL --add race -j 2>/dev/null)
-report "…with reason locked"            0 "$(printf '%s' "$PL_OUT" | jq -e '.reason=="locked"' >/dev/null 2>&1; echo $?)"
+report "…with reason locked"            0 "$(jq_in '.reason=="locked"' '[{"engine":"yt","url":"https://x/z"}]' $PL --add race -j)"
 # A lock left by a SIGKILLed writer must not wedge a playlist forever.
 touch -t 202001010000 "$UT_STATE_DIR/playlists/.lock-race"
 report "a stale lock is stolen"         0 "$(printf '[{"engine":"yt","url":"https://x/z"}]' | $PL --add race -j >/dev/null 2>&1; echo $?)"
