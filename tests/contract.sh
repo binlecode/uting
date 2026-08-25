@@ -19,32 +19,34 @@
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md §28.
 #
 # Usage:  tests/contract.sh            all checks
-#         tests/contract.sh -q         failures and the summary only
-# Exit:   0 = every check held (known drifts excluded), 1 = at least one regression
+# Exit:   0 = every check held, 1 = at least one regression
 
 set -uo pipefail
 cd "$(cd -P "$(dirname "$0")/.." && pwd -P)" || exit 1
 
-QUIET=0
-[ "${1:-}" = "-q" ] && QUIET=1
+# ---- the player's state dir, pointed somewhere disposable ---------------------------
+# `ut-play` derives its state dir from TMPDIR ("${TMPDIR:-/tmp}/uting-$(id -u)", shell/ut-play)
+# and takes no override of its own. Left at the user's real TMPDIR, this file --stop --all's a
+# player they are listening to, writes its tombstone fixtures into their real players/, and
+# rm -rf's their real failure record — three side effects on live user state, in a suite whose
+# instruction is "run it before every commit".
+#
+# Redirecting TMPDIR is what makes that instruction safe. It changes nothing about WHAT is
+# invoked or asserted: the player is the real one and its state is really written, just not on
+# top of the user's. The playlist store already had this in UT_STATE_DIR; the half that kills
+# processes is the half that needed it more.
+UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-contract.XXXXXX") || exit 1
+trap 'rm -rf "$UT_TEST_TMP"' EXIT INT TERM
+export TMPDIR="$UT_TEST_TMP"
 
-pass=0; fail=0; known=0
+pass=0; fail=0
 FAILED=""
 
-# report <name> <want> <got>          — a regression if they differ
+# report <name> <want> <got>   — the only bookkeeping in this file.
 report() {
-    # FAIL FAST on a hang, and ONLY on a hang. An ordinary mismatch keeps going — the point
-    # of a suite is the whole list. But a check that hit the ceiling means the environment is
-    # wedged (throttled, offline, a dead socket), and every live call after it will spend the
-    # same five seconds proving the same thing.
-    if [ "$3" = 124 ] && [ "$2" != 124 ]; then
-        printf '  HUNG  %-34s exceeded %ss\n' "$1" "$UT_CHECK_TIMEOUT"
-        printf '\ncontract.sh: aborted — a check wedged. %d checks ran before it.\n' "$((pass + fail))"
-        exit 1
-    fi
     if [ "$2" = "$3" ]; then
         pass=$((pass + 1))
-        ((QUIET)) || printf '  ok    %-34s %s\n' "$1" "$3"
+        printf '  ok    %-34s %s\n' "$1" "$3"
     else
         fail=$((fail + 1))
         FAILED="${FAILED}    ${1}: want ${2}, got ${3}"$'\n'
@@ -52,125 +54,47 @@ report() {
     fi
 }
 
-# drift <name> <want> <got> <note>    — an OPEN finding, recorded and not counted as a
-# regression. The point is that a new break still stands out against a red line that is
-# already understood; papering over is reporting the wrong number, not labelling a known one.
-drift() {
-    if [ "$2" = "$3" ]; then
-        pass=$((pass + 1))
-        printf '  FIXED %-34s now %s (was a known drift: %s)\n' "$1" "$3" "$4"
-    else
-        known=$((known + 1))
-        printf '  drift %-34s want %s, got %s — %s\n' "$1" "$2" "$3" "$4"
-    fi
-}
-
-# ---- the upper bound on any ONE check -----------------------------------------------
-# About twenty of the checks below make a LIVE call to YouTube or Bilibili (yt-dlp, curl),
-# and a throttled or wedged one of those blocks FOREVER: nothing else in this file is
-# a clock. macOS ships no `timeout` and the Homebrew coreutils one is not a dependency this
-# suite may grow (CLAUDE.md), so the watchdog is written here out of builtins.
+# Four one-liners, and deliberately nothing else. Each runs a real entry point the way a
+# caller does and hands back one value for report() to compare.
 #
-# It changes nothing about WHAT is invoked or asserted — every check still runs its own real
-# command and reads its own real answer. It only refuses to wait forever for one.
-#
-# 5s: measured, yt-search 2.74s / yt-resolve 2.45s / bili-search 0.71s, so ~2x headroom.
-# Anything past it is WEDGED, not slow, and a generous ceiling just turns a hung run into a
-# long one — the exact failure this exists to prevent.
-#
-# The command runs in its OWN process group (set -m, the idiom ut-play's detach_play uses)
-# and the GROUP is what gets killed: a check that shelled out to yt-dlp leaves that child
-# holding the network otherwise, and the child is the part that hangs. The budget lives in
-# its own process and the check BLOCKS in `wait` — polling instead cost 213ms on every check
-# that finished in 2ms, because the first sleep is paid before the first liveness test can
-# succeed.
-UT_CHECK_TIMEOUT=${UT_CHECK_TIMEOUT:-5}
-bounded() {
-    local pid wd st
-    set -m
-    "$@" &
-    pid=$!
-    set +m
-    # BOTH fds redirected, and it matters: a caller reads this function through
-    # `out=$(bounded ...)`, and the watchdog would otherwise inherit that command
-    # substitution's stdout PIPE. Killing the subshell does not kill the `sleep` under it, so
-    # the orphan kept the pipe open and every captured check paid the full budget — 5s each,
-    # turning a 114s suite into one that could not finish.
-    { sleep "$UT_CHECK_TIMEOUT"; kill -TERM "-$pid" 2>/dev/null; } >/dev/null 2>&1 &
-    wd=$!
-    wait "$pid"
-    st=$?
-    # The watchdog exits the moment it fires, so finding it ALIVE is what proves it did not.
-    if kill -0 "$wd" 2>/dev/null; then
-        { kill "$wd"; wait "$wd"; } 2>/dev/null
-    else
-        { wait "$wd"; } 2>/dev/null
-        st=124
-    fi
-    return $st
-}
+# There is no watchdog: a wedged network call hangs this file until you interrupt it. That is
+# the accepted cost of having no orchestration to get wrong — the hand-rolled timeout that
+# used to live here inferred "did it fire?" from a background process's liveness and was
+# wrong in both directions (a command that succeeded at the boundary aborted the whole run;
+# a real timeout was reported as a content mismatch).
 
-# Exit code of a command whose output we do not want.
-rc() { bounded "$@" >/dev/null 2>&1; echo $?; }
+# rc <command...>                 — its exit code, output discarded.
+rc() { "$@" >/dev/null 2>&1; echo $?; }
 
-# jq_ok <jq-filter> <command...> — does the command's stdout satisfy the filter?
-# The output is captured FIRST and the filter applied to the variable, never piped straight
-# from the command: `set -o pipefail` makes a pipeline carry the LEFT side's status, so
-# `yt-resolve --transcript -j <no-captions> | jq -e …` reported jq's success as the command's
-# exit 1. Both error-path checks below went red against correct behaviour that way.
-jq_ok() {
-    local filter=$1; shift
-    local out st
-    out=$(bounded "$@" 2>/dev/null)
-    st=$?
-    # A timeout must stay 124 all the way to report(). Letting jq answer for it turns a
-    # wedged network call into an ordinary content mismatch — the one diagnosis that sends
-    # the reader looking at the engine instead of at the link.
-    [ "$st" = 124 ] && { echo 124; return; }
-    printf '%s' "$out" | jq -e "$filter" >/dev/null 2>&1
-    echo $?
-}
+# rc_in <payload> <command...>    — the same, for a verb that READS STDIN. `rc` cannot serve
+# those: the payload has to arrive on the command's own stdin, and for these verbs an empty
+# stdin is a DIFFERENT error with the SAME exit code — a check that would pass for the wrong
+# reason. Measured, not reasoned: "idle --enqueue is 4" once came back 1 this way.
+rc_in() { local payload=$1; shift; printf '%s' "$payload" | "$@" >/dev/null 2>&1; echo $?; }
+
+# jqv <jq-filter> <json>          — does an envelope already in hand satisfy the filter?
+jqv() { printf '%s' "$2" | jq -e "$1" >/dev/null 2>&1; echo $?; }
+
+# jq_ok <jq-filter> <command...>  — run it, then filter what it printed. The output is
+# captured FIRST and never piped straight from the command: `set -o pipefail` makes a
+# pipeline carry the LEFT side's status, so `yt-resolve … | jq -e …` reports the command's
+# own exit as jq's verdict. Both error-path checks below went red against correct behaviour
+# that way.
+jq_ok() { local f=$1; shift; local o; o=$("$@" 2>/dev/null); jqv "$f" "$o"; }
+
+# lines <json>                    — 1 for a single-line envelope.
+lines() { printf '%s\n' "$1" | wc -l | tr -d ' '; }
 
 # ---- fetch once, assert many --------------------------------------------------------
 # A live engine call costs a yt-dlp start (~2s) whether one question is asked of its answer
-# or four, and nearly every assertion below is about an envelope's SHAPE — its key set, a
-# field's type, its line count. Two identical queries cannot answer a shape question
-# differently, so each fixture is fetched ONCE into a variable and interrogated as many
-# times as it has claims. Nothing is weakened: the command is still the real entry point
-# and the answer is still its real stdout. What goes away is re-asking the network a
-# question it has already answered.
+# or four, and nearly every assertion below is about an envelope's SHAPE. Two identical
+# queries cannot answer a shape question differently, so each fixture is one plain command
+# substitution, interrogated as many times as it has claims. The command is still the real
+# entry point and the answer is still its real stdout.
 #
-# A call keeps its own fetch when its ARGV differs (-j and -J are two envelopes, not two
+# A call keeps its own invocation when its ARGV differs (-j and -J are two envelopes, not two
 # questions about one), when its ENVIRONMENT differs (the proxy checks), or when its INPUT
 # differs (a second query, chosen for content the first one does not have).
-
-# fetch <var> <command...>  — one live call. <var> gets stdout BYTE-EXACT and FETCH_ST the
-# exit code. Both halves need care: `$( )` strips every trailing newline, and "is this
-# envelope one line?" is a question the stripped string can no longer answer; and the
-# status of an assignment from a command substitution is the LAST command inside it, so the
-# real one is carried out through the same pipe, behind a separator byte.
-FETCH_ST=0
-fetch() {
-    local __v=$1; shift
-    local __sep __o
-    __sep=$(printf '\001')
-    __o=$(bounded "$@" 2>/dev/null; printf '%s%s' "$__sep" "$?")
-    FETCH_ST=${__o##*"$__sep"}
-    __o=${__o%"$__sep"*}
-    eval "$__v=\$__o"
-    # A wedged FIXTURE is the wedged environment report() aborts on, and it has to abort
-    # here: every check reading this variable would otherwise go red as a content mismatch,
-    # which sends the reader looking at the engine instead of at the link.
-    [ "$FETCH_ST" = 124 ] && report "fetch ${1##*/}" 0 124
-    return 0
-}
-
-# jq_s <jq-filter> <json>  — jq_ok's verdict, on an envelope that was ALREADY fetched.
-jq_s() { printf '%s' "$2" | jq -e "$1" >/dev/null 2>&1; echo $?; }
-
-# nlines <json> — the number `<command> | wc -l` gave back when the command was re-run for
-# no other reason than to be counted.
-nlines() { printf '%s' "$1" | wc -l | tr -d ' '; }
 
 # A short, permanent, caption-bearing public video: the one handle every engine-contract
 # check below resolves. Chosen for being 19 seconds long — nothing here plays it, but a
@@ -180,31 +104,31 @@ MEDIA_ID="jNQXAC9IVRw"
 echo "── search envelope ────────────────────────────────────────────────"
 # One live search, four claims — and the parity check further down reuses this same
 # envelope rather than fetching a fifth.
-fetch YT_S  shell/yt-search -j -n 3 -- lofi
-fetch YT_SJ shell/yt-search -J -n 2 -- lofi
+YT_S=$(shell/yt-search -j -n 3 -- lofi 2>/dev/null)
+YT_SJ=$(shell/yt-search -J -n 2 -- lofi 2>/dev/null)
 report "search -j envelope" 0 \
-    "$(jq_s '.query and .count and (.results|length==3)' "$YT_S")"
+    "$(jqv '.query and .count and (.results|length==3)' "$YT_S")"
 # The engine names itself in its own envelope. This is what lets a caller route a chosen
 # result back to the matching <engine>-resolve without pattern-matching its URL, so a new
 # engine that forgets the field breaks routing rather than merely looking different.
 report "search -j names its engine" 0 \
-    "$(jq_s '.status=="ok" and .engine=="yt"' "$YT_S")"
+    "$(jqv '.status=="ok" and .engine=="yt"' "$YT_S")"
 report "search -J has raw id" 0 \
-    "$(jq_s '.results[0]|has("id")' "$YT_SJ")"
+    "$(jqv '.results[0]|has("id")' "$YT_SJ")"
 # Was an open R8 drift (26 lines for -n 3); fixed, so it is a hard check now — a "known"
 # label on a passing behaviour is how a real regression gets waved through later.
-report "search -j is one line" 1 "$(nlines "$YT_S")"
+report "search -j is one line" 1 "$(lines "$YT_S")"
 
 echo "── resolve envelope: the half that turns a handle into bytes ──────"
-fetch YT_R shell/yt-resolve -j -- "$MEDIA_ID"
+YT_R=$(shell/yt-resolve -j -- "$MEDIA_ID" 2>/dev/null)
 # Every key the PLAYER reads. A new engine that renames one, or omits http_headers, breaks
 # playback in a way no other check here would notice: the search half would still look fine.
 # http_headers is asserted PRESENT rather than non-empty — {} is a legal answer, absent is not.
 report "resolve -j envelope" 0 \
-    "$(jq_s '.status=="ok" and .engine=="yt" and (.stream_urls|length)>0
+    "$(jqv '.status=="ok" and .engine=="yt" and (.stream_urls|length)>0
               and has("http_headers") and (.http_headers|type)=="object"
               and has("title") and has("format") and has("retried")' "$YT_R")"
-report "resolve -j is one line" 1 "$(nlines "$YT_R")"
+report "resolve -j is one line" 1 "$(lines "$YT_R")"
 # Shape validation lives in the ENGINE now — the player cannot tell a good id from a bad one.
 report "resolve rejects a non-id" 1 "$(rc shell/yt-resolve -j -- "not an id")"
 report "resolve rejects -d"       1 "$(rc shell/yt-resolve -d -- "$MEDIA_ID")"
@@ -219,11 +143,10 @@ report "engine name is validated" 1 "$(rc shell/ut-play --engine ../evil -- "$ME
 # and it must still say why. This is the semantic B-2 bought by moving the shape check down.
 # One resolve attempt answers both: the exit code and the envelope come off the same run,
 # which is also the only way they are guaranteed to be describing the same failure.
-fetch DEAD shell/ut-play -j -- AAAAAAAAAAA
-DEAD_ST=$FETCH_ST
+DEAD=$(shell/ut-play -j -- AAAAAAAAAAA 2>/dev/null); DEAD_ST=$?
 report "dead id is 2+, not 1"     2 "$DEAD_ST"
 report "dead id keeps its reason" 0 \
-    "$(jq_s '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' "$DEAD")"
+    "$(jqv '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' "$DEAD")"
 
 echo "── rejections (1 = usage error) ───────────────────────────────────"
 report "core no args"             1 "$(rc /bin/bash shell/ut-play)"
@@ -247,8 +170,11 @@ echo "── argv order: a flag-shaped query after -- is SEARCHED ────�
 # Not a player list: --status after -- is eight characters of query text. The check lives on
 # yt-search because that is where searching lives now; the player has no search branch left
 # to confuse a flag-shaped token with (AS-BUILT-contract.md §2).
+# Asserted POSITIVELY, on the query the engine echoes back. The old form folded stderr into
+# the pipe and asked only "is line one not JSON?", so `Error: search failed (network)` — a
+# yt-search that did not run at all — satisfied it. It was also the one live call in this file
 report "yt-search -- --status searches" 0 \
-    "$(shell/yt-search -l -- --status 2>&1 | head -1 | grep -qv '^{' && echo 0 || echo 1)"
+    "$(jq_ok '.status=="ok" and .query=="--status"' shell/yt-search -j -n 1 -- --status)"
 
 echo "── --transcript: read-only, so the gate and both envelopes are all ─"
 # The ok-path fixture must be a video that HAS captions and the error-path one must not:
@@ -263,10 +189,9 @@ report "transcript envelope"      0 \
         shell/yt-resolve --transcript -j -- "$CAPTIONED")"
 report "transcript -J has segments" 0 \
     "$(jq_ok '.segments[0]|has("start") and has("text")' shell/yt-resolve --transcript -J -- "$CAPTIONED")"
-fetch NOCAP shell/yt-resolve --transcript -j -- "$BARE"
-NOCAP_ST=$FETCH_ST
+NOCAP=$(shell/yt-resolve --transcript -j -- "$BARE" 2>/dev/null); NOCAP_ST=$?
 report "no captions -> error"     0 \
-    "$(jq_s '.status=="error" and .reason=="no_subtitles_available"' "$NOCAP")"
+    "$(jqv '.status=="error" and .reason=="no_subtitles_available"' "$NOCAP")"
 report "no captions exit"         1 "$NOCAP_ST"
 
 echo "── the second engine: the same envelope, or the split is a fiction ─"
@@ -277,10 +202,10 @@ BILI_ID="BV1mL411E7Fb"
 
 # The second engine's three envelopes, one call each. `-n 5` because the duration check
 # below needs a page rather than a pair, and a key set does not care how long the list is.
-fetch BILI_S shell/bili-search  -j -n 5 -- 音乐
-fetch BILI_R shell/bili-resolve -j -- "$BILI_ID"
-fetch YT_I   shell/yt-resolve   --info -j -- "$MEDIA_ID"
-fetch BILI_I shell/bili-resolve --info -j -- "$BILI_ID"
+BILI_S=$(shell/bili-search  -j -n 5 -- 音乐 2>/dev/null)
+BILI_R=$(shell/bili-resolve -j -- "$BILI_ID" 2>/dev/null)
+YT_I=$(shell/yt-resolve   --info -j -- "$MEDIA_ID" 2>/dev/null)
+BILI_I=$(shell/bili-resolve --info -j -- "$BILI_ID" 2>/dev/null)
 
 # THE check the engine split exists for. Two engines are only interchangeable if a caller
 # cannot tell which one answered, so the assertion is on the KEY SETS THEMSELVES rather
@@ -302,15 +227,15 @@ report "resolve envelopes agree" \
 # side. The ok/engine assertion is what keeps the key comparison from passing vacuously —
 # two ERROR envelopes agree on their keys too.
 report "info -j is ok and named" 0 \
-    "$(jq_s '.status=="ok" and .engine=="yt"' "$YT_I")"
+    "$(jqv '.status=="ok" and .engine=="yt"' "$YT_I")"
 report "info envelopes agree" \
     "$(printf '%s' "$YT_I" | jq -Sc 'keys' 2>/dev/null)" \
     "$(printf '%s' "$BILI_I" | jq -Sc 'keys' 2>/dev/null)"
-report "--info -j is one line" 1 "$(nlines "$YT_I")"
+report "--info -j is one line" 1 "$(lines "$YT_I")"
 
 report "bili-search names its engine" 0 \
-    "$(jq_s '.status=="ok" and .engine=="bili"' "$BILI_S")"
-report "bili-search -j is one line" 1 "$(nlines "$BILI_S")"
+    "$(jqv '.status=="ok" and .engine=="bili"' "$BILI_S")"
+report "bili-search -j is one line" 1 "$(lines "$BILI_S")"
 # The site sends duration as "MM:SS" with unbounded minutes ("222:28"), which every surface
 # above would silently mis-sort and mis-render as a string. It is parsed in the engine, so
 # the assertion is that what leaves the engine is a NUMBER — never the raw string.
@@ -322,7 +247,7 @@ report "bili-search -j is one line" 1 "$(nlines "$BILI_S")"
 # asserting against the contract rather than for it. What must hold: nothing is a string, and
 # the page is not ALL nulls (which would mean the parser stopped working).
 report "bili duration is seconds" 0 \
-    "$(jq_s '[.results[].duration]
+    "$(jqv '[.results[].duration]
                | length>0
                and all(type=="number" or type=="null")
                and any(type=="number")' "$BILI_S")"
@@ -336,7 +261,7 @@ report "bili-resolve rejects a non-id" 1 "$(rc shell/bili-resolve -j -- "not an 
 # these headers answers 206 (measured). An empty http_headers here is a silently unplayable
 # engine, which is exactly the contract hole the key was added to close.
 report "bili resolve sends a Referer" 0 \
-    "$(jq_s '.http_headers|has("Referer")' "$BILI_R")"
+    "$(jqv '.http_headers|has("Referer")' "$BILI_R")"
 # Capability differs per engine and is stated, not faked: this site's videos carry no
 # caption track, so the verb is absent rather than always answering "none".
 report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcript -- "$BILI_ID")"
@@ -359,7 +284,10 @@ for f in shell/*-resolve; do
     [ -x "shell/$n-search" ] && ENGINES="$ENGINES $n"
 done
 NENG=$(echo "$ENGINES" | wc -w | tr -d ' ')
-report "engine pairs discovered" 2 "$NENG"
+# >= 2, not == 2: this section's whole premise is that engine #3 is covered the day its pair
+# lands, and a hardcoded count is the one line that would go red on exactly that day. What it
+# has to rule out is NENG=0, which would make every `refusals` check below pass vacuously.
+report "at least two engine pairs" 1 "$([ "$NENG" -ge 2 ] && echo 1 || echo 0)"
 
 # A search half resolves no format, so -S (a stream-format sort) is a value it cannot act
 # on. Stated over EVERY discovered engine, not just the one that got it right: yt-search
@@ -457,6 +385,50 @@ report "--seek accepts -15"       4 "$(rc shell/ut-play --seek -15 -j)"
 # that reject it elsewhere are already covered by "ut-play selector alone" and
 # "ut-play -d + action" above, which exercise the same case statement.
 report "--id on --pause parses"   4 "$(rc shell/ut-play --pause --id nope -j)"
+
+# ── the queue verbs, idle. They address a player exactly as the socket verbs do (same
+# require_live_target, same 4), but they reach its queue FILE rather than mpv — so they are
+# checked here rather than folded into the loop above, and they must answer without nc.
+Q1='[{"engine":"yt","url":"https://www.youtube.com/watch?v=jNQXAC9IVRw"}]'
+report "idle --next is 4"        4 "$(rc shell/ut-play --next -j)"
+report "idle --next says why"    0 "$(jq_ok '.status=="not_playing"' shell/ut-play --next -j)"
+report "idle --enqueue is 4"     4 "$(rc_in "$Q1" shell/ut-play --enqueue - -j)"
+# The one place a repeated envelope assertion is NOT raising a count: --enqueue can exit 4
+# for two different reasons (no such player, or a queue it could not write), and only the
+# envelope says which. Proved by making it skip require_live_target — the exit code stayed 4
+# and this line is what went red.
+# Captured FIRST, then filtered — never piped straight into jq. `set -o pipefail` makes the
+# pipeline carry ut-play's exit 4 rather than jq's verdict, which is the same trap jq_ok
+# exists to avoid; written the short way this line reported 4 against correct behaviour.
+ENQ_IDLE=$(printf '%s' "$Q1" | shell/ut-play --enqueue - -j 2>/dev/null)
+report "idle --enqueue says why" 0 "$(printf '%s' "$ENQ_IDLE" | jq -e '.status=="not_playing"' >/dev/null 2>&1; echo $?)"
+report "--id on --next parses"   4 "$(rc shell/ut-play --next --id nope -j)"
+
+# The 1-vs-4 split again, on the verbs that take a PAYLOAD: a queue this process could not
+# parse never reaches a player, so it is usage (1) — and it is refused in the PARENT, which
+# is the whole reason stdin is read here and not in the detached child, where a die would
+# only reach a log. Driven through --enqueue rather than --queue on purpose: a --queue that
+# got past its gate would LAUNCH A PLAYER, and this file starts none. The pairing with
+# "idle --enqueue is 4" above is what gives each of these teeth — 1 where the payload is
+# wrong, 4 where only the player is missing.
+report "bad JSON is 1"           1 "$(rc_in 'not json' shell/ut-play --enqueue -)"
+report "an empty queue is 1"     1 "$(rc_in '[]' shell/ut-play --enqueue -)"
+report "a url with a space is 1" 1 "$(rc_in '[{"engine":"yt","url":"a b"}]' shell/ut-play --enqueue -)"
+report "an empty url is 1"       1 "$(rc_in '[{"engine":"yt","url":""}]' shell/ut-play --enqueue -)"
+report "a bad engine name is 1"  1 "$(rc_in '[{"engine":"../evil","url":"x"}]' shell/ut-play --enqueue -)"
+# The three shapes the verb takes, each proved by the SAME rejection: a payload that parses
+# reaches the player check (4), one that does not is usage (1). A search envelope is accepted
+# because a search result does not carry `engine` — that field is on the envelope, so only
+# taking the whole thing can label an item with its source (AS-BUILT-contract.md §3).
+report "a --show envelope parses" 4 "$(rc_in '{"status":"playlist","items":[{"engine":"yt","url":"x"}]}' shell/ut-play --enqueue - -j)"
+report "a search envelope parses" 4 "$(rc_in '{"status":"ok","engine":"yt","results":[{"url":"x"}]}' shell/ut-play --enqueue - -j)"
+report "a shapeless object is 1"  1 "$(rc_in '{"status":"ok"}' shell/ut-play --enqueue -)"
+# --queue is a LAUNCH modifier: it needs -d, and it takes its handles from stdin ONLY. Each
+# arm names what to do instead rather than saying "invalid combination".
+report "--queue needs -d"        1 "$(rc_in "$Q1" shell/ut-play --queue -)"
+report "--queue rejects a handle" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - -- URL)"
+report "--enqueue rejects a handle" 1 "$(rc_in "$Q1" shell/ut-play --enqueue - -- URL)"
+report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - --status)"
 
 # A detached player that dies on its own is the one lifecycle path the caller does not
 # drive, and it used to be silent: --status went empty, which is what a NORMAL finish looks
@@ -611,33 +583,38 @@ else
     TUI_CMD="$TUI_CMD"'; stty -a </dev/tty | tr " " "\n" | grep -E "^-?(echo|icanon)$" | tr "\n" " " | sed "s/^/FLAGS= /"; echo; sleep 20'
     tmux new-session -d -s "$TS" -x 100 -y 30 "$TUI_CMD"
     TUI_TTY=$(tmux display-message -p -t "$TS" '#{pane_tty}' 2>/dev/null)
+    # `-echo` with ICANON still SET is the termios signature of getpass(), and terminals poll
+    # the pty for exactly that pair: Ghostty flips macOS Secure Input on it, iTerm2 draws a
+    # padlock at the cursor — which the fetch spinner parks on its own glyph. Two greps, not a
+    # case glob: `-echo` is a prefix of `-echoe`/`-echok`.
+    #
+    # This is a SAMPLE, and the name says so. The state it looks for is transient, so the
+    # sampling rate is what the check is worth: at the capture-pane cadence (0.3s) it could
+    # miss a flip that lasted a frame and report a pass it had not earned. termios is read
+    # every 0.05s and the pane only every sixth pass — same wall clock, 6x the chance of
+    # catching it. Waiting for the first frame is the right window: it is the one stretch of
+    # the session where no `read` is running and the tty carries whatever the app left on it.
     booted=0; i=0; getpass=0
-    while [ $i -lt 80 ]; do
-        # Sampled from inside this loop rather than in a phase of its own: waiting for the
-        # first frame IS the fetch, the one stretch of the session where no `read` is running
-        # and the tty carries whatever the app left on it.
-        #
-        # `-echo` with ICANON still SET is the termios signature of getpass(), and terminals
-        # poll the pty for exactly that pair: Ghostty flips macOS Secure Input on it,
-        # iTerm2 draws a padlock at the cursor — which the fetch spinner parks on its own
-        # glyph. Two greps, not a case glob: `-echo` is a prefix of `-echoe`/`-echok`.
+    while [ $i -lt 480 ]; do
         if [ -n "$TUI_TTY" ]; then
             flags=$(stty -f "$TUI_TTY" -a 2>/dev/null | tr ' ' '\n')
             [ "$(printf '%s\n' "$flags" | grep -c '^-echo$')" = 1 ] &&
                 [ "$(printf '%s\n' "$flags" | grep -c '^icanon$')" = 1 ] && getpass=1
         fi
-        tmux capture-pane -t "$TS" -p 2>/dev/null | grep -q 'results=' && { booted=1; break; }
-        sleep 0.3; i=$((i + 1))
+        if [ $((i % 6)) = 5 ]; then
+            tmux capture-pane -t "$TS" -p 2>/dev/null | grep -q 'results=' && { booted=1; break; }
+        fi
+        sleep 0.05; i=$((i + 1))
     done
     report "TUI boots and paints a list" 1 "$booted"
-    report "never signals a password prompt" 0 "$getpass"
+    report "no password prompt sampled" 0 "$getpass"
 
     # Reflow is width-conditional, so the two geometries that change layout are the ones
     # worth walking. The assertion is survival, not shape: still up, still showing a list.
     alive=1
-    for geom in "62 20" "26 24"; do
-        set -- $geom
-        tmux resize-window -t "$TS" -x "$1" -y "$2" 2>/dev/null
+    for geom in "62x20" "26x24"; do
+        gw=${geom%x*}; gh=${geom#*x}
+        tmux resize-window -t "$TS" -x "$gw" -y "$gh" 2>/dev/null
         j=0; seen=0
         while [ $j -lt 20 ]; do
             tmux capture-pane -t "$TS" -p 2>/dev/null | grep -q 'results=' && { seen=1; break; }
@@ -674,14 +651,14 @@ for f in shell/*; do
     head -n 1 "$f" | grep -q '^#!' || continue      # VERSION is data, not a command
     ENTRY_POINTS="$ENTRY_POINTS $f"
 done
-report "at least seven entry points" 1 \
-    "$(set -- $ENTRY_POINTS; [ $# -ge 7 ] && echo 1 || echo 0)"
+# No separate count check: an empty ENTRY_POINTS makes the `sort -u | wc -l` below 0, not 1,
+# so the vacuous case is already caught by the check that does the work.
 report "one version, every entry point" 1 \
     "$(for c in $ENTRY_POINTS; do "$c" --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
 report "uting refuses a non-TTY" 1 "$(shell/uting </dev/null >/dev/null 2>&1; echo $?)"
 
 echo
-printf '%s: %d ok, %d failed, %d known drift\n' "$(basename "$0")" "$pass" "$fail" "$known"
+printf '%s: %d ok, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 if [ "$fail" -ne 0 ]; then
     printf 'regressions:\n%s' "$FAILED"
     exit 1

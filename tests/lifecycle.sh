@@ -227,6 +227,93 @@ sleep 1
 n=$(pgrep -f 'mpv .*--input-ipc-server' 2>/dev/null | wc -l | tr -d ' ')
 report "no orphan mpv" 0 "${n:-0}"
 
+echo "── a queue is a player consuming a playlist ───────────────────────"
+# Everything above played ONE handle. This section plays a LIST, and it is here rather than
+# in contract.sh for the reason that file states about itself: proving a queue ADVANCES
+# needs a real engine round trip and a real mpv reaching the end of a track, and nothing may
+# stand in for either. A mock engine answering av://lavfi:sine would skip the JIT resolve —
+# the very thing most likely to break between two tracks — and be green for it.
+#
+# One player, so no --id is needed anywhere below (exactly-one is the zero-friction case).
+shell/ut-play --stop --all -j >/dev/null 2>&1
+qout=$(jq -nc --arg a "$U1" --arg b "$U2" \
+    '[{engine:"yt",url:$a},{engine:"yt",url:$b}]' | shell/ut-play -d --queue - -j --volume 0 2>/dev/null)
+report "--queue - launches" 0 "$(printf '%s' "$qout" | jq -e '.status=="started" and .id' >/dev/null 2>&1; echo $?)"
+# The queue is visible from the moment the player exists, not once the first track decodes:
+# a caller that asks what is queued must not have to wait for mpv.
+report "--status carries the queue" 0 \
+    "$(shell/ut-play --status -j | jq -e '.players[0].queue
+        | .pos==0 and .len==2 and (.next.url|type=="string")' >/dev/null 2>&1; echo $?)"
+qsock=$(printf '%s' "$qout" | jq -r '.sock // empty')
+wait_for_sock "$qsock" || bad "the queued player's socket never appeared — the checks below are moot"
+
+# --enqueue lands on a RUNNING player, and the envelope reports the queue it wrote.
+report "--enqueue appends" 0 \
+    "$(jq -nc --arg a "$U1" '[{engine:"yt",url:$a}]' | shell/ut-play --enqueue - -j 2>/dev/null \
+        | jq -e '.status=="ok" and .added==1 and .queue.len==3' >/dev/null 2>&1; echo $?)"
+# Concurrency is DRIVEN, not argued (the rule ut-playlist's eight concurrent --add checks
+# already follow): six writers, six items, no lost update. With lock_queue_state stubbed to
+# fail this loop leaves fewer — watched, so the check is known to be able to fail.
+for i in 1 2 3 4 5 6; do
+    jq -nc --arg a "$U2" '[{engine:"yt",url:$a}]' | shell/ut-play --enqueue - -j >/dev/null 2>&1 &
+done
+wait
+report "6 concurrent --enqueue all land (3+6)" 9 \
+    "$(shell/ut-play --status -j | jq -r '.players[0].queue.len')"
+
+# --next: the POSITION moves in the parent, so the envelope reports a queue it read. Then the
+# player follows — a bounded poll, because what is being proved is that it DID follow, not
+# how fast it resolved (a duration assertion against a live site is the timing check
+# CLAUDE.md forbids).
+report "--next advances the position" 1 \
+    "$(shell/ut-play --next -j 2>/dev/null | jq -r '.queue.pos')"
+i=0
+while [ $i -lt 60 ]; do
+    u=$(shell/ut-play --status -j | jq -r '.players[0].url // empty')
+    [ "$u" = "$U2" ] && break
+    sleep 1; i=$((i + 1))
+done
+report "the record follows the track" "$U2" \
+    "$(shell/ut-play --status -j | jq -r '.players[0].url // empty')"
+
+# The one a queue exists for: a track ENDING on its own starts the next. Seek to just before
+# the end rather than waiting out a six-hour stream, then poll for the position to move —
+# the child has to notice mpv exited, advance under its own lock, resolve the next handle and
+# start a new mpv, and none of that is driven from here.
+dur=$(shell/ut-play --status -j | jq -r '.players[0].duration // empty')
+case "$dur" in
+    "" | null) bad "no duration on the queued player — cannot drive it to the end of a track" ;;
+    *)
+        shell/ut-play --seek-to $((dur - 4)) -j >/dev/null 2>&1
+        i=0
+        while [ $i -lt 90 ]; do
+            [ "$(shell/ut-play --status -j | jq -r '.players[0].queue.pos // empty')" = "2" ] && break
+            sleep 1; i=$((i + 1))
+        done
+        report "a track ending advances the queue" "2" \
+            "$(shell/ut-play --status -j | jq -r '.players[0].queue.pos // empty')"
+        ;;
+esac
+
+# --stop takes the whole QUEUE down. The child cannot trap SIGINT — an async command enters
+# with it SIG_IGN — so a group INT alone leaves the leader alive and playing on into the next
+# track until stop_group's KILL escalation. stop_group therefore tells the LEADER with
+# SIGTERM, and repeats both signals on every tick of the escalation because the engine call
+# between two tracks spawns processes that never saw the first one.
+shell/ut-play --next -j >/dev/null 2>&1
+sleep 0.5
+report "--stop ends the queue" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; echo $?)"
+sleep 2
+report "no players after a queue" 0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
+n=$(pgrep -f 'mpv .*--input-ipc-server' 2>/dev/null | wc -l | tr -d ' ')
+report "no orphan mpv after a queue" 0 "${n:-0}"
+# NOT checked here, and the reason is the rule this file lives by: that a stopped queue
+# files no tombstone was TRIED as a check and pulled, because it could not be made to go red
+# — disabling the child's `stopped` arm outright still produced an empty failed[]. A green
+# tick nobody has seen fail proves nothing, so the claim stays where it can fail: contract.sh
+# already drives the tombstone boundaries (a normal finish writes none, a log with no epitaph
+# writes none) from fixtures, which is where a rule about what the REAPER records belongs.
+
 echo
 printf '%s: %d ok, %d failed\n' "$(basename "$0")" "$pass" "$fail"
 if [ "$fail" -ne 0 ]; then printf 'failures:\n%s' "$FAILED"; exit 1; fi
