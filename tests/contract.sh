@@ -31,6 +31,9 @@ set -uo pipefail
 cd "$(cd -P "$(dirname "$0")/.." && pwd -P)" || exit 1
 
 # ---- the player's state dir, pointed somewhere disposable ---------------------------
+# THE ARGUMENT FOR THIS LIVES HERE, and the other two files under tests/ point at it rather
+# than restating it (docs/ARCHITECTURE.md §27 is the doc-level home of the same fact).
+#
 # `ut-play` derives its state dir from TMPDIR ("${TMPDIR:-/tmp}/uting-$(id -u)", shell/ut-play)
 # and takes no override of its own. Left at the user's real TMPDIR, this file --stop --all's a
 # player they are listening to, writes its tombstone fixtures into their real players/, and
@@ -95,68 +98,25 @@ jq_in() { local f=$1 p=$2; shift 2; jqv "$f" "$(printf '%s' "$p" | "$@" 2>/dev/n
 # lines <json>                    — 1 for a single-line envelope.
 lines() { printf '%s\n' "$1" | wc -l | tr -d ' '; }
 
-# ---- fetch once, assert many --------------------------------------------------------
-# A live engine call costs a yt-dlp start (~2s) whether one question is asked of its answer
-# or four, and nearly every assertion below is about an envelope's SHAPE. Two identical
-# queries cannot answer a shape question differently, so each fixture is one plain command
-# substitution, interrogated as many times as it has claims. The command is still the real
-# entry point and the answer is still its real stdout.
+# ---- the offline half, FIRST -------------------------------------------------------
+# Everything below this line to the live-fixture preamble runs without a network: flag gates,
+# the idle lifecycle, the death-record fixtures, the two halves of the user-level store, and
+# --version. It used to sit AFTER ~15 live engine round trips, so the most common regression of
+# all — a gate or an envelope broken by the edit you are about to commit — cost 80 seconds to
+# see. Measured after the move (2026-08-25): the gates are red at 1s, the idle lifecycle at 1s,
+# the death record at 2s, and the whole offline half is done at 22s, the first network call not
+# starting until then. The 19s inside it are the playlist store's — a deliberate 5s lock spin
+# plus eight concurrent writers — so a gate regression is still seen in about two seconds.
 #
-# A call keeps its own invocation when its ARGV differs (-j and -J are two envelopes, not two
-# questions about one), when its ENVIRONMENT differs (the proxy checks), or when its INPUT
-# differs (a second query, chosen for content the first one does not have).
-
-# A short, permanent, caption-bearing public video: the one handle every engine-contract
-# check below resolves. Chosen for being 19 seconds long — nothing here plays it, but a
-# resolve that accidentally starts a download costs a second rather than a minute.
-MEDIA_ID="jNQXAC9IVRw"
-
-echo "── search envelope ────────────────────────────────────────────────"
-# One live search, four claims — and the parity check further down reuses this same
-# envelope rather than fetching a fifth.
-YT_S=$(shell/yt-search -j -n 3 -- lofi 2>/dev/null)
-YT_SJ=$(shell/yt-search -J -n 2 -- lofi 2>/dev/null)
-report "search -j envelope" 0 \
-    "$(jqv '.query and .count and (.results|length==3)' "$YT_S")"
-# The engine names itself in its own envelope. This is what lets a caller route a chosen
-# result back to the matching <engine>-resolve without pattern-matching its URL, so a new
-# engine that forgets the field breaks routing rather than merely looking different.
-report "search -j names its engine" 0 \
-    "$(jqv '.status=="ok" and .engine=="yt"' "$YT_S")"
-report "search -J has raw id" 0 \
-    "$(jqv '.results[0]|has("id")' "$YT_SJ")"
-# Was an open R8 drift (26 lines for -n 3); fixed, so it is a hard check now — a "known"
-# label on a passing behaviour is how a real regression gets waved through later.
-report "search -j is one line" 1 "$(lines "$YT_S")"
-
-echo "── resolve envelope: the half that turns a handle into bytes ──────"
-YT_R=$(shell/yt-resolve -j -- "$MEDIA_ID" 2>/dev/null)
-# Every key the PLAYER reads. A new engine that renames one, or omits http_headers, breaks
-# playback in a way no other check here would notice: the search half would still look fine.
-# http_headers is asserted PRESENT rather than non-empty — {} is a legal answer, absent is not.
-report "resolve -j envelope" 0 \
-    "$(jqv '.status=="ok" and .engine=="yt" and (.stream_urls|length)>0
-              and has("http_headers") and (.http_headers|type)=="object"
-              and has("title") and has("format") and has("retried")' "$YT_R")"
-report "resolve -j is one line" 1 "$(lines "$YT_R")"
-# Shape validation lives in the ENGINE now — the player cannot tell a good id from a bad one.
-report "resolve rejects a non-id" 1 "$(rc shell/yt-resolve -j -- "not an id")"
-report "resolve rejects -d"       1 "$(rc shell/yt-resolve -d -- "$MEDIA_ID")"
-report "resolve rejects -n"       1 "$(rc shell/yt-resolve -n 5 -- "$MEDIA_ID")"
-
-echo "── the player's engine seam ───────────────────────────────────────"
-# A mistyped engine must be a USAGE error. If it fell into 2+ an agent would read it as
-# "the tool failed, retry later" and retry a name that will never exist.
-report "unknown engine is usage"  1 "$(rc shell/ut-play --engine nope -- "$MEDIA_ID")"
-report "engine name is validated" 1 "$(rc shell/ut-play --engine ../evil -- "$MEDIA_ID")"
-# A well-formed id that resolves to nothing is a PROPAGATED tool failure (2+), not usage,
-# and it must still say why. This is the semantic B-2 bought by moving the shape check down.
-# One resolve attempt answers both: the exit code and the envelope come off the same run,
-# which is also the only way they are guaranteed to be describing the same failure.
-DEAD=$(shell/ut-play -j -- AAAAAAAAAAA 2>/dev/null); DEAD_ST=$?
-report "dead id is 2+, not 1"     2 "$DEAD_ST"
-report "dead id keeps its reason" 0 \
-    "$(jqv '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' "$DEAD")"
+# THE ORDER IS PART OF THE FILE, not an accident of how it grew:
+#   · offline first, so a broken gate is red before anything is fetched;
+#   · the death-record fixtures ahead of the TUI section (stated again at that section, where
+#     the mechanism is) — the pane's `uting` polls --status once a second and every lifecycle
+#     verb reaps, so a fixture created after the pane is up can be deleted before the
+#     assertion that reads it;
+#   · the TUI section LAST, for the same reason from the other side.
+# Moving a section is therefore a deliberate act. Nothing here reads a live fixture — that is
+# what made the move a permutation rather than a rewrite, and it is what keeps it one.
 
 echo "── rejections (1 = usage error) ───────────────────────────────────"
 report "core no args"             1 "$(rc /bin/bash shell/ut-play)"
@@ -175,191 +135,6 @@ report "ut-play -- <query>"       1 "$(rc shell/ut-play -- "a query")"
 report "ut-play unknown long flag" 1 "$(rc shell/ut-play --json-full -- URL)"
 report "--get-url is retired"     1 "$(rc shell/ut-play --get-url -- URL)"
 report "--info is the engine's"   1 "$(rc shell/ut-play --info -- URL)"
-
-echo "── argv order: a flag-shaped query after -- is SEARCHED ───────────"
-# Not a player list: --status after -- is eight characters of query text. The check lives on
-# yt-search because that is where searching lives now; the player has no search branch left
-# to confuse a flag-shaped token with (AS-BUILT-contract.md §2).
-# Asserted POSITIVELY, on the query the engine echoes back. The old form folded stderr into
-# the pipe and asked only "is line one not JSON?", so `Error: search failed (network)` — a
-# yt-search that did not run at all — satisfied it. It was also the one live call in this file
-report "yt-search -- --status searches" 0 \
-    "$(jq_ok '.status=="ok" and .query=="--status"' shell/yt-search -j -n 1 -- --status)"
-
-echo "── --transcript: read-only, so the gate and both envelopes are all ─"
-# The ok-path fixture must be a video that HAS captions and the error-path one must not:
-# pointing the ok-path at a long music stream is how this check first went red against
-# working code.
-CAPTIONED="https://www.youtube.com/watch?v=8S0FDjFBj8o"
-BARE="https://www.youtube.com/watch?v=n61ULEU7CO0"
-report "transcript rejects -f"    1 "$(rc shell/yt-resolve --transcript -f audio -- "$CAPTIONED")"
-report "transcript rejects -d"    1 "$(rc shell/yt-resolve --transcript -d -- "$CAPTIONED")"
-report "transcript envelope"      0 \
-    "$(jq_ok '.status=="ok" and .id and .lang and .chars>0 and (.is_auto|type=="boolean") and (.text|length>0)' \
-        shell/yt-resolve --transcript -j -- "$CAPTIONED")"
-report "transcript -J has segments" 0 \
-    "$(jq_ok '.segments[0]|has("start") and has("text")' shell/yt-resolve --transcript -J -- "$CAPTIONED")"
-NOCAP=$(shell/yt-resolve --transcript -j -- "$BARE" 2>/dev/null); NOCAP_ST=$?
-report "no captions -> error"     0 \
-    "$(jqv '.status=="error" and .reason=="no_subtitles_available"' "$NOCAP")"
-report "no captions exit"         1 "$NOCAP_ST"
-
-echo "── the second engine: the same envelope, or the split is a fiction ─"
-# A permanent, single-part music video on the second site. Single-part matters: a handle
-# that is a 50-track collection resolves to part one, which is correct but makes a title
-# assertion depend on which part that is.
-BILI_ID="BV1mL411E7Fb"
-
-# The second engine's three envelopes, one call each. `-n 5` because the duration check
-# below needs a page rather than a pair, and a key set does not care how long the list is.
-BILI_S=$(shell/bili-search  -j -n 5 -- 音乐 2>/dev/null)
-BILI_R=$(shell/bili-resolve -j -- "$BILI_ID" 2>/dev/null)
-YT_I=$(shell/yt-resolve   --info -j -- "$MEDIA_ID" 2>/dev/null)
-BILI_I=$(shell/bili-resolve --info -j -- "$BILI_ID" 2>/dev/null)
-
-# THE check the engine split exists for. Two engines are only interchangeable if a caller
-# cannot tell which one answered, so the assertion is on the KEY SETS THEMSELVES rather
-# than on a list of names written out twice: a field renamed, added or dropped in EITHER
-# engine fails here, including one added to yt-search years from now and forgotten on the
-# other side. Nothing else in this file would notice — each engine's own checks would still
-# pass, and playback would break only for the engine nobody happened to run.
-report "search envelopes agree" \
-    "$(printf '%s' "$YT_S" | jq -Sc 'keys' 2>/dev/null)" \
-    "$(printf '%s' "$BILI_S" | jq -Sc 'keys' 2>/dev/null)"
-report "search result keys agree" \
-    "$(printf '%s' "$YT_S" | jq -Sc '.results[0]|keys' 2>/dev/null)" \
-    "$(printf '%s' "$BILI_S" | jq -Sc '.results[0]|keys' 2>/dev/null)"
-report "resolve envelopes agree" \
-    "$(printf '%s' "$YT_R" | jq -Sc 'keys' 2>/dev/null)" \
-    "$(printf '%s' "$BILI_R" | jq -Sc 'keys' 2>/dev/null)"
-# --info gets the same parity treatment: it is the third envelope both engines publish
-# (AS-BUILT-contract.md §3), and nothing else here would notice a field renamed on one
-# side. The ok/engine assertion is what keeps the key comparison from passing vacuously —
-# two ERROR envelopes agree on their keys too.
-report "info -j is ok and named" 0 \
-    "$(jqv '.status=="ok" and .engine=="yt"' "$YT_I")"
-report "info envelopes agree" \
-    "$(printf '%s' "$YT_I" | jq -Sc 'keys' 2>/dev/null)" \
-    "$(printf '%s' "$BILI_I" | jq -Sc 'keys' 2>/dev/null)"
-report "--info -j is one line" 1 "$(lines "$YT_I")"
-
-report "bili-search names its engine" 0 \
-    "$(jqv '.status=="ok" and .engine=="bili"' "$BILI_S")"
-report "bili-search -j is one line" 1 "$(lines "$BILI_S")"
-# The site sends duration as "MM:SS" with unbounded minutes ("222:28"), which every surface
-# above would silently mis-sort and mis-render as a string. It is parsed in the engine, so
-# the assertion is that what leaves the engine is a NUMBER — never the raw string.
-#
-# `null` is ALLOWED and is not a miss: §7/AS-BUILT-contract.md §3 make duration/duration_fmt null together when the
-# row has no duration, and this endpoint does return such rows intermittently (observed: one
-# null among five, on a result set the site swapped in between two identical requests). An
-# earlier `all(type=="number")` here failed on exactly those runs and read as flaky — it was
-# asserting against the contract rather than for it. What must hold: nothing is a string, and
-# the page is not ALL nulls (which would mean the parser stopped working).
-report "bili duration is seconds" 0 \
-    "$(jqv '[.results[].duration]
-               | length>0
-               and all(type=="number" or type=="null")
-               and any(type=="number")' "$BILI_S")"
-# Titles arrive as search-result HTML (<em class="keyword">) and entity-escaped. Markup that
-# survives into a title is counted by the width layer, which reflows every row wrongly.
-report "bili titles carry no markup" 0 \
-    "$(jq_ok '[.results[].title]|all((test("<") or test("&[a-z#]+;"))|not)' shell/bili-search -j -n 10 -- 周杰伦)"
-
-report "bili-resolve rejects a non-id" 1 "$(rc shell/bili-resolve -j -- "not an id")"
-# This site's CDN checks Referer: the bare stream URL answers 403 and the same URL with
-# these headers answers 206 (measured). An empty http_headers here is a silently unplayable
-# engine, which is exactly the contract hole the key was added to close.
-report "bili resolve sends a Referer" 0 \
-    "$(jqv '.http_headers|has("Referer")' "$BILI_R")"
-# Capability differs per engine and is stated, not faked: this site's videos carry no
-# caption track, so the verb is absent rather than always answering "none".
-report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcript -- "$BILI_ID")"
-report "bili-search rejects -d" 1 "$(rc shell/bili-search -d -- 音乐)"
-# One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
-# which supports 1700+ sites — so a Bilibili URL resolved fine and came back labelled
-# `engine:"yt"`. It WORKED, which is why it went unnoticed, and it made the one field whose
-# job is routing a result back to its resolver into a field that lies.
-#
-# Engine-DISCOVERED, not hardcoded: the pair convention (`<name>-search` + `<name>-resolve`)
-# is the one `uting` already builds its registry from, so a third engine is covered the day
-# its pair lands rather than when someone remembers to add it here. And the claim is stated
-# as an invariant over ALL engines, needing no table of who owns what — which is why it
-# cannot drift from the engines themselves. Every host-gate function is duplicated per
-# engine (`url_host` is byte-identical across the pair today), so a check that drove only
-# one engine would be green while the other copy, and engine #3, said nothing.
-ENGINES=""
-for f in shell/*-resolve; do
-    n=$(basename "$f"); n=${n%-resolve}
-    [ -x "shell/$n-search" ] && ENGINES="$ENGINES $n"
-done
-NENG=$(echo "$ENGINES" | wc -w | tr -d ' ')
-# >= 2, not == 2: this section's whole premise is that engine #3 is covered the day its pair
-# lands, and a hardcoded count is the one line that would go red on exactly that day. What it
-# has to rule out is NENG=0, which would make every `refusals` check below pass vacuously.
-report "at least two engine pairs" 1 "$([ "$NENG" -ge 2 ] && echo 1 || echo 0)"
-
-# A search half resolves no format, so -S (a stream-format sort) is a value it cannot act
-# on. Stated over EVERY discovered engine, not just the one that got it right: yt-search
-# took the flag and forwarded it into a --flat-playlist dump where it changed nothing, so
-# the two halves disagreed about what a search IS and the add-an-engine checklist copied
-# the wrong one. Engine #3 is covered the day it lands.
-_sdash=0
-for n in $ENGINES; do
-    [ "$(rc "shell/$n-search" -S abr -- q)" = 1 ] && _sdash=$((_sdash + 1))
-done
-report "every search half refuses -S" "$NENG" "$_sdash"
-
-# refusals <url> — how many engines reject it as a USAGE error (1)? A rejected host dies
-# before the dependency gate, so each of these costs ~20ms and no network.
-refusals() {
-    local u=$1 n r=0
-    for n in $ENGINES; do
-        [ "$(rc "shell/$n-resolve" -j -- "$u")" = 1 ] && r=$((r + 1))
-    done
-    echo $r
-}
-
-# A real URL is claimed by EXACTLY ONE engine: the other N-1 refuse it with 1 — usage, not
-# extraction failure, because nothing was attempted and nothing is retryable.
-report "only 1 engine claims a yt URL"   $((NENG - 1)) "$(refusals "https://www.youtube.com/watch?v=$MEDIA_ID")"
-report "only 1 engine claims a bili URL" $((NENG - 1)) "$(refusals 'https://www.bilibili.com/video/BV1mL411E7Fb')"
-# The ordering probe, and the one here that costs a network call: `url_host` strips userinfo
-# BEFORE the port, so `user:pass@host` resolves to the host. Swap those two expansions — a
-# plausible tidy-up — and this resolves to host `user`, is refused by every engine, and
-# nothing else in this file notices.
-report "userinfo stripped before port"   $((NENG - 1)) "$(refusals "https://user:pass@www.youtube.com/watch?v=$MEDIA_ID")"
-
-# A confusable is refused by EVERY engine. These are the shapes `url_host`'s expansion ORDER
-# decides, and the two plain URLs above exercise three of its eight lines:
-#   evil<host>.com    an explicit host list, never a substring test
-#   <host>@evil.com   the LAST `@` is the separator, the way browsers read it
-#   https:///         an empty host must match nothing
-#   <host>.           trailing dot refused — the safe direction, pinned so a change is deliberate
-for u in 'https://evilyoutube.com/watch?v=x' 'https://evilbilibili.com/x' \
-         'https://youtube.com@evil.com/' 'https://bilibili.com@evil.com/' \
-         'https:///watch?v=x' 'https://youtube.com./watch?v=x'; do
-    report "all refuse ${u#https://}" "$NENG" "$(refusals "$u")"
-done
-# The opposite failure is just as real: a host list tightened too far silently drops a
-# spelling users actually type. youtu.be is the one every share button produces.
-report "yt-resolve still takes youtu.be" 0 "$(rc shell/yt-resolve -j -- https://youtu.be/$MEDIA_ID)"
-# The player routes by NAME, and the name is the command prefix — the whole reason the
-# lookup is a string concatenation instead of a registry.
-report "ut-play routes to the bili engine" 0 \
-    "$(jq_ok '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' \
-        shell/ut-play --engine bili -j -- BV1111111111)"
-
-echo "── failure taxonomy: 2 is a tool failure, never 1 ─────────────────"
-# An unreachable proxy is the cheapest deliberate network failure, and it works offline too.
-NOPROXY="http://127.0.0.1:1"
-report "network envelope" 0 \
-    "$(http_proxy=$NOPROXY https_proxy=$NOPROXY jq_ok '.status=="error" and .reason=="network"' \
-        shell/yt-search -j -n 2 -- lofi)"
-report "network exit is 2" 2 \
-    "$(http_proxy=$NOPROXY https_proxy=$NOPROXY rc shell/yt-search -j -n 2 -- lofi)"
-report "network exit is 2 (text)" 2 \
-    "$(http_proxy=$NOPROXY https_proxy=$NOPROXY rc shell/yt-search -n 2 -- lofi)"
 
 echo "── idle lifecycle: exit 0, ONE compact line, idempotent ───────────"
 report "--status exit"      0 "$(rc shell/ut-play --status -j)"
@@ -446,8 +221,7 @@ report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - -
 # a stand-in that runs in place of a component. Nothing here simulates a player; a record whose
 # pid is gone IS a dead player, which is the whole condition under test. The code (reap,
 # classify, prune, envelope) is the real one, driven through the real verb. Like --stop --all
-# above, this writes in the private TMPDIR this file exports at the top (:27-40), never in the
-# user's.
+# above, this writes in the private TMPDIR this file exports at the top, never in the user's.
 #
 # ORDER IS LOAD-BEARING: this section must stay AHEAD of the TUI section. The pane's `uting`
 # polls --status once a second, every lifecycle verb reaps, and a reaped fixture is a fixture
@@ -649,6 +423,283 @@ report "a reason off the enum: 1"      1 "$(rc_in "$(printf '%s' "$H_ROW" | jq -
 rm -rf "$UT_STATE_DIR"
 unset UT_STATE_DIR
 
+echo "── version and the non-TTY refusal ────────────────────────────────"
+# Stated over every entry point the checkout HAS, not over a list of six names: a hardcoded
+# list is a check that silently stops covering the thing it was written for the moment a
+# seventh command lands. Anything in shell/ with a shebang is an entry point.
+ENTRY_POINTS=""
+for f in shell/*; do
+    [ -f "$f" ] || continue
+    head -n 1 "$f" | grep -q '^#!' || continue      # VERSION is data, not a command
+    ENTRY_POINTS="$ENTRY_POINTS $f"
+done
+# No separate count check: an empty ENTRY_POINTS makes the `sort -u | wc -l` below 0, not 1,
+# so the vacuous case is already caught by the check that does the work.
+report "one version, every entry point" 1 \
+    "$(for c in $ENTRY_POINTS; do "$c" --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
+# …and that the one version is the FILE's, asserted through a SYMLINK — the documented
+# install (ROADMAP D1/D2: users symlink these onto their own PATH) and the configuration this
+# breaks in. A script that does not resolve its own symlink chain looks for VERSION next to
+# the LINK, finds none, and prints "unknown". Seven entry points all printing "unknown" agree
+# with each other perfectly, so the check above stays green while every one of them is wrong;
+# pinning the value to the file is what gives it teeth. Real symlinks to real scripts, read by
+# the real command — a fixture, not a stand-in.
+UT_VER=$(cat VERSION)
+LINKDIR="$UT_TEST_TMP/bin"
+mkdir -p "$LINKDIR"
+for c in $ENTRY_POINTS; do ln -sf "$PWD/$c" "$LINKDIR/$(basename "$c")"; done
+report "…and it is VERSION, via a symlink" "$UT_VER" \
+    "$(for c in "$LINKDIR"/*; do "$c" --version | awk '{print $NF}'; done | sort -u | tr -d '\n')"
+report "uting refuses a non-TTY" 1 "$(shell/uting </dev/null >/dev/null 2>&1; echo $?)"
+
+# ---- fetch once, assert many --------------------------------------------------------
+# A live engine call costs a yt-dlp start (~2s) whether one question is asked of its answer
+# or four, and nearly every assertion below is about an envelope's SHAPE. Two identical
+# queries cannot answer a shape question differently, so each fixture is one plain command
+# substitution, interrogated as many times as it has claims. The command is still the real
+# entry point and the answer is still its real stdout.
+#
+# A call keeps its own invocation when its ARGV differs (-j and -J are two envelopes, not two
+# questions about one), when its ENVIRONMENT differs (the proxy checks), or when its INPUT
+# differs (a second query, chosen for content the first one does not have).
+
+# A short, permanent, caption-bearing public video: the one handle every engine-contract
+# check below resolves. Chosen for being 19 seconds long — nothing here plays it, but a
+# resolve that accidentally starts a download costs a second rather than a minute.
+MEDIA_ID="jNQXAC9IVRw"
+
+echo "── search envelope ────────────────────────────────────────────────"
+# One live search, four claims — and the parity check further down reuses this same
+# envelope rather than fetching a fifth.
+YT_S=$(shell/yt-search -j -n 3 -- lofi 2>/dev/null)
+YT_SJ=$(shell/yt-search -J -n 2 -- lofi 2>/dev/null)
+report "search -j envelope" 0 \
+    "$(jqv '.query and .count and (.results|length==3)' "$YT_S")"
+# The engine names itself in its own envelope. This is what lets a caller route a chosen
+# result back to the matching <engine>-resolve without pattern-matching its URL, so a new
+# engine that forgets the field breaks routing rather than merely looking different.
+report "search -j names its engine" 0 \
+    "$(jqv '.status=="ok" and .engine=="yt"' "$YT_S")"
+report "search -J has raw id" 0 \
+    "$(jqv '.results[0]|has("id")' "$YT_SJ")"
+# Was an open R8 drift (26 lines for -n 3); fixed, so it is a hard check now — a "known"
+# label on a passing behaviour is how a real regression gets waved through later.
+report "search -j is one line" 1 "$(lines "$YT_S")"
+
+echo "── resolve envelope: the half that turns a handle into bytes ──────"
+YT_R=$(shell/yt-resolve -j -- "$MEDIA_ID" 2>/dev/null)
+# Every key the PLAYER reads. A new engine that renames one, or omits http_headers, breaks
+# playback in a way no other check here would notice: the search half would still look fine.
+# http_headers is asserted PRESENT rather than non-empty — {} is a legal answer, absent is not.
+report "resolve -j envelope" 0 \
+    "$(jqv '.status=="ok" and .engine=="yt" and (.stream_urls|length)>0
+              and has("http_headers") and (.http_headers|type)=="object"
+              and has("title") and has("format") and has("retried")' "$YT_R")"
+report "resolve -j is one line" 1 "$(lines "$YT_R")"
+# Shape validation lives in the ENGINE now — the player cannot tell a good id from a bad one.
+report "resolve rejects a non-id" 1 "$(rc shell/yt-resolve -j -- "not an id")"
+report "resolve rejects -d"       1 "$(rc shell/yt-resolve -d -- "$MEDIA_ID")"
+report "resolve rejects -n"       1 "$(rc shell/yt-resolve -n 5 -- "$MEDIA_ID")"
+
+echo "── the player's engine seam ───────────────────────────────────────"
+# A mistyped engine must be a USAGE error. If it fell into 2+ an agent would read it as
+# "the tool failed, retry later" and retry a name that will never exist.
+report "unknown engine is usage"  1 "$(rc shell/ut-play --engine nope -- "$MEDIA_ID")"
+report "engine name is validated" 1 "$(rc shell/ut-play --engine ../evil -- "$MEDIA_ID")"
+# A well-formed id that resolves to nothing is a PROPAGATED tool failure (2+), not usage,
+# and it must still say why. This is the semantic B-2 bought by moving the shape check down.
+# One resolve attempt answers both: the exit code and the envelope come off the same run,
+# which is also the only way they are guaranteed to be describing the same failure.
+DEAD=$(shell/ut-play -j -- AAAAAAAAAAA 2>/dev/null); DEAD_ST=$?
+report "dead id is 2+, not 1"     2 "$DEAD_ST"
+report "dead id keeps its reason" 0 \
+    "$(jqv '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' "$DEAD")"
+
+echo "── argv order: a flag-shaped query after -- is SEARCHED ───────────"
+# Not a player list: --status after -- is eight characters of query text. The check lives on
+# yt-search because that is where searching lives now; the player has no search branch left
+# to confuse a flag-shaped token with (AS-BUILT-contract.md §2).
+# Asserted POSITIVELY, on the query the engine echoes back. The old form folded stderr into
+# the pipe and asked only "is line one not JSON?", so `Error: search failed (network)` — a
+# yt-search that did not run at all — satisfied it. It was also the one live call in this file
+report "yt-search -- --status searches" 0 \
+    "$(jq_ok '.status=="ok" and .query=="--status"' shell/yt-search -j -n 1 -- --status)"
+
+echo "── --transcript: read-only, so the gate and both envelopes are all ─"
+# The ok-path fixture must be a video that HAS captions and the error-path one must not:
+# pointing the ok-path at a long music stream is how this check first went red against
+# working code.
+CAPTIONED="https://www.youtube.com/watch?v=8S0FDjFBj8o"
+BARE="https://www.youtube.com/watch?v=n61ULEU7CO0"
+report "transcript rejects -f"    1 "$(rc shell/yt-resolve --transcript -f audio -- "$CAPTIONED")"
+report "transcript rejects -d"    1 "$(rc shell/yt-resolve --transcript -d -- "$CAPTIONED")"
+report "transcript envelope"      0 \
+    "$(jq_ok '.status=="ok" and .id and .lang and .chars>0 and (.is_auto|type=="boolean") and (.text|length>0)' \
+        shell/yt-resolve --transcript -j -- "$CAPTIONED")"
+report "transcript -J has segments" 0 \
+    "$(jq_ok '.segments[0]|has("start") and has("text")' shell/yt-resolve --transcript -J -- "$CAPTIONED")"
+NOCAP=$(shell/yt-resolve --transcript -j -- "$BARE" 2>/dev/null); NOCAP_ST=$?
+report "no captions -> error"     0 \
+    "$(jqv '.status=="error" and .reason=="no_subtitles_available"' "$NOCAP")"
+report "no captions exit"         1 "$NOCAP_ST"
+
+echo "── the second engine: the same envelope, or the split is a fiction ─"
+# A permanent, single-part music video on the second site. Single-part matters: a handle
+# that is a 50-track collection resolves to part one, which is correct but makes a title
+# assertion depend on which part that is.
+BILI_ID="BV1mL411E7Fb"
+
+# The second engine's three envelopes, one call each. `-n 5` because the duration check
+# below needs a page rather than a pair, and a key set does not care how long the list is.
+BILI_S=$(shell/bili-search  -j -n 5 -- 音乐 2>/dev/null)
+BILI_R=$(shell/bili-resolve -j -- "$BILI_ID" 2>/dev/null)
+YT_I=$(shell/yt-resolve   --info -j -- "$MEDIA_ID" 2>/dev/null)
+BILI_I=$(shell/bili-resolve --info -j -- "$BILI_ID" 2>/dev/null)
+
+# THE check the engine split exists for. Two engines are only interchangeable if a caller
+# cannot tell which one answered, so the assertion is on the KEY SETS THEMSELVES rather
+# than on a list of names written out twice: a field renamed, added or dropped in EITHER
+# engine fails here, including one added to yt-search years from now and forgotten on the
+# other side. Nothing else in this file would notice — each engine's own checks would still
+# pass, and playback would break only for the engine nobody happened to run.
+report "search envelopes agree" \
+    "$(printf '%s' "$YT_S" | jq -Sc 'keys' 2>/dev/null)" \
+    "$(printf '%s' "$BILI_S" | jq -Sc 'keys' 2>/dev/null)"
+report "search result keys agree" \
+    "$(printf '%s' "$YT_S" | jq -Sc '.results[0]|keys' 2>/dev/null)" \
+    "$(printf '%s' "$BILI_S" | jq -Sc '.results[0]|keys' 2>/dev/null)"
+report "resolve envelopes agree" \
+    "$(printf '%s' "$YT_R" | jq -Sc 'keys' 2>/dev/null)" \
+    "$(printf '%s' "$BILI_R" | jq -Sc 'keys' 2>/dev/null)"
+# --info gets the same parity treatment: it is the third envelope both engines publish
+# (AS-BUILT-contract.md §3), and nothing else here would notice a field renamed on one
+# side. The ok/engine assertion is what keeps the key comparison from passing vacuously —
+# two ERROR envelopes agree on their keys too.
+report "info -j is ok and named" 0 \
+    "$(jqv '.status=="ok" and .engine=="yt"' "$YT_I")"
+report "info envelopes agree" \
+    "$(printf '%s' "$YT_I" | jq -Sc 'keys' 2>/dev/null)" \
+    "$(printf '%s' "$BILI_I" | jq -Sc 'keys' 2>/dev/null)"
+report "--info -j is one line" 1 "$(lines "$YT_I")"
+
+report "bili-search names its engine" 0 \
+    "$(jqv '.status=="ok" and .engine=="bili"' "$BILI_S")"
+report "bili-search -j is one line" 1 "$(lines "$BILI_S")"
+# The site sends duration as "MM:SS" with unbounded minutes ("222:28"), which every surface
+# above would silently mis-sort and mis-render as a string. It is parsed in the engine, so
+# the assertion is that what leaves the engine is a NUMBER — never the raw string.
+#
+# `null` is ALLOWED and is not a miss: §7/AS-BUILT-contract.md §3 make duration/duration_fmt null together when the
+# row has no duration, and this endpoint does return such rows intermittently (observed: one
+# null among five, on a result set the site swapped in between two identical requests). An
+# earlier `all(type=="number")` here failed on exactly those runs and read as flaky — it was
+# asserting against the contract rather than for it. What must hold: nothing is a string, and
+# the page is not ALL nulls (which would mean the parser stopped working).
+report "bili duration is seconds" 0 \
+    "$(jqv '[.results[].duration]
+               | length>0
+               and all(type=="number" or type=="null")
+               and any(type=="number")' "$BILI_S")"
+# Titles arrive as search-result HTML (<em class="keyword">) and entity-escaped. Markup that
+# survives into a title is counted by the width layer, which reflows every row wrongly.
+report "bili titles carry no markup" 0 \
+    "$(jq_ok '[.results[].title]|all((test("<") or test("&[a-z#]+;"))|not)' shell/bili-search -j -n 10 -- 周杰伦)"
+
+report "bili-resolve rejects a non-id" 1 "$(rc shell/bili-resolve -j -- "not an id")"
+# This site's CDN checks Referer: the bare stream URL answers 403 and the same URL with
+# these headers answers 206 (measured). An empty http_headers here is a silently unplayable
+# engine, which is exactly the contract hole the key was added to close.
+report "bili resolve sends a Referer" 0 \
+    "$(jqv '.http_headers|has("Referer")' "$BILI_R")"
+# Capability differs per engine and is stated, not faked: this site's videos carry no
+# caption track, so the verb is absent rather than always answering "none".
+report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcript -- "$BILI_ID")"
+report "bili-search rejects -d" 1 "$(rc shell/bili-search -d -- 音乐)"
+# One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
+# which supports 1700+ sites — so a Bilibili URL resolved fine and came back labelled
+# `engine:"yt"`. It WORKED, which is why it went unnoticed, and it made the one field whose
+# job is routing a result back to its resolver into a field that lies.
+#
+# Engine-DISCOVERED, not hardcoded: the pair convention (`<name>-search` + `<name>-resolve`)
+# is the one `uting` already builds its registry from, so a third engine is covered the day
+# its pair lands rather than when someone remembers to add it here. And the claim is stated
+# as an invariant over ALL engines, needing no table of who owns what — which is why it
+# cannot drift from the engines themselves. Every host-gate function is duplicated per
+# engine (`url_host` is byte-identical across the pair today), so a check that drove only
+# one engine would be green while the other copy, and engine #3, said nothing.
+ENGINES=""
+for f in shell/*-resolve; do
+    n=$(basename "$f"); n=${n%-resolve}
+    [ -x "shell/$n-search" ] && ENGINES="$ENGINES $n"
+done
+NENG=$(echo "$ENGINES" | wc -w | tr -d ' ')
+# >= 2, not == 2: this section's whole premise is that engine #3 is covered the day its pair
+# lands, and a hardcoded count is the one line that would go red on exactly that day. What it
+# has to rule out is NENG=0, which would make every `refusals` check below pass vacuously.
+report "at least two engine pairs" 1 "$([ "$NENG" -ge 2 ] && echo 1 || echo 0)"
+
+# A search half resolves no format, so -S (a stream-format sort) is a value it cannot act
+# on. Stated over EVERY discovered engine, not just the one that got it right: yt-search
+# took the flag and forwarded it into a --flat-playlist dump where it changed nothing, so
+# the two halves disagreed about what a search IS and the add-an-engine checklist copied
+# the wrong one. Engine #3 is covered the day it lands.
+_sdash=0
+for n in $ENGINES; do
+    [ "$(rc "shell/$n-search" -S abr -- q)" = 1 ] && _sdash=$((_sdash + 1))
+done
+report "every search half refuses -S" "$NENG" "$_sdash"
+
+# refusals <url> — how many engines reject it as a USAGE error (1)? A rejected host dies
+# before the dependency gate, so each of these costs ~20ms and no network.
+refusals() {
+    local u=$1 n r=0
+    for n in $ENGINES; do
+        [ "$(rc "shell/$n-resolve" -j -- "$u")" = 1 ] && r=$((r + 1))
+    done
+    echo $r
+}
+
+# A real URL is claimed by EXACTLY ONE engine: the other N-1 refuse it with 1 — usage, not
+# extraction failure, because nothing was attempted and nothing is retryable.
+report "only 1 engine claims a yt URL"   $((NENG - 1)) "$(refusals "https://www.youtube.com/watch?v=$MEDIA_ID")"
+report "only 1 engine claims a bili URL" $((NENG - 1)) "$(refusals 'https://www.bilibili.com/video/BV1mL411E7Fb')"
+# The ordering probe, and the one here that costs a network call: `url_host` strips userinfo
+# BEFORE the port, so `user:pass@host` resolves to the host. Swap those two expansions — a
+# plausible tidy-up — and this resolves to host `user`, is refused by every engine, and
+# nothing else in this file notices.
+report "userinfo stripped before port"   $((NENG - 1)) "$(refusals "https://user:pass@www.youtube.com/watch?v=$MEDIA_ID")"
+
+# A confusable is refused by EVERY engine. These are the shapes `url_host`'s expansion ORDER
+# decides, and the two plain URLs above exercise three of its eight lines:
+#   evil<host>.com    an explicit host list, never a substring test
+#   <host>@evil.com   the LAST `@` is the separator, the way browsers read it
+#   https:///         an empty host must match nothing
+#   <host>.           trailing dot refused — the safe direction, pinned so a change is deliberate
+for u in 'https://evilyoutube.com/watch?v=x' 'https://evilbilibili.com/x' \
+         'https://youtube.com@evil.com/' 'https://bilibili.com@evil.com/' \
+         'https:///watch?v=x' 'https://youtube.com./watch?v=x'; do
+    report "all refuse ${u#https://}" "$NENG" "$(refusals "$u")"
+done
+# The opposite failure is just as real: a host list tightened too far silently drops a
+# spelling users actually type. youtu.be is the one every share button produces.
+report "yt-resolve still takes youtu.be" 0 "$(rc shell/yt-resolve -j -- https://youtu.be/$MEDIA_ID)"
+# The player routes by NAME, and the name is the command prefix — the whole reason the
+# lookup is a string concatenation instead of a registry.
+report "ut-play routes to the bili engine" 0 \
+    "$(jq_ok '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' \
+        shell/ut-play --engine bili -j -- BV1111111111)"
+
+echo "── failure taxonomy: 2 is a tool failure, never 1 ─────────────────"
+# An unreachable proxy is the cheapest deliberate network failure, and it works offline too.
+NOPROXY="http://127.0.0.1:1"
+report "network envelope" 0 \
+    "$(http_proxy=$NOPROXY https_proxy=$NOPROXY jq_ok '.status=="error" and .reason=="network"' \
+        shell/yt-search -j -n 2 -- lofi)"
+report "network exit is 2" 2 \
+    "$(http_proxy=$NOPROXY https_proxy=$NOPROXY rc shell/yt-search -j -n 2 -- lofi)"
+report "network exit is 2 (text)" 2 \
+    "$(http_proxy=$NOPROXY https_proxy=$NOPROXY rc shell/yt-search -n 2 -- lofi)"
+
 echo "── the TUI boots, paints, survives a resize, and leaves on q ──────"
 # NOT a renderer assertion: no cell arithmetic, no width table, no captured frame compared
 # against an expected picture. The claim is only that the interactive surface starts on a
@@ -735,35 +786,6 @@ else
     report "hands the tty back on exit" 1 "$restored"
     tmux kill-session -t "$TS" 2>/dev/null
 fi
-
-echo "── version and the non-TTY refusal ────────────────────────────────"
-# Stated over every entry point the checkout HAS, not over a list of six names: a hardcoded
-# list is a check that silently stops covering the thing it was written for the moment a
-# seventh command lands. Anything in shell/ with a shebang is an entry point.
-ENTRY_POINTS=""
-for f in shell/*; do
-    [ -f "$f" ] || continue
-    head -n 1 "$f" | grep -q '^#!' || continue      # VERSION is data, not a command
-    ENTRY_POINTS="$ENTRY_POINTS $f"
-done
-# No separate count check: an empty ENTRY_POINTS makes the `sort -u | wc -l` below 0, not 1,
-# so the vacuous case is already caught by the check that does the work.
-report "one version, every entry point" 1 \
-    "$(for c in $ENTRY_POINTS; do "$c" --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
-# …and that the one version is the FILE's, asserted through a SYMLINK — the documented
-# install (ROADMAP D1/D2: users symlink these onto their own PATH) and the configuration this
-# breaks in. A script that does not resolve its own symlink chain looks for VERSION next to
-# the LINK, finds none, and prints "unknown". Seven entry points all printing "unknown" agree
-# with each other perfectly, so the check above stays green while every one of them is wrong;
-# pinning the value to the file is what gives it teeth. Real symlinks to real scripts, read by
-# the real command — a fixture, not a stand-in.
-UT_VER=$(cat VERSION)
-LINKDIR="$UT_TEST_TMP/bin"
-mkdir -p "$LINKDIR"
-for c in $ENTRY_POINTS; do ln -sf "$PWD/$c" "$LINKDIR/$(basename "$c")"; done
-report "…and it is VERSION, via a symlink" "$UT_VER" \
-    "$(for c in "$LINKDIR"/*; do "$c" --version | awk '{print $NF}'; done | sort -u | tr -d '\n')"
-report "uting refuses a non-TTY" 1 "$(shell/uting </dev/null >/dev/null 2>&1; echo $?)"
 
 echo
 printf '%s: %d ok, %d failed\n' "$(basename "$0")" "$pass" "$fail"

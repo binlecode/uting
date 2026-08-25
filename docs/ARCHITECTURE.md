@@ -3176,6 +3176,24 @@ starts no player, and `drive.sh -k Enter -w Playing` waits for the banner withou
 it. So it is proved nowhere today, and the honest entry is that sentence rather than a check
 somewhere that half-covers it.
 
+**Two checks were written, watched, and pulled — recorded here because the register is where a
+coverage decision belongs, and because a pulled check that leaves no trace gets re-added.**
+Both failed the same test: *it could not be made to go red.*
+
+- **The `head -n <count>` pipe close in `live_props` (§9.3).** Against the real peer it cannot
+  fail. Swapping the `head` for a `cat` and re-running measures **0.04 s either way**, so a
+  timing assertion on it would pass whatever the code does. The 1.11 s the guard once appeared
+  to save was a *scripted peer's* idle timer, and that peer is gone with every other stand-in.
+  The guard stays in the player as defence, without a green tick pretending the suite proved it.
+- **That a stopped queue files no tombstone.** Disabling the child's `stopped` arm outright
+  *still* produced an empty `failed[]`, so the check was green against broken code. The claim
+  lives where it can fail instead: `contract.sh` drives the tombstone boundaries from fixtures
+  (a normal finish writes none, a log with no epitaph writes none), which is where a rule about
+  what the REAPER records belongs.
+
+`tests/playback.sh` carries a one-line pointer at each of the two sites, so the next reader
+finds the reasoning without the file carrying it twice.
+
 > **Observed flakiness — the shared-state one is CLOSED, and this is the record of it.** On
 > 2026-08-23 ten checks failed on the first of three runs and the next two passed 78/78
 > unchanged; on 2026-08-24 the same cluster went red twice while an ordinary interactive
@@ -3184,9 +3202,8 @@ somewhere that half-covers it.
 > `${TMPDIR}/uting-$(id -u)/players`, keyed by uid and nothing else, and **every lifecycle verb
 > reaps** — so one `ut-play --status` from anywhere, a TUI's liveness poll included, deleted a
 > tombstone fixture between its creation and the assertion that read it. The durable fix was
-> the per-run state dir, and it is now built in both suites (`contract.sh:38-40`,
-> `playback.sh:39-41`): each exports a `TMPDIR` of its own, so no other uting on the uid shares
-> the directory. What survives is the ordering rule the same mechanism still implies inside a
+> the per-run state dir, and every entry point under `tests/` now builds it: each exports a
+> `TMPDIR` of its own, so no other uting on the uid shares the directory. What survives is the ordering rule the same mechanism still implies inside a
 > single run — the death-record section must precede the TUI section, since the pane's own
 > `--status` poll reaps — and that is written at the section itself rather than left to layout.
 >

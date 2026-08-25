@@ -52,16 +52,13 @@ done
 command -v tmux >/dev/null 2>&1 || { echo "drive.sh: tmux is required (uting needs a real tty)" >&2; exit 1; }
 
 # ---- a state dir of this run's own --------------------------------------------------
-# `ut-play` derives its state dir from TMPDIR and takes no override (shell/ut-play, STATE_DIR),
-# so at the user's real TMPDIR the cleanup below reaches the player they are listening to and
-# the orphan check counts THEIR mpv. Both suites in tests/ already redirect for this reason;
-# this is the same derivation and the last entry point that had not. Isolation changes nothing
-# about what runs — the pane holds a real `uting` driving a real `ut-play` and a real mpv —
-# only whose state it is written on top of. Their playlists and their history still render,
-# because those live in UT_STATE_DIR, which is deliberately NOT redirected: a frame captured
-# from this driver should show the store a human sees. What the driver does suppress is the
-# WRITE side of that store (UT_HISTORY=0 in the pane): a track this script starts and reaps a
-# second later is not a listening, and a log is not something --stop takes back.
+# Why, once, for all three files under tests/: contract.sh's header, and §27. What is specific
+# to a DRIVER: the pane holds a real `uting` driving a real `ut-play` and a real mpv, so only
+# whose state it lands on changes — and their playlists and history still render, because
+# UT_STATE_DIR is deliberately NOT redirected (a frame captured here should show the store a
+# human sees). What is suppressed is that store's WRITE side, via UT_HISTORY=0 in the pane: a
+# track this script starts and reaps a second later is not a listening, and unlike a player, a
+# log is not something --stop takes back.
 UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-drive.XXXXXX") || exit 1
 export TMPDIR="$UT_TEST_TMP"
 STATE_DIR="$TMPDIR/uting-$(id -u)"

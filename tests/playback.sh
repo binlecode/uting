@@ -30,11 +30,9 @@ REPO=$(cd -P "$(dirname "$0")/.." && pwd -P) || exit 1
 cd "$REPO" || exit 1
 
 # ---- a state dir of this file's own -------------------------------------------------
-# `ut-play` derives its state dir from TMPDIR ("${TMPDIR:-/tmp}/uting-$(id -u)", shell/ut-play)
-# and takes no override. Left at the user's real TMPDIR, every --stop --all below reaches the
-# player they are listening to and every orphan count is a count of THEIR mpv. Redirecting
-# TMPDIR changes nothing about what runs — the players are real and their state is really
-# written — only whose state it is written on top of.
+# Why, once, for all three files under tests/: contract.sh's header, and §27. Here it earns
+# the sharpest form of the same sentence — every --stop --all below would reach the player the
+# user is listening to, and every orphan count would be a count of THEIR mpv.
 UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-playback.XXXXXX") || exit 1
 export TMPDIR="$UT_TEST_TMP"
 STATE_DIR="$TMPDIR/uting-$(id -u)"
@@ -214,12 +212,9 @@ report "--resume reads back running" "false" \
 report "…and --status agrees"         "false" \
     "$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.paused')"
 
-# NOT checked here: the `head -n <count>` pipe close in live_props (§9.3). It was tried and
-# pulled the same day — with the real peer it CANNOT go red. Swapping the head for a `cat`
-# and re-running measures 0.04s either way, so a timing assertion on it would be a check that
-# passes whatever the code does. The 1.11s it used to save was a scripted peer's idle timer,
-# and that peer is gone; the guard stays in the player as defence, without a green tick
-# pretending the suite proved it.
+# NOT checked here: the `head -n <count>` pipe close in live_props (§9.3). Tried, pulled, and
+# why — with the real peer it cannot go red — is recorded in docs/ARCHITECTURE.md §27. Do not
+# re-add it as a timing assertion.
 # The degradation an agent must be able to tell from a reading — and it is produced by doing
 # it, not by imitating it: the socket of a REALLY running player is really removed, which is
 # what a crashed mpv or a half-cleaned state dir leaves behind. Live fields go null and volume
@@ -348,12 +343,10 @@ report "--stop ends the queue" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&
 sleep 2
 report "no players after a queue" 0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
 no_orphans "no orphan mpv after a queue"
-# NOT checked here, and the reason is the rule this file lives by: that a stopped queue
-# files no tombstone was TRIED as a check and pulled, because it could not be made to go red
-# — disabling the child's `stopped` arm outright still produced an empty failed[]. A green
-# tick nobody has seen fail proves nothing, so the claim stays where it can fail: contract.sh
-# already drives the tombstone boundaries (a normal finish writes none, a log with no epitaph
-# writes none) from fixtures, which is where a rule about what the REAPER records belongs.
+# NOT checked here: that a stopped queue files no tombstone. Tried, pulled, and why — it could
+# not be made to go red here — is recorded in docs/ARCHITECTURE.md §27; contract.sh drives the
+# tombstone boundaries from fixtures instead, which is where a rule about what the REAPER
+# records belongs.
 
 echo "── the listening log, written by a player that really played ─────"
 # contract.sh drives ut-history's own contract from fixtures. The WIRING — that a track
