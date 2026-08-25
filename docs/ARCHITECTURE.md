@@ -3186,6 +3186,22 @@ somewhere that half-covers it.
 > single run — the death-record section must precede the TUI section, since the pane's own
 > `--status` poll reaps — and that is written at the section itself rather than left to layout.
 >
+> **A third, observed once and NOT located — recorded because an unrecorded flake is a
+> flake nobody can recognise the second time.** On 2026-08-25, in the first of two
+> back-to-back runs, the TUI section's last two checks went red together — *"quits on q with
+> 0"* and *"hands the tty back on exit"* — and the second run passed 177/177 unchanged. The
+> pair failing TOGETHER is the signal: the FLAGS line the second check reads is printed by
+> the same pane command that prints `RC=`, so neither appeared, which means `uting` had not
+> left within the 10 s the poll allows. It was not a slow quit: measured afterwards, seven
+> runs (three plain, four driving the section's exact boot → 62x20 → 26x24 → `q` sequence),
+> **every quit landed in 186–250 ms**, i.e. the budget is fifty times the cost. Two in-app
+> mechanisms that could swallow a keypress were looked for and ruled out: the OSC 11
+> background query is skipped when `$TMUX` is set (§11), so no terminal reply can be sitting
+> in the reader, and `q` is not a UTF-8 lead byte, so `utf8_complete` cannot absorb it. What
+> is left is the machine: a second session was working in this checkout that afternoon and
+> had run the same suite, and whether the two overlapped was not captured. Filed as
+> unlocated, with the measurement, rather than explained.
+>
 > **The open one is different, and it has a fix rather than an acceptance.** On 2026-08-25
 > `playback.sh` ran 34s/35 ok/1 failed and then 41s/36 ok/0 failed, same machine, no code
 > change; the red one was *"no duration on the queued player"*. That is not shared state — it
