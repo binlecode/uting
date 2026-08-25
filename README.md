@@ -192,7 +192,10 @@ Bilibili track — the one check that proves the player *applies* an engine's `h
 One more file in `tests/` is not a suite and asserts nothing. `tests/drive.sh` is a **driver** for the TUI, which needs a real tty and so cannot be run from
 a pipe. It launches tmux at a declared geometry, waits on the ready marker, optionally sends
 keys, dumps the frame, and **always reaps the detached player** — `Enter` starts mpv in its own
-process group, and killing the tmux session does not stop it.
+process group, and killing the tmux session does not stop it. Like the two suites it drives a
+state dir of its own, which is what lets that reap be unconditional: with your real one it would
+reach the player *you* are listening to, so the reap used to be skipped unless the keys contained
+`Enter` — and `-i`, the one mode where a human presses it, was therefore never cleaned up at all.
 
 ```sh
 tests/drive.sh -x 62 -y 20              # the reflow floor, frame dumped

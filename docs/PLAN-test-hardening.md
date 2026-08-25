@@ -1,6 +1,6 @@
 # PLAN-test-hardening —— 测试套件加固（2026-08-25 核查产出）
 
-> 状态：**8/14 已落地（批次 A 全部 + D1）**。三个批次按「零行为改动 → 唯一的行为改动 → 结构去重」排序，
+> 状态：**11/14 已落地（批次 A + B 全部 + D1）**。三个批次按「零行为改动 → 唯一的行为改动 → 结构去重」排序，
 > 每批一次提交、一次回归；`ut-history` 那一条挂在它自己的落地上。最后一条落地时删除本文件。
 >
 > | # | 条目 | 批次 | 状态 | 落地后并入 |
@@ -12,9 +12,9 @@
 > | A5 | 检查数漂 1（实测 145，文档 144），且钉在三个地方 | A | ✅ 已落地 | `CLAUDE.md` · `ARCHITECTURE.md` §27 |
 > | A6 | 耗时声明：`contract.sh` 没有（实测 84s）；`playback.sh` 的 "~35s" 实测 41s，改成 ~40s | A | ✅ 已落地 | 文件自身 · README · `CLAUDE.md` |
 > | A7 | `capture-pane` SKILL.md:118 说版本出自 `ut-play` 的 `UT_VERSION` | A | ✅ 已落地 | 技能自身 |
-> | B1 | `drive.sh` 不隔离 TMPDIR —— 会掐掉用户正在听的播放器 | B | 未开工 | 文件自身 · README |
-> | B2 | `drive.sh` 的 `pgrep` 没作用域 —— 用户自己的 mpv 被报成孤儿 | B | 未开工 | 文件自身 |
-> | B3 | `PRESSED_ENTER` 使 `-i` 永不回收 —— 正是人会按 Enter 的模式 | B | 未开工 | 文件自身 · README |
+> | B1 | `drive.sh` 不隔离 TMPDIR —— 会掐掉用户正在听的播放器 | B | ✅ 已落地 | 文件自身 · README |
+> | B2 | `drive.sh` 的 `pgrep` 没作用域 —— 用户自己的 mpv 被报成孤儿 | B | ✅ 已落地 | 文件自身 |
+> | B3 | `PRESSED_ENTER` 使 `-i` 永不回收 —— 正是人会按 Enter 的模式 | B | ✅ 已落地 | 文件自身 · README |
 > | C1 | 缺 `jq_in`：「先捕获再过滤」手写了三遍 | C | 未开工 | 文件自身 |
 > | C2 | `playback.sh` 两块逐字重复（孤儿检查、position 轮询）+ 一处空值守卫 | C | 未开工 | 文件自身 |
 > | C3 | `contract.sh` 离线段前置、TUI 收尾；TMPDIR 论证只留一份 | C | 未开工 | 文件自身 · `ARCHITECTURE.md` §27 |
@@ -116,7 +116,24 @@
 | A6 | `playback.sh:9`、README:180、`CLAUDE.md:138` 的 "~35s"；`contract.sh` docstring | **已实测**（2026-08-25，走网络）：`playback.sh` 全绿一次 **41s**（"~35s" 偏低但同量级 → 写 **~40s**，并注明含两个上限轮询，慢网络会更久）；`contract.sh` **84s**，此前根本没有耗时声明 —— 给它的 docstring 补上 **~85s**，并点明代价构成（约 15 次活的 engine 往返 + 一次 5s 锁自旋 + 一次约 25s 的 tmux 起 TUI）。`CLAUDE.md:165` 要求「每次提交前跑」，那这个数字就该挂在门口 |
 | A7 | `.claude/skills/capture-pane/SKILL.md:118` | 「版本出自 `shell/ut-play` 的 `UT_VERSION`」→ 出自仓库根的 `VERSION` 文件（每个入口把它读进自己的 `UT_VERSION`）。后半句「重新截图而不是手改数字」保持不变 |
 
-## 5. 批次 B —— `drive.sh` 的隔离与去分支（唯一的行为改动，单独一次提交）
+## 5. 批次 B —— `drive.sh` 的隔离与去分支（唯一的行为改动，单独一次提交）—— ✅ 已落地 2026-08-25
+
+> **落地记录。** 四步全做，另加一条本节写就时还不存在的：`ut-history` 落地之后，`-k Enter` 起的
+> 真播放器会在曲终往**用户真实的收听日志**里追加一行，而这条写在 `UT_STATE_DIR` 下，TMPDIR 的
+> 隔离管不到它。修法不是隔离 `UT_STATE_DIR`（那会把帧里的歌单/历史清空，破掉本节「帧不受影响」
+> 的血缘结论），而是给 pane 喂 `UT_HISTORY=0`，且放在转发块**之前** —— 抑制是默认而非规矩，
+> `UT_HISTORY=1 tests/drive.sh -k Enter` 仍能驱动写入路径。
+>
+> **对照实测（2026-08-25，一段 `tmp/` 下的对照脚本，只按 `--id` 停、绝不 `--all`，用完即弃）**：先在用户真实的
+> state dir 上起一个旁观播放器（静音、日志关），再跑 `tests/drive.sh -k Enter -w Playing`。
+> - 修前：`drive.sh` 退出 0，**旁观者 alive=0** —— 缺陷本体。另一次运行连 ready 帧都没等到就
+>   超时退出 1，而 EXIT trap 照样掐掉了旁观者：**它连自己的播放器都没起就先杀了别人的**。
+> - 修后：`drive.sh` 退出 0，**旁观者 alive=1**，且真实 state dir 里 `mpv` 剩 0 个 —— 后者同时
+>   证明 pane 真的用上了隔离目录（否则驱动自己起的那个会留在真实目录里成为孤儿）。
+> - 帧未变：`tests/drive.sh -x 62 -y 20` 前后每行宽度都是 62、chrome 逐字节相同；只有搜索结果
+>   自己换了序（YouTube 的相关度排序两次不同），换序的两行把各自的右贴 rail 列一起带走
+>   （56 与 53 对调），所以渲染未受影响。
+> - `contract.sh`：**177 ok / 0 failed / 80s**，条数不变（本批不被任何套件调用）。
 
 按决定 T2，一处修法，三条同时消失：
 
