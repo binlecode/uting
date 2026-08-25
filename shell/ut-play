@@ -14,14 +14,29 @@ set -euo pipefail
 # ==============================================================================
 # 1. CORE LIBRARY & DEFAULT SETTINGS (Merged from yt-common.sh)
 # ==============================================================================
-SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+# Resolve the symlink chain before taking a directory from it. ~/bin/ut-play is a SYMLINK
+# into the checkout (the documented install), so a plain dirname yields ~/bin — which holds
+# no VERSION and no engines, leaving --version reading "unknown" and the engine lookup
+# falling through to PATH. The other six entry points already resolve this way; this file
+# was the outlier. bash 3.2 has no `readlink -f`, hence the loop, and physical resolution
+# (-P) because a relative link must be normalised against what it points at, not against the
+# directory the link happens to sit in.
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+    _link=$(readlink "$_self")
+    case "$_link" in
+    /*) _self="$_link" ;;
+    *)  _self="$(dirname "$_self")/$_link" ;;
+    esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
 # THE version of the whole suite, declared once — in a data file, not in code. The player and
 # the engines are independent executables that share no library, so a shell variable in any
 # one of them would make the others ask IT for the version, which is the wrong dependency
 # direction for a player that must not know its engines. A one-line file each reads keeps
 # "one fact, one place" with zero code sharing. CLAUDE.md § one fact, one place.
-if [[ -r "$SCRIPT_DIR/VERSION" ]]; then
-    UT_VERSION=$(cat "$SCRIPT_DIR/VERSION")
+if [[ -r "$SCRIPT_DIR/../VERSION" ]]; then
+    UT_VERSION=$(cat "$SCRIPT_DIR/../VERSION")
 else
     UT_VERSION="unknown"
 fi
