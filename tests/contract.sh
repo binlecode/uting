@@ -578,7 +578,13 @@ else
     tmux kill-session -t "$TS" 2>/dev/null
     # The session outlives the TUI on purpose: what the tty looks like AFTER `q` is a claim
     # of its own, and the pane is the only place to read it from once uting has gone.
-    TUI_CMD="cd '$PWD' && env YT_SYNC=0 shell/uting 'lofi hip hop'"
+    # TMPDIR is passed explicitly: a tmux SERVER that was already running carries the
+    # environment of whoever started it, so the export at the top of this file does not reach
+    # the pane, and uting's --status polls would create a players/ dir in the user's real
+    # state dir. Nothing destructive happens there — every --stop and every fixture below runs
+    # in this shell, where TMPDIR is redirected — but "this file does not touch your state"
+    # should be true without a footnote.
+    TUI_CMD="cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' shell/uting 'lofi hip hop'"
     TUI_CMD="$TUI_CMD"'; printf "RC=%s\n" $?'
     TUI_CMD="$TUI_CMD"'; stty -a </dev/tty | tr " " "\n" | grep -E "^-?(echo|icanon)$" | tr "\n" " " | sed "s/^/FLAGS= /"; echo; sleep 20'
     tmux new-session -d -s "$TS" -x 100 -y 30 "$TUI_CMD"
