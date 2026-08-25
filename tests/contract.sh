@@ -66,8 +66,8 @@ drift() {
 }
 
 # ---- the upper bound on any ONE check -----------------------------------------------
-# About twenty-five of the checks below make a LIVE call to YouTube or Bilibili (yt-dlp,
-# curl), and a throttled or wedged one of those blocks FOREVER: nothing else in this file is
+# About twenty of the checks below make a LIVE call to YouTube or Bilibili (yt-dlp, curl),
+# and a throttled or wedged one of those blocks FOREVER: nothing else in this file is
 # a clock. macOS ships no `timeout` and the Homebrew coreutils one is not a dependency this
 # suite may grow (CLAUDE.md), so the watchdog is written here out of builtins.
 #
@@ -131,37 +131,80 @@ jq_ok() {
     echo $?
 }
 
+# ---- fetch once, assert many --------------------------------------------------------
+# A live engine call costs a yt-dlp start (~2s) whether one question is asked of its answer
+# or four, and nearly every assertion below is about an envelope's SHAPE — its key set, a
+# field's type, its line count. Two identical queries cannot answer a shape question
+# differently, so each fixture is fetched ONCE into a variable and interrogated as many
+# times as it has claims. Nothing is weakened: the command is still the real entry point
+# and the answer is still its real stdout. What goes away is re-asking the network a
+# question it has already answered.
+#
+# A call keeps its own fetch when its ARGV differs (-j and -J are two envelopes, not two
+# questions about one), when its ENVIRONMENT differs (the proxy checks), or when its INPUT
+# differs (a second query, chosen for content the first one does not have).
+
+# fetch <var> <command...>  — one live call. <var> gets stdout BYTE-EXACT and FETCH_ST the
+# exit code. Both halves need care: `$( )` strips every trailing newline, and "is this
+# envelope one line?" is a question the stripped string can no longer answer; and the
+# status of an assignment from a command substitution is the LAST command inside it, so the
+# real one is carried out through the same pipe, behind a separator byte.
+FETCH_ST=0
+fetch() {
+    local __v=$1; shift
+    local __sep __o
+    __sep=$(printf '\001')
+    __o=$(bounded "$@" 2>/dev/null; printf '%s%s' "$__sep" "$?")
+    FETCH_ST=${__o##*"$__sep"}
+    __o=${__o%"$__sep"*}
+    eval "$__v=\$__o"
+    # A wedged FIXTURE is the wedged environment report() aborts on, and it has to abort
+    # here: every check reading this variable would otherwise go red as a content mismatch,
+    # which sends the reader looking at the engine instead of at the link.
+    [ "$FETCH_ST" = 124 ] && report "fetch ${1##*/}" 0 124
+    return 0
+}
+
+# jq_s <jq-filter> <json>  — jq_ok's verdict, on an envelope that was ALREADY fetched.
+jq_s() { printf '%s' "$2" | jq -e "$1" >/dev/null 2>&1; echo $?; }
+
+# nlines <json> — the number `<command> | wc -l` gave back when the command was re-run for
+# no other reason than to be counted.
+nlines() { printf '%s' "$1" | wc -l | tr -d ' '; }
+
 # A short, permanent, caption-bearing public video: the one handle every engine-contract
 # check below resolves. Chosen for being 19 seconds long — nothing here plays it, but a
 # resolve that accidentally starts a download costs a second rather than a minute.
 MEDIA_ID="jNQXAC9IVRw"
 
 echo "── search envelope ────────────────────────────────────────────────"
+# One live search, four claims — and the parity check further down reuses this same
+# envelope rather than fetching a fifth.
+fetch YT_S  shell/yt-search -j -n 3 -- lofi
+fetch YT_SJ shell/yt-search -J -n 2 -- lofi
 report "search -j envelope" 0 \
-    "$(jq_ok '.query and .count and (.results|length==3)' shell/yt-search -j -n 3 -- lofi)"
+    "$(jq_s '.query and .count and (.results|length==3)' "$YT_S")"
 # The engine names itself in its own envelope. This is what lets a caller route a chosen
 # result back to the matching <engine>-resolve without pattern-matching its URL, so a new
 # engine that forgets the field breaks routing rather than merely looking different.
 report "search -j names its engine" 0 \
-    "$(jq_ok '.status=="ok" and .engine=="yt"' shell/yt-search -j -n 2 -- lofi)"
+    "$(jq_s '.status=="ok" and .engine=="yt"' "$YT_S")"
 report "search -J has raw id" 0 \
-    "$(jq_ok '.results[0]|has("id")' shell/yt-search -J -n 2 -- lofi)"
+    "$(jq_s '.results[0]|has("id")' "$YT_SJ")"
 # Was an open R8 drift (26 lines for -n 3); fixed, so it is a hard check now — a "known"
 # label on a passing behaviour is how a real regression gets waved through later.
-report "search -j is one line" 1 \
-    "$(shell/yt-search -j -n 2 -- lofi | wc -l | tr -d ' ')"
+report "search -j is one line" 1 "$(nlines "$YT_S")"
 
 echo "── resolve envelope: the half that turns a handle into bytes ──────"
+fetch YT_R shell/yt-resolve -j -- "$MEDIA_ID"
 # Every key the PLAYER reads. A new engine that renames one, or omits http_headers, breaks
 # playback in a way no other check here would notice: the search half would still look fine.
 # http_headers is asserted PRESENT rather than non-empty — {} is a legal answer, absent is not.
 report "resolve -j envelope" 0 \
-    "$(jq_ok '.status=="ok" and .engine=="yt" and (.stream_urls|length)>0
+    "$(jq_s '.status=="ok" and .engine=="yt" and (.stream_urls|length)>0
               and has("http_headers") and (.http_headers|type)=="object"
-              and has("title") and has("format") and has("retried")' \
-        shell/yt-resolve -j -- "$MEDIA_ID")"
-report "resolve -j is one line" 1 \
-    "$(shell/yt-resolve -j -- "$MEDIA_ID" | wc -l | tr -d ' ')"
+              and has("title") and has("format") and has("retried")' "$YT_R")"
+report "resolve -j is one line" 1 "$(nlines "$YT_R")"
 # Shape validation lives in the ENGINE now — the player cannot tell a good id from a bad one.
 report "resolve rejects a non-id" 1 "$(rc shell/yt-resolve -j -- "not an id")"
 report "resolve rejects -d"       1 "$(rc shell/yt-resolve -d -- "$MEDIA_ID")"
@@ -174,10 +217,13 @@ report "unknown engine is usage"  1 "$(rc shell/ut-play --engine nope -- "$MEDIA
 report "engine name is validated" 1 "$(rc shell/ut-play --engine ../evil -- "$MEDIA_ID")"
 # A well-formed id that resolves to nothing is a PROPAGATED tool failure (2+), not usage,
 # and it must still say why. This is the semantic B-2 bought by moving the shape check down.
-report "dead id is 2+, not 1"     2 "$(rc shell/ut-play -j -- AAAAAAAAAAA)"
+# One resolve attempt answers both: the exit code and the envelope come off the same run,
+# which is also the only way they are guaranteed to be describing the same failure.
+fetch DEAD shell/ut-play -j -- AAAAAAAAAAA
+DEAD_ST=$FETCH_ST
+report "dead id is 2+, not 1"     2 "$DEAD_ST"
 report "dead id keeps its reason" 0 \
-    "$(jq_ok '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' \
-        shell/ut-play -j -- AAAAAAAAAAA)"
+    "$(jq_s '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' "$DEAD")"
 
 echo "── rejections (1 = usage error) ───────────────────────────────────"
 report "core no args"             1 "$(rc /bin/bash shell/ut-play)"
@@ -217,9 +263,11 @@ report "transcript envelope"      0 \
         shell/yt-resolve --transcript -j -- "$CAPTIONED")"
 report "transcript -J has segments" 0 \
     "$(jq_ok '.segments[0]|has("start") and has("text")' shell/yt-resolve --transcript -J -- "$CAPTIONED")"
+fetch NOCAP shell/yt-resolve --transcript -j -- "$BARE"
+NOCAP_ST=$FETCH_ST
 report "no captions -> error"     0 \
-    "$(jq_ok '.status=="error" and .reason=="no_subtitles_available"' shell/yt-resolve --transcript -j -- "$BARE")"
-report "no captions exit"         1 "$(rc shell/yt-resolve --transcript -j -- "$BARE")"
+    "$(jq_s '.status=="error" and .reason=="no_subtitles_available"' "$NOCAP")"
+report "no captions exit"         1 "$NOCAP_ST"
 
 echo "── the second engine: the same envelope, or the split is a fiction ─"
 # A permanent, single-part music video on the second site. Single-part matters: a handle
@@ -227,22 +275,25 @@ echo "── the second engine: the same envelope, or the split is a fiction ─
 # assertion depend on which part that is.
 BILI_ID="BV1mL411E7Fb"
 
+# The second engine's three envelopes, one call each. `-n 5` because the duration check
+# below needs a page rather than a pair, and a key set does not care how long the list is.
+fetch BILI_S shell/bili-search  -j -n 5 -- 音乐
+fetch BILI_R shell/bili-resolve -j -- "$BILI_ID"
+fetch YT_I   shell/yt-resolve   --info -j -- "$MEDIA_ID"
+fetch BILI_I shell/bili-resolve --info -j -- "$BILI_ID"
+
 # THE check the engine split exists for. Two engines are only interchangeable if a caller
 # cannot tell which one answered, so the assertion is on the KEY SETS THEMSELVES rather
 # than on a list of names written out twice: a field renamed, added or dropped in EITHER
 # engine fails here, including one added to yt-search years from now and forgotten on the
 # other side. Nothing else in this file would notice — each engine's own checks would still
 # pass, and playback would break only for the engine nobody happened to run.
-YT_S=$(shell/yt-search -j -n 2 -- lofi 2>/dev/null)
-BILI_S=$(shell/bili-search -j -n 2 -- 音乐 2>/dev/null)
 report "search envelopes agree" \
     "$(printf '%s' "$YT_S" | jq -Sc 'keys' 2>/dev/null)" \
     "$(printf '%s' "$BILI_S" | jq -Sc 'keys' 2>/dev/null)"
 report "search result keys agree" \
     "$(printf '%s' "$YT_S" | jq -Sc '.results[0]|keys' 2>/dev/null)" \
     "$(printf '%s' "$BILI_S" | jq -Sc '.results[0]|keys' 2>/dev/null)"
-YT_R=$(shell/yt-resolve -j -- "$MEDIA_ID" 2>/dev/null)
-BILI_R=$(shell/bili-resolve -j -- "$BILI_ID" 2>/dev/null)
 report "resolve envelopes agree" \
     "$(printf '%s' "$YT_R" | jq -Sc 'keys' 2>/dev/null)" \
     "$(printf '%s' "$BILI_R" | jq -Sc 'keys' 2>/dev/null)"
@@ -250,20 +301,16 @@ report "resolve envelopes agree" \
 # (AS-BUILT-contract.md §3), and nothing else here would notice a field renamed on one
 # side. The ok/engine assertion is what keeps the key comparison from passing vacuously —
 # two ERROR envelopes agree on their keys too.
-YT_I=$(shell/yt-resolve --info -j -- "$MEDIA_ID" 2>/dev/null)
-BILI_I=$(shell/bili-resolve --info -j -- "$BILI_ID" 2>/dev/null)
 report "info -j is ok and named" 0 \
-    "$(printf '%s' "$YT_I" | jq -e '.status=="ok" and .engine=="yt"' >/dev/null 2>&1; echo $?)"
+    "$(jq_s '.status=="ok" and .engine=="yt"' "$YT_I")"
 report "info envelopes agree" \
     "$(printf '%s' "$YT_I" | jq -Sc 'keys' 2>/dev/null)" \
     "$(printf '%s' "$BILI_I" | jq -Sc 'keys' 2>/dev/null)"
-report "--info -j is one line" 1 \
-    "$(shell/yt-resolve --info -j -- "$MEDIA_ID" | wc -l | tr -d ' ')"
+report "--info -j is one line" 1 "$(nlines "$YT_I")"
 
 report "bili-search names its engine" 0 \
-    "$(jq_ok '.status=="ok" and .engine=="bili"' shell/bili-search -j -n 2 -- 音乐)"
-report "bili-search -j is one line" 1 \
-    "$(shell/bili-search -j -n 2 -- 音乐 | wc -l | tr -d ' ')"
+    "$(jq_s '.status=="ok" and .engine=="bili"' "$BILI_S")"
+report "bili-search -j is one line" 1 "$(nlines "$BILI_S")"
 # The site sends duration as "MM:SS" with unbounded minutes ("222:28"), which every surface
 # above would silently mis-sort and mis-render as a string. It is parsed in the engine, so
 # the assertion is that what leaves the engine is a NUMBER — never the raw string.
@@ -275,10 +322,10 @@ report "bili-search -j is one line" 1 \
 # asserting against the contract rather than for it. What must hold: nothing is a string, and
 # the page is not ALL nulls (which would mean the parser stopped working).
 report "bili duration is seconds" 0 \
-    "$(jq_ok '[.results[].duration]
+    "$(jq_s '[.results[].duration]
                | length>0
                and all(type=="number" or type=="null")
-               and any(type=="number")' shell/bili-search -j -n 5 -- 音乐)"
+               and any(type=="number")' "$BILI_S")"
 # Titles arrive as search-result HTML (<em class="keyword">) and entity-escaped. Markup that
 # survives into a title is counted by the width layer, which reflows every row wrongly.
 report "bili titles carry no markup" 0 \
@@ -289,7 +336,7 @@ report "bili-resolve rejects a non-id" 1 "$(rc shell/bili-resolve -j -- "not an 
 # these headers answers 206 (measured). An empty http_headers here is a silently unplayable
 # engine, which is exactly the contract hole the key was added to close.
 report "bili resolve sends a Referer" 0 \
-    "$(jq_ok '.http_headers|has("Referer")' shell/bili-resolve -j -- "$BILI_ID")"
+    "$(jq_s '.http_headers|has("Referer")' "$BILI_R")"
 # Capability differs per engine and is stated, not faked: this site's videos carry no
 # caption track, so the verb is absent rather than always answering "none".
 report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcript -- "$BILI_ID")"
