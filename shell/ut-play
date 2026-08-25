@@ -87,6 +87,9 @@ Usage (everything after -- is the handle, so it may start with '-'):
   ut-play --set-volume N [--id ID] [-j]                   live volume on a detached player
   ut-play --pause | --resume [--id ID] [-j]               pause/resume a detached player
   ut-play --seek ±N | --seek-to N [--id ID] [-j]          seek (relative needs the sign)
+  ut-play -d --queue - [-j]                               play a QUEUE: items on stdin
+  ut-play --enqueue - [--id ID] [-j]                      append to a running queue
+  ut-play --next [--id ID] [-j]                           skip to the next queued track
   ut-play (no handle, no action)                          usage error; use uting to browse
 
 Not here, by design: metadata, captions and stream URLs are extraction, so they are the
@@ -109,15 +112,24 @@ Options:
               envelope reports where it actually landed.
   -l          Prose output (default)
   -j          JSON output: one-line status JSON for play/lifecycle
+  --queue -   Start a detached player on a QUEUE read from stdin, which is any of: a JSON
+              array of items, a `ut-playlist --show -j` envelope, or a search envelope. An
+              item is {engine, url, title?, duration?} — engine PER ITEM, so one queue can
+              mix sources; --engine is only the fallback for an item without one. The first
+              item starts playing and the rest wait. Each is resolved when it is reached,
+              never up front: a stream URL expires (hours), so a queue resolved at enqueue
+              time would 403 halfway down.
+  --enqueue - Append the same shapes to a RUNNING player's queue.
+  --next      Drop the current track and start the next one. Exit 4 when there is none.
   -d          --detach: background playback; manage with --status/--stop/--set-volume/
-              --pause/--resume/--seek
+              --pause/--resume/--seek/--enqueue/--next
   --color M   auto|always|never (default: auto). No -c short form.
   -h          This help
   -V          Print the suite version (answered before any dependency check)
 
 Long-only flags: --engine --detach --status --stop --set-volume --pause --resume --seek
-                 --seek-to --id --all --json --list --color --volume
-                 (--help and --version also have short forms: -h, -V)
+                 --seek-to --queue --enqueue --next --id --all --json --list --color
+                 --volume  (--help and --version also have short forms: -h, -V)
 
 Output contracts (full schemas: AS-BUILT-contract.md §3):
   play -j   {status, url, mode, exit_code, reason, retried}
@@ -135,6 +147,11 @@ Output contracts (full schemas: AS-BUILT-contract.md §3):
   --resume  as --pause
   --seek    {status:"ok", id, position:<seconds>}  position is READ BACK from mpv after the
   --seek-to seek, never computed — it is clamped at the ends and refused on a live stream
+  --enqueue {status:"ok", id, added:<n>, queue:{pos,len,next}}
+  --next    {status:"ok", id, queue:{pos,len,next}} | {status:"error", reason:"queue_empty"}
+            queue is read back off the player's own queue file, never predicted. Every
+            detached player has one (a lone handle is a queue of one), and --status carries
+            the same object per player; `next` is null on the last track.
 
 Exit codes: 0 ok · 1 usage/validation · 2+ propagated engine/mpv failure · 4 lifecycle
             call did not take effect (no such player / ambiguous / IPC failure)
@@ -143,7 +160,7 @@ Playback keys (mpv, during a blocking 'ut-play -- <handle>' playback):
   _  toggle video track on/off        q  stop playback and exit
 
 Dependencies: mpv (playback) + jq; nc (every socket verb: --set-volume, --pause, --resume,
-              --seek, --seek-to); an <engine>-resolve on PATH or next
+              --seek, --seek-to — the queue verbs need only jq); an <engine>-resolve on PATH or next
               to this file. yt-dlp / curl / cookies are the ENGINE's business, not the
               player's — see 'yt-resolve -h' for those.
 
@@ -262,6 +279,7 @@ engine_resolve_bin() {
 RESOLVED_URLS=()          # [0] = what mpv opens; [1] = its separate audio track, if any
 RESOLVED_HEADER_ARGS=()   # ready-made --http-header-fields-append=... mpv flags
 RESOLVED_TITLE=""
+RESOLVED_HANDLE=""        # what was asked for: the queue moves, so the record must follow
 RESOLVED_FORMAT=""        # the engine's format string: recorded verbatim, never read
 RESOLVED_REASON=""        # on failure, the engine's own reason enum member
 RESOLVED_RC=0
@@ -275,6 +293,7 @@ resolve_media() {
     local handle=$1 mode=$2
     engine_resolve_bin
 
+    RESOLVED_HANDLE="$handle"
     RESOLVED_URLS=()
     RESOLVED_HEADER_ARGS=()
     RESOLVED_TITLE=""
@@ -353,10 +372,14 @@ patch_player_meta() {
 
     tmp="$sf.tmp.$$"
     lock_player_state "$id" || true
-    if jq --arg t "$RESOLVED_TITLE" --arg f "$RESOLVED_FORMAT" --arg p "$$" \
+    # `url` is patched too, not only backfilled: a player consuming a queue moves from track
+    # to track, and a record still naming the first one would make --status describe
+    # something that stopped playing ten minutes ago.
+    if jq --arg t "$RESOLVED_TITLE" --arg f "$RESOLVED_FORMAT" --arg u "$RESOLVED_HANDLE" --arg p "$$" \
         'if ((.pid | tostring) == $p)
          then .title = (if $t == "" then null else $t end)
               | .format = (if $f == "" then null else $f end)
+              | .url = (if $u == "" then .url else $u end)
          else empty end' \
         "$sf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
         mv -f "$tmp" "$sf"
@@ -456,7 +479,29 @@ run_mpv() {
     # its log — there the filter buys nothing and costs correctness: process substitution is
     # not waited on, so play_url_json (which reads the temp file the instant mpv exits) could
     # miss a late-flushed error line and classify a real 403 as `unknown`.
-    if [[ "$OUTPUT_MODE" == "json" || -n "${YT_DETACHED:-}" ]]; then
+    if [[ -n "${YT_DETACHED:-}" ]]; then
+        # BACKGROUND + `wait`, never foreground, and this is a bash 3.2 fact rather than a
+        # style choice: 3.2 does not dispatch a trap while a FOREGROUND child runs. Measured
+        # on 3.2.57 — a foreground `sleep 5` sent SIGUSR1 ran its trap five seconds later
+        # and `sleep` still returned 0; `cmd & wait "$!"` entered the trap inside a second
+        # and `wait` returned 158. So a --next delivered to a child playing mpv in the
+        # foreground would mean "skip a track once this one is over", which is not a skip.
+        # MPV_PID is what the signal handler kills; `wait` yields mpv's own status because
+        # this branch execs nothing and substitutes no process.
+        # A signal that landed while the ENGINE call was running would otherwise start the
+        # very track it was meant to skip: the handler had no mpv to kill, and bash 3.2 only
+        # ran the trap once that foreground call returned. Check before spending a play.
+        if [[ -n "$CHILD_REASON" ]]; then
+            return 0
+        fi
+        local wrc=0
+        "${mpv_cmd[@]}" "$@" ${detached_opts[@]+"${detached_opts[@]}"} "${media[@]}" &
+        MPV_PID=$!
+        wait "$MPV_PID" || wrc=$?
+        MPV_PID=""
+        return "$wrc"
+    fi
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
         "${mpv_cmd[@]}" "$@" ${detached_opts[@]+"${detached_opts[@]}"} "${media[@]}"
     else
         "${mpv_cmd[@]}" "$@" "${media[@]}" 2> >(grep --line-buffered -vE 'CoreText note|\.LastResort|fontselect' >&2)
@@ -663,12 +708,31 @@ group_alive() {
 # briefly for graceful exit, then SIGKILL any survivor. Negative PID targets the group.
 stop_group() {
     local pgid=$1
+    # The LEADER is told by SIGTERM and everything else in the group by SIGINT, and that
+    # asymmetry is forced: bash starts an ASYNCHRONOUS command with SIGINT set to SIG_IGN,
+    # and a signal ignored on entry can never be trapped ("Signals ignored upon entry to the
+    # shell cannot be trapped or reset"). The detached child IS such a command, so its
+    # `trap … INT` is silently a no-op — measured: a group INT killed mpv with 130 while the
+    # child sailed on and started the NEXT queued track, and only the KILL escalation three
+    # seconds later stopped it. SIGTERM is not ignored, so it reaches the child's trap, which
+    # is what makes --stop stop a QUEUE rather than one track of it.
+    kill -TERM "$pgid" 2>/dev/null || true
     kill -INT -"$pgid" 2>/dev/null || true
 
+    # Say it AGAIN on every tick, because the group is not a fixed set. The child spends the
+    # gap between two tracks inside an ENGINE call, and that call spawns fresh processes as it
+    # goes (yt-dlp, then its anonymous retry, then curl for the probe): one started a
+    # millisecond after the first signal never saw it, and while it runs the child's own TERM
+    # trap cannot run either — bash 3.2 does not dispatch a trap while a foreground command
+    # is running. One late straggler is therefore enough to make a --stop wait out the whole
+    # escalation, and the repeat costs nothing: both signals are idempotent here (the child's
+    # handler is, since `stopped` is final in child_signal).
     local i
     for ((i = 0; i < 15; i++)); do
         group_alive "$pgid" || return 0
         sleep 0.2
+        kill -TERM "$pgid" 2>/dev/null || true
+        kill -INT -"$pgid" 2>/dev/null || true
     done
 
     kill -KILL -"$pgid" 2>/dev/null || true
@@ -783,6 +847,103 @@ read_player_live() {
 # record, not listening history (a ROADMAP.md §0 non-goal), and that distinction is enforced
 # here rather than promised in prose. A player killed by --stop dies with its process group
 # and never reaches this line, which is the same rule from the other direction.
+# ------------------------------------------------------------------------------
+# The detached child: one player, one queue
+# ------------------------------------------------------------------------------
+# detach_play re-execs this script with YT_PLAYER_ID set; this is what that re-exec runs. A
+# player plays a QUEUE, and a lone handle is a queue of one, so there is one loop rather than
+# two paths.
+#
+# CHILD_REASON is the second rule the queue turns on (the first is run_mpv's background
+# `wait`): THE REASON A TRACK ENDED COMES FROM THIS VARIABLE, never from mpv's exit code.
+# Measured on mpv 0.41: a normal finish is 0 and an interrupted one is 4 — man mpv,
+# "4 = Quit due to a signal" — one code covering "--next killed it", "--stop killed it" and
+# "the user killed it" alike. The handler sets the reason BEFORE it kills mpv, so the epitaph
+# describes what happened instead of guessing. A sentinel FILE was considered and rejected:
+# that is another lock, and it would let the death record lie in a new way.
+CHILD_REASON=""
+MPV_PID=""
+child_signal() {
+    # STOPPED IS FINAL. Both signals can be pending at once — bash 3.2 defers a trap while a
+    # foreground command runs, and the engine call between two tracks IS such a command — and
+    # the order the pending handlers then run in is not ours to pick. Letting a late `next`
+    # overwrite `stopped` restarts the loop on a player that was told to die, and it plays on
+    # until stop_group's KILL escalation: measured at 3.5s (3/3) against 0.37s once this line
+    # existed, for `--next; --next mid-resolve; --stop`.
+    [[ "$CHILD_REASON" == "stopped" ]] && return 0
+    CHILD_REASON=$1
+    if [[ -n "$MPV_PID" ]]; then
+        kill "$MPV_PID" 2>/dev/null || true
+    fi
+    return 0
+}
+
+detached_child_loop() {
+    local handle=$1 rc=0 played=0
+    # SIGUSR1 is --next's channel; TERM/INT is --stop's (stop_group signals the whole process
+    # group, so mpv gets it too and this trap only decides what the death record says).
+    # SIGUSR1 is --next's channel; SIGTERM is --stop's. INT is deliberately NOT here: this
+    # process is an async child, so it entered with SIGINT ignored and could not trap it if
+    # it wanted to (see stop_group, which sends TERM to this pid for exactly that reason).
+    trap 'child_signal next' USR1
+    trap 'child_signal stopped' TERM
+
+    if [[ ! -f "$(player_queue "${YT_PLAYER_ID:-}")" ]]; then
+        # No queue file: an older parent, or someone running this child by hand. Play the
+        # handle once, exactly as this path did before queues existed.
+        rc=0
+        play_url_directly "$handle" || rc=$?
+        detached_epitaph "$rc"
+        exit "$rc"
+    fi
+
+    while :; do
+        queue_current "$YT_PLAYER_ID" || break
+        played=$QUEUE_POS
+        # A queue may mix engines (a playlist can), so the engine is per ITEM and the
+        # resolved-binary cache has to be dropped with it.
+        ENGINE=$QUEUE_ENGINE
+        ENGINE_RESOLVE=""
+        CHILD_REASON=""
+        rc=0
+        play_url_directly "$QUEUE_URL" || rc=$?
+        case "$CHILD_REASON" in
+        stopped)
+            # --stop already took the process group down. Leave WITHOUT an epitaph, which is
+            # what makes a stopped player produce no tombstone (record_player_death) — that
+            # rule predates queues and is not this loop's to change.
+            rc=0
+            break
+            ;;
+        next)
+            # The parent moved pos before it signalled, so the top of the loop already reads
+            # the track it chose. Nothing to advance, and a skip is not a failure.
+            rc=0
+            continue
+            ;;
+        esac
+        # A JIT resolve turns an N-item queue into N chances for an upstream to be having a
+        # bad minute, so one failure ADVANCES the queue instead of killing the player —
+        # otherwise yt-dlp's availability is welded to the player's lifetime. No retry
+        # either: a retry is the gap between tracks, doubled.
+        #
+        # ADVANCE FIRST, then decide whether the track needs a tombstone. When the queue is
+        # exhausted the PLAYER is what died, and the parent writes that record from the
+        # epitaph in the log (record_player_death); writing one here as well reports a single
+        # failure twice — measured, before this order: a bad handle produced both <id> and
+        # <id>-q0 in failed[].
+        queue_advance_from "$YT_PLAYER_ID" "$played" || break
+        if ((rc != 0)); then
+            queue_note_failure "$YT_PLAYER_ID" "$played" "$QUEUE_URL" "$rc"
+        fi
+    done
+
+    # The exit status is the LAST track's, which is also the whole player's when the queue
+    # held one item — the pre-queue behaviour, unchanged.
+    detached_epitaph "$rc"
+    exit "$rc"
+}
+
 detached_epitaph() {
     local rc=$1 reason ended_at
     [[ -n "${YT_DETACHED_LOG:-}" ]] || return 0
@@ -827,6 +988,232 @@ unlock_player_state() {
     rmdir "$(player_lock_dir "$1")" 2>/dev/null || true
 }
 
+# ------------------------------------------------------------------------------
+# The queue: a detached player's own runtime state
+# ------------------------------------------------------------------------------
+# A queue is a playlist BEING CONSUMED, so it belongs to the player and dies with it — a
+# queue that survived a restart would just be a playlist, and playlists belong to
+# ut-playlist (docs/ARCHITECTURE.md §9.4/§9.5). It lives beside the socket and the log
+# rather than under players/ because that directory's *.json glob IS the player-record
+# namespace: reap_dead_players walks it, and would read <id>.queue.json as a player whose
+# record it could not parse — and then delete it.
+#
+# EVERY detached launch writes one, a lone handle included: a detached player is then always
+# "a queue being consumed", so --enqueue and --next need no separate does-this-player-have-a-
+# queue path and --status never has to answer null.
+player_queue() { echo "$STATE_DIR/queue-$1.json"; }
+
+# Everything a player leaves behind EXCEPT its record, removed in one place because three
+# call sites remove it (the reaper and both --stop paths) and a file added to two of them is
+# a leak in the third. The lock dirs are here too: a holder killed mid-write leaves one, and
+# a stale lockdir costs every later caller a five-second spin.
+rm_player_files() {
+    rm -f "$(player_sock "$1")" "$(player_log "$1")" "$(player_queue "$1")" 2>/dev/null || true
+    rmdir "$(queue_lock_dir "$1")" "$(player_lock_dir "$1")" 2>/dev/null || true
+    return 0
+}
+queue_lock_dir() { echo "$STATE_DIR/lock-queue-$1"; }
+
+# The queue gets its OWN lock, deliberately not lock_player_state's: the player record and
+# the queue are two entities whose update rates differ by an order of magnitude (one title
+# backfill per track against one advance per track plus every --enqueue), and one lock for
+# both would make each wait on the other's clock.
+#
+# HARD RULE: NO PATH EVER HOLDS BOTH LOCKS. Take one, write, release, then take the other —
+# never nested. One lock can only stall; two can deadlock, and under these bounded spins the
+# symptom would not even be a hang: it would be two five-second pauses followed by a SILENT
+# unlocked write, which is worse, because nobody would notice.
+lock_queue_state() {
+    local dir i
+    dir=$(queue_lock_dir "$1")
+    for ((i = 0; i < 50; i++)); do
+        mkdir "$dir" 2>/dev/null && return 0
+        sleep 0.1
+    done
+    return 1
+}
+
+unlock_queue_state() {
+    rmdir "$(queue_lock_dir "$1")" 2>/dev/null || true
+}
+
+# stdin -> QUEUE_ITEMS_JSON, an array of {engine,url,title,duration}. THREE shapes, the same
+# three `ut-playlist --add` takes and for the same reason: a search result does not carry
+# `engine` — that field is on the ENVELOPE — so only taking the whole envelope can label an
+# item with the source it came from. A bare array is the hand-written case, and an object
+# with .items is what `ut-playlist --show -j` emits, which is what makes
+# `ut-playlist --show jazz -j | ut-play -d --queue -` mean "play that playlist" without the
+# player ever learning that playlists exist.
+#
+# Every rejection here is a USAGE error (1) in the parent, so a malformed queue never
+# reaches a player. $1 is the flag being served, so the message names the caller's own verb.
+QUEUE_ITEMS_JSON="[]"
+read_queue_items() {
+    local flag=$1 raw
+    raw=$(cat)
+    [[ -n "${raw//[[:space:]]/}" ]] ||
+        die "$flag reads JSON on stdin (an item array, a --show envelope, or a search envelope); got nothing"
+    QUEUE_ITEMS_JSON=$(printf '%s' "$raw" | jq -c --arg fallback "$ENGINE" '
+        (if type == "array" then {items: ., engine: null}
+         elif type == "object" and (.items | type) == "array" then {items: .items, engine: .engine}
+         elif type == "object" and (.results | type) == "array" then {items: .results, engine: .engine}
+         else null end)
+        | if . == null then error("shape") else . end
+        | (.engine // $fallback) as $env
+        | [ .items[]
+            | {engine: (.engine // $env // ""),
+               url: (.url // ""),
+               title: (.title // null),
+               duration: (.duration // null)} ]' 2>/dev/null) ||
+        die "$flag: stdin is not a JSON item array, a --show envelope or a search envelope"
+    printf '%s' "$QUEUE_ITEMS_JSON" | jq -e 'length > 0' >/dev/null 2>&1 ||
+        die "$flag: no items on stdin"
+    # The url is checked the way a handle on argv is checked and no further (a whitespace-free
+    # non-empty string): which ids are good is ENGINE knowledge, and the player not holding it
+    # is the point of the split. The engine NAME is checked here because it is pasted into a
+    # command name later, in a child where a die would only reach a log.
+    printf '%s' "$QUEUE_ITEMS_JSON" |
+        jq -e 'all(.[]; (.url | type == "string" and test("^[^[:space:]]+$"))
+                        and (.engine | type == "string" and test("^[a-z0-9][a-z0-9_-]*$")))' >/dev/null 2>&1 ||
+        die "$flag: every item needs a whitespace-free url and a valid engine name"
+    return 0
+}
+
+# A fresh queue at pos 0. detach_play writes this BEFORE it launches the child, so the child
+# can never reach the end of its first track and find no queue to advance.
+queue_write_new() {
+    local id=$1 items=$2 qf tmp
+    qf=$(player_queue "$id")
+    tmp="$qf.tmp.$$"
+    if jq -nc --argjson items "$items" '{schema: 1, pos: 0, items: $items}' >"$tmp" 2>/dev/null &&
+        mv -f "$tmp" "$qf"; then
+        return 0
+    fi
+    rm -f "$tmp" 2>/dev/null || true
+    return 1
+}
+
+# Append (--enqueue). Read-modify-write, so it runs under the queue lock — the other writer
+# is the player's own child advancing the position.
+queue_append() {
+    local id=$1 items=$2 qf tmp rc=0
+    qf=$(player_queue "$id")
+    [[ -f "$qf" ]] || return 1
+    tmp="$qf.tmp.$$"
+    lock_queue_state "$id" || true
+    if jq -c --argjson add "$items" '.items = (.items + $add)' "$qf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
+        mv -f "$tmp" "$qf" || rc=1
+    else
+        rm -f "$tmp" 2>/dev/null || true
+        rc=1
+    fi
+    unlock_queue_state "$id"
+    return "$rc"
+}
+
+# The CHILD's advance, and the one reason it is a compare-and-swap rather than `pos += 1`:
+# --next advances pos in the PARENT — so its envelope reports a position it read rather than
+# one it predicted — and then signals the child. If the track ends in that same instant, a
+# blind increment here would skip a second item. Advancing only while pos is still the
+# position we played makes the two orders indistinguishable: whoever moves it first wins and
+# the other is a no-op. Returns 1 when there is nothing left to play.
+queue_advance_from() {
+    local id=$1 played=$2 qf tmp rc=0
+    qf=$(player_queue "$id")
+    [[ -f "$qf" ]] || return 1
+    tmp="$qf.tmp.$$"
+    lock_queue_state "$id" || true
+    if jq -c --argjson p "$played" 'if .pos == $p then .pos = (.pos + 1) else . end' "$qf" >"$tmp" 2>/dev/null &&
+        [[ -s "$tmp" ]]; then
+        mv -f "$tmp" "$qf" || rc=1
+    else
+        rm -f "$tmp" 2>/dev/null || true
+        rc=1
+    fi
+    unlock_queue_state "$id"
+    ((rc == 0)) || return 1
+    jq -e '.pos < (.items | length)' "$qf" >/dev/null 2>&1 || return 1
+    return 0
+}
+
+# --next's advance, in the PARENT: move to the next item, or report that there is none.
+# Returns 1 when pos already names the last item (or there is no queue at all) — the caller
+# turns that into exit 4 with reason queue_empty, never into a skip that did nothing.
+queue_bump() {
+    local id=$1 qf tmp rc=0
+    qf=$(player_queue "$id")
+    [[ -f "$qf" ]] || return 1
+    lock_queue_state "$id" || true
+    if ! jq -e '(.pos + 1) < (.items | length)' "$qf" >/dev/null 2>&1; then
+        unlock_queue_state "$id"
+        return 1
+    fi
+    tmp="$qf.tmp.$$"
+    if jq -c '.pos = (.pos + 1)' "$qf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
+        mv -f "$tmp" "$qf" || rc=1
+    else
+        rm -f "$tmp" 2>/dev/null || true
+        rc=1
+    fi
+    unlock_queue_state "$id"
+    return "$rc"
+}
+
+# What the CHILD plays next: the item at the current pos. Out-params, not stdout, so a
+# multi-field answer needs no parsing and no subshell (the discipline resolve_media uses).
+# Returns 1 when the queue is exhausted or unreadable, which is the loop's exit condition.
+QUEUE_POS=0
+QUEUE_URL=""
+QUEUE_ENGINE=""
+queue_current() {
+    local id=$1 qf line
+    qf=$(player_queue "$id")
+    [[ -f "$qf" ]] || return 1
+    line=$(jq -r '.items[.pos] as $i | if $i == null then empty else [(.pos|tostring), $i.engine, $i.url] | join("\u001f") end'         "$qf" 2>/dev/null) || return 1
+    [[ -n "$line" ]] || return 1
+    IFS=$'\037' read -r QUEUE_POS QUEUE_ENGINE QUEUE_URL <<<"$line"
+    [[ -n "$QUEUE_URL" ]] || return 1
+    return 0
+}
+
+# {pos, len, next} — the queue as the --status record and the queue verbs' envelopes report
+# it. `next` is the item AFTER pos, or null at the end: a caller asking what is coming gets
+# an answer or an honest null, never a guess. Read without the lock on purpose: a reader
+# sees either the file before an mv or the file after it, never a half-written one.
+QUEUE_JSON=null
+queue_snapshot() {
+    local id=$1 qf
+    QUEUE_JSON=null
+    qf=$(player_queue "$id")
+    [[ -f "$qf" ]] || return 0
+    QUEUE_JSON=$(jq -c '(.items[(.pos + 1)] // null) as $n
+                        | {pos: .pos, len: (.items | length),
+                           next: (if $n == null then null else {title: $n.title, url: $n.url, engine: $n.engine} end)}'         "$qf" 2>/dev/null) || QUEUE_JSON=null
+    [[ -n "$QUEUE_JSON" ]] || QUEUE_JSON=null
+    return 0
+}
+
+# A queue item that failed while the player plays on. The player's own death is recorded by
+# the PARENT from the epitaph in the log (record_player_death); this is the same tombstone
+# for a TRACK rather than a process, so a caller reading failed[] sees the track that did not
+# play instead of a silent gap. Keyed <id>-q<pos>, which cannot collide with a player id
+# (new_player_id mints six mktemp characters, no dash) and keeps prune_dead_players' rule
+# that the file name is the record's own id.
+queue_note_failure() {
+    local id=$1 pos=$2 url=$3 rc=$4 reason dead ended_at rec
+    dead="$PLAYERS_DIR/dead"
+    [[ -d "$dead" ]] || mkdir -m 700 "$dead" 2>/dev/null || return 0
+    reason=$(classify_playback_error "$(tail -c 4000 "${YT_DETACHED_LOG:-/dev/null}" 2>/dev/null)" "$rc")
+    ended_at=$(date -u +%FT%TZ 2>/dev/null || echo unknown)
+    rec="$dead/$id-q$pos.json"
+    jq -nc --arg id "$id-q$pos" --arg url "$url" --arg mode "$PLAYBACK_MODE"         --arg started_at "$ended_at" --arg ended_at "$ended_at"         --argjson exit_code "$rc" --arg reason "$reason"         '{id: $id, url: $url, mode: $mode, started_at: $started_at, ended_at: $ended_at,
+          exit_code: $exit_code, reason: $reason}' >"$rec.tmp.$$" 2>/dev/null &&
+        mv -f "$rec.tmp.$$" "$rec" 2>/dev/null ||
+        rm -f "$rec.tmp.$$" 2>/dev/null || true
+    prune_dead_players
+    return 0
+}
+
 # Mint a fresh, collision-free player id by atomically creating a reservation file
 # with mktemp; the id is its basename. Done BEFORE launch so the socket path is
 # known up front (the child's pid isn't available until $! after launch) and so the
@@ -867,6 +1254,16 @@ detach_play() {
     log=$(player_log "$id")
     rm -f "$sock" 2>/dev/null || true
 
+    # The queue is written BEFORE the launch, so the child cannot finish its first track and
+    # find nothing to advance. A launch without --queue still gets one, holding exactly the
+    # handle being played: a detached player is always a queue being consumed, which is what
+    # lets --enqueue and --next address any of them without a special case.
+    if [[ "$QUEUE_ITEMS_JSON" == "[]" ]]; then
+        QUEUE_ITEMS_JSON=$(jq -nc --arg e "$ENGINE" --arg u "$url" \
+            '[{engine: $e, url: $u, title: null, duration: null}]')
+    fi
+    queue_write_new "$id" "$QUEUE_ITEMS_JSON" || die "failed to write the queue for $url"
+
     # Launch the child in its OWN process group so the whole playback (incl. any
     # fallback mpv) can be stopped as a unit later (see stop_group). Enabling monitor
     # mode (set -m) makes a backgrounded job a process-group leader whose pgid == its
@@ -906,11 +1303,13 @@ detach_play() {
         --argjson volume "$volume_json" \
         '{id: $id, pid: $pid, url: $url, mode: $mode, format: null, started_at: $started_at, log: $log, sock: $sock, title: null, volume: $volume}' >"$sf.tmp.$pid"; then
         rm -f "$sf.tmp.$pid" "$PLAYERS_DIR/$id" 2>/dev/null || true
+        rm_player_files "$id"
         stop_group "$pid"
         die "failed to write player state for $url"
     fi
     if ! mv -f "$sf.tmp.$pid" "$sf"; then
         rm -f "$sf.tmp.$pid" "$PLAYERS_DIR/$id" 2>/dev/null || true
+        rm_player_files "$id"
         stop_group "$pid"
         die "failed to persist player state for $url"
     fi
@@ -960,7 +1359,7 @@ reap_dead_players() {
             # and the log still exist, and a failure that is not captured here is gone.
             [[ -n "$id" ]] && record_player_death "$id" "$f"
             rm -f "$f" 2>/dev/null || true
-            [[ -n "$id" ]] && rm -f "$(player_sock "$id")" "$(player_log "$id")" 2>/dev/null || true
+            [[ -n "$id" ]] && rm_player_files "$id"
         fi
     done
 }
@@ -1107,14 +1506,18 @@ do_status() {
             local i parts=()
             for ((i = 0; i < n; i++)); do
                 read_player_live "$(player_sock "${LIVE_PLAYER_IDS[$i]}")"
+                # The queue comes off disk rather than the socket: it is the PLAYER's state,
+                # not mpv's — mpv is told one URL at a time and never learns there is a list.
+                queue_snapshot "${LIVE_PLAYER_IDS[$i]}"
                 parts+=("$(jq -c \
                     --argjson live "${LP_VOLUME:-null}" \
                     --argjson paused "${LP_PAUSED:-null}" \
                     --argjson position "${LP_POSITION:-null}" \
                     --argjson duration "${LP_DURATION:-null}" \
+                    --argjson queue "$QUEUE_JSON" \
                     '{id, pid, url, mode, volume: ($live // .volume),
                       paused: $paused, position: $position, duration: $duration,
-                      title, started_at}' \
+                      title, started_at, queue: $queue}' \
                     "${LIVE_PLAYER_FILES[$i]}")")
             done
             # -sc: one line, like the empty branch below and every other envelope. The
@@ -1127,7 +1530,7 @@ do_status() {
         fi
     else
         if ((${#LIVE_PLAYER_FILES[@]})); then
-            local f id pid mode started_at url title volume vol_suffix pause_suffix
+            local f id pid mode started_at url title volume vol_suffix pause_suffix queue_suffix
             for f in "${LIVE_PLAYER_FILES[@]}"; do
                 vol_suffix=""
                 pause_suffix=""
@@ -1147,6 +1550,12 @@ do_status() {
                 # it went quiet. The position pair stays JSON-only — the human who wants a
                 # playhead has `uting`, which draws one, and this line is already long.
                 [[ "$LP_PAUSED" == "true" ]] && pause_suffix=", paused"
+                # Only a queue of MORE THAN ONE earns a word here: every detached player has
+                # a queue now, and printing "track 1/1" on every line would be noise.
+                queue_snapshot "$id"
+                queue_suffix=$(printf '%s' "$QUEUE_JSON" |
+                    jq -r 'if . != null and .len > 1 then ", track \(.pos + 1)/\(.len)" else "" end' 2>/dev/null) || queue_suffix=""
+                vol_suffix="$vol_suffix$queue_suffix"
                 if [[ -n "$title" ]]; then
                     printf "playing (id %s, pid %s, mode %s%s%s, since %s): %s\n  %s\n" \
                         "$id" "$pid" "$mode" "$vol_suffix" "$pause_suffix" "$started_at" "$title" "$url"
@@ -1184,7 +1593,7 @@ do_stop() {
         for ((i = 0; i < n; i++)); do
             stop_group "${LIVE_PLAYER_PIDS[$i]}"
             rm -f "${LIVE_PLAYER_FILES[$i]}" 2>/dev/null || true
-            rm -f "$(player_sock "${LIVE_PLAYER_IDS[$i]}")" "$(player_log "${LIVE_PLAYER_IDS[$i]}")" 2>/dev/null || true
+            rm_player_files "${LIVE_PLAYER_IDS[$i]}"
         done
         if [[ "$OUTPUT_MODE" == "json" ]]; then
             jq -nc --argjson stopped "$any" '{status: "stopped", scope: "all", stopped: $stopped}'
@@ -1221,7 +1630,7 @@ do_stop() {
         any=true
     fi
     rm -f "$sf" 2>/dev/null || true
-    rm -f "$(player_sock "$id")" "$(player_log "$id")" 2>/dev/null || true
+    rm_player_files "$id"
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         jq -nc --arg id "$id" --argjson stopped "$any" '{status: "stopped", id: $id, stopped: $stopped}'
@@ -1388,6 +1797,67 @@ do_playback_verb() {
     exit 0
 }
 
+# Append to a running player's queue. The items were parsed and validated in the parent
+# before we got here, so everything left to fail is the store itself.
+#
+# It shares require_live_target with the socket verbs, and therefore their exit taxonomy —
+# no target or an ambiguous one is 4, because the call was well formed and did not take
+# effect. What it does NOT share is the socket: a queue is the player's own state on disk,
+# and mpv is never told there is a list.
+do_enqueue() {
+    local want_id=$1
+    require_live_target "$want_id"
+
+    local id added
+    id=$RESOLVED_ID
+    if ! queue_append "$id" "$QUEUE_ITEMS_JSON"; then
+        [[ "$OUTPUT_MODE" == "json" ]] && echo '{"status":"error","reason":"queue_failed"}' || echo "failed to enqueue" >&2
+        exit 4
+    fi
+    added=$(printf '%s' "$QUEUE_ITEMS_JSON" | jq 'length' 2>/dev/null) || added=0
+    queue_snapshot "$id"
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --arg id "$id" --argjson added "$added" --argjson queue "$QUEUE_JSON" \
+            '{status: "ok", id: $id, added: $added, queue: $queue}'
+    else
+        printf 'queued %s (player %s)\n' "$added" "$id"
+    fi
+    exit 0
+}
+
+# Skip to the next track. The POSITION MOVES HERE, in the parent, and only then is the child
+# signalled — so this envelope reports a queue it read rather than one it predicted, the same
+# rule the socket verbs follow for paused/position. The child's own advance is a
+# compare-and-swap against the position it played (queue_advance_from), which is what makes
+# the two orders safe when a track ends in the same instant.
+do_next() {
+    local want_id=$1
+    require_live_target "$want_id"
+
+    local id pid
+    id=$RESOLVED_ID
+    if ! queue_bump "$id"; then
+        # Nothing after the current track — a well-formed call that did not take effect (4),
+        # never a usage error and never a silent no-op reported as success.
+        [[ "$OUTPUT_MODE" == "json" ]] && echo '{"status":"error","reason":"queue_empty"}' || echo "nothing queued after the current track" >&2
+        exit 4
+    fi
+    # SIGUSR1 goes to the CHILD's pid, never to the process group: USR1's default
+    # disposition is to terminate, so a group-wide signal would kill mpv out from under the
+    # loop it is supposed to advance. If the child is gone the position still moved, which
+    # is why the envelope reports what is on disk rather than "skipped".
+    pid=$(jq -r '.pid // empty' "$(player_state "$id")" 2>/dev/null) || pid=""
+    [[ -n "$pid" ]] && kill -USR1 "$pid" 2>/dev/null
+    queue_snapshot "$id"
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --arg id "$id" --argjson queue "$QUEUE_JSON" '{status: "ok", id: $id, queue: $queue}'
+    else
+        printf 'skipped to track %s (player %s)\n' \
+            "$(printf '%s' "$QUEUE_JSON" | jq -r '(.pos + 1) | tostring' 2>/dev/null)" "$id"
+    fi
+    exit 0
+}
+
 # ==============================================================================
 # 5. CLI OPTIONS PARSING & VALIDATION
 # ==============================================================================
@@ -1401,11 +1871,13 @@ OUTPUT_MODE="list"
 # Playback lifecycle / structured-output state.
 DETACH=0
 ENGINE="$UT_DEFAULT_ENGINE"  # which <engine>-resolve turns a handle into bytes
-ACTION=""            # "" (normal) | status | stop | set-volume | pause | resume | seek | seek-to
+ACTION=""            # "" (normal) | status | stop | set-volume | pause | resume | seek |
+                     # seek-to | enqueue | next
 ACTION_FLAG=""       # the flag that set ACTION, for conflict messages
 PLAYBACK_RETRIED=0   # relayed from the resolve envelope; surfaced in the playback JSON
 SET_VOLUME_ARG=""    # value from --set-volume N
 SEEK_ARG=""          # value from --seek ±N / --seek-to N
+QUEUE_INPUT=""       # value from --queue / --enqueue: always "-", i.e. stdin
 TARGET_ID=""         # value from --id (target a specific detached player)
 STOP_ALL=0           # --stop --all
 RESOLVED_ID=""       # resolve_target out-param: the resolved player id
@@ -1551,6 +2023,30 @@ while (($#)); do
         SEEK_ARG="${1#*=}"
         shift
         ;;
+    --queue)
+        [[ $# -ge 2 ]] || die "--queue requires '-' (the items are read from stdin)"
+        QUEUE_INPUT="$2"
+        shift 2
+        ;;
+    --queue=*)
+        QUEUE_INPUT="${1#*=}"
+        shift
+        ;;
+    --enqueue)
+        [[ $# -ge 2 ]] || die "--enqueue requires '-' (the items are read from stdin)"
+        set_action enqueue --enqueue
+        QUEUE_INPUT="$2"
+        shift 2
+        ;;
+    --enqueue=*)
+        set_action enqueue --enqueue
+        QUEUE_INPUT="${1#*=}"
+        shift
+        ;;
+    --next)
+        set_action next --next
+        shift
+        ;;
     --id)
         [[ $# -ge 2 ]] || die "--id requires a value"
         TARGET_ID="$2"
@@ -1569,7 +2065,7 @@ while (($#)); do
         # an unmatched one can never be valid — and left to fall through it reached getopts
         # as `-`, which reported the useless "invalid option: --". The wrapper used to hold
         # this arm; naming the real flags is the half of a gate that helps a caller recover.
-        die "unknown flag '$1' (play flags: -f -S -d -j -l --engine --volume --status --stop --set-volume --pause --resume --seek --seek-to --id --all --color)"
+        die "unknown flag '$1' (play flags: -f -S -d -j -l --engine --volume --status --stop --set-volume --pause --resume --seek --seek-to --queue --enqueue --next --id --all --color)"
         ;;
     *)
         normalized_args+=("$1")
@@ -1635,12 +2131,12 @@ fi
 # something to the lifecycle verbs, -d is a launch rather than an action, and a detached
 # player has no terminal for the terminal-rendering modes to draw into (§9.2).
 case "$ACTION" in
-stop | set-volume | pause | resume | seek | seek-to) ;;
+stop | set-volume | pause | resume | seek | seek-to | enqueue | next) ;;
 *)
     # --id names ONE running player, so it is meaningless to a verb that does not address
     # one. Listing the verbs beats "invalid combination": the caller has the right idea and
     # the wrong verb.
-    [[ -z "$TARGET_ID" ]] || die "--id applies only to --stop, --set-volume, --pause, --resume, --seek and --seek-to"
+    [[ -z "$TARGET_ID" ]] || die "--id applies only to the verbs that address one player: --stop, --set-volume, --pause, --resume, --seek, --seek-to, --enqueue and --next"
     ;;
 esac
 if ((STOP_ALL)) && [[ "$ACTION" != stop ]]; then
@@ -1651,6 +2147,25 @@ if ((DETACH)) && [[ -n "$ACTION" ]]; then
 fi
 if ((DETACH)) && [[ "$PLAYBACK_MODE" == "ascii" || "$PLAYBACK_MODE" == "viz" ]]; then
     die "-d/--detach cannot use -f $PLAYBACK_MODE: a detached player has no terminal to render into (use audio, video, or fast)"
+fi
+
+# --queue turns a LAUNCH into a queued launch: the handles come from stdin, and the first
+# item is what this player starts on. Read here, before the handle rules below, because
+# QUERY is what those rules judge — and read in the PARENT so a malformed queue is a usage
+# error (1) from the caller's own shell rather than a line in a detached player's log.
+if [[ -n "$QUEUE_INPUT" ]] && [[ "$ACTION" != enqueue ]]; then
+    ((DETACH)) || die "--queue starts a detached player: use 'ut-play -d --queue -'"
+    [[ -z "$ACTION" ]] || die "--queue cannot be combined with $ACTION_FLAG"
+    [[ "$QUEUE_INPUT" == "-" ]] || die "--queue takes '-': the items are read from stdin"
+    [[ -z "${QUERY//[[:space:]]/}" ]] || die "--queue takes its handles from stdin, not from the command line"
+    require_cmd jq
+    read_queue_items --queue
+    # The engine is per ITEM (a playlist may mix sources), so --engine is only the fallback
+    # read_queue_items already applied. What the LAUNCH needs is the first item's.
+    IFS=$'\037' read -r ENGINE QUERY < <(
+        printf '%s' "$QUEUE_ITEMS_JSON" | jq -r '.[0] | [.engine, .url] | join("\u001f")'
+    )
+    ENGINE_RESOLVE=""
 fi
 
 # A HANDLE is what the player forwards to an engine: a URL, or an engine-specific media id
@@ -1713,6 +2228,19 @@ pause | resume | seek | seek-to)
     do_playback_verb "$ACTION" "$SEEK_ARG" "${TARGET_ID:-}"
     ;;
 esac
+# The queue verbs address a player's own state on disk, so they need jq and NOT nc — the
+# queue never goes near the socket. --next signals the child instead (do_next).
+if [[ "$ACTION" == "enqueue" ]]; then
+    [[ "$QUEUE_INPUT" == "-" ]] || die "--enqueue takes '-': the items are read from stdin"
+    [[ -z "${QUERY//[[:space:]]/}" ]] || die "--enqueue takes its items from stdin, not from the command line"
+    require_cmd jq
+    read_queue_items --enqueue
+    do_enqueue "${TARGET_ID:-}"
+fi
+if [[ "$ACTION" == "next" ]]; then
+    require_cmd jq
+    do_next "${TARGET_ID:-}"
+fi
 # yt-dlp is no longer a dependency of the PLAYER: extraction belongs to the engine, which
 # gates its own tools. What is left here is what actually plays and shapes output.
 require_deps jq mpv
@@ -1736,10 +2264,13 @@ if ((IS_HANDLE)); then
         play_url_json "$QUERY" "$PLAYBACK_MODE" || rc=$?
         exit "$rc"
     fi
-    # rc is captured rather than left to set -e so the DETACHED child gets one line of
-    # epilogue before it goes (detached_epitaph is a no-op for every other caller — a
-    # foreground play has a terminal to have already shown the error on). The exit status is
-    # unchanged either way: set -e would have exited with exactly this rc.
+    # The detached child takes the loop (it owns a queue, even a queue of one) and never
+    # returns from it. Every other prose caller plays once: rc is captured rather than left
+    # to set -e so detached_epitaph gets to run, and the exit status is what set -e would
+    # have exited with anyway.
+    if [[ -n "${YT_PLAYER_ID:-}" && -n "${YT_DETACHED:-}" ]]; then
+        detached_child_loop "$QUERY"
+    fi
     rc=0
     play_url_directly "$QUERY" || rc=$?
     detached_epitaph "$rc"
