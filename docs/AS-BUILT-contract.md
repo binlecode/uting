@@ -1,7 +1,7 @@
 # AS-BUILT-contract — the uting CLI contract
 
 The **frozen surface** (ROADMAP D3/D13): the one thing that survives any rewrite, and the
-acceptance spec for a port. Everything here is as built — verified against the six scripts —
+acceptance spec for a port. Everything here is as built — verified against the seven scripts —
 and versioned by `shell/VERSION` under ROADMAP D13's semver rule. **Changing anything in
 this file is a deliberate, documented act** (CLAUDE.md hard rule 4), never a side effect
 of a feature.
@@ -9,7 +9,7 @@ of a feature.
 Written for two readers, neither of whom should need the source:
 
 - **a test author** — every envelope, exit code and error shape needed to write a JSON
-  diff test against any of the six commands is in §1–§5;
+  diff test against any of the seven commands is in §1–§5;
 - **a third-engine author** — §1.2/§1.3 (the engine's two command surfaces), §2 (its gate),
   §3 (its envelopes) and §6 (the checklist) are the whole obligation; `bili-search` /
   `bili-resolve` satisfy nothing beyond what is stated here.
