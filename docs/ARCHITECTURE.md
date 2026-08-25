@@ -959,11 +959,17 @@ normalisation exists once. Three rules are load-bearing:
 
 - **Correlate by `request_id`, never by line order** — mpv interleaves async events into
   every client's stream (the same rule `do_set_volume` carries).
-- **`head -n <count>` is what closes the pipe.** mpv answers each command exactly once and
-  `jq` has already dropped the id-less events, so the last expected line is where `head`
-  exits, SIGPIPEs `nc`, and ends the read. Measured against `tests/mpv_ipc_mock.py`, a peer
-  that never closes its side: **1.11s → 0.03s**. The caller breaking its own read loop does
-  NOT achieve this — nothing writes again to notice the reader is gone.
+- **`head -n <count>` is what closes the pipe** *against a peer that holds the connection
+  open*. mpv answers each command exactly once and `jq` has already dropped the id-less
+  events, so the last expected line is where `head` exits, SIGPIPEs `nc`, and ends the read.
+  **Correction (2026-08-24), recorded rather than quietly dropped:** the **1.11s → 0.03s**
+  this line long carried was measured against a *scripted* peer whose idle timer ran the
+  `nc -w1` clock out. That peer was deleted with the no-stand-in rule, and against **real
+  mpv** the same read costs **0.04s with `head` or with a bare `cat`**. The guard is
+  therefore defence against a peer that behaves that way, not a measured win, and
+  `tests/lifecycle.sh` deliberately carries **no** check for it — none can go red. A
+  measurement is only as durable as the thing it was taken against. The caller breaking its
+  own read loop does NOT achieve it either — nothing writes again to notice the reader is gone.
 - **`|| true` around the pipeline**, or `set -euo pipefail` turns an `nc` timeout into an
   abort at the assignment.
 
@@ -2920,10 +2926,10 @@ the screen will not be caught by a test — only by the next doc capture.
 > "green with no other uting on this uid", which is a condition the file does not enforce and
 > the reason the per-run state dir is the real fix rather than a tidy-up.
 
-**No *scratch* check is named by path here, on purpose.** The exception is the four files
+**No *scratch* check is named by path here, on purpose.** The exception is the three files
 that earned a permanent home and are committed under `tests/` — the two suites `contract.sh`
-and `lifecycle.sh`, the fake peer `mpv_ipc_mock.py`, and the TUI driver `drive.sh` (which
-asserts nothing and exists to reap the detached player a session kill leaves behind) — which
+and `lifecycle.sh`, and the TUI driver `drive.sh` (which asserts nothing and exists to reap the
+detached player a session kill leaves behind) — which
 the root README describes by name because a contributor cannot run what nothing points at. (Two pty-based rigs and then a tmux renderer rig preceded today's
 shape: a pty starting at 0×0 produced plausible-looking one-row frames — a wrong green — and
 tmux fixed that, but asserting on the picture at all is what finally went.) Everything else this suite has been
@@ -3032,15 +3038,19 @@ the part of a deleted harness worth keeping.
    Live volume: uting 9/0 on a --volume 0 player → --status reports the
                 moved value (not the stale launch value); from 98, three 0 presses stop
                 at 100 and never reach mpv's own 130 ceiling
-   Live read  : the four properties in ONE round trip (§9.3), driven against the IPC mock
-                over a real socket: replies out of order land in the right slots
-                (--reverse), a property answered null renders JSON null and NOT false
-                (--null pause), async events interleaved change nothing (--noisy), and a
-                peer that never closes its side costs 0.03s rather than the full nc -w1
-                second (1.11s before `head -n <count>` closed the pipe). Against a real
-                player: an external `set_property pause true` over the socket shows up as
-                paused:true on the next --status, a dead socket reports paused/position/
-                duration null with volume falling back to the record, and with `nc` off
+   Live read  : the four properties in ONE round trip (§9.3), driven against REAL mpv over
+                its own socket and nothing else — the scripted peer this entry used to cite
+                was deleted with the no-stand-in rule, and the shapes only it could produce
+                on cue (replies out of order, a property answered null, async events
+                interleaved) are coverage this suite now does WITHOUT rather than fake.
+                What a real player proves, in lifecycle.sh: position and duration arrive as
+                numbers off the socket rather than off the record, a playing player answers
+                paused:false and not null, and a really-running player whose socket is
+                really removed reports paused/position/duration null with volume falling
+                back to the record (proved red by leaving the socket in place). NOT checked,
+                and deliberately: the `head -n <count>` pipe close — against real mpv the
+                read costs 0.04s with head or with a bare cat, so a timing check on it
+                cannot fail (§9.3 carries the correction). Also measured: with `nc` off
                 PATH --status still exits 0 with the same three nulls. position/duration
                 are null until mpv starts decoding (~8s cold) and duration stays null on a
                 live stream — the honest reading, not a fabricated 0

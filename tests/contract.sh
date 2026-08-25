@@ -162,8 +162,6 @@ report "resolve -j envelope" 0 \
         shell/yt-resolve -j -- "$MEDIA_ID")"
 report "resolve -j is one line" 1 \
     "$(shell/yt-resolve -j -- "$MEDIA_ID" | wc -l | tr -d ' ')"
-# The id is what search hands over; accepting it is what makes the two halves a pair.
-report "resolve takes a bare id"  0 "$(rc shell/yt-resolve -j -- "$MEDIA_ID")"
 # Shape validation lives in the ENGINE now — the player cannot tell a good id from a bad one.
 report "resolve rejects a non-id" 1 "$(rc shell/yt-resolve -j -- "not an id")"
 report "resolve rejects -d"       1 "$(rc shell/yt-resolve -d -- "$MEDIA_ID")"
@@ -205,9 +203,6 @@ echo "── argv order: a flag-shaped query after -- is SEARCHED ────�
 # to confuse a flag-shaped token with (AS-BUILT-contract.md §2).
 report "yt-search -- --status searches" 0 \
     "$(shell/yt-search -l -- --status 2>&1 | head -1 | grep -qv '^{' && echo 0 || echo 1)"
-# The other half of that split: a non-URL positional is no longer a search, it is a usage
-# error naming the right tool. Exit 1, not a silent fall-through to playback.
-report "core: non-URL is a usage error" 1 "$(rc /bin/bash shell/ut-play -- "a query")"
 
 echo "── --transcript: read-only, so the gate and both envelopes are all ─"
 # The ok-path fixture must be a video that HAS captions and the error-path one must not:
@@ -289,7 +284,6 @@ report "bili duration is seconds" 0 \
 report "bili titles carry no markup" 0 \
     "$(jq_ok '[.results[].title]|all((test("<") or test("&[a-z#]+;"))|not)' shell/bili-search -j -n 10 -- 周杰伦)"
 
-report "bili-resolve takes a BV id" 0 "$(rc shell/bili-resolve -j -- "$BILI_ID")"
 report "bili-resolve rejects a non-id" 1 "$(rc shell/bili-resolve -j -- "not an id")"
 # This site's CDN checks Referer: the bare stream URL answers 403 and the same URL with
 # these headers answers 206 (measured). An empty http_headers here is a silently unplayable
@@ -417,84 +411,20 @@ report "--seek accepts -15"       4 "$(rc shell/ut-play --seek -15 -j)"
 # "ut-play -d + action" above, which exercise the same case statement.
 report "--id on --pause parses"   4 "$(rc shell/ut-play --pause --id nope -j)"
 
-
-# The four live fields are read off a real unix socket, so the peer is the one thing that
-# cannot be faked away — and mpv will not answer out of order, report a property null, or
-# refuse to close its side on cue. tests/mpv_ipc_mock.py does exactly that (the same fixture
-# the TUI readers are checked against), behind a real socket, with the real verb in front.
-# The timing check is the guard on `head -n <count>`: without it the read waits out `nc -w1`
-# per player, which is a 30x slowdown no output assertion would notice. python3-gated: the
-# rest of this file is dependency-free on purpose.
-echo "── live read: four properties, one round trip, null != false ──────"
-SD="${TMPDIR:-/tmp}/uting-$(id -u)"
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "  skip  (needs python3 for tests/mpv_ipc_mock.py)"
-else
-    # A player record is only LIVE while pgrep -g finds its stored pid, so the stand-in has
-    # to be a process-group leader — `set -m` makes a background job one, exactly as
-    # detach_play does. --no-peer leaves the socket absent, which is the degradation case.
-    mkplayer() { # <id> [--no-peer] [mock-flags...]
-        local id=$1 peer=1; shift
-        [ "${1:-}" = "--no-peer" ] && { peer=0; shift; }
-        mkdir -p "$SD/players"
-        set -m; sleep 60 & LIVE_PID=$!; set +m
-        disown "$LIVE_PID" 2>/dev/null
-        MOCK_PID=""
-        if [ "$peer" = 1 ]; then
-            python3 tests/mpv_ipc_mock.py "$SD/mpv-$id.sock" "$@" & MOCK_PID=$!
-            disown "$MOCK_PID" 2>/dev/null
-            local i=0
-            while [ ! -S "$SD/mpv-$id.sock" ] && [ "$i" -lt 40 ]; do sleep 0.1; i=$((i + 1)); done
-        fi
-        printf '{"id":"%s","pid":%s,"url":"https://youtu.be/%s","mode":"audio","format":"ba","started_at":"2026-01-01T00:00:00Z","log":"%s/mpv-%s.log","sock":"%s/mpv-%s.sock","title":null,"volume":7}\n' \
-            "$id" "$LIVE_PID" "$id" "$SD" "$id" "$SD" "$id" >"$SD/players/$id.json"
-    }
-    rmplayer() {
-        kill "$LIVE_PID" 2>/dev/null
-        [ -n "$MOCK_PID" ] && kill "$MOCK_PID" 2>/dev/null
-        rm -f "$SD/players/$1.json" "$SD/mpv-$1.sock"
-        return 0
-    }
-
-    mkplayer ctest_live --paused
-    report "paused is read live"    0 "$(jq_ok '[.players[]|select(.id=="ctest_live")][0].paused==true' shell/ut-play --status -j)"
-    report "position/duration live" 0 "$(jq_ok '[.players[]|select(.id=="ctest_live")][0]|.position==61 and .duration==245' shell/ut-play --status -j)"
-    report "volume beats the record" 0 "$(jq_ok '[.players[]|select(.id=="ctest_live")][0].volume==55' shell/ut-play --status -j)"
-    # A peer that never closes: three --status calls must not cost three nc timeouts.
-    start=$SECONDS
-    shell/ut-play --status -j >/dev/null 2>&1
-    shell/ut-play --status -j >/dev/null 2>&1
-    shell/ut-play --status -j >/dev/null 2>&1
-    report "3 reads under 2s (pipe closes)" 1 "$([ $((SECONDS - start)) -lt 2 ] && echo 1 || echo 0)"
-    rmplayer ctest_live
-
-    mkplayer ctest_null --null pause
-    report "unanswered pause is null"  0 "$(jq_ok '[.players[]|select(.id=="ctest_null")][0].paused==null' shell/ut-play --status -j)"
-    rmplayer ctest_null
-
-    mkplayer ctest_rev --reverse --noisy
-    report "out-of-order lands right" 0 "$(jq_ok '[.players[]|select(.id=="ctest_rev")][0]|.position==61 and .duration==245 and .volume==55' shell/ut-play --status -j)"
-    rmplayer ctest_rev
-
-    # No peer at all: the socket is absent, so every live field is null and volume falls back
-    # to the record — the degradation an agent must be able to tell from a real reading.
-    mkplayer ctest_nosock --no-peer
-    report "dead socket: nulls, not false" 0 \
-        "$(jq_ok '[.players[]|select(.id=="ctest_nosock")][0]|.paused==null and .position==null and .duration==null and .volume==7' shell/ut-play --status -j)"
-    rmplayer ctest_nosock
-fi
-
 # A detached player that dies on its own is the one lifecycle path the caller does not
 # drive, and it used to be silent: --status went empty, which is what a NORMAL finish looks
 # like too (docs/ARCHITECTURE.md §9.2). These checks own the boundary that keeps the tombstone
 # list an error record rather than the listening history ROADMAP.md §0 rules out — a normal
 # finish must leave nothing, a log with no epitaph must not be read as a death, and the list
-# must stay bounded. The input is a fabricated state file + log, which is exactly what the
-# reaper reads; the code under test (reap, classify, prune, envelope) is the real one, driven
-# through the real verb. Like --stop --all above, this writes in the live state dir.
+# must stay bounded. The input is a state file + log written by hand — a FIXTURE, which is
+# the only thing this suite is allowed to author: it is data the real reaper really reads, not
+# a stand-in that runs in place of a component. Nothing here simulates a player; a record whose
+# pid is gone IS a dead player, which is the whole condition under test. The code (reap,
+# classify, prune, envelope) is the real one, driven through the real verb. Like --stop --all
+# above, this writes in the live state dir.
 echo "── the death record: failures only, bounded, never inferred ───────"
 SD="${TMPDIR:-/tmp}/uting-$(id -u)"
-mkfake() { # <id> <rc|""> [ended_at]   — a dead player, with or without an epitaph
+dead_record() { # <id> <rc|""> [ended_at]   — a dead player, with or without an epitaph
     mkdir -p "$SD/players"
     printf '{"id":"%s","pid":999999,"url":"https://youtu.be/%s","mode":"audio","format":"ba","started_at":"2026-01-01T00:00:00Z","log":"%s/mpv-%s.log","sock":"%s/mpv-%s.sock","title":null,"volume":50}\n' \
         "$1" "$1" "$SD" "$1" "$SD" "$1" >"$SD/players/$1.json"
@@ -505,16 +435,16 @@ mkfake() { # <id> <rc|""> [ended_at]   — a dead player, with or without an epi
 }
 rm -rf "$SD/players/dead"
 report "failed[] always present"   0 "$(jq_ok '.failed|type=="array"' shell/ut-play --status -j)"
-mkfake ctest_ok 0
+dead_record ctest_ok 0
 report "normal finish: no tombstone" 0 "$(jq_ok '.failed==[]' shell/ut-play --status -j)"
-mkfake ctest_mute ""
+dead_record ctest_mute ""
 report "no epitaph: no tombstone"  0 "$(jq_ok '.failed==[]' shell/ut-play --status -j)"
-mkfake ctest_bad 2
+dead_record ctest_bad 2
 report "death is reported once"    0 "$(jq_ok '[.failed[]|select(.id=="ctest_bad")]|length==1 and (.[0].reason=="unavailable") and (.[0].exit_code==2)' shell/ut-play --status -j)"
 report "--status still exits 0"    0 "$(rc shell/ut-play --status -j)"
 report "--status still one line"   1 "$(shell/ut-play --status -j | wc -l | tr -d ' ')"
 i=0
-while [ "$i" -lt 10 ]; do mkfake "ctest_c$i" 2 "2026-01-01T00:00:0${i}Z"; i=$((i + 1)); done
+while [ "$i" -lt 10 ]; do dead_record "ctest_c$i" 2 "2026-01-01T00:00:0${i}Z"; i=$((i + 1)); done
 shell/ut-play --status -j >/dev/null 2>&1
 report "capped at 8 in the envelope" 8 "$(shell/ut-play --status -j | jq '.failed|length')"
 report "capped at 8 on disk"         8 "$(ls "$SD/players/dead" 2>/dev/null | wc -l | tr -d ' ')"

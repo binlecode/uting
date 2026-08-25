@@ -708,10 +708,12 @@ ensure_state_dir() {
 #
 # `head -n $i` is load-bearing, not tidiness — it is what CLOSES the pipe. mpv answers every
 # command exactly once and jq has already dropped the id-less async events, so the i-th line
-# is the last one coming; head exiting there SIGPIPEs nc, which is how the read costs ~30ms
-# instead of the full `nc -w1` second against a peer that never closes its side (measured:
-# 1.11s -> 0.03s against tests/mpv_ipc_mock.py, which is exactly that peer). The caller
-# breaking its own read loop does NOT achieve this: nothing writes again to notice.
+# is the last one coming; head exiting there SIGPIPEs nc, which is how the read ends against a
+# peer that never closes its side, instead of waiting out the full `nc -w1` second. Kept as
+# DEFENCE, not as a measured win: the 1.11s -> 0.03s figure came from a scripted test peer that
+# has since been deleted, and against real mpv the same read costs 0.04s with head or with a
+# bare `cat` (measured 2026-08-24), so no check in tests/ can go red on this line. The caller
+# breaking its own read loop does NOT achieve it either: nothing writes again to notice.
 live_props() {
     local sock=$1
     shift

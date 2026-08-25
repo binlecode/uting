@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# uting pre-commit gate. Three hard rules, in cheapest-first order:
+# uting pre-commit gate. Four hard rules, in cheapest-first order:
 #   1. redaction    — no secret/credential/cookie material in staged additions
 #   2. bash 3.2     — no bash-4 feature in a staged shell script (the portability floor)
 #   3. syntax       — bash -n on the STAGED content of every staged shell script
+#   4. no stand-ins — every file under tests/ is a .sh that runs a real command
 # Plus: refuse a force-added tmp/ file (scratch is untracked by convention).
 #
 # This hook is itself held to the 3.2 floor: no declare -A, no mapfile, every
@@ -112,6 +113,29 @@ while IFS= read -r f; do
 done <<EOF
 $staged_sh
 EOF
+
+# --------------------------------------------------- tests/: no mocks, no stand-ins
+# The testing rule is absolute (CLAUDE.md, "Reject a check when it"): tests/ holds shell
+# suites that invoke real commands, and nothing that RUNS in place of a component. A file
+# there that is not a .sh is how that rule was broken last time — a python JSON-IPC peer
+# scripted to answer the way mpv would not. The path is the cheap half of the rule and the
+# only half a hook can decide; the half about a `sleep` posing as a live pid, or a shim on
+# PATH, stays with review, which is where CLAUDE.md says it lives.
+stand_in="$(git diff --cached --name-only --diff-filter=ACM \
+  | grep -E '^tests/' | grep -vE '\.sh$' || true)"
+if [ -n "$stand_in" ]; then
+  {
+    echo ""
+    echo "BLOCKED: a non-.sh file is staged under tests/:"
+    printf '%s\n' "$stand_in" | sed 's/^/    /'
+    echo ""
+    echo "tests/ is functional shell only — every check invokes a real entry point and reads"
+    echo "its real answer. No mock, no fake peer, no stub process, no shimmed binary. A claim"
+    echo "that needs a real peer belongs in tests/lifecycle.sh, where the real one runs; a"
+    echo "claim no real dependency can be made to produce is coverage this suite does without."
+  } >&2
+  fail=1
+fi
 
 # ------------------------------------------------------------- tmp/ discipline
 scratch="$(git diff --cached --name-only --diff-filter=ACM | grep -E '(^|/)tmp/' || true)"

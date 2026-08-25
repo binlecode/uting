@@ -10,6 +10,10 @@
 # And it carries the one claim that needs a SECOND source: that the player applies the
 # http_headers an engine hands it. See the Bilibili section for why only that site can show it.
 #
+# It also owns the LIVE READ (--status off the mpv socket), for the same reason: the peer is
+# real mpv or it is nothing. The suite keeps no stand-in for a component, so a claim about
+# talking to mpv can only be made where mpv is running — here, behind the gate.
+#
 # Portability: bash 3.2. Needs jq for the envelopes; no tmux and no terminal — every
 # assertion here is an exit code or a field out of a real envelope.
 #
@@ -93,6 +97,50 @@ report "--set-volume --id"    0 "$(shell/ut-play --set-volume 40 --id "$id1" -j 
 # Only the targeted player moved: a mutation that leaks across players is the bug --id exists for.
 report "only the target moved" "40" \
     "$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.volume')"
+
+echo "── the live read: a real socket, a real peer, null is not false ───"
+# The four live fields cost a round trip to mpv itself. Nothing in this repo may stand in for
+# that peer, so the read is proved HERE, against the real one, behind the gate — never in
+# contract.sh against something written to imitate it.
+#
+# Poll for the first reading rather than sleeping a guess: position/duration are null until
+# mpv starts decoding (network-bound, ~8s cold), and null there is an honest READING, not a
+# failure. What must not happen is null forever.
+pos=""; i=0
+while [ $i -lt 40 ]; do
+    pos=$(shell/ut-play --status -j 2>/dev/null \
+          | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.position // empty' 2>/dev/null)
+    case "$pos" in "" | null | 0) ;; *) break ;; esac
+    sleep 1; i=$((i + 1))
+done
+case "$pos" in
+    "" | null | 0) bad "player 1 never reported a position — the live read is unproved" ;;
+    *) ok "position came off the socket (${pos}s), not off the record" ;;
+esac
+# false is an ANSWER; null is "the question could not be asked" (§9.3). A playing player that
+# reported paused:null would make every consumer's readiness probe read a fabrication, and a
+# playing player that reported it as anything but false would make --pause unobservable.
+report "live paused is false, not null" 0 \
+    "$(shell/ut-play --status -j | jq -e --arg i "$id1" \
+        '.players[]|select(.id==$i)|.paused==false' >/dev/null 2>&1; echo $?)"
+report "live duration is a number" 0 \
+    "$(shell/ut-play --status -j | jq -e --arg i "$id1" \
+        '.players[]|select(.id==$i)|.duration|type=="number"' >/dev/null 2>&1; echo $?)"
+# NOT checked here: the `head -n <count>` pipe close in live_props (§9.3). It was tried and
+# pulled the same day — with the real peer it CANNOT go red. Swapping the head for a `cat`
+# and re-running measures 0.04s either way, so a timing assertion on it would be a check that
+# passes whatever the code does. The 1.11s it used to save was a scripted peer's idle timer,
+# and that peer is gone; the guard stays in the player as defence, without a green tick
+# pretending the suite proved it.
+# The degradation an agent must be able to tell from a reading — and it is produced by doing
+# it, not by imitating it: the socket of a REALLY running player is really removed, which is
+# what a crashed mpv or a half-cleaned state dir leaves behind. Live fields go null and volume
+# falls back to the record, which --set-volume patched to 40 above.
+rm -f "$sock1"
+report "socketless player: nulls, volume off the record" 0 \
+    "$(shell/ut-play --status -j | jq -e --arg i "$id1" \
+        '.players[]|select(.id==$i)|.paused==null and .position==null and .duration==null and .volume==40' \
+        >/dev/null 2>&1; echo $?)"
 
 echo "── a second engine: the envelope's http_headers reach mpv ─────────"
 # The only check in the suite that proves the player APPLIES what an engine hands it.

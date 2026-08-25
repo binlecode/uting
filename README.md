@@ -156,20 +156,17 @@ sources, and each row plays under the engine that produced it.
 
 **Functional tests only.** A command-line tool is tested by running it and reading its exit
 code and its stdout, which is all these do — no rig layer, no screen model, no pty harness,
-no unit tier. Each file's header says what it proves; run either one directly.
+no unit tier, and **no mock, fake, stub or stand-in of any kind**. The only thing the suite
+authors is a *fixture*: data a real command really reads. Anything that would *run* in place
+of a component is out, peers included — a claim needing a real peer is proved where the real
+one runs, or it is not claimed. Each file's header says what it proves; run either one directly.
 
 | Suite | What it is for |
 |---|---|
-| `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the lifecycle verbs, the live `--status` read (against the mock, over a real socket), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), and the TUI booting / surviving a resize / leaving on `q` under tmux. |
-| `tests/lifecycle.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, and zero orphan mpv at the end. It also plays a real Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. Starts real players at `--volume 0`, so it is gated behind `YT_TEST_LIFECYCLE=1`. |
+| `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the idle lifecycle verbs, the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), and the TUI booting / surviving a resize / leaving on `q` under tmux. |
+| `tests/lifecycle.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, and zero orphan mpv at the end. It also owns the **live read** — the `--status` fields off a real mpv socket, `paused:false` distinguished from `paused:null`, and a really-running player whose socket is really removed degrading to nulls with volume off the record — because the peer has no stand-in and never will. It also plays a real Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. Starts real players at `--volume 0`, so it is gated behind `YT_TEST_LIFECYCLE=1`. |
 
-Two more files in `tests/` are not suites and assert nothing. `tests/mpv_ipc_mock.py` is a
-fake **peer** that `contract.sh` drives: it does what real mpv will not do on cue — answer out
-of order (`--reverse`), report a property null (`--null pause`), start paused, interleave async
-events, walk the clock, never close its side. Every IPC rule in the read path exists because of
-one of those shapes. Fake the peer, never the thing under test.
-
-`tests/drive.sh` is a **driver** for the TUI, which needs a real tty and so cannot be run from
+One more file in `tests/` is not a suite and asserts nothing. `tests/drive.sh` is a **driver** for the TUI, which needs a real tty and so cannot be run from
 a pipe. It launches tmux at a declared geometry, waits on the ready marker, optionally sends
 keys, dumps the frame, and **always reaps the detached player** — `Enter` starts mpv in its own
 process group, and killing the tmux session does not stop it.
@@ -180,8 +177,9 @@ tests/drive.sh -k Enter -w Playing      # a real detached play, then cleaned up
 tests/drive.sh -i                       # attach and drive it by hand
 ```
 
-`contract.sh` needs `tmux` for its TUI boot check and skips the live-read block without
-`python3`. There is no `pip install` step, and nothing here is needed at runtime.
+`contract.sh` needs `tmux` for its TUI boot check and nothing else — `tests/` is shell all the
+way down, and `.githooks/pre-commit` refuses a non-`.sh` file there to keep it that way. Nothing
+here is needed at runtime.
 
 **Layout is proved outside the suite.** Cell grids, column alignment and glyph widths are
 checked when a frame enters a doc — that is what `.claude/skills/capture-pane` is for, and its

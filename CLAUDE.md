@@ -15,14 +15,14 @@ The suite is exposed **directly** to shell-capable agents with no MCP wrapper, s
 - **bash 3.2** — macOS's frozen system `/bin/bash`. This is a deliberate floor, not an accident: zero install step, identical behavior under macOS, Linux, containers, CI, and cron/launchd. Do **not** raise it, and do **not** hardcode a Homebrew bash path. See the portability contract below — it is a hard rule.
 - Runtime deps, all external and unvendored: `yt-dlp`, `jq`, `mpv`, `nc` (BSD netcat, stock on macOS), `curl`. `curl` is required by `bili-search` (it IS that engine's transport) and optional elsewhere — the YouTube play-time client probe.
 - **macOS first.** Linux is not currently usable: stock netcat has no `-U`, which the mpv IPC path needs. Do not "fix" Linux support by adding a dependency — that decision is gated in `docs/ROADMAP.md` §9.
-- The test suite needs `tmux` (`contract.sh`'s TUI boot check) and `python3` (`mpv_ipc_mock.py`, the fake IPC peer). **No `pip install`**: a suite that depends only on primitives should not need a package to test itself. Nothing in `tests/` is needed at runtime.
+- The test suite needs `tmux` (`contract.sh`'s TUI boot check) and nothing else — it is shell all the way down, because a suite whose subject depends only on primitives must not need more than its subject does. Nothing in `tests/` is needed at runtime, and **nothing in `tests/` may be a stand-in for a component** (see the testing rules).
 - There is **no** build step, no venv, no lockfile, and no CI. The checks below are run by hand — that is the whole reason they are written out — with two of them gated locally by git hooks:
 
 ```sh
 git config core.hooksPath .githooks   # RUN ONCE PER CLONE — fresh clones have no hooks
 ```
 
-`.githooks/pre-commit` blocks a staged secret / cookie export, a **bash-4 idiom on an added line**, a staged shell script that does not parse under `/bin/bash -n`, and a force-added `tmp/` file. `.githooks/pre-push` blocks a force-push or deletion of `main` and a syntax error in any script under `shell/` (globbed, not listed), and warns when a `v*` tag is pushed (the tag must match `shell/VERSION`). A direct push to `main` is **not** blocked — see the commit guidelines.
+`.githooks/pre-commit` blocks a staged secret / cookie export, a **bash-4 idiom on an added line**, a staged shell script that does not parse under `/bin/bash -n`, a **non-`.sh` file under `tests/`** (the enforceable half of the no-stand-in rule below), and a force-added `tmp/` file. `.githooks/pre-push` blocks a force-push or deletion of `main` and a syntax error in any script under `shell/` (globbed, not listed), and warns when a `v*` tag is pushed (the tag must match `shell/VERSION`). A direct push to `main` is **not** blocked — see the commit guidelines.
 
 ## Build, Test, and Development Commands
 
@@ -40,7 +40,6 @@ tests/contract.sh                                             # the CLI contract
 YT_TEST_LIFECYCLE=1 tests/lifecycle.sh                        # detached players; gated, silent
 tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
 tests/drive.sh -k Enter -w Playing                            # …including a real detached play
-python3 tests/mpv_ipc_mock.py --reverse                       # fake IPC peer for the awkward shapes
 ```
 
 Each suite runs directly and says in its own docstring what it proves. Read the docstring before changing it.
@@ -57,7 +56,6 @@ Each suite runs directly and says in its own docstring what it proves. Read the 
 | `shell/VERSION` | The suite version, declared once — a one-line data file, not a shell variable. The player and the engines are independent executables sharing no library, so a variable in any one of them would make the others ask *it* for the version — the wrong dependency direction for a player that must not know its engines |
 | `shell/ut-playlist` | **The playlist store** (636 lines) — durable, user-level, engine-agnostic state: `$UT_STATE_DIR/playlists/<name>.json`, one file per list, `mkdir` lock + atomic temp+mv, six verbs (`--ls --show --add --rm --del --rename`) and its own state-error enum (`not_found`, `exists`, `invalid_name`, `invalid_input`, `locked`, `corrupt` — the last four split 1 vs 4 the way the rest of the suite does). Knows **no site and no playback**: its record is `{engine, url, …}`, which is exactly `ut-play --engine E -- URL`, so a stored record is a CALL, not a reference. Input is stdin JSON only — a search envelope, its own `--show` envelope, or an item array. **The queue is NOT here**: a queue is a playlist being consumed and belongs to the player (`docs/ARCHITECTURE.md` §9.4) |
 | `shell/uting` | The human face (3.0k lines) — self-rendered list and focus card, live filter, reflowing pagination, three playback states, en/zh chrome, ASCII fallback, themes. **Pure orchestration: zero YouTube logic.** No TUI framework, no fzf |
-| `tests/mpv_ipc_mock.py` | A fake mpv JSON-IPC peer that does what the real one will not do on cue: answer out of order, report a property null, interleave async events, walk the clock, never close its side |
 
 **Dependency graph — one layer, seven peers. Site knowledge exists ONLY in an engine pair, playback ONLY in the player. An engine's two halves need not use the same primitive: the seam is the ENVELOPE, not the tool behind it:**
 
@@ -131,12 +129,10 @@ Two files, one rule:
 | File | Drives | Gate |
 |---|---|---|
 | `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store under a disposable `UT_STATE_DIR`; the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux | none — run it before every commit |
-| `tests/lifecycle.sh` | detached players end to end (launch → status → mutate → stop → stop again), and that an engine's `http_headers` actually reach mpv | `YT_TEST_LIFECYCLE=1` — it starts real players |
+| `tests/lifecycle.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), and that an engine's `http_headers` actually reach mpv | `YT_TEST_LIFECYCLE=1` — it starts real players |
 
-Neither of the other two files in `tests/` is a suite, and neither asserts anything:
-
-- `tests/mpv_ipc_mock.py` is a fake **peer** that `contract.sh` drives, legitimate for the same reason a stubbed renderer is not — it produces socket shapes real mpv will not produce on cue (replies out of order, a property reported null, a side that never closes). **Fake the peer, never the thing under test.**
-- `tests/drive.sh` is a **driver**: it launches the TUI in tmux at a declared geometry, waits on the ready marker, optionally sends keys, and **always reaps the detached player** — which killing the tmux session does not do. Use it whenever a TUI change has to be driven rather than reasoned about.
+`tests/drive.sh` is the only other file, and it is not a suite — it asserts nothing. It is a
+**driver**: it launches the TUI in tmux at a declared geometry, waits on the ready marker, optionally sends keys, and **always reaps the detached player** — which killing the tmux session does not do. Use it whenever a TUI change has to be driven rather than reasoned about.
 
 ### Harden before you extend
 
@@ -145,7 +141,7 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 ### Reject a check when it:
 
 - asserts on an internal function or a private helper instead of invoking the command;
-- fakes the data or the logic under test (a fake *peer* is not the thing under test);
+- **introduces a mock, a fake, a stub or a stand-in of any kind — no exception, including for a peer.** There is exactly one legitimate thing this suite may author: a **fixture**, meaning *data a real command really reads* (a state file for the reaper, a search envelope on `ut-playlist`'s stdin). The moment something in `tests/` *executes* in place of a component — a scripted socket peer, a `sleep` posing as a live pid, a shimmed binary on `PATH` — it is a mock and it does not land. The rule is not "fake the peer, never the subject": it is **no fake at all**. A claim that needs a real peer is proved where the real peer runs (`lifecycle.sh`, gated), or it is not proved. Coverage a real dependency cannot be made to produce on cue is coverage this suite does not have, and saying so is honest; a green check against a scripted peer is not;
 - asserts on a rendered **picture** — cell grids, column alignment, glyph widths. Layout is proved when a frame enters a doc, and the `capture-pane` skill owns that; the suite asserts survival, not shape;
 - exists only to raise a count, or asserts a default that a behavioural check already exercises;
 - times a network-dependent path against YouTube when a local synthetic source (`av://lavfi:sine`) would do — throttling has corrupted a timing measurement here before (`docs/ARCHITECTURE.md` §25.1);
@@ -153,14 +149,14 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 
 ### Accept a check when it drives a real surface:
 
-`bash -n` on every script in `shell/`; a real `-j` invocation whose envelope is parsed; the exit code of a real failure path; a real unix socket (real mpv, or the mock); the TUI under tmux asserted on survival — it booted, it is still up after a resize, it left on `q` with 0.
+`bash -n` on every script in `shell/`; a real `-j` invocation whose envelope is parsed; the exit code of a real failure path; a real unix socket with real mpv on the far end (gated, `lifecycle.sh`); the TUI under tmux asserted on survival — it booted, it is still up after a resize, it left on `q` with 0.
 
 ### Minimum checks before every commit
 
 **The two suites in `tests/` ARE these checks.** A check that exists only as prose for someone to copy out reports green by default. A new check goes in the suite, never in a doc — and a fixed command sequence goes in a script, never in prose.
 
 - `/bin/bash -n shell/*` — enforced by `.githooks/pre-commit` on staged content and by `pre-push` on the worktree, so this is a backstop for a `--no-verify`, not a habit.
-- **Any change at all:** `tests/contract.sh` (it also drives the empty-argument paths on the 3.2 floor, and the live `--status` read against the IPC mock).
+- **Any change at all:** `tests/contract.sh` (it also drives the empty-argument paths on the 3.2 floor). It starts no process it did not have to and talks to no peer — every live claim is `lifecycle.sh`'s.
 - **Any change to the detached player:** `YT_TEST_LIFECYCLE=1 tests/lifecycle.sh`. It starts real players (silent, `--volume 0`) and does not pass until `pgrep mpv` is empty, so it is gated and run deliberately.
 - The shellcheck baseline is a tracked count, not a clean bill — `docs/ROADMAP.md` §6.1.
 
