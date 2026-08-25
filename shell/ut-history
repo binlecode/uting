@@ -294,10 +294,13 @@ do_record() {
     [[ -t 0 ]] && fail 1 invalid_input "--record reads one JSON record on stdin (try: ... | ut-history --record -)"
     local raw row rc=0
     raw=$(cat)
-    # A MATCH, not the `${raw//[[:space:]]/}` substitution its two sibling readers use. That
-    # expansion rewrites the whole string, and on the input this command is specifically
-    # required to survive — a record with a several-KB title — bash 3.2 takes minutes over
-    # it. Measured: 48KB of stdin, >2 minutes for the substitution against 4ms for this.
+    # A MATCH, never `${raw//[[:space:]]/}`. That substitution is quadratic on the 3.2 floor
+    # once the string holds one space — 17.5s for a 7KB envelope against 4ms here — while
+    # bailing fast when nothing matches, which is exactly what made it look free everywhere
+    # it was used. The rule and the numbers are ARCHITECTURE.md §28. The input this command
+    # is specifically required to survive is a record with a multi-KB title, so the cheap
+    # form is not an optimisation: it is the difference between a best-effort write and a
+    # stalled track boundary.
     [[ "$raw" == *[![:space:]]* ]] || fail 1 invalid_input "no input on stdin"
 
     # The reason enum is the PLAYBACK one, unchanged and not widened here: a caller branches

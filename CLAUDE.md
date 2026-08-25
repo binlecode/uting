@@ -100,6 +100,12 @@ Each script locates its siblings by a path **relative to its own resolved script
                         byte by TABLE MEMBERSHIP the way char_w does — `LC_ALL=C [[ … ]]`
                         is not valid bash at all, and a ( LC_ALL=C … ) subshell forks per
                         keypress and cannot set a global.
+  ${var//pat/} is O(n2): pattern SUBSTITUTION is quadratic on 3.2 once the string holds one
+                        match (measured: 7KB envelope = 17s; no match at all = 5ms, which is
+                        why it reads as free). A blank-input test is a MATCH, never a
+                        substitution: [[ "$s" == *[![:space:]]* ]] / [[ "$s" != *[![:space:]]* ]].
+                        There is no `${var//` left in shell/ — keep it that way. Anchored
+                        strips (${v#pat} / ${v%pat}) are unaffected. ARCHITECTURE.md §28.
   read -s is per-read:  it restores echo after ONE read, so the driver echoes whatever is
                         still queued between reads (a paste, a fast multi-byte char). A UI
                         that draws its own input owns the echo for the whole session

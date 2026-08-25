@@ -528,7 +528,7 @@ if ((${#query[@]} == 0)); then
     exit 1
 fi
 QUERY="${query[*]}"
-if [[ -z "${QUERY//[[:space:]]/}" ]]; then
+if [[ "$QUERY" != *[![:space:]]* ]]; then
     echo "yt-search: a search query is required (see 'yt-search -h')" >&2
     exit 1
 fi

@@ -3414,6 +3414,24 @@ Rules for anyone editing these scripts:
                           call (§25). Take both down together — stty -echo -icanon min 1
                           time 0 — and restore the stty -g state saved on the way in rather
                           than re-asserting defaults over a tty the caller set up itself.
+   ${var//pat/} is O(n2): pattern SUBSTITUTION is quadratic-with-a-multibyte-constant on
+                          3.2 the moment the string contains ONE match: bash walks every
+                          byte position running a glob match, and each attempt costs
+                          O(remaining) in a UTF-8 locale. Measured on 3.2.57, one space per
+                          five bytes: 1KB 93ms - 2KB 527ms - 4KB 3.4s - 7KB 17.5s. With no
+                          match ANYWHERE there is a fast bail (48KB in 5ms), and that is
+                          precisely why the idiom reads as free: a hand-written test
+                          envelope with terse titles takes the fast path, while every real
+                          title contains a space and takes the slow one. Measured before
+                          this rule existed: `yt-search -j -n 25 | ut-playlist --add` spent
+                          16s in one such expansion, and `ut-play -d --queue -` 16.5s.
+                          So a blank-input test is a MATCH, never a substitution:
+                            [[ "$s" == *[![:space:]]* ]]   has a non-blank character
+                            [[ "$s" != *[![:space:]]* ]]   is blank or empty
+                          Both amplifiers are measured too: a character class costs 47x a
+                          literal pattern, and en_US.UTF-8 costs 8x LC_ALL=C. There is now
+                          no `${var//` anywhere in shell/ — keep it that way, and note that
+                          the anchored strips (${v#pat}, ${v%pat}) are NOT affected.
    Verify:                run the empty-argument paths under /bin/bash explicitly —
                           this class is a runtime bash-version behavior, so `bash -n`
                           and shellcheck do NOT catch it; only executing on 3.2 does.

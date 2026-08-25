@@ -264,7 +264,13 @@ read_items() {
     [[ -t 0 ]] && fail 1 invalid_input "--add reads items from stdin (try: yt-search -j -- QUERY | ut-playlist --add NAME)"
     local raw items rc=0
     raw=$(cat)
-    [[ -n "${raw//[[:space:]]/}" ]] || fail 1 invalid_input "no input on stdin"
+    # A MATCH, not `${raw//[[:space:]]/}`. That substitution has a fast path when the pattern
+    # occurs NOWHERE, which is why it read as free — but the moment one space exists ahead,
+    # bash 3.2 walks every byte position running a glob match, each attempt costing O(remaining)
+    # in a UTF-8 locale. Measured on the floor: a 7KB search envelope — i.e. `yt-search -j -n 25`,
+    # the example in this command's own usage — spent 16s in that one expansion, against 5ms
+    # here. Every real title contains a space, so the slow path was the only path.
+    [[ "$raw" == *[![:space:]]* ]] || fail 1 invalid_input "no input on stdin"
     items=$(printf '%s' "$raw" | jq -c --arg now "$(now_utc)" '
         (if type == "object" and has("results") then
             (.engine) as $e

@@ -1066,7 +1066,11 @@ QUEUE_ITEMS_JSON="[]"
 read_queue_items() {
     local flag=$1 raw
     raw=$(cat)
-    [[ -n "${raw//[[:space:]]/}" ]] ||
+    # A MATCH, not `${raw//[[:space:]]/}` — the same fix `ut-playlist`'s read_items carries,
+    # for the same measured reason: that substitution is quadratic-with-a-multibyte-constant
+    # in bash 3.2 once the string contains one space, and a queue arrives as a KB-sized
+    # envelope. Measured: 16s for a 7KB envelope, against 5ms for this.
+    [[ "$raw" == *[![:space:]]* ]] ||
         die "$flag reads JSON on stdin (an item array, a --show envelope, or a search envelope); got nothing"
     QUEUE_ITEMS_JSON=$(printf '%s' "$raw" | jq -c --arg fallback "$ENGINE" '
         (if type == "array" then {items: ., engine: null}
@@ -2172,7 +2176,7 @@ if [[ -n "$QUEUE_INPUT" ]] && [[ "$ACTION" != enqueue ]]; then
     ((DETACH)) || die "--queue starts a detached player: use 'ut-play -d --queue -'"
     [[ -z "$ACTION" ]] || die "--queue cannot be combined with $ACTION_FLAG"
     [[ "$QUEUE_INPUT" == "-" ]] || die "--queue takes '-': the items are read from stdin"
-    [[ -z "${QUERY//[[:space:]]/}" ]] || die "--queue takes its handles from stdin, not from the command line"
+    [[ "$QUERY" != *[![:space:]]* ]] || die "--queue takes its handles from stdin, not from the command line"
     require_cmd jq
     read_queue_items --queue
     # The engine is per ITEM (a playlist may mix sources), so --engine is only the fallback
@@ -2190,7 +2194,7 @@ fi
 # search query and belongs to a different verb. An unresolvable handle therefore surfaces as
 # a propagated engine failure (2+), not a usage error. docs/ARCHITECTURE.md §6.
 IS_HANDLE=0
-if [[ -n "${QUERY//[[:space:]]/}" && "$QUERY" != *[[:space:]]* ]]; then
+if [[ -n "$QUERY" && "$QUERY" != *[[:space:]]* ]]; then
     IS_HANDLE=1
 fi
 
@@ -2203,7 +2207,7 @@ fi
 # A bare invocation (no handle, no lifecycle action) is a usage error (D3). Report it before
 # the heavier mpv dependency check so the message is about the missing input, not a missing
 # player. Searching lives in yt-search; interactive browsing in uting.
-if ((! IS_HANDLE)) && [[ -z "${QUERY//[[:space:]]/}" ]] && [[ -z "$ACTION" ]]; then
+if ((! IS_HANDLE)) && [[ "$QUERY" != *[![:space:]]* ]] && [[ -z "$ACTION" ]]; then
     die "provide a video id or URL (to search, run yt-search; for interactive browsing, uting)"
 fi
 
@@ -2247,7 +2251,7 @@ esac
 # queue never goes near the socket. --next signals the child instead (do_next).
 if [[ "$ACTION" == "enqueue" ]]; then
     [[ "$QUEUE_INPUT" == "-" ]] || die "--enqueue takes '-': the items are read from stdin"
-    [[ -z "${QUERY//[[:space:]]/}" ]] || die "--enqueue takes its items from stdin, not from the command line"
+    [[ "$QUERY" != *[![:space:]]* ]] || die "--enqueue takes its items from stdin, not from the command line"
     require_cmd jq
     read_queue_items --enqueue
     do_enqueue "${TARGET_ID:-}"

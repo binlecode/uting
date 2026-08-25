@@ -2685,7 +2685,7 @@ play_selected() {
         # a handle with whitespace in it, no mpv).
         msg=${msg##*$'\n'}                 # last line only; die can print context above it
         msg=${msg#Error: }                 # the core's own prefix, redundant under our label
-        [[ -n "${msg//[[:space:]]/}" ]] || msg="playback failed"
+        [[ "$msg" == *[![:space:]]* ]] || msg="playback failed"
         play_failed_notice "$msg"
         return 1
     fi
@@ -2767,7 +2767,7 @@ prompt_name() {
     PROMPT_NAME=""
     printf '\n%s%s %s%s: ' "$C_BOLD" "$GL_CARET" "$1" "$C_RESET"
     read_query_input || return 1
-    [[ -n "${QUERY_INPUT//[[:space:]]/}" ]] || return 1
+    [[ "$QUERY_INPUT" == *[![:space:]]* ]] || return 1
     PROMPT_NAME="$QUERY_INPUT"
     return 0
 }
@@ -2813,7 +2813,7 @@ add_to_playlist() {
     if ((rc != 0)); then
         msg=${msg##*$'\n'}
         msg=${msg#ut-playlist: }
-        [[ -n "${msg//[[:space:]]/}" ]] || msg="$S_PL_FAILED"
+        [[ "$msg" == *[![:space:]]* ]] || msg="$S_PL_FAILED"
         store_notice "$S_PL_ACT:" "$msg"
         return 0
     fi
@@ -2916,7 +2916,7 @@ new_search() {
     printf '\n%s%s %s%s: ' "$C_BOLD" "$GL_CARET" "$S_NEW_SEARCH" "$C_RESET"
     read_query_input || return 0
     q="$QUERY_INPUT"
-    [[ -n "${q//[[:space:]]/}" ]] || return 0
+    [[ "$q" == *[![:space:]]* ]] || return 0
     QUERY_LABEL="$q"
     printf '%s%s' "$S_SEARCHING" "$GL_ELL"
     fetch_json || rc=$?
@@ -3018,7 +3018,7 @@ apply_filter() {
     local q="$1" url title dur views chan live hay tok ok matched="" tokens=()
     selected=0
     page_index=1
-    if [[ -z "${q//[[:space:]]/}" ]]; then
+    if [[ "$q" != *[![:space:]]* ]]; then
         FILTER_LABEL=""
         load_rows "$ALL_ROWS"
         return 0
@@ -3313,7 +3313,7 @@ if ((${#query[@]} == 0)); then
     # char_w). Cancelling the first prompt is a clean quit, so it exits 0.
     if ! read_query_input; then tty_echo_restore; exit 0; fi
     tty_echo_restore
-    [[ -n "${QUERY_INPUT//[[:space:]]/}" ]] || { echo "uting: no query entered" >&2; exit 0; }
+    [[ "$QUERY_INPUT" == *[![:space:]]* ]] || { echo "uting: no query entered" >&2; exit 0; }
     query=("$QUERY_INPUT")
 fi
 QUERY_LABEL="${query[*]}"
