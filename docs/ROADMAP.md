@@ -333,7 +333,15 @@ yt-dlp/mpv**，不再碰网易云。**国内新生代与本项目走在同一条
     人机面   uting        发布名本身 —— 人会敲它，也会向别人提起它
     播放器   ut-play      套件前缀 ut-（派生自发布名）
     引擎     yt-* bili-*  站名 —— 一个引擎最该先说清自己是哪个站
+    状态     ut-playlist  套件前缀 + 它存的那件东西的全词，不缩写
+             ut-history
   ```
+
+  **两个状态命令的落选名，连同落选理由**（同一条规则的第二次应用，记下来是为了挡住重开）：
+  `ut-list` —— 与每个 verb 都有的 `-l/--list` 输出模式撞车，`ut-list --ls` 根本读不通；
+  `ut-lib` / `ut-store` —— 缩写加一个模糊名词，而且把"列表"和"历史"两件事挤进一个命令，
+  flag 面会宽到小模型调不安全；`ut-queue` —— 队列不是一个命令，它是播放器的运行时状态
+  （`ARCHITECTURE.md` §9.5）。
 
   **不发任何短名。** 六项筛查（§3 方法）：`ut-play` / `ut-search` **PATH·brew·npm·PyPI·crates·
   GitHub 同名 全空**；光杆 `ut` 全占（npm/PyPI/crates + `boost-ext/ut` 1438★），`utt` 也被占

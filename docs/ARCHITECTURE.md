@@ -1225,6 +1225,28 @@ killed it" and "the user killed it" alike. The handler sets the reason BEFORE it
 the epitaph describes what happened instead of guessing. A sentinel file was considered and
 rejected: that is another lock, and it would let the death record lie in a new way.
 
+**The gap between two tracks is a JIT resolve, and it was measured rather than budgeted.**
+median **4.3 s**, p90 **5.7 s**, range 3.2–5.8 (n=12) — against a written budget of "about 3
+seconds", which is 1.4× off and is why an unmeasured "about 3 seconds" is the next timing
+incident. The measurement is defined at the EARS, not in the code: from the last `position`
+the old track reports to the first one the new track reports, read off a real player's
+`--status`, on a 5-item queue alternating yt and bili, three runs, each track sent to
+`duration-3` so it ends by itself (a `--next` is a different path and not what this measures).
+**92% of the gap is the engine round trip** (resolve median 3.8 s), so the only place left to
+cut is prefetch — nothing else in the loop is big enough to matter. The direction asymmetry is
+real and is why a mixed queue is the only honest fixture: **→bili 3.4 s, →yt 5.3 s**, because
+`yt-resolve` reads a browser cookie and may spend a PO-token probe and an anonymous retry
+where `bili-resolve` needs one yt-dlp call. **Prefetch is therefore NOT in v1**, on the
+trigger condition written before the number existed and honoured after: it is paid for only
+when p90 passes **8 s**, because resolving track N+1 during track N means a second background
+job and a cache that expires (a stream URL dies in hours). The number hangs off live sites;
+an upstream change means re-measuring, and the trigger does not move.
+
+**N extractions instead of one.** JIT resolve turns one play into N chances for yt-dlp to be
+having a bad minute, and repeated extraction can itself invite throttling. That is the real
+price of keeping the queue in the player, and it is absorbed by ADVANCING on a failed track
+rather than by retrying — a retry is the gap above, doubled.
+
 **`--next` moves the position in the PARENT, then signals.** The envelope therefore reports a
 queue it read off disk rather than one it predicted — the rule `--seek` already follows for
 `position` (§9.3). The child's own end-of-track advance is a compare-and-swap against the
@@ -1286,6 +1308,10 @@ history, because nobody finds the knob before the feature has ever produced a ro
 buys is bounded on purpose: a local file, on this machine, with a `--clear` verb of its own.
 The reopen condition is a SHARED account, where "what this login listened to" stops being one
 person's record.
+
+**Volume, so nobody adds a rotation nobody needs.** A row is ~200 bytes; 50 tracks a day is
+about 300 KB a year. Month shards plus `--clear --before` are the whole size story — there is
+no rotation, no compaction and no cap, because at that rate none of them would ever fire.
 
 **The TUI reads it and stores nothing** (`h`, §11). The log's `--ls` envelope is the same
 `.items` shape a playlist's `--show` is, so `build_playlist_rows` renders it unchanged and
@@ -3070,6 +3096,10 @@ new-search/more-results instead of `n`/`m`; also corrected.
   half-built.
   Favourites is deliberately not a feature (a playlist with a fixed name); a downloader and
   channel subscriptions are unscheduled.
+- **Queue EDITING — reorder, dequeue, repeat, shuffle — is deliberately not v1.** Those are
+  operations on a queue; the first version had to prove a queue ADVANCES, which is the part
+  everything else rests on. Adding them is adding verbs to `ut-play` (each with its `-j`
+  envelope, D14), not a new command — a queue belongs to the player (§9.5).
 - `uting` rows are one jq pass over the cached results per search — fine for small N;
   not intended for thousands of results.
 - **URL sniffing in the player** — `ut-play` never guesses which engine a bare URL belongs
