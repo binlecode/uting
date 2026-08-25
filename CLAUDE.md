@@ -38,8 +38,8 @@ shell/ut-history --ls -n 20 -j                                # the log: what a 
 UT_HISTORY=0 shell/ut-play -d -- URL                          # …and the switch that stops it being written
 shell/uting --version                                        # answers before any dependency gate
 
-tests/contract.sh                                             # the CLI contract; ~90s, needs the network
-tests/playback.sh                                             # real detached players; silent, ~55s
+tests/contract.sh                                             # the CLI contract; ~75s, needs the network
+tests/playback.sh                                             # real detached players; silent, ~65s
 tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
 tests/drive.sh -k Enter -w Playing                            # …including a real detached play
 ```
@@ -141,7 +141,7 @@ Two files, one rule:
 | File | Drives | Gate |
 |---|---|---|
 | `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux | none — run it before every commit |
-| `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), that an engine's `http_headers` actually reach mpv, and the listening log's **wiring** — only here does a real track really end | none — it starts real players, but in a `TMPDIR` and a `UT_STATE_DIR` of its own; ~55s and needs the network, so run it when the player changed |
+| `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), that an engine's `http_headers` actually reach mpv, and the listening log's **wiring** — only here does a real track really end | none — it starts real players, but in a `TMPDIR` and a `UT_STATE_DIR` of its own; ~65s and needs the network, so run it when the player changed |
 
 `tests/drive.sh` is the only other file, and it is not a suite — it asserts nothing. It is a
 **driver**: it launches the TUI in tmux at a declared geometry, waits on the ready marker, optionally sends keys, and **always reaps the detached player** — which killing the tmux session does not do. Use it whenever a TUI change has to be driven rather than reasoned about.

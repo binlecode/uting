@@ -3121,8 +3121,8 @@ new-search/more-results instead of `n`/`m`; also corrected.
 **Last run — a measurement, filled in from the run, not a constant kept in sync.** Each suite
 prints its own count on the last line, which is that number's one home; the entry here records
 what a particular run on a particular day cost, and goes stale by design rather than by drift.
-*2026-08-25, both suites green*: `contract.sh` **177 ok / 0 failed in ~90s**, `playback.sh`
-**42 ok / 0 failed in ~55s**, with `pgrep mpv` empty afterwards. Both files point `TMPDIR` at a
+*2026-08-25, both suites green*: `contract.sh` **177 ok / 0 failed in 76s**, `playback.sh`
+**42 ok / 0 failed in 64s**, with `pgrep mpv` empty afterwards. Both files point `TMPDIR` at a
 directory of their own, so neither reaches the state dir of a player the user is listening to,
 and both now point `UT_STATE_DIR` at one too — a detached player writes a listening row per
 track (§9.6), so without it every run would append a dozen tracks nobody listened to to the
