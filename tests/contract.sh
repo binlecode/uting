@@ -33,6 +33,15 @@ FAILED=""
 
 # report <name> <want> <got>          — a regression if they differ
 report() {
+    # FAIL FAST on a hang, and ONLY on a hang. An ordinary mismatch keeps going — the point
+    # of a suite is the whole list. But a check that hit the ceiling means the environment is
+    # wedged (throttled, offline, a dead socket), and every live call after it will spend the
+    # same five seconds proving the same thing.
+    if [ "$3" = 124 ] && [ "$2" != 124 ]; then
+        printf '  HUNG  %-34s exceeded %ss\n' "$1" "$UT_CHECK_TIMEOUT"
+        printf '\ncontract.sh: aborted — a check wedged. %d checks ran before it.\n' "$((pass + fail))"
+        exit 1
+    fi
     if [ "$2" = "$3" ]; then
         pass=$((pass + 1))
         ((QUIET)) || printf '  ok    %-34s %s\n' "$1" "$3"
@@ -56,8 +65,53 @@ drift() {
     fi
 }
 
+# ---- the upper bound on any ONE check -----------------------------------------------
+# About twenty-five of the checks below make a LIVE call to YouTube or Bilibili (yt-dlp,
+# curl), and a throttled or wedged one of those blocks FOREVER: nothing else in this file is
+# a clock. macOS ships no `timeout` and the Homebrew coreutils one is not a dependency this
+# suite may grow (CLAUDE.md), so the watchdog is written here out of builtins.
+#
+# It changes nothing about WHAT is invoked or asserted — every check still runs its own real
+# command and reads its own real answer. It only refuses to wait forever for one.
+#
+# 5s: measured, yt-search 2.74s / yt-resolve 2.45s / bili-search 0.71s, so ~2x headroom.
+# Anything past it is WEDGED, not slow, and a generous ceiling just turns a hung run into a
+# long one — the exact failure this exists to prevent.
+#
+# The command runs in its OWN process group (set -m, the idiom ut-play's detach_play uses)
+# and the GROUP is what gets killed: a check that shelled out to yt-dlp leaves that child
+# holding the network otherwise, and the child is the part that hangs. The budget lives in
+# its own process and the check BLOCKS in `wait` — polling instead cost 213ms on every check
+# that finished in 2ms, because the first sleep is paid before the first liveness test can
+# succeed.
+UT_CHECK_TIMEOUT=${UT_CHECK_TIMEOUT:-5}
+bounded() {
+    local pid wd st
+    set -m
+    "$@" &
+    pid=$!
+    set +m
+    # BOTH fds redirected, and it matters: a caller reads this function through
+    # `out=$(bounded ...)`, and the watchdog would otherwise inherit that command
+    # substitution's stdout PIPE. Killing the subshell does not kill the `sleep` under it, so
+    # the orphan kept the pipe open and every captured check paid the full budget — 5s each,
+    # turning a 114s suite into one that could not finish.
+    { sleep "$UT_CHECK_TIMEOUT"; kill -TERM "-$pid" 2>/dev/null; } >/dev/null 2>&1 &
+    wd=$!
+    wait "$pid"
+    st=$?
+    # The watchdog exits the moment it fires, so finding it ALIVE is what proves it did not.
+    if kill -0 "$wd" 2>/dev/null; then
+        { kill "$wd"; wait "$wd"; } 2>/dev/null
+    else
+        { wait "$wd"; } 2>/dev/null
+        st=124
+    fi
+    return $st
+}
+
 # Exit code of a command whose output we do not want.
-rc() { "$@" >/dev/null 2>&1; echo $?; }
+rc() { bounded "$@" >/dev/null 2>&1; echo $?; }
 
 # jq_ok <jq-filter> <command...> — does the command's stdout satisfy the filter?
 # The output is captured FIRST and the filter applied to the variable, never piped straight
@@ -66,8 +120,13 @@ rc() { "$@" >/dev/null 2>&1; echo $?; }
 # exit 1. Both error-path checks below went red against correct behaviour that way.
 jq_ok() {
     local filter=$1; shift
-    local out
-    out=$("$@" 2>/dev/null)
+    local out st
+    out=$(bounded "$@" 2>/dev/null)
+    st=$?
+    # A timeout must stay 124 all the way to report(). Letting jq answer for it turns a
+    # wedged network call into an ordinary content mismatch — the one diagnosis that sends
+    # the reader looking at the engine instead of at the link.
+    [ "$st" = 124 ] && { echo 124; return; }
     printf '%s' "$out" | jq -e "$filter" >/dev/null 2>&1
     echo $?
 }
