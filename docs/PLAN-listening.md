@@ -346,10 +346,15 @@ fork 成本要对着今天的 ~16 ms IPC 量一次再决定，**量出来 > 50 m
 
 ## 6. 契约与版本
 
-- **`AS-BUILT-contract.md`**：§1 加 1.5/1.6 两个命令面 · §2 加两条 gate · §3 加 playlist / queue /
-  history 三个 schema 与 `--status` 的 `queue` 键 · §5 加 `UT_STATE_DIR`、`UT_HISTORY`。
+- **`AS-BUILT-contract.md`**（§1.5 与 `ut-playlist` 的 gate **已随步骤 1 落地**，剩下的是）：
+  **步骤 2** 改 §1.1 —— `ut-play` 加七个动词（`--queue`/`--enqueue`/`--next` +
+  `--pause`/`--resume`/`--seek`/`--seek-to`）、§3 加 queue schema 与 `--status` 的 `queue` 键、
+  §4 记 `--seek` 无符号退 1 而无目标退 4；**步骤 3** 加 §1.6（`ut-history`）+ 它的一条 gate、
+  §3 的 history 行 schema、§5 的 `UT_HISTORY`。
 - **`ARCHITECTURE.md`**：新增一节讲用户级状态层（为什么与 `players/` 分开、锁与原子写、JSONL 的例外
-  及其 4KB 约束）· §9.2 改成"播放器从一次播放变成一串播放"· §26 的非目标表按实际情况收缩。
+  及其 4KB 约束）· §9.2 改成"播放器从一次播放变成一串播放"，并写下两把锁与**不嵌套**的硬规则（§3）·
+  **§26 那条判据作废**（"只有调用方没法直接跟 socket 说话才加动词"—— 理由在 `ROADMAP.md` §11），
+  pause / seek / next 从非目标表里移出。
 - **semver**（D13）：三条都是**加法** —— 新命令、新动词、envelope 新增键。既有调用方一行不用改。
   → 每条落地各 bump 一次 **z**，`shell/VERSION` 单独一个 commit，不随功能 commit 走。
   `--status` 加 `queue` 键**不是**破坏性变更（既有消费者忽略未知键；本套件所有 envelope 都是这个约定）。
