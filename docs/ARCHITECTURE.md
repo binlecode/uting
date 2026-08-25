@@ -3152,11 +3152,15 @@ new-search/more-results instead of `n`/`m`; also corrected.
 prints its own count on the last line, which is that number's one home; the entry here records
 what a particular run on a particular day cost, and goes stale by design rather than by drift.
 *2026-08-25, both suites green*: `contract.sh` **177 ok / 0 failed in 76s**, `playback.sh`
-**42 ok / 0 failed in 64s**, with `pgrep mpv` empty afterwards. Both files point `TMPDIR` at a
-directory of their own, so neither reaches the state dir of a player the user is listening to,
-and both now point `UT_STATE_DIR` at one too — a detached player writes a listening row per
-track (§9.6), so without it every run would append a dozen tracks nobody listened to to the
-user's real history, which unlike a player is not something `--stop` takes back.
+**42 ok / 0 failed in 64s**, with `pgrep mpv` empty afterwards. All THREE entry points under
+`tests/` point `TMPDIR` at a directory of their own — the two suites and the `drive.sh` driver,
+which was the last one still using the user's — so none of them reaches the state dir of a
+player the user is listening to. The suites point `UT_STATE_DIR` at one too: a detached player
+writes a listening row per track (§9.6), so without it every run would append a dozen tracks
+nobody listened to to the user's real history, which unlike a player is not something `--stop`
+takes back. `drive.sh` deliberately leaves `UT_STATE_DIR` alone — a frame captured from it
+should show the store a human sees — and passes `UT_HISTORY=0` into the pane instead, which
+suppresses the write without emptying the read.
 
 **Functional only, and two files.** The renderer rig (`tui_pane.sh`) and its cell-grid prover
 were removed: layout is proved when a frame enters a doc (`.claude/skills/capture-pane`, which
@@ -3202,16 +3206,22 @@ somewhere that half-covers it.
 > had run the same suite, and whether the two overlapped was not captured. Filed as
 > unlocated, with the measurement, rather than explained.
 >
-> **The open one is different, and it has a fix rather than an acceptance.** On 2026-08-25
-> `playback.sh` ran 34s/35 ok/1 failed and then 41s/36 ok/0 failed, same machine, no code
-> change; the red one was *"no duration on the queued player"*. That is not shared state — it
-> is a **live field read exactly once**: after `--next` the poll waits for the recorded `url`
-> to flip, which the parent does the moment it advances the queue, while `duration` comes off
-> the socket, where the new mpv may not have reported one yet. It is a race with a bounded
-> poll for a fix (`wait_live <id> <field>`), so it is logged as located-and-scheduled, not as
-> accepted flakiness. It also cost more than one check: a red there skips the arm of the
-> `case` that proves a track ending advances the queue, so the score dropped by one while the
-> coverage dropped by two.
+> **The fourth is CLOSED too, and it is the one worth reading twice, because a red check
+> turned another one off.** On 2026-08-25 `playback.sh` ran 34s/35 ok/1 failed and then
+> 41s/36 ok/0 failed, same machine, no code change; the red one was *"no duration on the queued
+> player"*. Not shared state — a **live field read exactly once**: after `--next` the poll
+> waited for the recorded `url` to flip, which the parent does the moment it advances the
+> queue, while `duration` comes off the socket, where the new mpv may not have reported one
+> yet. The cost was never the one red. It sat on a `case` whose other arm proves *a track
+> ending advances the queue* — the single claim a queue exists for — so a race in the setup
+> silently withdrew the check, and the score fell by one while the coverage fell by two. **The
+> mirror image of the rule this suite lives by:** not a green nobody has seen fail, but a red
+> nobody noticed had switched something off. Fixed by the bounded poll the field always
+> needed (`wait_live <id> <field>`, shared with the two `position` waits), and the failure
+> message now says *never reported a duration in 40s* rather than *no duration*, because those
+> are different findings. Confirmed by sabotage — `wait_live` returning failure at once turns
+> all three of its sites red, C4's among them — and then by three consecutive clean runs at
+> 42 ok, since a race check run once proves nothing.
 
 **No *scratch* check is named by path here, on purpose.** The exception is the three files
 that earned a permanent home and are committed under `tests/` — the two suites `contract.sh`

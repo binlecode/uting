@@ -70,6 +70,36 @@ wait_for_sock() {
     return 1
 }
 
+# wait_live <id> <field>  — poll --status until one LIVE field reports something real, then
+# echo it; 1 on timeout, with whatever it last saw. The fields this waits on come off the mpv
+# socket, not the record, so until mpv is decoding they are legitimately null — null there is
+# an honest READING (§9.3), and what must not happen is null forever. Same rule as
+# wait_for_sock: bounded poll, never a fixed sleep, because the wait is network-bound.
+#
+# By FIELD rather than one loop per field: position and duration arrive at the same moment for
+# the same reason, and the duration site below is a queue changing tracks, where reading once
+# races the child killing one mpv and starting the next.
+wait_live() {
+    local id=$1 field=$2 v="" i
+    for i in $(seq 1 40); do
+        v=$(shell/ut-play --status -j 2>/dev/null \
+            | jq -r --arg i "$id" --arg f "$field" '.players[]|select(.id==$i)|.[$f] // empty' 2>/dev/null)
+        case "$v" in "" | null | 0) ;; *) printf '%s' "$v"; return 0 ;; esac
+        sleep 1
+    done
+    printf '%s' "$v"
+    return 1
+}
+
+# no_orphans <label>  — every mpv this file started is gone. Scoped to this run's own socket
+# dir: a bare `mpv .*--input-ipc-server` counts the user's players too, so on any machine
+# where uting is actually used the orphan check was a coin toss.
+no_orphans() {
+    local n
+    n=$(pgrep -f "mpv .*--input-ipc-server=$STATE_DIR" 2>/dev/null | wc -l | tr -d ' ')
+    report "$1" 0 "${n:-0}"
+}
+
 # Always stop everything, however this exits — a leaked player outlives the shell.
 cleanup() {
     shell/ut-play --stop --all -j >/dev/null 2>&1
@@ -120,20 +150,12 @@ echo "── the live read: a real socket, a real peer, null is not false ──
 # that peer, so the read is proved HERE, against the real one — never in contract.sh against
 # something written to imitate it.
 #
-# Poll for the first reading rather than sleeping a guess: position/duration are null until
-# mpv starts decoding (network-bound, ~8s cold), and null there is an honest READING, not a
-# failure. What must not happen is null forever.
-pos=""; i=0
-while [ $i -lt 40 ]; do
-    pos=$(shell/ut-play --status -j 2>/dev/null \
-          | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.position // empty' 2>/dev/null)
-    case "$pos" in "" | null | 0) ;; *) break ;; esac
-    sleep 1; i=$((i + 1))
-done
-case "$pos" in
-    "" | null | 0) bad "player 1 never reported a position — the live read is unproved" ;;
-    *) ok "position came off the socket (${pos}s), not off the record" ;;
-esac
+# Poll for the first reading rather than sleeping a guess (see wait_live).
+if pos=$(wait_live "$id1" position); then
+    ok "position came off the socket (${pos}s), not off the record"
+else
+    bad "player 1 never reported a position — the live read is unproved"
+fi
 # false is an ANSWER; null is "the question could not be asked" (§9.3). A playing player that
 # reported paused:null would make every consumer's readiness probe read a fabrication, and a
 # playing player that reported it as anything but false would make --pause unobservable.
@@ -168,10 +190,16 @@ before=$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id
 # exact 30 — asserting the exact number would be asserting mpv's keyframe interval. What is
 # proved here is that the sign was honoured and that the number is READ, not computed.
 p1=$(shell/ut-play --seek +30 --id "$id1" -j | jq -r '.position')
-case "$before$p1" in
-    *null* | "") bad "--seek +30 reported no position — the read-back is unproved" ;;
-    *) if [ "$p1" -ge $((before + 20)) ]; then ok "--seek +30 moved the playhead forward (${before}s → ${p1}s)"
-       else bad "--seek +30 left the playhead at ${p1}s (was ${before}s)"; fi ;;
+# Each operand is judged SEPARATELY. Concatenating them ("$before$p1") let an empty baseline
+# through whenever p1 was a number — and an empty `before` is 0 to bash 3.2 arithmetic, so
+# `p1 >= before + 20` became `p1 >= 20` and this passed with no baseline at all.
+case "$before" in
+    "" | null) bad "--seek +30 had no baseline position to compare against" ;;
+    *) case "$p1" in
+        "" | null) bad "--seek +30 reported no position — the read-back is unproved" ;;
+        *) if [ "$p1" -ge $((before + 20)) ]; then ok "--seek +30 moved the playhead forward (${before}s → ${p1}s)"
+           else bad "--seek +30 left the playhead at ${p1}s (was ${before}s)"; fi ;;
+       esac ;;
 esac
 # An ABSOLUTE seek is exact (mpv hr-seeks it), so coming back from ~30s means the start
 # itself, not a keyframe in its neighbourhood.
@@ -216,20 +244,13 @@ report "bili detach envelope" 0 \
 id3=$(printf '%s' "$o3" | jq -r '.id // empty')
 sock3=$(printf '%s' "$o3" | jq -r '.sock // empty')
 if wait_for_sock "$sock3"; then
-    # Poll, never sleep a guess: time-to-first-byte is network-bound, so a fixed wait either
-    # flakes or spends the whole budget on a run that was ready in a second (same rule as
-    # wait_for_sock). `position` is read live off the socket, not from the record.
-    pos=""; i=0
-    while [ $i -lt 40 ]; do
-        pos=$(shell/ut-play --status -j 2>/dev/null \
-              | jq -r --arg i "$id3" '.players[]|select(.id==$i)|.position // empty' 2>/dev/null)
-        case "$pos" in "" | null | 0) ;; *) break ;; esac
-        sleep 1; i=$((i + 1))
-    done
-    case "$pos" in
-        "" | null | 0) bad "bili position never left 0 — did http_headers reach mpv? (CDN 403s without the Referer)" ;;
-        *) ok "bili audio flowed (position ${pos}s) — the envelope's headers reached mpv" ;;
-    esac
+    # `position` is read live off the socket, not from the record, and time-to-first-byte is
+    # network-bound — so it is the same bounded poll as player 1's (wait_live).
+    if pos=$(wait_live "$id3" position); then
+        ok "bili audio flowed (position ${pos}s) — the envelope's headers reached mpv"
+    else
+        bad "bili position never left 0 — did http_headers reach mpv? (CDN 403s without the Referer)"
+    fi
 else
     bad "the bili player's IPC socket never appeared — the header claim is untested"
 fi
@@ -241,10 +262,7 @@ report "--stop --all again" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; 
 report "no players left"   0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
 
 sleep 1
-# Scoped to this file's own socket dir. A bare `mpv .*--input-ipc-server` counts the user's
-# players too, so on any machine where uting is actually used the orphan check was a coin toss.
-n=$(pgrep -f "mpv .*--input-ipc-server=$STATE_DIR" 2>/dev/null | wc -l | tr -d ' ')
-report "no orphan mpv" 0 "${n:-0}"
+no_orphans "no orphan mpv"
 
 echo "── a queue is a player consuming a playlist ───────────────────────"
 # Everything above played ONE handle. This section plays a LIST, and it is here rather than
@@ -299,20 +317,24 @@ report "the record follows the track" "$U2" \
 # the end rather than waiting out a six-hour stream, then poll for the position to move —
 # the child has to notice mpv exited, advance under its own lock, resolve the next handle and
 # start a new mpv, and none of that is driven from here.
-dur=$(shell/ut-play --status -j | jq -r '.players[0].duration // empty')
-case "$dur" in
-    "" | null) bad "no duration on the queued player — cannot drive it to the end of a track" ;;
-    *)
-        shell/ut-play --seek-to $((dur - 4)) -j >/dev/null 2>&1
-        i=0
-        while [ $i -lt 90 ]; do
-            [ "$(shell/ut-play --status -j | jq -r '.players[0].queue.pos // empty')" = "2" ] && break
-            sleep 1; i=$((i + 1))
-        done
-        report "a track ending advances the queue" "2" \
-            "$(shell/ut-play --status -j | jq -r '.players[0].queue.pos // empty')"
-        ;;
-esac
+# WAIT for the duration, never read it once. `duration` comes off the socket while the poll
+# above only proved the RECORD advanced — at that moment the child may have just killed track
+# one's mpv and still be resolving track two, so a single read has come back empty and turned
+# this red on a correct player (measured). Worse than the red: it skipped the arm below, so
+# the one claim a queue exists for went unproved while the score dropped by only 1.
+qid=$(printf '%s' "$qout" | jq -r '.id // empty')
+if dur=$(wait_live "$qid" duration); then
+    shell/ut-play --seek-to $((dur - 4)) -j >/dev/null 2>&1
+    i=0
+    while [ $i -lt 90 ]; do
+        [ "$(shell/ut-play --status -j | jq -r '.players[0].queue.pos // empty')" = "2" ] && break
+        sleep 1; i=$((i + 1))
+    done
+    report "a track ending advances the queue" "2" \
+        "$(shell/ut-play --status -j | jq -r '.players[0].queue.pos // empty')"
+else
+    bad "the queued player never reported a duration in 40s — cannot drive it to a track end"
+fi
 
 # --stop takes the whole QUEUE down. The child traps BOTH signals stop_group sends it, and
 # the INT half is not belt-and-braces: bash only sets SIGINT to SIG_IGN in an async child when
@@ -325,10 +347,7 @@ sleep 0.5
 report "--stop ends the queue" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; echo $?)"
 sleep 2
 report "no players after a queue" 0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
-# Scoped to this file's own socket dir. A bare `mpv .*--input-ipc-server` counts the user's
-# players too, so on any machine where uting is actually used the orphan check was a coin toss.
-n=$(pgrep -f "mpv .*--input-ipc-server=$STATE_DIR" 2>/dev/null | wc -l | tr -d ' ')
-report "no orphan mpv after a queue" 0 "${n:-0}"
+no_orphans "no orphan mpv after a queue"
 # NOT checked here, and the reason is the rule this file lives by: that a stopped queue
 # files no tombstone was TRIED as a check and pulled, because it could not be made to go red
 # — disabling the child's `stopped` arm outright still produced an empty failed[]. A green
