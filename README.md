@@ -232,8 +232,11 @@ Lessons these paid for, every one of which produced a wrong result first:
 - [`docs/AS-BUILT-contract.md`](docs/AS-BUILT-contract.md) — the frozen CLI contract: envelopes, exit codes,
   lifecycle semantics, and the checklist for adding an engine.
 - [`docs/AS-BUILT-workflow.md`](docs/AS-BUILT-workflow.md) — how a unit of work moves through this repo.
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — positioning and non-goals, the naming survey, the OSS
-  readiness assessment, and the conditions under which the core would move to Go.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — positioning and non-goals, the decisions and their
+  reopen conditions, and the conditions under which the core would move to Go.
+- [`docs/RESEARCH-oss-landscape.md`](docs/RESEARCH-oss-landscape.md) — the measured survey those
+  decisions rest on, kept separate so the roadmap holds decisions rather than data: the six-way
+  name screening, what comparable projects do, and what publishing this shell version costs.
 
 ## License
 

@@ -372,7 +372,7 @@ print_list() {
 # fidelity is needed. FILTERED_JSON's own shape is left untouched (print_list still reads
 # it), so we project only here.
 # `jq -c`, both arms: every machine envelope in this suite is ONE line, which is the
-# contract the README and ROADMAP §0/§6.1 state as a differentiator.
+# contract the README and ROADMAP §0 state as a differentiator.
 emit_search_json() {
     if [[ "$OUTPUT_MODE" == "json_full" ]]; then
         printf '%s' "$FILTERED_JSON" | jq -c --arg e "$ENGINE_NAME" --arg q "$QUERY" \

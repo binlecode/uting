@@ -57,7 +57,9 @@ B6. **An initiative descends from the roadmap; research is its input, not a stag
     `docs/RESEARCH-<topic>.md` with each claim cited — that work runs on its own cadence, off
     this pipeline. What survives the filter of relevance and business need (`ROADMAP.md` §0's
     positioning and non-goals) becomes a roadmap entry carrying its reopen condition; the
-    research doc is then deleted, and the `PLAN-` names the entry it implements.
+    **decision** moves, the **survey stays** where it was measured, dated, with the roadmap
+    linking to it — a roadmap that carries data ages into a doc nobody trusts. The `PLAN-`
+    names the roadmap entry it implements, never the research doc.
 
 B7. **A landing is a checklist, not a feeling.** The unit of work closes against the document
     that authorized it, atomically: every plan item landed or explicitly deferred, every
