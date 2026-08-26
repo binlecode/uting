@@ -753,7 +753,15 @@ else
     # state dir. Nothing destructive happens there — every --stop and every fixture below runs
     # in this shell, where TMPDIR is redirected — but "this file does not touch your state"
     # should be true without a footnote.
-    TUI_CMD="cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' shell/uting 'lofi hip hop'"
+    # A state dir of the pane's own, seeded with ONE listening. Two reasons, and the second
+    # is the check below: the pane stops reading the user's real store (the footnote the
+    # TMPDIR comment above wishes it did not need), and `h` has something deterministic to
+    # open — against a real user's log the row-source check would pass on an empty history
+    # without ever leaving the search, which is a check that cannot fail.
+    TUI_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-tuistore.XXXXXX")
+    printf '%s' '{"engine":"yt","id":"t1","url":"https://www.youtube.com/watch?v=t1","title":"Seeded","duration":213,"played_at":"2026-06-02T10:00:00Z","ended_at":"2026-06-02T10:01:37Z","seconds":97,"reason":null}' |
+        UT_STATE_DIR="$TUI_STATE" shell/ut-history --record - -j >/dev/null 2>&1
+    TUI_CMD="cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' shell/uting 'lofi hip hop'"
     TUI_CMD="$TUI_CMD"'; printf "RC=%s\n" $?'
     TUI_CMD="$TUI_CMD"'; stty -a </dev/tty | tr " " "\n" | grep -E "^-?(echo|icanon)$" | tr "\n" " " | sed "s/^/FLAGS= /"; echo; sleep 20'
     tmux new-session -d -s "$TS" -x 100 -y 30 "$TUI_CMD"
@@ -799,6 +807,33 @@ else
     done
     report "survives 62x20 and 26x24" 1 "$alive"
 
+    # A store is a room with a door, not a one-way trip. `h` REPLACES the rows with the log
+    # (`items=` in the header, where a search says `results=`) and `Esc` puts the search back
+    # — and until it did, the only exits from that room were retyping a query and quitting.
+    # Both halves are asserted: an `h` that quietly did nothing would leave the search on
+    # screen and make the return leg pass for free.
+    tmux resize-window -t "$TS" -x 100 -y 30 2>/dev/null
+    tmux send-keys -t "$TS" h
+    opened=0; i=0
+    while [ $i -lt 40 ]; do
+        tmux capture-pane -t "$TS" -p 2>/dev/null | grep -q 'items=' && { opened=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "h opens the log as the rows" 1 "$opened"
+    # Esc is read on a 1s timeout (it is also the lead byte of every arrow key), so this waits
+    # rather than photographs.
+    tmux send-keys -t "$TS" Escape
+    backed=0; i=0
+    while [ $i -lt 40 ]; do
+        pane=$(tmux capture-pane -t "$TS" -p 2>/dev/null)
+        case "$pane" in
+        *"items="*) ;;
+        *"results="*) backed=1; break ;;
+        esac
+        sleep 0.25; i=$((i + 1))
+    done
+    report "Esc leaves it for the search" 1 "$backed"
+
     # `q` used to be asserted by waiting for tmux to tear the session down, which proves the
     # pty is not wedged but says nothing about the status or about what was handed back. The
     # pane now outlives the TUI, so both come out of the same exit.
@@ -835,6 +870,7 @@ else
     report "the TUI left no player behind" 0 \
         "$(shell/ut-play --status -j 2>/dev/null | jq '.players | length')"
     tmux kill-session -t "$TS" 2>/dev/null
+    rm -rf "$TUI_STATE"
 fi
 
 echo
