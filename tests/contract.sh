@@ -36,7 +36,7 @@ cd "$(cd -P "$(dirname "$0")/.." && pwd -P)" || exit 1
 
 # ---- the player's state dir, pointed somewhere disposable ---------------------------
 # THE ARGUMENT FOR THIS LIVES HERE, and the other two files under tests/ point at it rather
-# than restating it (docs/ARCHITECTURE.md §27 is the doc-level home of the same fact).
+# than restating it (docs/AS-BUILT-verification.md §27 is the doc-level home of the same fact).
 #
 # `ut-play` derives its state dir from TMPDIR ("${TMPDIR:-/tmp}/uting-$(id -u)", shell/ut-play)
 # and takes no override of its own. Left at the user's real TMPDIR, this file --stop --all's a
@@ -242,7 +242,7 @@ report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - -
 
 # A detached player that dies on its own is the one lifecycle path the caller does not
 # drive, and it used to be silent: --status went empty, which is what a NORMAL finish looks
-# like too (docs/ARCHITECTURE.md §9.2). These checks own the boundary that keeps the tombstone
+# like too (docs/AS-BUILT-player.md §9.2). These checks own the boundary that keeps the tombstone
 # list an error record rather than the listening history ROADMAP.md §0 rules out — a normal
 # finish must leave nothing, a log with no epitaph must not be read as a death, and the list
 # must stay bounded. The input is a state file + log written by hand — a FIXTURE, which is
@@ -254,7 +254,7 @@ report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - -
 #
 # ORDER IS LOAD-BEARING: this section must stay AHEAD of the TUI section. The pane's `uting`
 # polls --status once a second, every lifecycle verb reaps, and a reaped fixture is a fixture
-# deleted before the assertion that reads it — the failure docs/ARCHITECTURE.md §27 already
+# deleted before the assertion that reads it — the failure docs/AS-BUILT-verification.md §27 already
 # has on record. Today the order holds by accident of layout; this comment is what makes it
 # hold on purpose.
 echo "── the death record: failures only, bounded, never inferred ───────"
@@ -807,11 +807,12 @@ else
     done
     report "survives 62x20 and 26x24" 1 "$alive"
 
-    # A store is a room with a door, not a one-way trip. `h` REPLACES the rows with the log
-    # (`items=` in the header, where a search says `results=`) and `Esc` puts the search back
-    # — and until it did, the only exits from that room were retyping a query and quitting.
-    # Both halves are asserted: an `h` that quietly did nothing would leave the search on
-    # screen and make the return leg pass for free.
+    # A store is a room with a door, not a one-way trip — and the door is the key that opened
+    # it (AS-BUILT-tui.md §11). `h` REPLACES the rows with the log (`items=` in the header,
+    # where a search says `results=`) and `h` again puts the search back; until it did, the
+    # only exits from that room were retyping a query and quitting. Both halves are asserted:
+    # an `h` that quietly did nothing would leave the search on screen and make the return
+    # leg pass for free.
     tmux resize-window -t "$TS" -x 100 -y 30 2>/dev/null
     tmux send-keys -t "$TS" h
     opened=0; i=0
@@ -820,9 +821,9 @@ else
         sleep 0.25; i=$((i + 1))
     done
     report "h opens the log as the rows" 1 "$opened"
-    # Esc is read on a 1s timeout (it is also the lead byte of every arrow key), so this waits
-    # rather than photographs.
-    tmux send-keys -t "$TS" Escape
+    # The toggle. A plain byte, so unlike the Esc this shipped as it needs no disambiguation
+    # window — but the poll stays: a redraw is not instant either.
+    tmux send-keys -t "$TS" h
     backed=0; i=0
     while [ $i -lt 40 ]; do
         pane=$(tmux capture-pane -t "$TS" -p 2>/dev/null)
@@ -832,7 +833,7 @@ else
         esac
         sleep 0.25; i=$((i + 1))
     done
-    report "Esc leaves it for the search" 1 "$backed"
+    report "h again leaves it for search" 1 "$backed"
 
     # `q` used to be asserted by waiting for tmux to tear the session down, which proves the
     # pty is not wedged but says nothing about the status or about what was handed back. The

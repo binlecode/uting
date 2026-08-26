@@ -181,7 +181,7 @@ Keys (List View):
   ↑/↓      move selection              ←/→  change page
   Enter    play / switch track (non-blocking background playback)
   Tab / p  toggle view: List <-> Now Playing card
-  Esc      back to the search results (from a playlist or the listening log)
+  Esc      (in the card) back to List View
   Space    pause / resume playback
   s        stop playback
   9 / 0    volume down / up (via IPC)
@@ -194,9 +194,11 @@ Keys (List View):
   m        more results (re-fetch current query, +25 to count)
   o        rotate sort field / order (relevance → view_count → duration), re-fetch
   e        switch source, re-fetch the same query (only when >1 engine is installed)
-  a        add the focused row to a playlist        (needs ut-playlist)
-  b        open a stored playlist as the row source  (needs ut-playlist)
-  h        open the listening log as the row source  (needs ut-history)
+  a        add the focused row to a playlist               (needs ut-playlist)
+  b        open a stored playlist as the row source; b again
+           returns to the search results                    (needs ut-playlist)
+  h        open the listening log as the row source; h again
+           returns to the search results                    (needs ut-history)
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
   q        quit (stops background playback on exit)
 
@@ -1214,7 +1216,7 @@ elapsed_since_play() {
 # Pause is read here rather than tracked locally because the local value LIES: toggle_pause
 # flips CURRENT_PLAY_PAUSED, but anything else driving the same socket (ut-play, an agent's
 # own `nc -U`, a second TUI) moves the real state without telling us — the identical reason
-# the core reads `volume` off the socket instead of the state file (ARCHITECTURE.md §9.3).
+# the core reads `volume` off the socket instead of the state file (AS-BUILT-player.md §9.3).
 # The local flip STAYS: it is what repaints the banner on the keypress instead of up to a
 # second later (tests/tui_pane.sh counts the repaint), and this read corrects it on the next
 # tick. Optimism, then truth.
@@ -1957,7 +1959,7 @@ display_list_menu() {
     # recomputes and rewrites the whole frame (2413 bytes in 15-24 ms at 100x30 — the same frame
     # an arrow-down writes). What went away is the number of states the terminal shows, not the
     # work. The geometry below is measured per frame rather than fixed, so almost any state
-    # change could move it; ARCHITECTURE.md §11 records why a banner-only repaint for the one change
+    # change could move it; AS-BUILT-tui.md §11 records why a banner-only repaint for the one change
     # that cannot (pause) was rejected rather than forgotten.
     printf '\033[H'
     # Title. Elided like every other row: a long query used to wrap and push the whole layout
@@ -2028,8 +2030,8 @@ display_list_menu() {
     # card's arrows seek 5s, these brackets seek 10s. That is why it is no longer called
     # S_SEEK5: the label never named a number, so the only thing the old name did was promise
     # a step size that the second caller does not honour. Still undocumented on purpose: p/P
-    # (a pure Tab alias). Esc used to be listed here too, when it was a no-op in this view;
-    # over a store it is the way back and is printed above, under the same gate as e/a/b/h.
+    # (a pure Tab alias) and Esc (a no-op in this view — the way out of a store is the key
+    # that opened it, see the BACK section).
     #
     # HINT_SEP is set around the MEASURE call as well as the print call below, never just
     # one: the separator is 3 cells against the default 2, and across 11 gaps that is 11
@@ -2051,19 +2053,23 @@ display_list_menu() {
     fi
     # Same rule as the source key: a key that cannot do anything must not spend a cell of a
     # measured block. With no ut-playlist installed, `a` and `b` genuinely do nothing.
+    # A store key RELABELS itself while its own store is on screen, because that is when it
+    # does the other half of its job. No extra entry for the way back: a toggle that spent a
+    # second cell would be documenting one key twice in a block that is measured.
     if [[ -n "$UT_PLAYLIST" ]]; then
-        nav_items+=("a	$S_PL_ADD" "b	$S_PL_OPEN")
+        if [[ "$LIST_SOURCE" == "playlist" ]]; then
+            nav_items+=("a	$S_PL_ADD" "b	$S_BACK_SEARCH")
+        else
+            nav_items+=("a	$S_PL_ADD" "b	$S_PL_OPEN")
+        fi
     fi
     # Same rule again: with no ut-history installed, h genuinely does nothing.
     if [[ -n "$UT_HISTORY_BIN" ]]; then
-        nav_items+=("h	$S_HIST_KEY")
-    fi
-    # Same rule once more: Esc only means something when there is a search to go back TO,
-    # which is exactly when a store put these rows on screen — and NOT while the filter is
-    # open, where Esc clears the filter and the filter's own hint line already says so. Two
-    # contradicting Esc entries on one screen is worse than none.
-    if stored_rows && ((FILTER_MODE == 0)); then
-        nav_items+=("Esc	$S_BACK_SEARCH")
+        if [[ "$LIST_SOURCE" == "history" ]]; then
+            nav_items+=("h	$S_BACK_SEARCH")
+        else
+            nav_items+=("h	$S_HIST_KEY")
+        fi
     fi
     # The queue keys are offered only while something is PLAYING: with no player they say
     # "nothing is playing" and nothing else, and a measured block must not spend cells on a
@@ -2719,7 +2725,7 @@ play_selected() {
     # id/pid/sock in one jq pass. The socket path is READ FROM THE ENVELOPE, never rebuilt:
     # it is the core's private state layout, and hardcoding "$TMPDIR/uting-$(id -u)/mpv-
     # $id.sock" here duplicated it in a second script that would break silently if the core
-    # ever moved its state dir. ARCHITECTURE.md §9.3.
+    # ever moved its state dir. AS-BUILT-player.md §9.3.
     # US, not tab, for the same reason build_all_rows uses it: all three fields default to
     # "" here, and a run of tabs collapses, so a player that reported no pid would have had
     # its socket path read into `pid` — and then the guard below would reject a play that
@@ -2907,7 +2913,7 @@ search_only() {
     return 1
 }
 
-# ── BACK action (key: Esc, in the list) ─────────────────────────────────────────────────
+# ── BACK action: the key that OPENED a store closes it (h, b) ───────────────────────────
 # b and h REPLACE the rows on screen, so without this the only ways out of a store were `n`
 # (retype a query) and `q`. Everything they replace is LOCAL state — the envelope, the rows
 # built from it, the label, and where the cursor was — so the way back is to put that state
@@ -2915,7 +2921,15 @@ search_only() {
 # we still hold, and would silently change them under a user who only asked to go back.
 #
 # The stash is taken by the store openers themselves and only while the rows are still the
-# search's, so search -> h -> b -> Esc lands on the search rather than on the history.
+# search's, so search -> h -> b -> back lands on the search rather than on the history.
+#
+# NOT Esc, which is what this first shipped as. Esc is the one key on the keyboard that
+# cannot be instant: `\x1b` is also the first byte of every arrow and function key, so a lone
+# Esc is only knowable after a wait — and bash 3.2 cannot express a wait shorter than one
+# whole second (`read -t` takes integers; ncurses calls the same window ESCDELAY and defaults
+# it to 1000 ms, which is exactly the number everybody overrides to 25). A "back" key that
+# takes a second reads as broken. `h` and `b` are plain bytes, they answer in the redraw, and
+# a toggle needs no second key to learn: the one that opened it closes it.
 stash_search() {
     stored_rows && return 0
     SEARCH_STASH_JSON="$json"
@@ -2947,6 +2961,14 @@ back_to_search() {
 # in a file that already has one, and the prose --ls output is the store's own answer to
 # "what have I got" — printed, not re-rendered here.
 browse_playlists() {
+    # Same toggle, same reason (see the BACK section): whichever store is on screen, its own
+    # key is the way out of it. The cost is that switching playlist A -> B is two presses
+    # rather than one; the alternative was one key that means "open" in one view and "leave"
+    # in none, which is the one-way door this replaced.
+    if [[ "$LIST_SOURCE" == "playlist" ]]; then
+        back_to_search
+        return 0
+    fi
     have_store || return 0
     printf '\n'
     "$UT_PLAYLIST" --ls || true
@@ -2970,6 +2992,13 @@ have_history() {
 # it is a constant, not a knob: a number a user would set once is only a setting when someone
 # would set it differently, and pagination already answers "show me more".
 open_history() {
+    # The toggle. LIST_SOURCE tested literally, not through stored_rows: with a PLAYLIST on
+    # screen `h` opens the log (that is not "back", it is the other store), and only the log
+    # itself is what `h` closes.
+    if [[ "$LIST_SOURCE" == "history" ]]; then
+        back_to_search
+        return 0
+    fi
     have_history || return 0
     local out rc=0 cnt errfile
     errfile=$(mktemp "${TMPDIR:-/tmp}/uting-hist-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-hist-err.$$"
@@ -3604,7 +3633,7 @@ while true; do
     ">") skip_next ;;         # skip to the next queued track
     "/") filter_live ;;       # LIVE incremental filter
     q | Q) printf '%s%s\n' "$S_QUITTING" "$GL_ELL"; exit 0 ;;
-    ESC) back_to_search ;;    # leave a playlist / the log, back to the search results
+    ESC) ;;
     *) ;;
     esac
 done

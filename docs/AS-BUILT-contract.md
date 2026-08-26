@@ -99,9 +99,9 @@ there is no core to delegate to.
   cycle key, unlike `-f`'s `v` — see ARCHITECTURE.md §26). Query optional (prompts if absent). Requires a
   TTY on both stdin and stdout, `jq`, and the sibling verbs.
   `-f` is validated against `audio|video|fast`: playback is detached, and `ascii`/`viz`
-  need a terminal (ARCHITECTURE.md §9.2).
+  need a terminal (AS-BUILT-player.md §9.2).
   Keys: arrows nav/page · Enter non-blocking play · `Tab`/`p` toggle the two views ·
-  `Esc` back to the list (in the card) / back to the search results (over a store) · `Space` pause · `[`/`]` seek ∓10s · `9`/`0` volume · `s` stop ·
+  `Esc` back to the list (in the card) · `Space` pause · `[`/`]` seek ∓10s · `9`/`0` volume · `s` stop ·
   `v` cycle mode (audio→video→fast) · `e` switch source (hidden with one engine) ·
   `l` switch chrome language (en↔zh, any view) · `t` cycle palette family (any view) ·
   `n` new search · `m` more results · `o` sort · `/` filter · `q` quit ·
@@ -109,10 +109,12 @@ there is no core to delegate to.
   `h` open the listening log as the row source.
   `a`/`b` appear only when `ut-playlist` is installed (§1.5) and `h` only when `ut-history`
   is (§1.6), the same rule that hides `e`
-  on a single-engine install. Both REPLACE the rows on screen, and `Esc` puts the search
-  back — from the stashed envelope, not by re-running the query, so the rows a user goes
-  back to are the rows they left. It is offered in the key hints only while a store is on
-  screen, the same rule again. `h` takes no name — the log is one thing — and shows the 50
+  on a single-engine install. Both REPLACE the rows on screen, and both are TOGGLES: the key
+  that opened a store closes it (`h` again, `b` again), restoring the search from the stashed
+  envelope rather than re-running the query, so the rows a user goes back to are the rows
+  they left. The key relabels itself in the hints while its own store is up — no second key
+  is printed, and `Esc` is not involved (AS-BUILT-tui.md §11 has the rule and the
+  one-second measurement behind it). `h` takes no name — the log is one thing — and shows the 50
   newest rows. With a playlist or the log on screen the three keys that RE-FETCH a
   query — `m` `o` `e` — say so and do nothing; everything that works on the rows
   themselves is unchanged. Rows carry their own `engine`, so a list mixing sources plays
@@ -144,7 +146,7 @@ there is no core to delegate to.
   documented rather than normalised.
 - **Not the player's state.** `players/` is in `$TMPDIR` and dies with the reboot; this
   does not. The queue (a playlist being consumed) stays with the player — a queue that
-  survives a reboot IS a playlist (ARCHITECTURE.md §9.4).
+  survives a reboot IS a playlist (AS-BUILT-player.md §9.4).
 
 ### 1.6 `ut-history` — the listening log (durable, user-level, engine-agnostic)
 
@@ -172,7 +174,7 @@ there is no core to delegate to.
   (§1.1, `UT_HISTORY`). `ut-history` never plays and `ut-play` never opens the log file.
 - **Not the death record.** `players/dead/` is failures only, bounded, in `$TMPDIR`, and gone
   at the reboot; this is every track, unbounded, and durable. The two are written at the same
-  instant and are the two sides of one rule (ARCHITECTURE.md §9.2).
+  instant and are the two sides of one rule (AS-BUILT-player.md §9.2).
 
 ## 2. Gating model — one tier, eight self-gating verbs
 
@@ -242,7 +244,7 @@ become anything but a rejected search. The TUI also passes `--engine` **explicit
 from the envelope's own `engine` field**, never letting `ut-play`'s default decide: with two
 engines installed, that default would send the second engine's URL to the first engine's
 resolver, which since ROADMAP D12 is a hard usage error instead of the silent mislabel it
-used to be. The one sanctioned exception to D8 is the mpv socket (ARCHITECTURE.md §9.3), whose path the
+used to be. The one sanctioned exception to D8 is the mpv socket (AS-BUILT-player.md §9.3), whose path the
 player publishes in the `-d -j` envelope precisely so a client may use it.
 
 ## 3. Data contracts (JSON schemas)
@@ -290,7 +292,7 @@ load-bearing:
 - **`stream_urls` is an array, VIDEO FIRST.** One element for a single stream; two when the
   engine's format merged a video-only and an audio-only track, in which case element 1 is
   the audio. The player joins them with mpv's `--audio-file` — the EDL synthesis
-  `ytdl_hook` used to do for free (ARCHITECTURE.md §8.1).
+  `ytdl_hook` used to do for free (AS-BUILT-player.md §8.1).
 - **`http_headers` is a REQUIRED key**, possibly `{}`. This closes the hole the old
   `--get-url` left open: a bare stream URL is not enough to fetch on a host that checks
   `Referer` or pins a `User-Agent`, and the player has no way to invent them. An engine
@@ -408,19 +410,19 @@ Lifecycle / resolve:
               resolves (the parent must return in milliseconds) and patches `title` and
               `format` into its own record from the resolve envelope the moment it has one
               volume, paused, position and duration are read LIVE off the player's socket in
-              ONE round trip (ARCHITECTURE.md §9.3). volume falls back to the recorded launch/--set-volume
+              ONE round trip (AS-BUILT-player.md §9.3). volume falls back to the recorded launch/--set-volume
               value; the other three are null when the socket could not be asked or the
               player answered null — null is "could not ask", NOT false/0. position and
               duration are integer seconds and are null until mpv starts decoding (~8s on a
               cold start); duration stays null for a live stream.
               queue is NEVER null on a live player: every detached launch writes one, and a
-              lone handle is a queue of length 1 (ARCHITECTURE.md §9.5). It is read off the player's own
+              lone handle is a queue of length 1 (AS-BUILT-player.md §9.5). It is read off the player's own
               queue file, not off the socket — mpv is handed one URL at a time and never
               learns there is a list. `next` is the item AFTER pos, `null` on the last track.
               url and title follow the TRACK: the child patches its own record each time it
               resolves, so a --status taken ten minutes in describes what is playing now.
               failed[] is the tombstone list — players that DIED on their own, newest first,
-              at most 8, nothing older than an hour (ARCHITECTURE.md §9.2). reason is the shared playback
+              at most 8, nothing older than an hour (AS-BUILT-player.md §9.2). reason is the shared playback
               enum. A player that finished normally or was --stopped is never in it, so the
               array is an error record, NOT the listening history feature (ROADMAP D14/P4),
               which gets its own durable store — this one lives in $TMPDIR and is bounded.
@@ -504,7 +506,7 @@ name inside a detached child, where a `die` would only reach a log.
 
 **A queue is resolved JUST IN TIME, one track at a time.** A stream URL expires in hours, so
 a queue resolved at enqueue time would 403 halfway down; the price is a gap between tracks
-(the engine round trip) and the design decision is ARCHITECTURE.md §9.5. One consequence is
+(the engine round trip) and the design decision is AS-BUILT-player.md §9.5. One consequence is
 contractual: a queued item that fails to resolve does NOT kill the player. The queue advances
 and the track gets its own tombstone in `failed[]`, keyed `<id>-q<pos>` — a track that did
 not play, in the same shape as a player that did not play, so a caller reading `failed[]`
@@ -592,7 +594,7 @@ on-disk record read by jq, not an envelope.
         playlist is idempotent success (0, `deleted:false`), the same rule as --stop
         with nothing playing.
 
-   TTY  : uting requires BOTH stdin and stdout (ARCHITECTURE.md §11). No other verb ever needs one —
+   TTY  : uting requires BOTH stdin and stdout (AS-BUILT-tui.md §11). No other verb ever needs one —
           each errors on empty input rather than prompting (D1/D3).
    deps : they are per-FILE now, which is the point of the split —
           ut-play      : jq + mpv to play; --status/--stop need only jq (--status uses
@@ -665,7 +667,7 @@ kept out of flags to keep each verb's flag surface narrow.
                         under a zh* locale, English otherwise. Help output, errors and
                         the card's field labels stay English in both.
                       YT_THEME (minimal|mono|catppuccin|tokyonight|nord|gruvbox|
-                        onedark) = uting palette family (ARCHITECTURE.md §11: one accent + one status
+                        onedark) = uting palette family (AS-BUILT-tui.md §11: one accent + one status
                         hue; community themes are 24-bit only under COLORTERM=truecolor).
                         --theme beats env; the t key cycles it live at runtime.
                       YT_BG (auto|light|dark) = background mode; auto chain:
@@ -673,13 +675,13 @@ kept out of flags to keep each verb's flag surface narrow.
                         variant (minimal swaps cyan for blue).
                       YT_SYNC (0|1|auto) = synchronized redraws (DCS 1q/2q; auto: on,
                         off under tmux).
-                      YT_BRAND (=1: header wordmark in math sans-serif bold, ARCHITECTURE.md §11 glyph
+                      YT_BRAND (=1: header wordmark in math sans-serif bold, AS-BUILT-tui.md §11 glyph
                         section; opt-in, ASCII mode wins).
                       NO_COLOR (=1: --color auto renders plain; explicit --color wins).
    Internal (set by the player for its own detached child, not a user knob):
                       YT_IPC_SOCK (per-player mpv IPC socket)  YT_DETACHED (=1: no
                       terminal, so quiet mpv + no stderr filter)  YT_PLAYER_ID (which
-                      record the child backfills title/format into, ARCHITECTURE.md §9.1)
+                      record the child backfills title/format into, AS-BUILT-player.md §9.1)
    (color MODE is the --color flag, NOT an env var — the scripts hardcode
     COLOR_MODE=auto at startup and only --color changes it, so a COLOR_MODE env
     value is never read. Theme and background ARE env-read: YT_THEME / YT_BG.)
@@ -714,7 +716,7 @@ executables and changes nothing else (ROADMAP D9):
    dependency gate (§4); the gate points cross-flags at the right verb (§2).
 4. **Nothing else**: no playback, no lifecycle, no `players/` writes — the player finds
    `foo-resolve` by name (§1.1) and `uting` discovers the pair by scanning for
-   `foo-search` + `foo-resolve` on PATH and beside itself (ARCHITECTURE.md §11).
+   `foo-search` + `foo-resolve` on PATH and beside itself (AS-BUILT-tui.md §11).
 
 The engine picks its own transport per verb (curl or yt-dlp or anything else) — the seam
 is the envelope, not the tool behind it (ROADMAP D11).
