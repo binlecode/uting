@@ -126,7 +126,7 @@ if [[ -n "${BILI_COOKIE_BROWSER:-}" && "$BILI_COOKIE_BROWSER" != "none" ]]; then
     fi
 fi
 
-ACTION="stream"      # stream | info
+ACTION="stream"      # stream | info | auth
 PLAYBACK_MODE="audio"
 FORMAT_SORT=""
 FORMAT_FLAG=""       # which of -f / -S was actually given (gate: stream resolution only)
@@ -596,7 +596,41 @@ resolve_info() {
 }
 
 # ==============================================================================
-# 5. CLI
+# 5. THE AUTH VERB (read-only: no network, no yt-dlp, no state file)
+# ==============================================================================
+
+# Report the cookie DECISION this engine made at startup: which browser profile playback
+# will read, and whether that profile exists on this machine. It answers BEFORE the yt-dlp
+# dependency gate and makes no request, because it is a question about this process's own
+# configuration, not about the site.
+#
+# What it deliberately does NOT claim is that the session behind those cookies is valid.
+# Measured 2026-08-26: 3159 cookies extracted from chrome and the site still served the
+# anonymous ladder, because that profile was not logged in. `auth: "cookie"` means the
+# cookies are SENT, never that they are ACCEPTED — proving the latter needs an
+# authenticated round trip, which is not this verb's job.
+resolve_auth() {
+    local auth="anonymous" found=false
+    if ((${#BILI_COOKIE_ARGS[@]} > 0)); then
+        auth="cookie"
+        found=true
+    fi
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --arg engine "$ENGINE_NAME" --arg auth "$auth" \
+            --arg browser "$BILI_COOKIE_BROWSER" --argjson found "$found" \
+            '{status: "ok", engine: $engine, auth: $auth,
+              cookie_browser: $browser, profile_found: $found}'
+        return 0
+    fi
+    if [[ "$auth" == "cookie" ]]; then
+        printf 'cookie (%s)\n' "$BILI_COOKIE_BROWSER"
+    else
+        printf 'anonymous\n'
+    fi
+}
+
+# ==============================================================================
+# 6. CLI
 # ==============================================================================
 
 print_usage() {
@@ -606,6 +640,7 @@ bili-resolve — the Bilibili resolve engine: a handle becomes bytes (non-intera
 Usage:
   bili-resolve [-f MODE] [-S SORT] [-j|-J] -- <BV id | av id | URL>
   bili-resolve --info [-j|-J] -- <BV id | av id | URL>
+  bili-resolve --auth [-j]
 
 The handle is a Bilibili URL, a BV id (what `bili-search -j` returns as results[].id), or
 the legacy av id. Knowing those shapes is this engine's job, not the player's.
@@ -617,6 +652,9 @@ Options:
   -j       JSON envelope (see below)
   -J       Full raw yt-dlp record
   --info   Metadata only (title, channel, description) — nothing is resolved
+  --auth   Report the cookie decision: which browser profile playback will read, and
+           whether it exists here. No network, no handle. Says cookies are SENT, not
+           that they are accepted — an expired login still reports "cookie"
   --color MODE  auto | always | never (default: auto)
   -h       This help
   -V       Print the suite version
@@ -629,6 +667,9 @@ Resolve JSON (-j): {"status","engine","id","url","title","duration","mode","form
 
 Info JSON (--info -j): {status,engine,id,title,url,channel,uploader,upload_date,duration,
                         duration_fmt,view_count,like_count,live_status,description,chapters}
+
+Auth JSON (--auth -j): {status,engine,auth,cookie_browser,profile_found}
+  auth is "cookie" exactly when cookie_browser is not "none" AND profile_found.
 
 There is no --transcript: this site's videos carry no caption track for yt-dlp to fetch
 (measured: subtitles {} and automatic_captions absent), and a verb that always answers
@@ -685,6 +726,10 @@ while (($#)); do
         ACTION="info"
         shift
         ;;
+    --auth)
+        ACTION="auth"
+        shift
+        ;;
     # Named rather than swept up by the unknown-flag arm: a caller reaching for captions is
     # holding a reasonable expectation (the sibling engine has them), and the useful answer
     # is why this site cannot serve it — not "unknown flag".
@@ -734,7 +779,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "bili-resolve: unknown flag '$1' (resolve flags: -f -S -j -J --info)" >&2
+        echo "bili-resolve: unknown flag '$1' (resolve flags: -f -S -j -J --info --auth)" >&2
         exit 1
         ;;
     *)
@@ -744,15 +789,26 @@ while (($#)); do
     esac
 done
 
-if ((${#positional[@]} == 0)); then
-    echo "bili-resolve: a BV id, av id or URL is required (see 'bili-resolve -h')" >&2
-    exit 1
+# --auth asks about the ENGINE, not about a handle, so it is the one verb here that takes
+# no positional — and a handle passed with it is rejected rather than ignored, the same way
+# -f next to --info is (AS-BUILT-contract.md §2).
+TARGET=""
+if [[ "$ACTION" == "auth" ]]; then
+    if ((${#positional[@]} > 0)); then
+        echo "bili-resolve: --auth takes no argument — it reports this engine's cookie decision, not a handle's" >&2
+        exit 1
+    fi
+else
+    if ((${#positional[@]} == 0)); then
+        echo "bili-resolve: a BV id, av id or URL is required (see 'bili-resolve -h')" >&2
+        exit 1
+    fi
+    if ((${#positional[@]} > 1)); then
+        echo "bili-resolve: takes exactly one BV id, av id or URL (got ${#positional[@]})" >&2
+        exit 1
+    fi
+    TARGET="${positional[0]}"
 fi
-if ((${#positional[@]} > 1)); then
-    echo "bili-resolve: takes exactly one BV id, av id or URL (got ${#positional[@]})" >&2
-    exit 1
-fi
-TARGET="${positional[0]}"
 
 # The default output is prose; -j/-J/-l override.
 ((has_format)) || OUTPUT_MODE="list"
@@ -765,6 +821,20 @@ fi
 # to reject rather than ignore (AS-BUILT-contract.md §2).
 if [[ -n "$FORMAT_FLAG" && "$ACTION" != "stream" ]]; then
     die "$FORMAT_FLAG selects a stream format — it does not apply to --$ACTION"
+fi
+
+# -J is the RAW yt-dlp record, and --auth never runs yt-dlp: there is no raw record for it
+# to return. Rejected rather than silently downgraded to -j.
+if [[ "$ACTION" == "auth" && "$OUTPUT_MODE" == "json_full" ]]; then
+    die "-J returns the raw yt-dlp record — --auth runs no yt-dlp; use -j"
+fi
+
+# --auth answers ahead of the dependency gate and the handle grammar, the way -V does: it
+# reports configuration, so it must not need the tool it is reporting the configuration of.
+if [[ "$ACTION" == "auth" ]]; then
+    [[ "$OUTPUT_MODE" == "json" ]] && require_deps jq
+    resolve_auth
+    exit 0
 fi
 
 normalize_target "$TARGET"

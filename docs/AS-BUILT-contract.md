@@ -78,9 +78,16 @@
 ### 1.3 `<engine>-resolve` —— 一个引擎的第二半
 
 - **它拥有：** 句柄文法与 host 白名单、模式→格式表、cookie 决定、这个站点的只读动词、
-  yt-dlp 错误词汇表。
+  yt-dlp 错误词汇表。**cookie 决定同时是可查询的** —— 它是这一半里唯一一件调用方
+  在没有句柄的情况下也想知道的事（`--auth`，见下）。
 - **标志：** `-f -S -j -J --color -h -V` 加上它**有**的那些动词：`--info`（两个引擎都有）、
-  `--transcript --sub-lang`（只有 `yt-resolve`，D13）。
+  `--auth`（两个引擎都有）、`--transcript --sub-lang`（只有 `yt-resolve`，D13）。
+- **`--auth` —— 这一半里唯一不吃句柄的动词。** 它问的是**引擎**怎么配的，不是某个句柄
+  怎么样，所以它自己的门与别的动词反着来：一个位置参数是用法错误（1），
+  `-f`/`-S` 同样是（它不解析流），`-J` 也是（`-J` 是 yt-dlp 的原始记录，而它根本不跑
+  yt-dlp）。它在**依赖门之前**作答，和 `-V` 一样 —— 一个报告"我怎么配的"的动词，
+  不该需要它正在报告的那个工具装在机器上；散文形态连 `jq` 都不需要。
+  信封见 §3。
 - **行为：** AS-BUILT-engine.md §10。非本站 host → 用法错误（1）。
 - **以"有没有"声明能力（D13）：** 一个引擎做不到的事，它就不为它准备动词。
 
@@ -278,10 +285,29 @@ D8 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md §9.3），
   `bv*+ba/b` 是一句 yt-dlp 表达式，而播放器不懂那门语言。
 - **`retried`** = 引擎回落到了一个匿名 client（AS-BUILT-engine.md §8.2）。
   播放器把它转手进播放信封的 `retried`；它不再自己观察这件事。
+  **它不是一个登录裁决**：`retried:false` 只说明带 cookie 那次调用没有出错，
+  不说明那份登录被站点认了 —— 见下面 `--auth` 那条同样的界线。
 - **`engine`** = 那个同时也是命令前缀的 token，于是一个手里拿着搜索结果的调用方靠拼接
   就够到了对应的 resolver（`yt` → `yt-resolve`）。
 - 失败 → `{status:"error", engine, url, mode, reason}`，`reason` 用与播放相同的枚举，
   且**退出 2+** —— 下限抬到 2，因为一个视频不可用时 yt-dlp 退出 1，而 1 是留给用法错误的。
+
+auth 信封（`<engine>-resolve --auth -j`）—— 一行，不发包，也不跑 yt-dlp：
+```json
+{ "status":"ok", "engine":"bili", "auth":"cookie",
+  "cookie_browser":"chrome", "profile_found":true }
+```
+- **`auth`** ∈ `cookie | anonymous` —— 调用方要渲染的那个摘要。
+  它 `== "cookie"` 当且仅当 `cookie_browser != "none"` **且** `profile_found`。
+- **`cookie_browser`** = `<ENGINE>_COOKIE_BROWSER` 的原值（`chrome`、`safari`、`none`…），
+  引擎名大写就是那个变量名（§5、§6）。
+- **`profile_found`** = 那个浏览器的 profile 目录在这台机器上在不在。
+- **这个信封承诺的是"发不发"，不是"认不认"。** cookie 送到了、站点却仍然只给匿名档位，
+  是一个真实且常见的状态（本机实测 2026-08-26：从 chrome 提取到 3159 个 cookie，
+  B 站依然只供匿名音频档，因为那个 profile 不是大会员）。
+  证明后者需要一次鉴权往返 —— 刻意不在这个动词里，也刻意不在这个信封里
+  （ROADMAP D16）。要那个的话，升级路径是把网络调用放到一个 `--auth --probe` 后面，
+  让这个信封的含义保持不变。
 
 播放状态（`ut-play -j -- <handle>`）—— 播放器自己的信封，也是唯一一个没有 `engine` 键的：
 播放器与站点无关，它回声出来的那个句柄就是别人给它的那个（ARCHITECTURE.md §4）。
@@ -607,7 +633,10 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                         一个已经挑过一次默认来源的用户，不该每个面再挑一次。
                         名字不在时，uting 回落到第一个装上的引擎。
                       YT_COOKIE_BROWSER   （默认 chrome = 登录开着；"none" = 只匿名）
-                        —— 由每个**引擎**读，播放器从不读。
+                        —— 由每个**引擎**读，播放器从不读。变量名是**引擎名大写**加
+                        `_COOKIE_BROWSER`（`YT_` / `BILI_` / …），与命令前缀同一条拼接规矩；
+                        当前生效值靠 `<engine>-resolve --auth` 问出来（§3），
+                        而不是靠调用方自己去读环境。
                       YT_AUDIO_FORMAT (ba)  YT_VIDEO_FORMAT (bv*+ba/b)
                       YT_VIDEO_FORMAT_FAST  —— 模式→格式表的那些值；它们跟那张表住在一起，
                         也就是住在每个 <engine>-resolve 里。
@@ -660,10 +689,15 @@ Cookie 处理：`YT_COOKIE_BROWSER` 是按平台做存在性检查的（那个�
    加上**仅仅**这个站点支持的那些动词（§1.3：以"有没有"声明能力）；§3 那个解析信封
    （`stream_urls[]` 视频在前、`http_headers{}` 必需且不含凭据、`format` 不透明、`retried`）；
    一份显式的本站 host 白名单 —— 一个非本站的 URL 或一个畸形的 id 是用法错误，退出 1（§3）。
-3. **两半都要：** `ENGINE_NAME` 从一个常量印出来；每一个信封（包括错误）里都有 `status` 与
+3. **`foo-resolve --auth`** —— cookie 决定读自 `FOO_COOKIE_BROWSER`（引擎名大写，
+   §5），信封按 §3，且 `auth=="cookie"` 与 `cookie_browser != "none" and profile_found`
+   等价。不吃位置参数，拒 `-f`/`-S`/`-J`，在依赖门之前作答。
+   `tests/contract.sh` 把这几条当作对**每一个被发现的**引擎的不变量来断言，
+   所以第三个引擎落地那天它就被覆盖了 —— 不是等谁想起来去加一行。
+4. **两半都要：** `ENGINE_NAME` 从一个常量印出来；每一个信封（包括错误）里都有 `status` 与
    `engine`；一个信封一行（§3）；`-V` 在任何依赖门之前回答（§4）；
    门把跨界标志指向正确的动词（§2）。
-4. **别的什么也没有：** 没有播放，没有生命周期，不写 `players/` —— 播放器靠名字找到
+5. **别的什么也没有：** 没有播放，没有生命周期，不写 `players/` —— 播放器靠名字找到
    `foo-resolve`（§1.1），而 `uting` 靠在 PATH 上和自己旁边扫描 `foo-search` + `foo-resolve`
    这一对来发现它（AS-BUILT-tui.md §11）。
 

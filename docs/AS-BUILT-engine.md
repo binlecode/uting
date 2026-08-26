@@ -205,6 +205,21 @@ soft ref：`shell/yt-resolve` 的 `resolve_stream()` / `dump_once()` / `probe_ra
 `YT_COOKIE_BROWSER=none` 强制只走匿名（不读钥匙串、不探测）；
 配了浏览器但本机没有 profile 时自动降级为匿名，而不是报错。
 
+**这个决定是可查询的，靠 `--auth`（AS-BUILT-contract.md §3）。** 上面那两句里藏着一件
+调用方看不见的事：cookie 究竟会不会被送出去，取决于**两个**条件 —— 变量不是 `none`，
+**并且**那个 profile 目录真的在这台机器上。降级是静默的（那是对的：一个公开视频照样能放），
+于是"我以为我登录着"和"这次是匿名的"在外面长得一模一样。`--auth` 就是把这两个条件的合成
+结果印出来的那个动词，不吃句柄、不发包、不跑 yt-dlp。
+
+**它报的是"发不发"，不是"认不认"，而这条界线是量出来的。** 本机实测 2026-08-26：
+`yt-dlp --cookies-from-browser chrome` 从 chrome 提取到 **3159 个 cookie**，B 站仍然回
+`you have to become a premium member`，音频档位与匿名完全一致（30216 / 30232 / 30280，
+顶格 181 kbps AAC；Hi-Res 30251 与 Dolby 30250 根本没出现在 format 表里），
+而解析信封的 `retried` 是 `false` —— 因为带 cookie 那一次调用**没有出错**。
+所以 `retried:false` 与 `auth:"cookie"` 都不是登录裁决：前者说的是那次调用没报错，
+后者说的是那份 cookie 会被送出去。证明它被**接受**了需要一次鉴权往返，
+这个套件刻意不做（ROADMAP D16）。
+
 ## 10. 解析 —— 引擎的第二半
 
 `<engine>-resolve` 把一个**句柄**变成播放它所需的一切，并承载该站点的只读动词。

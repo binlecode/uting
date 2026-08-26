@@ -124,6 +124,11 @@ V. 对齐的最佳实践。**
       不是一个引用。队列是那个刻意的例外：它是一个正在被消费的播放列表，
       所以它归播放器、住在播放器的运行时状态里、随它一起死。
                                                 （AS-BUILT-player.md §9.4、§9.5）
+  D15 登录状态**只报到"发不发"这一层**。`<engine>-resolve --auth` 印的是 cookie 决定
+      （读哪个 profile、它在不在），不是一次鉴权裁决 —— `auth:"cookie"` 与 `retried:false`
+      都不代表站点认了那份登录。这个动词归 resolve 半边（cookie 决定本来就住在那儿），
+      也是这一半里唯一不吃句柄的动词，且在依赖门之前作答。
+      （ROADMAP D16/D17、AS-BUILT-contract.md §1.3/§3、AS-BUILT-engine.md §8.2）
 ```
 
 ## 4. 命令拓扑与文件布局
@@ -627,8 +632,8 @@ reflow、共享时钟与三个播放态。
                   播放列表的 --show 与日志的 --ls 是一个形状，所以一个构造器服务两者）,
                   add_to_playlist（`a`）, browse_playlists / open_playlist（`b`）,
                   open_history（`h`，不提问 —— 日志只有一个）, stash_search / back_to_search
-                  （`Esc`：一个存储替换掉那些行，而它替换掉的是本地状态，
-                  所以回去是**还原**而不是重新搜索）, stored_rows（谓词；search_only 是
+                  （`h`/`b` 再按一次：一个存储替换掉那些行，而它替换掉的是本地状态，
+                  所以回去是**还原**而不是重新搜索 —— 规则见 AS-BUILT-tui.md §11）, stored_rows（谓词；search_only 是
                   "这些行来自一个存储"的另一半 —— 那个三处都要用、否则就会变成三份漂移副本的判断）,
                   prompt_name（`n` 提示的读取器，复用）, have_store / have_history /
                   store_notice —— 它们全都外壳调用 ut-playlist 或 ut-history，

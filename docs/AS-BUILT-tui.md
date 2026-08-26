@@ -28,6 +28,24 @@
 `e` 轮换（`cycle_engine`）并重新取数，新引擎取数失败时把上一个恢复回来；
 少于两个引擎时它立即返回，这个交互也不画出来。
 
+**状态行的 `auth=` 来自引擎，不来自这个文件。** 一个源从哪个浏览器读 cookie 是站点知识，
+而 `uting` 一条也不持有 —— 所以它去问 `<engine>-resolve --auth -j`
+（`engine_resolve_bin`，与 `engine_search_bin` 同一条拼接规矩，不是第二张表），
+取回的 `auth`/`cookie_browser` 渲染成 `auth=chrome` 或 `auth=anon`。
+`refresh_engine_auth` 在**启动时**与**每次 `e` 换源成功之后**各跑一次 ——
+跑在恢复窗口之后，不是之前，因为换源失败时 `ENGINE` 停在原处，而那个 token
+必须描述屏幕上真正在的那个引擎。不做缓存表：bash 3.2 没有关联数组，
+一次不碰 I/O 的 fork 比维护一组平行数组的正确性便宜。
+
+它**只**出现在搜索结果的状态行上。播放列表与历史的行是**混源**的
+（那一支报的是 `engine=${PLAYLIST_ENGINES}`），一个单一的 auth token 在那里
+对其中一半是假话。引擎的 resolve 半边没有 `--auth` 时它非零退出、字段直接消失 ——
+与 `--transcript` 缺失同一套"以有没有声明能力"的降级（ARCHITECTURE.md D13），
+所以第三个引擎不会被这件事卡住。
+
+它说的是"播放会读哪个 profile 的 cookie"，**不是**"你登录着" ——
+那条界线在 AS-BUILT-engine.md §8.2 量过，别在 UI 文案里把它说宽。
+
 ```
    uting "lofi" -n 40
         │  解析：SEARCH_ARGS=(-n 40)；PLAY_MODE=audio；拒绝交叉 flag

@@ -604,6 +604,89 @@ for n in $ENGINES; do
 done
 report "every search half refuses -S" "$NENG" "$_sdash"
 
+# --auth: the cookie DECISION, stated over every discovered engine. It is the one resolve
+# verb that takes no handle, makes no request and runs no yt-dlp, so all four of those are
+# what these checks pin. All of it is hermetic, which is why it sits above the --offline cut.
+#
+# The envelope's own rule is pinned too — auth=="cookie" IFF cookie_browser is not "none"
+# AND profile_found — because it is the line a third engine is likeliest to get subtly
+# wrong: reporting "cookie" from the env var alone, without checking the profile is really
+# there, which is exactly the case that silently degrades to anonymous at play time.
+#
+# What no check here claims, and none can: that the login behind those cookies is VALID.
+# Measured 2026-08-26 — 3159 cookies extracted from chrome, and the site still served the
+# anonymous audio ladder. The verb reports what is SENT; proving what is ACCEPTED needs an
+# authenticated round trip this suite does not make and the envelope does not promise.
+_auth=0
+for n in $ENGINES; do
+    [ "$(jq_ok '.status=="ok" and .engine=="'"$n"'"
+                and (.auth=="cookie" or .auth=="anonymous")
+                and (.cookie_browser|type)=="string"
+                and (.profile_found|type)=="boolean"
+                and ((.auth=="cookie") == (.cookie_browser!="none" and .profile_found))' \
+            "shell/$n-resolve" --auth -j)" = 0 ] && _auth=$((_auth + 1))
+done
+report "every engine answers --auth -j" "$NENG" "$_auth"
+
+# The set-once knob is <ENGINE>_COOKIE_BROWSER, upper-cased from the engine name — the same
+# concatenation-not-a-registry convention the command names follow. Asserting it over every
+# discovered engine is what MAKES it a convention rather than two coincidences, and it is on
+# the add-an-engine checklist for that reason. Upper-cased with `tr`, never with the
+# bash-4 case-conversion expansion: the floor here is 3.2.
+_anon=0
+for n in $ENGINES; do
+    _v="$(echo "$n" | tr '[:lower:]' '[:upper:]')_COOKIE_BROWSER"
+    [ "$(jq_ok '.auth=="anonymous" and .cookie_browser=="none" and .profile_found==false' \
+            env "$_v=none" "shell/$n-resolve" --auth -j)" = 0 ] && _anon=$((_anon + 1))
+done
+report "every engine honours _BROWSER=none" "$NENG" "$_anon"
+
+# The DISCRIMINATING input, and the reason this section needs no broken build to trust it: a
+# browser name that is not in the case arm at all. cookie_browser is then NOT "none", yet the
+# profile cannot exist, so the only correct answer is "anonymous". An engine that derives auth
+# from the env var alone — the plausible shortcut, and the one that silently degrades to
+# anonymous at play time while reporting "cookie" — answers "cookie" here and goes red. No
+# other check in this file separates those two implementations.
+_bogus=0
+for n in $ENGINES; do
+    _v="$(echo "$n" | tr '[:lower:]' '[:upper:]')_COOKIE_BROWSER"
+    [ "$(jq_ok '.auth=="anonymous" and .cookie_browser=="definitely-not-a-browser"
+                and .profile_found==false' \
+            env "$_v=definitely-not-a-browser" "shell/$n-resolve" --auth -j)" = 0 ] &&
+        _bogus=$((_bogus + 1))
+done
+report "an unknown browser is anonymous" "$NENG" "$_bogus"
+
+# A flag that cannot act is REJECTED, not ignored (AS-BUILT-contract.md §2). --auth asks
+# about the engine, so a handle is a usage error; -f selects a stream format and --auth
+# resolves no stream; -J returns the raw yt-dlp record and --auth runs no yt-dlp.
+for _bad in "--auth -- HANDLE" "--auth -f video" "--auth -J"; do
+    _r=0
+    for n in $ENGINES; do
+        # shellcheck disable=SC2086
+        [ "$(rc "shell/$n-resolve" $_bad)" = 1 ] && _r=$((_r + 1))
+    done
+    report "every engine refuses ${_bad}" "$NENG" "$_r"
+done
+
+# --auth answers ahead of the dependency gate, the way -V does: it reports how the engine is
+# configured, so needing the tool it describes would be backwards. Prose mode is the form
+# that proves it — it needs no jq either, so nothing but the script itself is on the path.
+# The guard above the loop is what stops the claim passing vacuously on a machine where
+# yt-dlp happens to live in /usr/bin.
+NODEP_PATH="/usr/bin:/bin"
+report "yt-dlp absent from probe PATH" 1 \
+    "$(env "PATH=$NODEP_PATH" command -v yt-dlp >/dev/null 2>&1 && echo 0 || echo 1)"
+_nod=0
+for n in $ENGINES; do
+    # `env`, not a `VAR=x rc …` prefix: an assignment in front of a FUNCTION call persists
+    # in bash after the call returns, and a leaked PATH would silently reshape every check
+    # below this line.
+    [ "$(env "PATH=$NODEP_PATH" "shell/$n-resolve" --auth >/dev/null 2>&1; echo $?)" = 0 ] &&
+        _nod=$((_nod + 1))
+done
+report "every engine --auth needs no yt-dlp" "$NENG" "$_nod"
+
 # refusals <url> — how many engines reject it as a USAGE error (1)? A rejected host dies
 # before the dependency gate, so a refusal costs ~20ms and no network.
 #
