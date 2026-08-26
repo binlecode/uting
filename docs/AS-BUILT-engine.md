@@ -1,310 +1,290 @@
-# AS-BUILT-engine — what an engine is: `<name>-search` + `<name>-resolve`
+# AS-BUILT-engine —— 什么是一个引擎：`<name>-search` + `<name>-resolve`
 
-The implementation of the two halves that know a **site**: `yt-search` / `yt-resolve` and
-`bili-search` / `bili-resolve`. Query shaping and the search error contract, the Bilibili
-HTTP transport, the login / PO-token probe, handle grammar and the host allowlist, the
-resolve envelope, `--info` and `--transcript`. **Every site-specific fact in this suite is
-described here or it is a layering violation** — the player is source-agnostic, the TUI is
-pure orchestration.
+那两个认识**站点**的半边的实现：`yt-search` / `yt-resolve` 与 `bili-search` / `bili-resolve`。
+查询整形与搜索的错误契约、Bilibili 的 HTTP 传输、登录 / PO-token 探测、句柄文法与 host 白名单、
+解析信封、`--info` 与 `--transcript`。**这套套件里每一个与站点相关的事实，要么写在这里，
+要么就是一次分层违规** —— 播放器与站点无关，TUI 是纯编排。
 
-**This is the document a third engine's author reads**, next to the checklist in
-`AS-BUILT-contract.md` §6.
+**这是第三个引擎的作者要读的那份文档**，与 `AS-BUILT-contract.md` §6 的清单并排看。
 
-**The division of labour.** `ARCHITECTURE.md` keeps the diagrams, the topology, the seams
-and the decisions; the contract surface (argv, envelopes, exit codes) is
-`AS-BUILT-contract.md`; how an engine actually lands — which rule was forced by a
-measurement, and which holes were dug and filled — is here. The playback subsystem and the
-detached lifecycle are `AS-BUILT-player.md`'s.
+**分工。** `ARCHITECTURE.md` 留图、拓扑、接缝与决定；契约面（argv、信封、退出码）在
+`AS-BUILT-contract.md`；而一个引擎**实际是怎么落地的** —— 哪一条规矩是被一次测量逼出来的、
+挖过又填上的坑有哪些 —— 在这里。播放子系统与 detached 生命周期归 `AS-BUILT-player.md`。
 
-**Section numbers are inherited** from `ARCHITECTURE.md`'s original numbering (§7, §8.2,
-§10 and its subsections), so an existing `§10.1` citation only changes filename, never
-number. That is why §8.2 appears here without a §8: §8 is the playback subsystem and stays
-with the player — 8.2 was always engine knowledge filed under a player heading, and the
-split is what makes that visible.
+**节号是继承来的**，沿用 `ARCHITECTURE.md` 原有的编号（§7、§8.2、§10 及其子节），
+于是一条既有的 `§10.1` 引用只换文件名，编号从不变。这也是为什么这里有 §8.2 却没有 §8：
+§8 是播放子系统、留在播放器那边 —— 而 8.2 本来就是引擎知识，只是当年被归在一个播放器的标题下，
+拆分让这一点显形。
 
-**The code is the only authority.** Function names here are soft references (file +
-function); pseudo-code is a shape, not a copy of the source.
+**代码是唯一权威。** 这里点名的函数是 soft ref（文件 + 函数名）；伪码是形状，不是源码的副本。
 
-**One thing this document deliberately does not own**: what a `-f MODE` *means* as a format
-string is engine knowledge (`format_for_mode()` lives in each `<engine>-resolve`), but the
-mode→format→mpv table is stated once, beside the player's mpv option set, in `AS-BUILT-player.md` §8.1.
+**这份文档刻意不拥有的一件事**：一个 `-f MODE` 作为格式字符串*意味着什么*是引擎知识
+（`format_for_mode()` 住在每个 `<engine>-resolve` 里），但 模式→格式→mpv 那张表只陈述一次，
+就放在播放器的 mpv 选项集旁边，见 `AS-BUILT-player.md` §8.1。
 
 ---
 
-## 7. Search subsystem — a verb of the ENGINE
+## 7. 搜索子系统 —— 引擎的一个动词
 
-Search is half of an engine (`ARCHITECTURE.md` §4), so this section describes `yt-search`;
-`bili-search` is the same envelope over a different transport (§7.1) and its argv is
-specified in AS-BUILT-contract.md §1. Everything below —
-the single jq program, the internal `FILTERED_JSON` shape, the duration rules, the error
-contract — is what BOTH halves implement, and the two files each carry their own copy on
-purpose: an engine that shared a library with another engine would be a library the player
-would eventually have to know about (`ARCHITECTURE.md` §4).
+搜索是一个引擎的一半（`ARCHITECTURE.md` §4），所以这一节描述的是 `yt-search`；
+`bili-search` 是同一个信封架在不同传输之上（§7.1），它的 argv 规定在
+AS-BUILT-contract.md §1。下面的一切 —— 那**一个** jq 程序、内部的 `FILTERED_JSON` 形状、
+时长规则、错误契约 —— 是**两半都要实现**的东西，而两个文件**各自带一份自己的副本**是有意的：
+一个与另一个引擎共享库的引擎，那个库最终会变成播放器不得不知道的东西（`ARCHITECTURE.md` §4）。
 
 ```
-  QUERY, NUM_RESULTS, MIN/MAX_DURATION, SORT_FIELD, cookies
+  QUERY、NUM_RESULTS、MIN/MAX_DURATION、SORT_FIELD、cookies
         │
         ▼
-  ┌─────────────────────────────────────────────────────────────┐
-  │ fetch_results()                                              │
-  │  yt-dlp "ytsearch<N>:<QUERY>"                                │
-  │     [--match-filter "duration > MIN [and duration < MAX]"]   │  ← only if asked
-  │     [--cookies-from-browser <B>] --flat-playlist             │
-  │     --dump-single-json -f ba --skip-download --quiet …       │
-  │     stderr → captured; non-zero rc ⇒ error envelope + exit   │
-  │        │                                                     │
-  │        ▼  ONE jq program (JQ_PRELUDE + shaping):             │
-  │           bounds select → + {duration_fmt: dur|fmt_dur}      │
-  │           → sort_by(duration|view_count)|reverse             │
-  │  FILTERED_JSON  (array; internal shape — NEVER changed)      │
-  └───────────────┬───────────────────────┬──────────────────────┘
+  ┌──────────────────────────────────────────────────────────────
+  │ fetch_results()
+  │  yt-dlp "ytsearch<N>:<QUERY>"
+  │     [--match-filter "duration > MIN [and duration < MAX]"]      ← 只有被要求时才加
+  │     [--cookies-from-browser <B>] --flat-playlist
+  │     --dump-single-json -f ba --skip-download --quiet …
+  │     stderr → 捕获；非零 rc ⇒ 错误信封 + 退出
+  │        │
+  │        ▼  **一个** jq 程序（JQ_PRELUDE + 整形）：
+  │           按上下界 select → + {duration_fmt: dur|fmt_dur}
+  │           → sort_by(duration|view_count)|reverse
+  │  FILTERED_JSON （数组；**内部**形状 —— 永不改动）
+  └───────────────┬───────────────────────┬─────────────────────
       OUTPUT=list │            OUTPUT=json │ json_full
                   ▼                        ▼
            print_list()            emit_search_json()
-        "♫ N. title / dur /       {status,engine,query,count,results:[ project ]}
-         views / url"             json: 8 lean fields; json_full: raw
+        "♫ N. 标题 / 时长 /        {status,engine,query,count,results:[ 投影 ]}
+         播放量 / url"             json：8 个精瘦字段；json_full：原始记录
 ```
 
-`engine` is in the envelope because a caller holding a result must be able to route it back
-to the resolver that understands it — `ut-play --engine <that value>` (AS-BUILT-contract.md §3, D12). It is the
-field the host allowlist (ROADMAP D12) exists to keep honest.
+`engine` 之所以在信封里，是因为一个拿着结果的调用方必须能把它**路由回**懂它的那个 resolver ——
+`ut-play --engine <那个值>`（AS-BUILT-contract.md §3、D12）。它正是 host 白名单
+（ROADMAP D12）存在要保其诚实的那个字段。
 
-`print_list()` reads the **`FILTERED_JSON` variable**, not the emitted `-j` stream.
-Projection happens only at the emit point, so the JSON contract can change without
-touching that consumer. (Schemas → AS-BUILT-contract.md §3.)
+`print_list()` 读的是 **`FILTERED_JSON` 这个变量**，不是发出去的 `-j` 流。
+投影只发生在发射点，所以 JSON 契约可以改而不必碰那个消费者。（schema → AS-BUILT-contract.md §3。）
 
-**One jq program, not a per-entry loop.** Shaping used to run a bash `while read` loop that
-forked jq twice per entry, and `print_list` forked jq five times per row — 175 processes
-for `-n 25`, measured ~40× slower than the single program that replaced them, with
-`duration_fmt` re-derived in `print_list` even though `FILTERED_JSON` already carried it.
+**一个 jq 程序，不是每条一遍的循环。** 整形曾经跑一个 bash `while read` 循环、每条 fork 两次 jq，
+而 `print_list` 每行 fork 五次 jq —— `-n 25` 就是 175 个进程，
+实测比取代它们的那个单一程序慢约 **40×**，而且 `duration_fmt` 在 `print_list` 里被重新推导了一遍，
+尽管 `FILTERED_JSON` 里本来就带着它。
 
-**Duration formatting lives in ONE place: the `JQ_PRELUDE` jq function** (`fmt_dur`), reused
-by search shaping and `--info`. It is jq rather than bash because every consumer is already
-shaping JSON with jq, so a bash implementation existed only to be forked once per row. The
-bash `convert_seconds` it replaced is gone. An unknown duration now yields **`null`**, not a
-fake `00h:00m:00s`, and each surface decides how to render that: `print_list` prints `LIVE`
-for a live stream / `--` otherwise (it used to leak a raw `null views` into human output),
-and `uting` shows `● LIVE`.
+**时长格式化只住在一个地方：`JQ_PRELUDE` 里那个 jq 函数**（`fmt_dur`），
+搜索整形与 `--info` 共用它。用 jq 而不用 bash，是因为每一个消费者本来就在用 jq 整形 JSON，
+所以一个 bash 实现存在的唯一意义就是每行被 fork 一次。它取代的那个 bash `convert_seconds`
+已经没了。一个未知的时长如今产出 **`null`**，而不是一个假的 `00h:00m:00s`，
+再由每个面自己决定怎么渲染它：`print_list` 对直播打 `LIVE`、其余打 `--`
+（它从前会把一个原始的 `null views` 漏进人类输出里），而 `uting` 显示 `● LIVE`。
 
-**Duration bounds (`-m`/`-M`) are enforced CLIENT-SIDE, in that same jq pass.**
-`--match-filter` is only a cheap server-side pre-filter, and is sent **only when a bound was
-actually requested** (the old always-on `duration > 0` filtered nothing). Reason: with
-`--flat-playlist` yt-dlp marks entries "incomplete", so a filter on a field a flat entry
-does not carry — a live stream has no duration — cannot decide and KEEPS the entry. Verified:
-`-m 999999` used to still return a live result; now `-m`/`-M` exclude unknown-duration
-entries as the flag implies.
+**时长上下界（`-m`/`-M`）是在**客户端**执行的，就在同一次 jq 里。** `--match-filter`
+只是一个便宜的服务端预过滤，而且**只有真的要求了某个界时才发**
+（老的那个永远开着的 `duration > 0` 什么都没过滤掉）。理由：在 `--flat-playlist` 下
+yt-dlp 把条目标记为"不完整"，于是一个作用在"扁平条目并不携带的字段"上的过滤器 ——
+一条直播没有 duration —— **判定不了，于是保留该条目**。验证过：`-m 999999` 从前仍然会返回一条
+直播结果；如今 `-m`/`-M` 会按这个 flag 的字面意思排除掉时长未知的条目。
 
-**Search has an error contract like every other surface.** A yt-dlp failure used to abort on
-`set -e` with raw stderr even under `-j`, handing an agent a jq parse error. `fetch_results`
-captures stderr, classifies it with the engine's own `classify_yt_dlp_error` (the enum is
-shared, the classifier is not — AS-BUILT-contract.md §3), and emits
-`{status:"error", engine, query, count:0, results:[], reason}` for `-j`/`-J` (prose: the captured
-stderr plus a `die`). Exit is 2+ — never 1, which AS-BUILT-contract.md §4 reserves for usage/validation.
+**搜索像其他每一个面一样有错误契约。** 一次 yt-dlp 失败从前会在 `set -e` 上带着原始 stderr 中止，
+哪怕在 `-j` 下也一样 —— 交给 agent 的是一个 jq 解析错误。`fetch_results` 捕获 stderr，
+用引擎自己的 `classify_yt_dlp_error` 分类（**枚举是共享的，分类器不是** ——
+AS-BUILT-contract.md §3），并为 `-j`/`-J` 发出
+`{status:"error", engine, query, count:0, results:[], reason}`（散文路径：捕获到的 stderr 加一次
+`die`）。退出码是 2+ —— **绝不是 1**，那个被 AS-BUILT-contract.md §4 留给用法/校验错误。
 
-### 7.1 The Bilibili transport — the same envelope over a hand-built request (D11)
+### 7.1 Bilibili 的传输 —— 同一个信封，架在一个手工拼出来的请求上（D11）
 
-`bili-search` implements everything above over `curl` + `jq` instead of yt-dlp. The split
-is not a preference, it is the only combination that works (measured, ROADMAP D11):
-yt-dlp's `--flat-playlist` answers in 0.9s with **zero metadata** (`BiliBiliSearchIE` yields
-`url_result(arcurl, aid)` and drops the title/author/duration/play sitting in the response
-it just parsed), and a full extraction recurses into every part of every collection —
-this site's music results are overwhelmingly multi-part — so `bilisearch10:` did not finish
-in 120s. One hand-built request answers in 0.71s with every field the envelope needs.
+`bili-search` 用 `curl` + `jq` 而不是 yt-dlp 实现了上面的一切。这个拆法不是偏好，
+它是**唯一**行得通的组合（实测，ROADMAP D11）：yt-dlp 的 `--flat-playlist` 用 0.9s 作答，
+却**一个元数据都没有**（`BiliBiliSearchIE` 产出 `url_result(arcurl, aid)`，
+把它刚刚解析出来的响应里的 标题/作者/时长/播放量 全丢掉了），而一次完整抽取会递归进
+**每一个合集的每一个分 P** —— 这个站点的音乐结果压倒性地是多 P 的 ——
+于是 `bilisearch10:` 在 120s 内根本跑不完。**一个手工拼的请求 0.71s 就答出信封需要的每一个字段。**
 
-`fetch_page_once` is **the only place in the suite that builds an HTTP request by hand**
-(`ARCHITECTURE.md` §5). Arguments reach curl as an ARRAY and the query values through `--data-urlencode`, so
-a query containing `&`, a space or a quote is a value and never a second parameter:
+`fetch_page_once` 是**全套件唯一一处手工构造 HTTP 请求的地方**（`ARCHITECTURE.md` §5）。
+参数以**数组**到达 curl，查询值经 `--data-urlencode` 送出，
+于是一条含 `&`、空格或引号的查询是一个**值**，而绝不会变成第二个参数：
 
 ```
    GET <search/type>  search_type=video · keyword=<QUERY> · page=<N>
-       -H "User-Agent: $BILI_UA"          # a browser UA; must not contain `curl`/`python`
+       -H "User-Agent: $BILI_UA"          # 一个浏览器 UA；**不得**含 `curl`/`python`
        -H "Referer:    https://www.bilibili.com/"
        [-H "Cookie: buvid3=<uuidgen>infoc"]
-       --compressed --max-time 15 --retry 0        # the retry decision is the caller's
-   ok ⇔ curl rc 0 AND http 200 AND the body's own `.code == 0`
+       --compressed --max-time 15 --retry 0        # 重试与否由调用方决定
+   ok ⇔ curl rc 0 **且** http 200 **且** 响应体自己的 `.code == 0`
 ```
 
-Three request facts, each forced by a measurement rather than chosen:
+三条请求层面的事实，每一条都是被测量逼出来的，不是选出来的：
 
-- **The `Referer` is required and is the only thing that is.** With it the endpoint answers
-  `code:0`, without it 412 (measured 2026-08-23). It is a public constant, not an
-  authentication mechanism — every Bilibili extractor in yt-dlp sends the same one.
-- **The `buvid3` is a DEVICE identifier, not a credential**: no account, no token, nothing
-  read from a browser profile — the engine generates a random one (`uuidgen` + `infoc`, the
-  shape yt-dlp itself uses) and throws it away when the process exits. It is
-  **correctness, not optimisation**: six consecutive searches scored 200 200 412 412 412 200
-  anonymously and 200 six times with a stable buvid3 (measured 2026-08-23).
-- **`BILI_UA` is overridable** because the site is known to start refusing a UA that has
-  gone stale (yt-dlp carries a commit for exactly that), and a suite that cannot be nudged
-  without an edit would need a release to survive it.
+- **`Referer` 是必需的，而且是唯一必需的东西。** 带上它端点答 `code:0`，
+  不带就是 412（2026-08-23 实测）。它是一个公开常量，不是一种认证机制 ——
+  yt-dlp 里每一个 Bilibili extractor 发的都是同一个。
+- **`buvid3` 是一个**设备**标识，不是凭据**：没有账号、没有 token、不从任何浏览器 profile 读东西
+  —— 引擎自己生成一个随机的（`uuidgen` + `infoc`，正是 yt-dlp 用的那个形状），
+  进程退出就扔掉。它是**正确性，不是优化**：匿名连搜六次的结果是
+  200 200 412 412 412 200，而带一个稳定 buvid3 是六次 200（2026-08-23 实测）。
+- **`BILI_UA` 可以覆盖**，因为这个站点是**已知**会开始拒绝一个过时 UA 的
+  （yt-dlp 里就有一个专门为此而来的提交），而一个不改代码就没法被推一把的套件，
+  会需要发一次版本才能活下来。
 
-**The hand-written HTTP path never touches a credential**, and that is the line through the
-middle of this engine: login state reaches only yt-dlp, in the resolve half, through
-`--cookies-from-browser`. It is what keeps the D11 answer to "why not a full client"
-("that whole block belongs to yt-dlp") true of the search half as well.
+**这条手写的 HTTP 路径从不碰任何凭据**，而这就是穿过这个引擎中间的那条线：
+登录状态只到达 yt-dlp、只在解析那一半、只经由 `--cookies-from-browser`。
+正是它让 D11 对"为什么不做一个完整客户端"的回答（"那整块归 yt-dlp"）
+对搜索这一半也同样为真。
 
-**Retry is classified, not blanket.** `classify_http_error` maps rc/http/`.code` onto the
-suite's reason enum, and only the `network` class earns a second attempt after
-`RETRY_PAUSE`; a `forbidden` or `unavailable` answer will say the same thing a second later,
-and asking again is another request against a host that counts them. Everything else fails
-straight to `search_fail` — exit **2**, never 1 (AS-BUILT-contract.md §4).
+**重试是分类过的，不是一刀切。** `classify_http_error` 把 rc/http/`.code` 映射到套件那份
+reason 枚举上，而**只有** `network` 那一类值得在 `RETRY_PAUSE` 之后再试一次；
+一个 `forbidden` 或 `unavailable` 的回答一秒之后还会说同样的话，
+而再问一次是对着一个**会计数**的主机多发一次请求。其余一切直接失败到 `search_fail` ——
+退 **2**，绝不是 1（AS-BUILT-contract.md §4）。
 
-**Paging stops on either condition.** Pages are requested only while the caller still wants
-rows *and* the site is still sending them (`MAX_PAGES` caps the rest), so a short tail does
-not cost `MAX_PAGES` round trips. An exhausted or empty search omits `data.result` entirely
-rather than sending `[]`, which is why the read is `.data.result // []`.
+**翻页在两个条件之一成立时停。** 只有当调用方**还想要**更多行**且**站点**还在给**时才请求下一页
+（`MAX_PAGES` 给其余部分封顶），于是一条短尾巴不必付 `MAX_PAGES` 次往返。
+一次耗尽的或空的搜索会**整个省略** `data.result` 而不是送一个 `[]`，
+这正是那次读要写成 `.data.result // []` 的原因。
 
-**The shaping is the same one jq program** — with one extra job, because this transport
-returns a *search API's* record rather than an extractor's. The normalised fields are merged
-**over** the raw record, so `-J` keeps every field the site sent while `-j` projects the same
-eight fields `yt-search` projects, and `title`/`duration` are the cleaned, correctly-typed
-values in BOTH — no surface can be handed the HTML or the `"MM:SS"` string. Two normalisations
-worth naming: `url` is built from the `bvid` rather than taken from `arcurl` (the `av`
-spelling, served over `http://`), because the canonical BV URL is what a caller hands back to
-`bili-resolve`; and `live_status` is **`null`, not the raw `0`** — under `search_type=video`
-that field is not the suite's is_live/was_live notion at all, and carrying the 0 over would
-let a renderer draw a liveness state the site never claimed. A field an engine cannot know is
-null, and the key is still present (AS-BUILT-contract.md §3).
+**整形用的是同一个 jq 程序** —— 只多一份活，因为这条传输返回的是一个*搜索 API 的*记录，
+而不是一个 extractor 的。归一化后的字段被合并**盖在**原始记录之上，
+于是 `-J` 保留站点发来的每一个字段，而 `-j` 投影出与 `yt-search` 同样的那八个字段，
+并且 `title`/`duration` 在**两者**里都是清洗过、类型正确的值 ——
+没有任何一个面会拿到那段 HTML 或那个 `"MM:SS"` 字符串。两处值得点名的归一化：
+`url` 是**从 `bvid` 构造**的而不是取自 `arcurl`（后者是 `av` 拼法、走 `http://`），
+因为规范的 BV URL 才是调用方要交回给 `bili-resolve` 的东西；
+以及 `live_status` 是 **`null`，不是那个原始的 `0`** ——
+在 `search_type=video` 下那个字段根本不是这套套件 is_live/was_live 的概念，
+把那个 0 带过去会让某个渲染器画出一个站点从没声称过的直播状态。
+**一个引擎不知道的字段是 null，而那个键仍然在**（AS-BUILT-contract.md §3）。
 
-## 8.2 Login, PO tokens, and the probe-then-play client pick — **inside `yt-resolve`**
+## 8.2 登录、PO token，与"先探后播"的客户端选择 —— **在 `yt-resolve` 内部**
 
-This whole subsection is YouTube-engine knowledge and lives in `shell/yt-resolve`. It is
-specified here because it is the reason the resolve envelope carries `retried`, and because
-"probe **then** play" is now literally true: the probe happens one process before mpv starts,
-in the engine, and the player only relays the verdict. `bili-resolve` has no probe — the site
-has no PO-token equivalent — which is the model for what a second engine may simply not have.
+整个这一小节都是 YouTube 引擎的知识，住在 `shell/yt-resolve` 里。把它写在这儿，
+是因为它正是解析信封为什么要带 `retried` 的原因，也因为"先探**后**播"如今是字面意义上的真：
+探测发生在 mpv 启动**之前的一个进程**里、在引擎里，播放器只是把裁决转述出去。
+`bili-resolve` 没有探测 —— 该站没有 PO token 的对应物 ——
+这正是"第二个引擎可以干脆没有某样东西"的范本。
 
-**Login is ON by default (`YT_COOKIE_BROWSER=chrome`)** — a setting each ENGINE reads for
-itself — so login-gated / members /
-age-restricted videos — invisible to an anonymous client — play. The trade-off: with
-cookies, yt-dlp switches to YouTube's authenticated client set, whose googlevideo media
-URLs can require a **GVS Proof-of-Origin (PO) token**, minted by Google's BotGuard
-attestation (yt-dlp's PO Token Guide; `bgutil-ytdlp-pot-provider` is the standard
-provider). Without a provider, the authenticated URLs **403 on a plain GET** for *some
-public videos*, while the anonymous client's URLs need no token and fetch cleanly
-(HTTP 206). Verified on this machine: same public video → 403 with cookies, 206 without.
+**登录默认是开的（`YT_COOKIE_BROWSER=chrome`）** —— 这是每个**引擎**自己去读的设置 ——
+所以需要登录 / 会员 / 年龄限制的视频（匿名客户端根本看不见）能放。代价是：带上 cookie 之后，
+yt-dlp 会切到 YouTube 的已认证客户端集，而那一组的 googlevideo 媒体 URL 可能需要一个
+**GVS Proof-of-Origin（PO）token**，由 Google 的 BotGuard 证明机制签发（见 yt-dlp 的
+PO Token Guide；标准提供者是 `bgutil-ytdlp-pot-provider`）。没有提供者时，
+那些已认证的 URL 对*某些公开视频*会在一次朴素 GET 上 **403**，
+而匿名客户端的 URL 不需要 token、干净地取到（HTTP 206）。
+本机实测：同一个公开视频 → 带 cookie 403，不带 206。
 
-The naive fix — play, let mpv 403, replay anonymous — works but dumps mpv's error wall
-on screen before the retry. Instead the default **probes which client can actually
-fetch the media BEFORE launching mpv**, then plays **once** with the winner.
-`probe_raw` takes the first media URL out of the record already resolved — it makes no
-second extraction — and issues an
-**open-ended ranged request** (`curl -I -r 0-`): 206/200 ⇒ authorized; 403 ⇒ missing PO token — the
-same verdict mpv would reach mid-load (and for HLS `.m3u8` playlists, probes the first segment).
-Anonymous fallback and anonymous probe use `extractor-args=youtube:player_client=android` to ensure
-YouTube's CDN serves streams that do not 403 on range requests.
+朴素的修法 —— 先播、让 mpv 403、再匿名重播 —— 能用，但会在重试之前把 mpv 的一整墙错误糊在
+屏幕上。默认做法改成：**在启动 mpv 之前先探哪一个客户端真的取得到媒体**，然后用赢家**播一次**。
+`probe_raw` 从**已经解析出来的**记录里取第一个媒体 URL —— 它不做第二次抽取 —— 发一个
+**开区间 ranged 请求**（`curl -I -r 0-`）：206/200 ⇒ 有权；403 ⇒ 缺 PO token，
+与 mpv 加载到一半才会得到的裁决是同一个（对 HLS 的 `.m3u8` 播放列表，探的是第一个分片）。
+匿名回退与匿名探测都用 `extractor-args=youtube:player_client=android`，
+以确保 YouTube 的 CDN 给出的流不会在 range 请求上 403。
 
 ```
-   play_url_with_probe(url, mode):
-      PLAYBACK_RETRIED=0
-      cookies OFF (none) ──────────────► play_mode_url(url, mode)   # nothing to weigh, no probe
-      curl present:                                                 # PROBE-THEN-PLAY (default)
-        probe cookies  (resolve + ranged check) ── 206 ─► keep cookies       # e.g. login-gated
-                                              └─ 403 ─► probe anonymous ── 206 ─► drop cookies + use android client
-                                                                              PLAYBACK_RETRIED=1
-        (neither fetches → keep cookies, let mpv emit the real error / exit code)
-        play_mode_url(url, mode)  ──► rc     # a SINGLE play, with the chosen client
-      curl absent:                                                  # graceful fallback
-        play_mode_url(url, mode)  ── rc!=0 & cookies in use ─► retry once anonymous (old path)
-      return rc
+   resolve_stream()                          # shell/yt-resolve —— 真正的形状在这里
+      FMT = format_for_mode(MODE)
+      有 cookie 时：
+         raw_c = dump_once(带 cookie)
+         probe_raw(raw_c) 通过 ─────────────► emit_stream(raw_c, retried=0)   # 例如登录门后的视频
+         否则 raw_a = dump_once(匿名 + android client)
+              probe_raw(raw_a) 通过 ────────► emit_stream(raw_a, retried=1)
+         两边都取不到，但带 cookie 那次解析成功 ► emit_stream(raw_c, 0)
+                                                 # 保留 cookie，让 mpv 去吐真错误与真退出码
+         都不成 ────────────────────────────► resolve_fail(rc)
+      无 cookie（YT_COOKIE_BROWSER=none，或本机没有该 profile）：
+         无从权衡，所以也不探 —— dump_once(匿名) → emit_stream(raw_a, 0) 或 resolve_fail
 ```
 
-Implementation notes: `local YT_COOKIE_ARGS=()` shadows the global (bash dynamic
-scoping) so the chosen resolve drops cookies without touching the real setting; the verdict
-surfaces as `retried` in the RESOLVE envelope, and `ut-play` relays it into the playback
-envelope's `retried` rather than observing it (AS-BUILT-contract.md §3). Cost: one extra
-resolve + 1-byte GET per play (two on a cookie-403 video). `curl` is a soft dependency —
-without it the probe is skipped and the old play-fail-replay retry runs (the error-dump
-regression reappears only there). `YT_COOKIE_BROWSER=none` forces anonymous-only (no
-keychain read, no probe); a configured browser with no local profile auto-degrades to
-anonymous rather than erroring.
+soft ref：`shell/yt-resolve` 的 `resolve_stream()` / `dump_once()` / `probe_raw()` /
+`have_probe_tools()` / `emit_stream()`。**播放器一侧没有对应函数** ——
+探测早在拆分时就整体搬进了引擎，任何还在 `ut-play` 里找 `play_url_with_probe` 的描述都是过期的
+（这份文档在切出来时原样继承了那段过期伪码，这里按真代码改正）。
 
-## 10. Resolve — the engine's half two
+实现要点：`local YT_COOKIE_ARGS=()` 借 bash 的动态作用域遮住全局量，
+于是那一次解析可以丢掉 cookie 而不碰真正的设置；裁决以 `retried` 出现在**解析**信封里，
+`ut-play` 把它**转述**进播放信封的 `retried`，而不是自己去观察（AS-BUILT-contract.md §3）。
+代价：每次播放多一次解析 + 一个 1 字节 GET（cookie-403 的视频是两次）。
+`curl` 是软依赖 —— 没有它就跳过探测、走回老的"播-失败-重播"（错误糊屏的回归也只在那条路上出现）。
+`YT_COOKIE_BROWSER=none` 强制只走匿名（不读钥匙串、不探测）；
+配了浏览器但本机没有 profile 时自动降级为匿名，而不是报错。
 
-`<engine>-resolve` turns a **handle** into everything needed to play it, and carries the
-site's read-only verbs. It never plays: no mpv, no lifecycle, no `players/`.
+## 10. 解析 —— 引擎的第二半
+
+`<engine>-resolve` 把一个**句柄**变成播放它所需的一切，并承载该站点的只读动词。
+它从不播放：没有 mpv、没有生命周期、没有 `players/`。
 
 ```
-   <engine>-resolve [-f MODE] [-S SORT] [-j|-J] -- <handle>   stream URLs + headers
-   <engine>-resolve --info [-j|-J] -- <handle>                metadata only
-   yt-resolve --transcript [--sub-lang L] [-j|-J] -- <handle> captions as clean text
+   <engine>-resolve [-f MODE] [-S SORT] [-j|-J] -- <handle>   流 URL + 请求头
+   <engine>-resolve --info [-j|-J] -- <handle>                只要元数据
+   yt-resolve --transcript [--sub-lang L] [-j|-J] -- <handle> 字幕，清洗成纯文本
 ```
 
-**The handle grammar is per-engine, and so is the host allowlist (ROADMAP D12).**
-`normalize_target` accepts a URL on one of THIS engine's hosts, or this engine's own media
-id shape:
+**句柄文法是每引擎自己的，host 白名单也是（ROADMAP D12）。** `normalize_target` 接受
+**本**引擎某个 host 上的 URL，或者本引擎自己的媒体 id 形状：
 
-| Engine | Hosts accepted | Bare id shape |
+| 引擎 | 接受的 host | 裸 id 形状 |
 |---|---|---|
-| `yt-resolve` | `youtube.com`, `youtu.be`, `youtube-nocookie.com` + their subdomains | exactly 11 chars of `[A-Za-z0-9_-]` |
-| `bili-resolve` | `bilibili.com`, `b23.tv` + their subdomains | `BV…` / `av…` |
+| `yt-resolve` | `youtube.com`、`youtu.be`、`youtube-nocookie.com` 及其子域 | 恰好 11 个 `[A-Za-z0-9_-]` |
+| `bili-resolve` | `bilibili.com`、`b23.tv` 及其子域 | `BV…` / `av…` |
 
-An **explicit list, not a substring test**: `*.youtube.com` matches `music.youtube.com` and
-refuses `evilyoutube.com`, which a bare `*youtube.com*` would wave through.
+用的是**显式清单，不是子串匹配**：`*.youtube.com` 命中 `music.youtube.com` 而拒绝
+`evilyoutube.com`，后者会被一个光秃秃的 `*youtube.com*` 放过去。
 
-**A URL from another site is a usage error (1), not an extraction failure (2+).** Nothing
-was attempted and nothing is retryable — the caller named the wrong engine, which is the
-same mistake as `--engine nope` and scores the same. This closes a hole that *worked*, which
-is why it survived so long: both resolvers used to hand any http(s) URL to yt-dlp (1700+
-supported sites), so a Bilibili URL resolved fine through `yt-resolve` and came back labelled
-`engine:"yt"` — a lie in the one field whose entire job is routing a result back to the
-resolver that understands it. The cost is recorded honestly: URL-only sources (Bandcamp,
-Apple Podcasts) that used to play by accident no longer do, and the fix for those is a pair
-of their own, never a looser host check.
+**来自另一个站点的 URL 是用法错误（1），不是抽取失败（2+）。** 什么都还没试、也没有什么可重试的
+—— 调用方点错了引擎，这与 `--engine nope` 是同一个错误，因此记同样的分。这堵上了一个**能用**的
+洞，而"能用"正是它活这么久的原因：两个 resolver 从前会把任何 http(s) URL 交给 yt-dlp
+（1700+ 个支持站点），于是一条 Bilibili URL 经 `yt-resolve` 解得好好的，
+回来时贴着 `engine:"yt"` —— 在那个整份工作就是"把结果路由回懂它的解析器"的字段上撒谎。
+代价如实记下：那些"只靠 URL"的源（Bandcamp、Apple Podcasts）从前是**意外**能播的，现在不能了，
+而它们的修法是给它们写一对自己的引擎，绝不是放松 host 校验。
 
 ```
-   resolve_stream(handle):                      # the bare verb — what ut-play calls
+   resolve_stream(handle)                       # 光秃秃的那个动词 —— ut-play 调的就是它
       yt-dlp --dump-single-json --no-playlist -f <format_for_mode(MODE)>
              [--format-sort SORT] [--cookies-from-browser B]
-      → probe (yt only, §8.2) may re-resolve anonymously and set retried
-      prose: print the stream URL(s)
+      → 探测（仅 yt，§8.2 是它完整的形状）可能匿名重解一次并把 retried 置上
+      prose: 打印流 URL
       -j:    {status,engine,id,url,title,duration,mode,format,stream_urls[],http_headers{},retried}
-      -J:    the full raw yt-dlp record
-      error: {status:"error",engine,url,mode,reason}, exit 2+
+      -J:    yt-dlp 的完整原始记录
+      error: {status:"error",engine,url,mode,reason}，退 2+
 ```
 
-`stream_urls` is **video first**: element 0 is what a player opens, element 1 — present only
-when the chosen format merged two streams — is its separate audio track. `http_headers` is
-**required, possibly `{}`**. Full schema and the reasoning for both: AS-BUILT-contract.md §3.
+`stream_urls` 是**视频在前**：元素 0 是播放器要打开的那个，元素 1 —— 只有当选中的格式合并了
+两条流时才有 —— 是它单独的音轨。`http_headers` 是**必需的，但可以是 `{}`**。
+完整 schema 与这两条的理由：AS-BUILT-contract.md §3。
 
-### 10.1 Metadata-only (`--info`)
+### 10.1 只要元数据（`--info`）
 
-Read-only, non-blocking, side-effect-free; needs yt-dlp+jq but never mpv. **Both engines have
-it.** Reason it exists: without it an agent that wants to know *what* a video is (description,
-chapters, uploader, date, like count) has to leave the ecosystem and drop to raw
-`yt-dlp --dump-json` — the same escape-hatch failure the JSON search surface removed.
-LLM-first, not human ergonomics (contrast the rejected `--url-only`, which strips grounding
-signal): `--info` *adds* the grounding an agent reasons over. `duration_fmt` comes from the
-engine's own `JQ_PRELUDE` `fmt_dur` (§7), so within an engine `--info` and search cannot
-drift on the format — and it is `null`, not `"00h:00m:00s"`, when the duration is unknown.
+只读、不阻塞、无副作用；要 yt-dlp+jq，但永远不要 mpv。**两个引擎都有它。** 它存在的理由：
+没有它的话，一个想知道某个视频*是什么*（描述、章节、上传者、日期、点赞数）的 agent，
+就得离开这套生态、掉回原始的 `yt-dlp --dump-json` —— 与 JSON 搜索面当初消除的是同一种
+"逃生口"失败。这是 LLM 优先而不是人体工学（对照被否掉的 `--url-only`，那个是**剥掉**接地信号）：
+`--info` 是**增加** agent 推理所依据的接地。`duration_fmt` 来自引擎自己 `JQ_PRELUDE` 里的
+`fmt_dur`（§7），所以在一个引擎内部，`--info` 与搜索在格式上不可能漂移 ——
+而且时长未知时它是 `null`，不是 `"00h:00m:00s"`。
 
 ```
-   resolve_info(handle):
+   resolve_info(handle)
       yt-dlp --dump-single-json --skip-download
-             [--cookies-from-browser B]   # only when login opted in
+             [--cookies-from-browser B]   # 只有选择了登录时才有
              --no-warnings --quiet
-      prose: readable block (title/channel/date/duration/views/likes/live/url,
-             then Chapters M:SS, then Description)          (die on failure)
-      -j:    lean, high-signal projection mirroring search -j field discipline:
+      prose: 可读段落（标题/频道/日期/时长/播放/点赞/直播/URL，
+             然后 Chapters M:SS，然后 Description）        （失败即 die）
+      -j:    精瘦、高信噪比的投影，与搜索 -j 的字段纪律一致：
              {status,engine,id,title,url,channel,uploader,upload_date,duration,duration_fmt,
               view_count,like_count,live_status,description,chapters}
              chapters = [{start_time,end_time,title}] | null
-      -J:    full raw yt-dlp record (fidelity escape hatch, same role as search -J)
-      error: -j/-J → {status:"error",engine,url,reason} exit 1 ; prose → die
+      -J:    完整原始 yt-dlp 记录（保真逃生口，与搜索 -J 同一角色）
+      error: -j/-J → {status:"error",engine,url,reason} 退 1；prose → die
 ```
 
-`bili-resolve --info` fills `channel` from `.channel // .uploader` because that extractor
-populates one or the other by record — **the envelope's shape must not depend on which**.
-That is the general rule for an engine: normalise to the contract, never publish the
-extractor's variance.
+`bili-resolve --info` 用 `.channel // .uploader` 来填 `channel`，因为那个 extractor 按记录
+只填其中之一 —— **信封的形状不得取决于是哪一个**。这是对一个引擎的通则：
+**归一化到契约，绝不把 extractor 的方差原样发布出去。**
 
-### 10.2 Captions (`--transcript`) — a verb `bili-resolve` does not have (D13)
+### 10.2 字幕（`--transcript`）—— 一个 `bili-resolve` 没有的动词（D13）
 
-`yt-resolve --transcript` fetches a caption track and cleans it into text that can be dropped
-straight into a prompt. Envelope, the `-j`/`-J` split, and the one-yt-dlp-call constraint:
-AS-BUILT-contract.md §3, which is also where the `no_subtitles_available` reason is specified.
+`yt-resolve --transcript` 取一条字幕轨，并把它清洗成可以直接丢进 prompt 的文本。信封、
+`-j`/`-J` 的分工，以及"只许一次 yt-dlp 调用"的约束：AS-BUILT-contract.md §3，
+`no_subtitles_available` 这个 reason 也规定在那里。
 
-**Bilibili serves no captions, so `bili-resolve` has no `--transcript` at all** — the flag is
-not accepted and the help does not list it. This is the capability rule in the small: an
-engine says what it cannot do by *not having the verb*, rather than by publishing one that
-always answers "none", which a caller cannot tell apart from a bad day or a rate limit.
+**Bilibili 不供字幕，所以 `bili-resolve` 根本没有 `--transcript`** —— 这个 flag 不被接受，
+帮助里也不列它。这是"能力规矩"的微观版：**一个引擎靠"没有那个动词"来说明自己做不到什么**，
+而不是发布一个永远答"没有"的动词 —— 后者让调用方分不清它与"今天不走运"或"被限流了"。
