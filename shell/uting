@@ -240,6 +240,8 @@ Keys (List View):
   a        add the focused row to a playlist               (needs ut-playlist)
   b        open a stored playlist as the row source; b again
            returns to the search results                    (needs ut-playlist)
+  d        remove the focused row from the playlist on screen, after a
+           confirmation; playlist rows only                 (needs ut-playlist)
   h        open the listening log as the row source; h again
            returns to the search results                    (needs ut-history)
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
@@ -590,10 +592,13 @@ set_ui_lang() {
         S_FILTER_HINT="过滤（输入即筛选，Enter 播放，Esc 清除）"
         S_NOTHING="(暂无正在播放的音频)"; S_BACK_SEARCH="返回搜索列表"; S_PLAY_SEL="播放选中歌曲"
         S_PL_ADD="加入列表"; S_PL_OPEN="播放列表"; S_PL_ACT="播放列表"
-        S_PL_PROMPT_ADD="加入哪个列表（Esc 取消）"; S_PL_PROMPT_OPEN="打开哪个（序号或名称，Esc 取消）"
+        S_PL_PROMPT_ADD="加入哪个（序号或名称，Esc 取消）"; S_PL_PROMPT_OPEN="打开哪个（序号或名称，Esc 取消）"
+        S_PL_PROMPT_NEW="新建列表名称（Esc 取消）"
         S_PL_ADDED="已加入"; S_PL_EMPTY="该列表是空的"; S_PL_FAILED="操作失败"
         S_PL_NONE="还没有播放列表（按 a 建一个）"; S_PL_ITEM="首"; S_PL_ITEMS="首"
         S_PL_ABSENT="未安装 ut-playlist"; S_PL_SEARCH_ONLY="该键只在搜索结果里可用（按 n 重新搜索）"
+        S_PL_LIST_ONLY="该键只在播放列表里可用（按 b 打开一个）"
+        S_PL_RM_KEY="移出"; S_PL_RM_HEAD="移出列表"; S_PL_RM_CONFIRM="确认？(y/N)"; S_PL_REMOVED="已移出"
         S_HIST_KEY="历史"; S_HIST_ACT="收听历史"; S_HIST_LABEL="最近收听"
         S_HIST_EMPTY="还没有收听记录"; S_HIST_ABSENT="未安装 ut-history"
         S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_NEXT="下一首"; S_Q_ACT="队列"
@@ -615,10 +620,13 @@ set_ui_lang() {
         S_FILTER_HINT="filter (type to narrow, Enter plays, Esc clears)"
         S_NOTHING="(nothing playing)"; S_BACK_SEARCH="back to results"; S_PLAY_SEL="play selection"
         S_PL_ADD="add to list"; S_PL_OPEN="playlists"; S_PL_ACT="Playlist"
-        S_PL_PROMPT_ADD="Add to which playlist (Esc cancels)"; S_PL_PROMPT_OPEN="Open which (number, name, Esc cancels)"
+        S_PL_PROMPT_ADD="Add to which (number, name, Esc cancels)"; S_PL_PROMPT_OPEN="Open which (number, name, Esc cancels)"
+        S_PL_PROMPT_NEW="Name the new playlist (Esc cancels)"
         S_PL_ADDED="Added to"; S_PL_EMPTY="that playlist is empty"; S_PL_FAILED="failed"
         S_PL_NONE="no playlists yet (press a to make one)"; S_PL_ITEM="item"; S_PL_ITEMS="items"
         S_PL_ABSENT="ut-playlist is not installed"; S_PL_SEARCH_ONLY="that key needs search results (press n to search)"
+        S_PL_LIST_ONLY="that key needs a playlist (press b to open one)"
+        S_PL_RM_KEY="remove"; S_PL_RM_HEAD="Remove from"; S_PL_RM_CONFIRM="Confirm? (y/N)"; S_PL_REMOVED="Removed from"
         S_HIST_KEY="history"; S_HIST_ACT="History"; S_HIST_LABEL="newest first"
         S_HIST_EMPTY="nothing listened to yet"; S_HIST_ABSENT="ut-history is not installed"
         S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_NEXT="next"; S_Q_ACT="Queue"
@@ -2109,7 +2117,10 @@ display_list_menu() {
     # second cell would be documenting one key twice in a block that is measured.
     if [[ -n "$UT_PLAYLIST" ]]; then
         if [[ "$LIST_SOURCE" == "playlist" ]]; then
-            nav_items+=("a	$S_PL_ADD" "b	$S_BACK_SEARCH")
+            # d is the one store key that is not offered everywhere, for the same reason `e`
+            # is not offered on a single-engine install: it can only act on a row a playlist
+            # owns, so anywhere else it would spend a cell of a measured block to say no.
+            nav_items+=("a	$S_PL_ADD" "d	$S_PL_RM_KEY" "b	$S_BACK_SEARCH")
         else
             nav_items+=("a	$S_PL_ADD" "b	$S_PL_OPEN")
         fi
@@ -2843,6 +2854,74 @@ have_store() {
     return 1
 }
 
+# What the store holds, fetched once per keypress into PL_LS_JSON. BOTH playlist keys need
+# it — `b` to pick a list to open, `a` to pick one to add to — and the ten lines that fetch
+# it (the errfile, the rc, the two-step message strip) are exactly the copy that drifted
+# apart in F11/F12, so there is one of them. -j, not the prose --ls: the picker needs the
+# names as DATA. The COUNT is left to the caller to judge, because the same number means
+# different things to the two keys: an empty store is a dead end for `b` and a perfectly
+# ordinary starting point for `a`.
+# One list, read out of the store, in PL_SHOW_JSON. Two callers — opening a list and
+# re-reading one that just changed — and the same ten lines list_playlists exists to stop
+# being copied. The COUNT is again the caller's to judge: an empty answer means "there is
+# nothing to open" on the way in and "you just removed the last one" on the way back.
+PL_SHOW_JSON=""
+PL_SHOW_COUNT=0
+show_playlist() {
+    local rc=0 errfile msg
+    PL_SHOW_JSON=""
+    PL_SHOW_COUNT=0
+    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-pl-err.$$"
+    PL_SHOW_JSON=$("$UT_PLAYLIST" --show "$1" -j 2>"$errfile") || rc=$?
+    msg=$(<"$errfile")
+    rm -f "$errfile"
+    if ((rc != 0)); then
+        msg=${msg##*$'\n'}
+        msg=${msg#ut-playlist: }
+        store_notice "$S_PL_ACT:" "${msg:-$S_PL_FAILED}"
+        return 1
+    fi
+    PL_SHOW_COUNT=$(printf '%s' "$PL_SHOW_JSON" | jq -r '.count // 0' 2>/dev/null) || PL_SHOW_COUNT=0
+    return 0
+}
+
+PL_LS_JSON=""
+PL_LS_COUNT=0
+list_playlists() {
+    local rc=0 errfile msg
+    PL_LS_JSON=""
+    PL_LS_COUNT=0
+    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-pl-err.$$"
+    PL_LS_JSON=$("$UT_PLAYLIST" --ls -j 2>"$errfile") || rc=$?
+    msg=$(<"$errfile")
+    rm -f "$errfile"
+    if ((rc != 0)); then
+        msg=${msg##*$'\n'}
+        msg=${msg#ut-playlist: }
+        store_notice "$S_PL_ACT:" "${msg:-$S_PL_FAILED}"
+        return 1
+    fi
+    PL_LS_COUNT=$(printf '%s' "$PL_LS_JSON" | jq -r '.count // 0' 2>/dev/null) || PL_LS_COUNT=0
+    return 0
+}
+
+# A yes/no, taken as ONE byte rather than through read_query_input: a confirmation is not
+# text, so a reader that assembles UTF-8 and handles backspace is answering a question nobody
+# asked, and an Enter to commit a single letter is a second keypress for no decision. Only y
+# confirms; every other key — Esc included — cancels, which is the safe default for a
+# destructive verb and is why the prompt strings spell it (y/N). The letter is deliberately
+# ASCII in both chrome languages: it is a KEY, and the zh prompt says so too.
+confirm_key() {
+    local k=""
+    printf '%s%s %s%s: ' "$C_BOLD" "$GL_CARET" "$1" "$C_RESET"
+    IFS= read -rsn1 k || return 1
+    printf '\n'
+    case "$k" in
+    y | Y) return 0 ;;
+    esac
+    return 1
+}
+
 # Prompt for a playlist name, echoing what is typed. Esc / empty cancels, exactly like the
 # n prompt this borrows its reader from — one reader owns UTF-8 assembly, backspace width
 # and the cancel contract for every prompt in the app.
@@ -2890,7 +2969,17 @@ add_to_playlist() {
         return 0
     fi
     payload="$FOCUSED_PAYLOAD"
-    prompt_name "$S_PL_PROMPT_ADD" || return 0
+    # The same question `b` asks, asked the same way: what exists, numbered, before the
+    # caret. A prompt that wants a name typed from memory is a worse question than the store
+    # can answer (see pick_playlist) — and it is worse HERE than it is there, because a
+    # mistyped name does not fail, it silently makes a second playlist. An empty store is the
+    # one case with nothing to show, and there the only useful question is the new name.
+    list_playlists || return 0
+    if [[ "$PL_LS_COUNT" == "0" ]]; then
+        prompt_name "$S_PL_PROMPT_NEW" || return 0
+    else
+        pick_playlist "$PL_LS_JSON" "$S_PL_ADD" "$S_PL_PROMPT_ADD" || return 0
+    fi
     name="$PROMPT_NAME"
     errfile=$(mktemp "${TMPDIR:-/tmp}/uting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-pl-err.$$"
     printf '%s' "$payload" | "$UT_PLAYLIST" --add "$name" -j >/dev/null 2>"$errfile" || rc=$?
@@ -2907,30 +2996,116 @@ add_to_playlist() {
     press_any_key
 }
 
+# Which item of the STORE the focused row is, in PL_ITEM_INDEX — 0-based, which is what
+# ut-playlist --rm --index takes.
+#
+# `selected` would be that number TODAY, and only by luck: the rows are the items in order,
+# and the one thing that reorders a view — the filter — does not outlive its own loop
+# (filter_live ends with apply_filter ""), so `d` is never pressed against a subset. That is
+# an invariant of another function, and the failure it buys if it ever changes is not a
+# missing row, it is the WRONG row deleted. So the index is resolved from the row's own
+# identity instead: the url, plus its OCCURRENCE — how many rows above it carry the same url
+# — because a playlist may hold one url twice, and then the first match is not necessarily
+# the row under the cursor. Both sequences are item order (build_playlist_rows emits items in
+# order, apply_filter re-emits survivors in order), so the k-th occurrence in the view is the
+# k-th occurrence in the store, subset or not.
+PL_ITEM_INDEX=""
+focused_index() {
+    local url="${urls[$selected]}" i k=0
+    PL_ITEM_INDEX=""
+    for ((i = 0; i < selected; i++)); do
+        if [[ "${urls[$i]}" == "$url" ]]; then k=$((k + 1)); fi
+    done
+    PL_ITEM_INDEX=$(printf '%s' "$json" | jq -r --arg u "$url" --argjson k "$k" \
+        '[.items | to_entries[] | select(.value.url == $u) | .key][$k] // empty' 2>/dev/null) || PL_ITEM_INDEX=""
+    [[ -n "$PL_ITEM_INDEX" ]] || return 1
+    return 0
+}
+
+# Remove the focused row from the playlist it is a row OF. The store does the removing, by
+# index, exactly as `a` lets it do the adding: this file neither rewrites the file nor decides
+# what a removal means. Two things make it different from the other store keys — it is
+# destructive, so it asks first and defaults to no; and it is the only one that acts on the
+# view it is already in, so it ends by re-reading the store rather than by opening something.
+delete_from_playlist() {
+    ((NUM_ENTRIES > 0)) || return 0
+    playlist_only || return 0
+    have_store || return 0
+    local name="$PLAYLIST_NAME" rc=0 msg errfile w
+    if ! focused_index; then
+        # The row is not in the envelope the view was built from, so the store and the screen
+        # disagree and an --index taken from here would delete SOMETHING ELSE. Refuse.
+        store_notice "$S_PL_ACT:" "$S_PL_FAILED"
+        return 0
+    fi
+    # What is about to go, named the way the row names it — a confirmation that says only
+    # "are you sure" is asking about something the user has to remember rather than read.
+    layout_cols
+    w=$((LAYOUT_COLS - 4))
+    ((w < 8)) && w=8
+    truncate_disp "${R_TITLE[$selected]}" "$w"
+    printf '\n%s%s%s %s %s\n' "$C_BOLD" "$S_PL_RM_HEAD" "$C_RESET" "$GL_ARROW" "$name"
+    printf '  %s\n' "$TRUNC_TEXT"
+    confirm_key "$S_PL_RM_CONFIRM" || return 0
+    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-pl-err.$$"
+    "$UT_PLAYLIST" --rm "$name" --index "$PL_ITEM_INDEX" -j >/dev/null 2>"$errfile" || rc=$?
+    msg=$(<"$errfile")
+    rm -f "$errfile"
+    if ((rc != 0)); then
+        msg=${msg##*$'\n'}
+        msg=${msg#ut-playlist: }
+        [[ "$msg" == *[![:space:]]* ]] || msg="$S_PL_FAILED"
+        store_notice "$S_PL_ACT:" "$msg"
+        return 0
+    fi
+    printf '%s%s%s %s %s\n' "$C_BOLD" "$S_PL_REMOVED" "$C_RESET" "$GL_ARROW" "$name"
+    reload_playlist "$name"
+}
+
+# Re-open the list after it has CHANGED under us, keeping the user where they were. The
+# re-fetch IS open_playlist (the stash it takes no-ops on rows that already belong to a
+# store), so there is no second copy of the show + build + load sequence; the one thing this
+# adds is the cursor, which must not jump back to the top after every delete — deleting three
+# tracks is otherwise three trips back down the list. Nothing restores a filter, because
+# there is none to restore: filter_live clears it on the way out, so a key handled by the
+# menu loop always sees the whole list.
+# A reload that FAILS lands on the search rather than on rows the store no longer agrees
+# with: the item is already gone, so what is on screen is a picture of the past. The one
+# expected failure is the list going empty, and there the notice is S_PL_EMPTY — the same
+# sentence `b` gives for opening an empty list, because it is the same fact.
+reload_playlist() {
+    local name=$1 keep=$selected
+    if ! open_playlist "$name"; then
+        back_to_search
+        return 0
+    fi
+    if ((keep >= NUM_ENTRIES)); then keep=$((NUM_ENTRIES - 1)); fi
+    if ((keep < 0)); then keep=0; fi
+    selected=$keep
+    page_index=$((keep / PAGE_SIZE + 1))
+    return 0
+}
+
 # Load a playlist as the row source. The list view is unchanged — same renderer, same
 # filter, same keys — because a playlist envelope produces the same seven-field row a
 # search does (build_playlist_rows). What changes is LIST_SOURCE, which is what the
 # search-only keys (m / o / e) test before re-fetching a query that is no longer on screen.
 open_playlist() {
-    local name="$1" out rc=0 cnt errfile
-    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-pl-err.$$"
-    out=$("$UT_PLAYLIST" --show "$name" -j 2>"$errfile") || rc=$?
-    local msg; msg=$(<"$errfile")
-    rm -f "$errfile"
-    if ((rc != 0)); then
-        msg=${msg##*$'\n'}
-        msg=${msg#ut-playlist: }
-        store_notice "$S_PL_ACT:" "${msg:-$S_PL_FAILED}"
-        return 1
-    fi
-    cnt=$(printf '%s' "$out" | jq -r '.count // 0' 2>/dev/null || echo 0)
-    if [[ "$cnt" == "0" ]]; then
+    local name="$1" out
+    show_playlist "$name" || return 1
+    if [[ "$PL_SHOW_COUNT" == "0" ]]; then
         store_notice "$S_PL_ACT:" "$S_PL_EMPTY"
         return 1
     fi
+    out="$PL_SHOW_JSON"
     stash_search
     json="$out"
     LIST_SOURCE="playlist"
+    # The name as DATA, next to the label that renders it: QUERY_LABEL is chrome (it holds a
+    # query in one view and a translated string in another), and `d` needs the exact key the
+    # store answers to. Nothing clears it, because nothing reads it outside a playlist view
+    # and this is the only way into one.
+    PLAYLIST_NAME="$name"
     # One label for the whole list, computed once: a mixed playlist says so rather than
     # claiming the session engine, which is not what its rows will play under.
     PLAYLIST_ENGINES=$(printf '%s' "$out" | jq -r '[.items[].engine] | unique | join("+")' 2>/dev/null) || PLAYLIST_ENGINES=""
@@ -2961,6 +3136,16 @@ stored_rows() {
 search_only() {
     [[ "$LIST_SOURCE" == "search" ]] && return 0
     store_notice "$S_PL_ACT:" "$S_PL_SEARCH_ONLY"
+    return 1
+}
+
+# The mirror of search_only, for the one key that needs the opposite: `d` removes a row from
+# the list it is a row of, and a search result is a row of nothing. Not stored_rows — the
+# listening log is a store too, and ut-history has no per-row removal (--ls --record --clear
+# is its whole surface), so a `d` there would have nothing to call.
+playlist_only() {
+    [[ "$LIST_SOURCE" == "playlist" ]] && return 0
+    store_notice "$S_PL_ACT:" "$S_PL_LIST_ONLY"
     return 1
 }
 
@@ -3011,7 +3196,8 @@ back_to_search() {
 # List what is stored, then ask which one. A picker widget would be a second list renderer
 # in a file that already has one, and the prose --ls output is the store's own answer to
 # "what have I got" — printed, not re-rendered here.
-# The picker `b` prints, and the reason it is not a widget: it is PROSE in the scroll area,
+# The picker BOTH playlist keys print, and the reason it is not a widget: it is PROSE in the
+# scroll area,
 # exactly where the store's own `--ls` output used to land, plus the two things that were
 # missing from it. An INDEX, because a caret that looks identical to the search prompt and
 # wants a name typed from memory is a worse question than the store can answer; and a name
@@ -3022,9 +3208,14 @@ back_to_search() {
 # takes exactly what ut-playlist takes and the store never hears about row numbers. The index
 # wins over a numeric name, which costs nothing: the number is what is on screen, and a
 # playlist actually called "7" is still reachable by ITS row number.
+# The header and the prompt come from the CALLER, and they are the only difference between
+# the two uses: `b` picks a list to open, `a` picks one to add to. Everything else — the
+# numbering, the measured name column, the index-beats-a-numeric-name rule — is one
+# behaviour, so the two keys cannot drift into two spellings of the same list.
 PICK_NAMES=()
 pick_playlist() {
-    local out=$1 nm ct up i n idx num_w name_w=0 meta_w=0 cols date_ok=0 unit
+    local out=$1 header=$2 prompt=$3
+    local nm ct up i n idx num_w name_w=0 meta_w=0 cols date_ok=0 unit
     local counts=() metas=()
     PICK_NAMES=()
     while IFS=$'\t' read -r nm ct up; do
@@ -3055,14 +3246,14 @@ pick_playlist() {
     ((idx < 8)) && idx=8
     ((name_w > idx)) && name_w=$idx
 
-    printf '\n  %s%s%s\n' "$C_BOLD" "$S_PL_OPEN" "$C_RESET"
+    printf '\n  %s%s%s\n' "$C_BOLD" "$header" "$C_RESET"
     for ((i = 0; i < n; i++)); do
         truncate_disp "${PICK_NAMES[$i]}" "$name_w"
         disp_w "$TRUNC_TEXT"
         printf '  %*d. %s%*s  %s\n' "$num_w" "$((i + 1))" "$TRUNC_TEXT" "$((name_w - DISP_W))" "" "${metas[$i]}"
     done
 
-    prompt_name "$S_PL_PROMPT_OPEN" || return 1
+    prompt_name "$prompt" || return 1
     # All digits and short enough that 10# cannot overflow the arithmetic. Anything else is a
     # name, including a number outside the range — the store will say `not_found` in its own
     # words, which is a better sentence than one invented here.
@@ -3085,26 +3276,14 @@ browse_playlists() {
         return 0
     fi
     have_store || return 0
-    # -j, not the prose --ls: the picker needs the names as DATA (to number them, and to hand
-    # one back to --show), and the store already publishes them that way. An empty store is
-    # answered here rather than by prompting for a name that cannot exist.
-    local out rc=0 cnt errfile msg
-    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-pl-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-pl-err.$$"
-    out=$("$UT_PLAYLIST" --ls -j 2>"$errfile") || rc=$?
-    msg=$(<"$errfile")
-    rm -f "$errfile"
-    if ((rc != 0)); then
-        msg=${msg##*$'\n'}
-        msg=${msg#ut-playlist: }
-        store_notice "$S_PL_ACT:" "${msg:-$S_PL_FAILED}"
-        return 0
-    fi
-    cnt=$(printf '%s' "$out" | jq -r '.count // 0' 2>/dev/null) || cnt=0
-    if [[ "$cnt" == "0" ]]; then
+    # An empty store is answered here rather than by prompting for a name that cannot exist —
+    # the one branch `a` does not share, because there an empty store is where a list starts.
+    list_playlists || return 0
+    if [[ "$PL_LS_COUNT" == "0" ]]; then
         store_notice "$S_PL_ACT:" "$S_PL_NONE"
         return 0
     fi
-    pick_playlist "$out" || { display_menu "$page_index"; return 0; }
+    pick_playlist "$PL_LS_JSON" "$S_PL_OPEN" "$S_PL_PROMPT_OPEN" || { display_menu "$page_index"; return 0; }
     open_playlist "$PROMPT_NAME" || return 0
 }
 
@@ -3641,6 +3820,9 @@ move_selection() {
 # /, v, the playback keys) does not care and is left alone.
 LIST_SOURCE="search"
 PLAYLIST_ENGINES=""
+# The playlist a `playlist` LIST_SOURCE is showing, as the store spells it. Read only under
+# that source, so it is never stale where it is read.
+PLAYLIST_NAME=""
 # What Esc puts back when a store (b / h) replaced the search on screen.
 SEARCH_STASH_JSON=""
 SEARCH_STASH_ROWS=""
@@ -3763,6 +3945,7 @@ while true; do
     t | T) cycle_theme ;;     # cycle palette family live
     a | A) add_to_playlist ;; # add the focused row to a playlist
     b | B) browse_playlists ;;# open a stored playlist as the row source
+    d | D) delete_from_playlist ;; # remove the focused row from the playlist on screen
     h | H) open_history ;;    # open the listening log as the row source
     "+") enqueue_selected ;;  # append the focused row to the running player's queue
     ">") skip_next ;;         # skip to the next queued track

@@ -156,14 +156,17 @@ addition bumps `z`; `1.0.0` is a promise this reference implementation does not 
 
 `↑/↓` select · `←/→` page · `Enter` play · `Tab` focus card · `/` filter · `n` new search ·
 `m` more results · `o` sort · `v` playback mode · `e` switch source · `a` add to playlist ·
-`b` open a playlist · `h` listening history · `+` add to the queue · `>` next track ·
+`b` open a playlist · `d` remove from the playlist on screen · `h` listening history · `+` add to the queue · `>` next track ·
 `Space` pause · `9/0` volume ·
 `[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
 
 `e` is drawn only when a second engine is installed — the TUI discovers engines by looking for
 `<name>-search` and `<name>-resolve` pairs, so it holds no list of sources. `a` and `b` are
 drawn only when `ut-playlist` is installed and `h` only when `ut-history` is, by the same rule.
-`h` asks for no name — the log is one thing — and shows the 50 newest listenings. With a
+`h` asks for no name — the log is one thing — and shows the 50 newest listenings. `d` is the
+mirror: it is drawn only with a **playlist** on screen, because a search result is a row of
+nothing and the log has no per-row removal to call. It names the track and defaults to no.
+With a
 playlist or the log on screen the three keys that re-fetch a query — `m`, `o`, `e` — say so and
 do nothing; both can mix sources, and each row plays under the engine that produced it. `+` and `>` appear only while
 something is playing: the queue belongs to the player, so with no player there is nothing to
