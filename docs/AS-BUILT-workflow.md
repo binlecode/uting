@@ -67,7 +67,7 @@ B7. **A landing is a checklist, not a feeling.** The unit of work closes against
     findings resolved, the as-built docs resynced, the `PLAN-` deleted, the version judged.
     Skipping the housekeeping half means the work has not landed — the code is merely present.
     Landing closes the unit of work, not the code's liability: that stays with
-    `ARCHITECTURE.md` §25 and B9.
+    `AS-BUILT-verification.md` §25 and B9.
 
 B8. **A session ends by sorting its residue.** Durable state — settled decisions,
     work-in-progress position — goes into the in-flight `PLAN-` before the session closes; only

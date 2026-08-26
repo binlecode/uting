@@ -213,7 +213,7 @@ report "…and --status agrees"         "false" \
     "$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.paused')"
 
 # NOT checked here: the `head -n <count>` pipe close in live_props (§9.3). Tried, pulled, and
-# why — with the real peer it cannot go red — is recorded in docs/ARCHITECTURE.md §27. Do not
+# why — with the real peer it cannot go red — is recorded in docs/AS-BUILT-verification.md §27. Do not
 # re-add it as a timing assertion.
 # The degradation an agent must be able to tell from a reading — and it is produced by doing
 # it, not by imitating it: the socket of a REALLY running player is really removed, which is
@@ -344,7 +344,7 @@ sleep 2
 report "no players after a queue" 0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
 no_orphans "no orphan mpv after a queue"
 # NOT checked here: that a stopped queue files no tombstone. Tried, pulled, and why — it could
-# not be made to go red here — is recorded in docs/ARCHITECTURE.md §27; contract.sh drives the
+# not be made to go red here — is recorded in docs/AS-BUILT-verification.md §27; contract.sh drives the
 # tombstone boundaries from fixtures instead, which is where a rule about what the REAPER
 # records belongs.
 

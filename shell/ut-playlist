@@ -4,14 +4,14 @@
 # The seventh command, and the first one that owns state a user would be upset to lose.
 # It knows nothing about sites (no yt-dlp, no cookie, no host grammar) and nothing about
 # playback (no mpv, no lifecycle, no players/). It knows two things: the item record and
-# the file. docs/ARCHITECTURE.md §9.4 (why this is user-level and how it locks),
+# the file. docs/AS-BUILT-player.md §9.4 (why this is user-level and how it locks),
 # docs/AS-BUILT-contract.md §1.5 (the surface) and §3 (the record).
 #
 # WHY IT IS NOT PART OF THE PLAYER. `players/` lives in ${TMPDIR}/uting-$(id -u) and dies
 # with the reboot — correct for a running process, fatal for a list a user spent six months
 # building. This store is user-level and permanent; the queue (a playlist being consumed)
 # stays with the player. A queue that survives a reboot IS a playlist, which is the whole
-# reason these are two different things. ARCHITECTURE.md §9.2.
+# reason these are two different things. AS-BUILT-player.md §9.2.
 #
 # ONE INPUT SHAPE: JSON on stdin, either a search envelope (`yt-search -j` verbatim) or a
 # bare array of items. Taking the envelope is correctness, not convenience — a search

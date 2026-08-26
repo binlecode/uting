@@ -227,10 +227,19 @@ Lessons these paid for, every one of which produced a wrong result first:
 
 ## Documentation
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — architecture, every non-obvious decision and why, plus the
-  verification matrix.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the umbrella: topology, seams, the control-flow
+  diagrams, the function map and every non-obvious decision. Diagrams, flows and decisions;
+  the detail is in the per-scope docs below. Written in Chinese.
 - [`docs/AS-BUILT-contract.md`](docs/AS-BUILT-contract.md) — the frozen CLI contract: envelopes, exit codes,
   lifecycle semantics, and the checklist for adding an engine.
+- [`docs/AS-BUILT-engine.md`](docs/AS-BUILT-engine.md) — the site half: query shaping, the Bilibili
+  transport, the login / PO-token probe, handle grammar, `--info` / `--transcript`.
+- [`docs/AS-BUILT-player.md`](docs/AS-BUILT-player.md) — the player, the queue and the two durable
+  stores: the detached lifecycle, runtime IPC, `ut-playlist` and `ut-history`.
+- [`docs/AS-BUILT-tui.md`](docs/AS-BUILT-tui.md) — the human face: the two views, in-place rendering,
+  the width layer, the reflow and the three play states.
+- [`docs/AS-BUILT-verification.md`](docs/AS-BUILT-verification.md) — the risk register and the
+  verification matrix: what each check proves, and what is deliberately not covered.
 - [`docs/AS-BUILT-workflow.md`](docs/AS-BUILT-workflow.md) — how a unit of work moves through this repo.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — positioning and non-goals, the decisions and their
   reopen conditions, and the conditions under which the core would move to Go.

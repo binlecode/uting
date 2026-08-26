@@ -27,7 +27,7 @@ function); pseudo-code is a shape, not a copy of the source.
 
 **One thing this document deliberately does not own**: what a `-f MODE` *means* as a format
 string is engine knowledge (`format_for_mode()` lives in each `<engine>-resolve`), but the
-mode→format→mpv table is stated once, beside the player's mpv option set, in `ARCHITECTURE.md` §8.1.
+mode→format→mpv table is stated once, beside the player's mpv option set, in `AS-BUILT-player.md` §8.1.
 
 ---
 

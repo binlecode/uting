@@ -78,7 +78,7 @@ YT_MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-
 # STDERR, so filtering stderr never touches the progress bar. audio is immune (--no-video → no
 # OSD); ascii uses --really-quiet. Rejected: --osd-level=0 (kills the noise but also the
 # on-window OSD/OSC); --msg-level=all=error (blanks the status bar); OS_ACTIVITY_MODE=disable
-# (does NOT stop CoreText). See ARCHITECTURE.md §8.1.
+# (does NOT stop CoreText). See AS-BUILT-player.md §8.1.
 YT_MPV_VIDEO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar)
 # mpv docs suggest sw-fast/really-quiet for terminal VOs to reduce glitches and improve speed.
 YT_MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term-osd-bar)
@@ -430,7 +430,7 @@ patch_player_meta() {
 # handed us direct URLs plus the headers they must be fetched with, so mpv is told
 # --no-ytdl and never makes an extraction of its own. That closes the asymmetry where the
 # LAST yt-dlp call in a play was one we did not make and could not classify — from here
-# there is exactly one extraction and we made it. docs/ARCHITECTURE.md §8.1.
+# there is exactly one extraction and we made it. docs/AS-BUILT-player.md §8.1.
 #
 # The media comes from the RESOLVED_* globals rather than arguments because bash 3.2 arrays
 # do not survive command substitution; resolve_media sets them in place and every path into
@@ -492,7 +492,7 @@ run_mpv() {
     # unbounded growth in TMPDIR for exactly the long-lived players -d exists for). Silence
     # the cosmetic chatter there and keep error level, so the log stays small and still
     # explains a failure. These go AFTER the caller's mode options so they win (mpv: last
-    # flag wins). ARCHITECTURE.md §9.1.
+    # flag wins). AS-BUILT-player.md §9.1.
     local detached_opts=()
     if [[ -n "${YT_DETACHED:-}" ]]; then
         detached_opts=(--no-term-osd-bar --msg-level=all=error)
@@ -805,7 +805,7 @@ ensure_state_dir() {
 
 # Live property read straight off a player's IPC socket. The state file's `volume` is only
 # what was recorded at launch or by the last --set-volume, so anything driving the socket
-# directly (uting's 9/0 keys — see ARCHITECTURE.md §9.3) moves the real value without
+# directly (uting's 9/0 keys — see AS-BUILT-player.md §9.3) moves the real value without
 # telling us; mpv is the source of truth. `pause` and the playback position are worse still:
 # the state file has never held them at all.
 #
@@ -898,7 +898,7 @@ read_player_live() {
 #
 # Nothing is written on success, so a normal finish leaves no trace here — this is an ERROR
 # record, and the listening log is the other side of that line, not a duplicate of it
-# (history_record, and ARCHITECTURE.md §9.2's separation rule): failures only, bounded, in
+# (history_record, and AS-BUILT-player.md §9.2's separation rule): failures only, bounded, in
 # $TMPDIR, gone at the reboot, against every track and durable in the user-level store. A
 # player told to --stop reaches this line with rc 0 and writes nothing, which is the same
 # distinction from the other direction: a stop is not a failure.
@@ -1184,7 +1184,7 @@ unlock_player_state() {
 # ------------------------------------------------------------------------------
 # A queue is a playlist BEING CONSUMED, so it belongs to the player and dies with it — a
 # queue that survived a restart would just be a playlist, and playlists belong to
-# ut-playlist (docs/ARCHITECTURE.md §9.4/§9.5). It lives beside the socket and the log
+# ut-playlist (docs/AS-BUILT-player.md §9.4/§9.5). It lives beside the socket and the log
 # rather than under players/ because that directory's *.json glob IS the player-record
 # namespace: reap_dead_players walks it, and would read <id>.queue.json as a player whose
 # record it could not parse — and then delete it.
@@ -1525,7 +1525,7 @@ detach_play() {
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         # sock/log are part of the envelope so a caller never has to RECONSTRUCT them from
         # the state-dir layout (uting used to hardcode "$TMPDIR/uting-$(id -u)/mpv-$id.sock",
-        # duplicating a private path in a second script). ARCHITECTURE.md §9.3.
+        # duplicating a private path in a second script). AS-BUILT-player.md §9.3.
         jq -nc \
             --arg id "$id" --argjson pid "$pid" --arg url "$url" --arg mode "$PLAYBACK_MODE" \
             --arg started_at "$started_at" --arg sock "$sock" --arg log "$log" \

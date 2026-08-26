@@ -6,7 +6,7 @@
 # nothing about playback (no mpv, no lifecycle, no players/). It knows two things: the row
 # and the file.
 #
-# WHY IT IS NOT THE PLAYER'S `failed[]`. ARCHITECTURE.md §9.2 draws the line this file is
+# WHY IT IS NOT THE PLAYER'S `failed[]`. AS-BUILT-player.md §9.2 draws the line this file is
 # the other side of: `failed[]` lives in ${TMPDIR}/uting-$(id -u), is bounded, records only
 # failures, and dies with the reboot — correct for a tombstone a caller reads seconds later,
 # useless as a log of what a user listened to. History is written on success AND failure,
@@ -287,7 +287,7 @@ do_ls() {
 #
 # The row is CONSTRUCTED field by field rather than merged from the input, so an unknown key
 # a caller happens to carry (a search result's channel, view_count, live_status) cannot land
-# on disk. That is both the ARCHITECTURE.md §9.4 rule about fields that expire into lies, and
+# on disk. That is both the AS-BUILT-player.md §9.4 rule about fields that expire into lies, and
 # the only way the line length stays bounded by this file rather than by its callers.
 do_record() {
     ensure_store
