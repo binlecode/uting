@@ -188,6 +188,33 @@ Any structural change follows a staged, reversible order:
 
 Principle: put the single destructive step last and smallest, prove its replacement first, and gate deletions by grep so no dangling reference survives.
 
+## How a Unit of Work Moves
+
+```
+ (roadmap) ──► plan ──► pre-mortem ──► build ──► verify ──► land
+   entry:      PLAN-    PLAN-        (A→E if   (the two   (checklist; as-built
+   decided,   authored  hardened     structural) suites)   docs resynced,
+   sequenced                                               PLAN- deleted)
+
+  ...off the pipeline, on their own cadence: research feeding the roadmap, and the
+  whole-tree conformance audit.
+```
+
+Interrogation and design are activities inside authoring the `PLAN-`, not stages of their own;
+the as-built docs are touched only at land. Each stage is bound to a discipline below. The
+disciplines are normative for the work itself; the agent skills that automate them are
+conveniences the checkout does not depend on.
+
+- **An idea is interrogated before it is designed.** An adversarial interview, not a monologue: questions in dependency order, each with a recommended answer; facts are looked up — a contract claim is executed, never read — and only decisions are asked. What settles is distilled into the `PLAN-` **before the conversation ends**: a decision that lives only in a conversation does not exist.
+- **Design speaks the seam vocabulary, and this repo's doctrine outranks generic instinct.** Interfaces here are envelopes, seams are `docs/ARCHITECTURE.md` §5's swap points, and depth is judged by what a caller gets per fact they must learn. Explore 2–4 deliberately different shapes before committing. Where generic advice points at a shared library or a mock, the carve-outs above win.
+- **A plan is pre-mortemed before it is built.** The plan text *alone*, without its authoring context, goes to a cold reader who writes its failure retrospective; each preventive fix is accepted into the `PLAN-` or explicitly rejected. The cold read is the point — a critique from the session that wrote the plan inherits the plan's assumptions.
+- **A build is incremental, or it is staged.** Small edits in place for ordinary work; the A→E order above the moment the change is structural — moves logic between files, retires a path, adds a surface.
+- **A bug gets a red loop before it gets a theory.** No hypothesis until one command exists that goes red on the exact symptom — fast, deterministic, agent-runnable. The harness lives in `tmp/`; the regression check lands in whichever suite owns the surface; the hypothesis that proved out is stated in the commit message.
+- **An initiative descends from the roadmap; research is its input, not a stage.** Outside-world questions are answered against primary sources and land as `docs/RESEARCH-<topic>.md` with each claim cited, on their own cadence. The `PLAN-` names the roadmap entry it implements, never the research doc.
+- **A landing is a checklist, not a feeling.** The unit of work closes against the document that authorized it, atomically: every plan item landed or explicitly deferred, every `done_when` executed rather than read, accepted pre-mortem fixes verified in, review findings resolved, the as-built docs resynced, the `PLAN-` deleted, the version judged. Skipping the housekeeping half means the work has not landed — the code is merely present. Landing closes the unit of work, not the code's liability: that stays with `docs/AS-BUILT-verification.md` §25 and the audit below.
+- **A session ends by sorting its residue.** Durable state — settled decisions, work-in-progress position — goes into the in-flight `PLAN-` before the session closes; only conversation-shaped remainder goes to a `tmp/` handoff note. The dividing line: if it still has value after the next session consumes it, it is not handoff content.
+- **Accretion is audited, not watched for.** Diff review catches what a change introduces; the whole-tree sweep (`/audit-conformance`) catches what accumulates between changes. Its cadence and rules are its own skill's.
+
 ## SDLC & Architectural Documentation
 
 **Documents move through four stages, and the prefix says which one a file is in.** A doc that
@@ -200,13 +227,15 @@ stops moving is a doc nobody trusts, so each stage names what ends it:
 | plan | `PLAN-<topic>.md` | one feature, from open question to built: options and trade-offs are explored **during its authoring** (design is an activity inside this stage, not a doc class), then field names, flags, the verification matrix. **Tracks the life of the feature delivery** — the status line and per-item state are updated as things land | **its content is split into the as-built docs as it lands, then the plan is deleted** — gone, not archived |
 | as-built | `ARCHITECTURE.md` + `AS-BUILT-<scope>.md` | what the code actually is and why — a description that chases the code, never a promise the code chases (which is why the prefix is not `SPEC-`: "spec" reads as a normative document implementations conform to). Every fact in exactly ONE section | never; it is **resynced at land, after the code stops moving** — never edited ahead of the build |
 
-Today there are **six** as-built docs. `docs/ARCHITECTURE.md` is the umbrella a newcomer opens
-first — diagrams, flows, pseudo-code and decisions, and **in Chinese**; five per-scope docs
+Today there are **six** as-built docs, and — like everything else under `docs/` — **all six are
+written in Chinese**; this file and the README are the English surface.
+`docs/ARCHITECTURE.md` is the umbrella a newcomer opens
+first — diagrams, flows, pseudo-code and decisions; five per-scope docs
 carry the detail: `AS-BUILT-contract.md` (the frozen CLI surface), `AS-BUILT-engine.md` (the
 site half), `AS-BUILT-player.md` (the player, the queue, the two stores),
 `AS-BUILT-tui.md` (the human face) and `AS-BUILT-verification.md` (risk register +
-verification matrix), plus `AS-BUILT-workflow.md` (the **process** — how a unit of work moves
-through the repo), which does not mix with the others. **A moved section keeps its NUMBER**,
+verification matrix). The **process** — how a unit of work moves through the repo — is not one
+of them: it lives in this file, above. **A moved section keeps its NUMBER**,
 so an old citation changes filename and nothing else, and ARCHITECTURE keeps a one-line
 tombstone at every number it gave away. A further `AS-BUILT-<scope>.md` splits out when one
 earns it. The rule that keeps the family honest is
@@ -221,13 +250,12 @@ things not done, with nowhere to record that three of five now are. The stage ne
 
 The live files:
 
-- `docs/ARCHITECTURE.md` — the umbrella: topology, seams, control-flow diagrams, the function map, the design-decision index (`D#`), non-goals and the bash 3.2 portability contract. Diagrams, flows and decisions only — **detail lives in the per-scope docs below**, and this one is in Chinese. **Kept in sync on every PR that touches architecture or a contract.**
+- `docs/ARCHITECTURE.md` — the umbrella: topology, seams, control-flow diagrams, the function map, the design-decision index (`D#`), non-goals and the bash 3.2 portability contract. Diagrams, flows and decisions only — **detail lives in the per-scope docs below**. **Kept in sync on every PR that touches architecture or a contract.**
 - `docs/AS-BUILT-engine.md` — the site half (§7, §8.2, §10): query shaping, the Bilibili HTTP transport, the login / PO-token probe, handle grammar and the host allowlist, `--info` / `--transcript`. Every site-specific fact is here or it is a layering violation.
 - `docs/AS-BUILT-player.md` — the player, the queue and the two durable stores (§8, §9): mode→format→mpv, the process-group model, the state machine and the death record, runtime IPC, `ut-playlist` and `ut-history`.
 - `docs/AS-BUILT-tui.md` — the human face (§11): the two views, in-place rendering, the width layer and the closed glyph inventory, the reflow, the shared clock, the three play states.
 - `docs/AS-BUILT-verification.md` — the risk register (§25, with §25.1's closed defect register and its harness lessons) and the verification matrix (§27, including the flakiness register and what the suites deliberately do not cover).
 - `docs/AS-BUILT-contract.md` — the frozen CLI contract (ROADMAP D3/D13): command surfaces, gates, every `-j`/`-J` envelope and error shape, exit codes, the configuration surface, and the add-an-engine checklist. The one doc a third-engine author or a port needs.
-- `docs/AS-BUILT-workflow.md` — the development process: which discipline each stage of work is bound to (plan → pre-mortem → build → verify → land, plus the periodic audit). The disciplines are normative; the agent skills that automate them are conveniences the checkout does not depend on.
 - `docs/ROADMAP.md` — positioning and non-goals, the decisions with their reopen conditions, and the conditions under which the core would move to Go. **It holds no survey data**: §3–§6 are pointers into `docs/RESEARCH-oss-landscape.md` below. Consult §0 before adding a feature. **Landed (D14/D15, P4 — 3/3):** playlist management, the queue, listening history, all in the SHELL version rather than deferred to a Go rewrite; what they ARE now lives in `docs/AS-BUILT-player.md` §9.4/§9.5/§9.6, and ROADMAP keeps only the decisions and their reopen conditions. **Favourites is NOT a feature** (it is a playlist with a fixed name — one capability, one spelling). A downloader and channel subscriptions are unscheduled. What did NOT change: this is still not a general-purpose local/MPD player, and every one of those features must ship an **agent surface** (a verb plus a `-j` envelope) alongside its keybinding — a TUI-only feature is half a feature here. MCP remains a non-goal, gated by §9.
 - `docs/RESEARCH-oss-landscape.md` — the one measured survey the roadmap's decisions rest on, three faces of one question: the six-way name screening (ROADMAP D6/D10), the terminal-player landscape (ROADMAP §0's non-goal), and what publishing the shell version costs plus how ready it is (ROADMAP D1/D2/P1). Every figure is dated; **re-run the method before reopening anything it settled, do not cite the numbers as current**.
 - `docs/PLAN-*.md` — whatever is ready to build or in flight, with its progress recorded inline. Empty is a valid state.

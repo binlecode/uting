@@ -227,9 +227,12 @@ Lessons these paid for, every one of which produced a wrong result first:
 
 ## Documentation
 
+**Everything under `docs/` is written in Chinese**; this README and `CLAUDE.md` are the English
+surface.
+
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the umbrella: topology, seams, the control-flow
   diagrams, the function map and every non-obvious decision. Diagrams, flows and decisions;
-  the detail is in the per-scope docs below. Written in Chinese.
+  the detail is in the per-scope docs below.
 - [`docs/AS-BUILT-contract.md`](docs/AS-BUILT-contract.md) — the frozen CLI contract: envelopes, exit codes,
   lifecycle semantics, and the checklist for adding an engine.
 - [`docs/AS-BUILT-engine.md`](docs/AS-BUILT-engine.md) — the site half: query shaping, the Bilibili
@@ -240,7 +243,6 @@ Lessons these paid for, every one of which produced a wrong result first:
   the width layer, the reflow and the three play states.
 - [`docs/AS-BUILT-verification.md`](docs/AS-BUILT-verification.md) — the risk register and the
   verification matrix: what each check proves, and what is deliberately not covered.
-- [`docs/AS-BUILT-workflow.md`](docs/AS-BUILT-workflow.md) — how a unit of work moves through this repo.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — positioning and non-goals, the decisions and their
   reopen conditions, and the conditions under which the core would move to Go.
 - [`docs/RESEARCH-oss-landscape.md`](docs/RESEARCH-oss-landscape.md) — the measured survey those
