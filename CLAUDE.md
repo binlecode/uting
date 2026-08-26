@@ -158,7 +158,7 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 - asserts on a rendered **picture** — cell grids, column alignment, glyph widths. Layout is proved when a frame enters a doc, and the `capture-pane` skill owns that; the suite asserts survival, not shape;
 - exists only to raise a count, or asserts a default that a behavioural check already exercises;
 - times a network-dependent path against YouTube when a local synthetic source (`av://lavfi:sine`) would do — throttling has corrupted a timing measurement here before (`docs/AS-BUILT-verification.md` §25.1);
-- **cannot fail.** Before it lands, break the thing it guards and watch it go red. A check nobody has seen fail is a check nobody has tested.
+- **cannot fail** — meaning no input reaching it separates a correct implementation from a plausibly-wrong one. The way to settle that is to **find the discriminating input and land it as the check**, not to break the subject and watch it go red: ask what a naive implementation would get wrong, then feed exactly that. `<ENGINE>_COOKIE_BROWSER=definitely-not-a-browser` is the worked example — not `"none"`, yet no profile can exist, so only an engine that really checks the profile answers `anonymous`, while the env-var-alone shortcut answers `cookie` and goes red. Mutating tracked files to prove a point is **not** how this is done: the restore step is a step that can be skipped, and once was — an interrupt landed between the mutation and its `cp` back, leaving a broken engine in the worktree. A discriminating input costs nothing, leaves the tree untouched, and stays in the suite as coverage instead of evaporating.
 
 ### Accept a check when it drives a real surface:
 
