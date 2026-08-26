@@ -6,11 +6,22 @@
 #
 # No gate. It used to sit behind YT_TEST_LIFECYCLE=1 because starting players meant starting
 # them ON TOP OF the user's — --stop --all reached whatever they were listening to. The state
-# dir below removes that, and what is left is a ~65s run that needs the network — a reason to
-# run it when the player changed, not a reason for an env var to guard it. (Measured
-# 2026-08-25, after the listening-log section, which plays a 19-second track out to its own
-# end rather than seeking there. Several waits below are bounded polls, so a slow network
-# costs more.)
+# dir below removes that, and what is left is a run that needs the network — a reason to run it
+# when the player changed, not a reason for an env var to guard it.
+#
+# Cost, measured 2026-08-26: **62s / 42 ok**, and it is real work rather than waiting. Roughly
+# 30s is seven live engine resolves (ut-play:530 records the measured median between tracks at
+# 4.3s) and ~19s is the listening-log section playing a 19-second track out to its own end
+# rather than seeking there — that section cannot seek, because `duration` is null on a live
+# stream and a check must not go green or red on whether the fixture was streaming that
+# afternoon. Neither half is reducible without a stand-in, and this file has none.
+#
+# EVERY WAIT HERE IS A BOUNDED POLL. There are exactly two fixed sleeps left and neither is a
+# wait — both are SETUP, and both say so where they sit. Three others were `sleep 1`/`sleep 2`
+# guesses at conditions the code can observe (the record empty, pgrep at zero); they became
+# polls on 2026-08-26, which took the run from 68s to 62s. Speed was the smaller half: a fixed
+# guess also goes red when the machine is merely slow, and a red that is not a bug still costs
+# somebody an investigation.
 #
 # And it carries the one claim that needs a SECOND source: that the player applies the
 # http_headers an engine hands it. See the Bilibili section for why only that site can show it.
@@ -89,12 +100,36 @@ wait_live() {
     return 1
 }
 
+# wait_no_players  — poll --status until the record is empty; 1 on timeout. Same rule as
+# wait_for_sock, and it exists because `--stop` returning is not the player being GONE: the
+# child traps both signals and escalates, so the record clearing is the observable END of
+# that path. This replaced a `sleep 2` at each of two sites — a fixed guess that was
+# simultaneously too long (the teardown takes ~1s) and too short (it goes red on a machine
+# that is merely slow, which is the most expensive red there is: not a bug, still investigated).
+wait_no_players() {
+    local i
+    for i in $(seq 1 80); do
+        [ "$(shell/ut-play --status -j 2>/dev/null | jq -c '.players' 2>/dev/null)" = "[]" ] && return 0
+        sleep 0.25
+    done
+    return 1
+}
+
 # no_orphans <label>  — every mpv this file started is gone. Scoped to this run's own socket
 # dir: a bare `mpv .*--input-ipc-server` counts the user's players too, so on any machine
 # where uting is actually used the orphan check was a coin toss.
+#
+# The wait is INSIDE the helper, not a `sleep` at each call site: a process is reaped when it
+# is reaped, both callers want the same answer, and one poll in one place cannot drift from
+# itself. It reports the LAST count it saw, which is what keeps this able to fail — the shape
+# wait_live already uses, where a timeout still hands back its final reading.
 no_orphans() {
-    local n
-    n=$(pgrep -f "mpv .*--input-ipc-server=$STATE_DIR" 2>/dev/null | wc -l | tr -d ' ')
+    local n i
+    for i in $(seq 1 80); do
+        n=$(pgrep -f "mpv .*--input-ipc-server=$STATE_DIR" 2>/dev/null | wc -l | tr -d ' ')
+        [ "${n:-0}" = "0" ] && break
+        sleep 0.25
+    done
     report "$1" 0 "${n:-0}"
 }
 
@@ -256,7 +291,6 @@ report "--stop --all"      0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; e
 report "--stop --all again" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; echo $?)"
 report "no players left"   0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
 
-sleep 1
 no_orphans "no orphan mpv"
 
 echo "── a queue is a player consuming a playlist ───────────────────────"
@@ -338,9 +372,12 @@ fi
 # repeated on every tick of the escalation because the engine call between two tracks spawns
 # processes that never saw the first one.
 shell/ut-play --next -j >/dev/null 2>&1
+# NOT a wait, and so not a poll: this sleep is SETUP. It puts the --stop below in the middle
+# of the between-tracks resolve, which is the race being driven; without it the stop lands
+# before the child has spawned anything and the check passes without touching the claim.
 sleep 0.5
 report "--stop ends the queue" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; echo $?)"
-sleep 2
+wait_no_players
 report "no players after a queue" 0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
 no_orphans "no orphan mpv after a queue"
 # NOT checked here: that a stopped queue files no tombstone. Tried, pulled, and why — it could
@@ -408,9 +445,16 @@ h_before=$(h_url "$HIST")
 o4=$(UT_HISTORY=0 shell/ut-play -d -j --volume 0 -- "$SHORT" 2>/dev/null)
 sock4=$(printf '%s' "$o4" | jq -r '.sock // empty')
 if wait_for_sock "$sock4"; then
+    # Setup again, not a wait: mpv has to really play, or "the switch wrote nothing" is true
+    # of a track that never started and the check is vacuous.
     sleep 2
     shell/ut-play --stop --all -j >/dev/null 2>&1
-    sleep 2
+    # An ABSENCE cannot be polled for — you can only wait long enough — so this polls the
+    # PRECONDITION instead of guessing at the absence: the row is written by the player's own
+    # exit path, so once the record is empty the only process that could write one is gone and
+    # the answer below is final. Strictly stronger than the `sleep 2` it replaced, which
+    # merely hoped.
+    wait_no_players
     report "UT_HISTORY=0 writes nothing" "$h_before" \
         "$(h_url "$(shell/ut-history --ls -n 50 -j 2>/dev/null)")"
 else
