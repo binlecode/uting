@@ -83,6 +83,8 @@
    │              一行点号分隔的元信息）、进度条与交互控件
    │  read_nav_input: 读一个键；解码 ESC-[/O 的方向键序列
    │    ↑/↓  移动选择（到边界翻页）        ←/→  翻页（列表）/ seek 5s（卡片）
+   │         搜索源下 → 越过最后一页即 more_results，行数长了才跨进第一个新页；
+   │         存储源（歌单/历史）没有"更多"可取，→ 在末页原地不动
    │    [ ]  seek ∓10s，走 ut-play --seek ±N        ↑/↓  音量（卡片）
    │    Enter → play_selected:  ut-play -d -j --engine E -f MODE -- url（非阻塞）
    │    Tab/p → 切视图：        列表 ◄──► Now Playing 卡片
@@ -91,7 +93,9 @@
    │    9/0   → 音量：          经 socket IPC 读-改-设，钳在 0-100
    │    v     → cycle_mode:     PLAY_MODE audio→video→fast（本地；下一次 Enter 生效）
    │    n     → new_search:     读查询 → fetch_json → 重载（音乐继续放）
-   │    m     → more_results:   用**当前**查询重取，RESULT_N += 25（没有更多则保持）
+   │    m     → more_results:   用**当前**查询重取，RESULT_N += 20（没有更多则保持）；
+   │                            首取与步进都是 20，对齐 Bilibili 服务端每页 20 行，
+   │                            每次抓取都是整页数，不为 5 行多付一次请求
    │    o     → cycle_sort:     轮换 SORT_FIELD 并重取（relevance→views→duration）
    │    t     → cycle_theme:    实时轮换调色板家族（minimal→…→mono），任何视图；
    │                            关闭颜色时是 no-op（COLORS_ON 把门）

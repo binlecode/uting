@@ -196,7 +196,7 @@ Usage:
 With no query, prompts for one (interactive). Requires a terminal.
 
 Search options (forwarded to <engine>-search):
-  -n NUM    Number of results to fetch (default: 25)
+  -n NUM    Number of results to fetch (default: 20)
   -m SEC    Minimum duration in seconds
   -M SEC    Maximum duration in seconds
   -s FIELD  Sort field: relevance | view_count | duration (default: relevance)
@@ -221,7 +221,8 @@ Menu options:
   -V        Print the suite version
 
 Keys (List View):
-  ↑/↓      move selection              ←/→  change page
+  ↑/↓      move selection              ←/→  change page (→ past the last page
+           fetches more results, as m does)
   Enter    play / switch track (non-blocking background playback)
   Tab / p  toggle view: List <-> Now Playing card
   Esc      (in the card) back to List View
@@ -234,7 +235,7 @@ Keys (List View):
   t        cycle palette family live (minimal → catppuccin → tokyonight → nord →
            gruvbox → onedark → mono), any view; no-op when colors are off
   n        new search (fetch a different query without interrupting music)
-  m        more results (re-fetch current query, +25 to count)
+  m        more results (re-fetch current query, +20 to count)
   o        rotate sort field / order (relevance → view_count → duration), re-fetch
   e        switch source, re-fetch the same query (only when >1 engine is installed)
   a        add the focused row to a playlist               (needs ut-playlist)
@@ -290,7 +291,11 @@ is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
 # Parse: search-shaping flags forwarded to <engine>-search (and captured for status line);
 # -f/-p/--color are menu-local. The rest is query. Reject anything else.
 SEARCH_ARGS=()
-RESULT_N=25          # fetch count; -n overrides. Runtime-mutable: m adds 25 (more_results).
+RESULT_N=20          # fetch count; -n overrides. Runtime-mutable: m adds 20 (more_results).
+                     # 20, not 25: Bilibili's endpoint pages at 20 with no page-size knob
+                     # (bili-search PAGE_SIZE), so 20 keeps the first fetch — and every
+                     # +20 re-fetch — an exact page count instead of paying a second
+                     # request for 5 rows.
 PLAY_MODE="audio"        # -f flag overrides. Runtime-mutable: v key rotates it (cycle_mode).
 MODE_CYCLE=(audio video fast)  # order the v key steps through
 PLAY_VOLUME=""           # --volume flag overrides
@@ -3395,7 +3400,7 @@ new_search() {
 more_results() {
     search_only || return 0
     local prev="$RESULT_N" rc=0 page="$page_index" sel="$selected"
-    RESULT_N=$(( RESULT_N + 25 ))
+    RESULT_N=$(( RESULT_N + 20 ))
     printf '\n%s%s%s %s %s "%s" %s %s %s%s' \
         "$C_BOLD" "$S_MORE_ACT" "$C_RESET" "$GL_DASH" "$S_REFETCH" "$QUERY_LABEL" \
         "$GL_SEP" "$RESULT_N" "$S_RESULTS_N" "$GL_ELL"
@@ -3785,7 +3790,7 @@ read_query_input() {
 }
 
 move_selection() {
-    local input="$1" pmin pmax
+    local input="$1" pmin pmax prev_pages
     pmin=$(( (page_index - 1) * PAGE_SIZE ))
     pmax=$(( pmin + PAGE_SIZE - 1 ))
     case "$input" in
@@ -3806,6 +3811,20 @@ move_selection() {
     "[C" | "OC" | "["*C | "O"*C) # right → next page
         if ((page_index < NUM_PAGES)); then
             page_index=$(( page_index + 1 )); selected=$(( (page_index - 1) * PAGE_SIZE ))
+        elif [[ "$LIST_SOURCE" == "search" ]]; then
+            # Past the last page of a SEARCH, → keeps going: fetch the next batch
+            # (exactly what m does) and step onto the first new page. Only if the
+            # row count actually grew — on a fetch failure more_results rolled
+            # back and reported, and an exhausted query appends nothing; in both
+            # cases the cursor must stay where it was. Stored rows (playlist /
+            # history) have nothing more to fetch, so there the arrow just stops:
+            # the LIST_SOURCE guard is what keeps that case a silent no-op
+            # instead of more_results' "search only" notice.
+            prev_pages=$NUM_PAGES
+            more_results
+            if ((NUM_PAGES > prev_pages)); then
+                page_index=$(( page_index + 1 )); selected=$(( (page_index - 1) * PAGE_SIZE ))
+            fi
         fi ;;
     "[D" | "OD" | "["*D | "O"*D) # left → prev page
         if ((page_index > 1)); then
