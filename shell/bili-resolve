@@ -270,17 +270,6 @@ ensure_scratch() {
     : >"$ERR_FILE"
 }
 
-normalize_playback_mode() {
-    case "$1" in
-    audio | ba) echo "audio" ;;
-    video | bv) echo "video" ;;
-    fast | fst) echo "fast" ;;
-    ascii | asc) echo "ascii" ;;
-    viz | waves | wave) echo "viz" ;;
-    *) die "-f must be one of: audio, video, fast, ascii, viz, waves, ba, bv, fst, asc, wave" ;;
-    esac
-}
-
 # The yt-dlp format string a playback mode resolves to. This table is the reason format
 # selection belongs to the engine and not the player: `bv*+ba/b` is a yt-dlp expression,
 # and the player must never learn to read one. ut-play sends a MODE and gets back bytes.
@@ -756,7 +745,11 @@ while (($#)); do
     -f | --format-mode)
         [[ $# -ge 2 ]] || { echo "bili-resolve: $1 requires a value" >&2; exit 1; }
         FORMAT_FLAG="$1"
-        PLAYBACK_MODE=$(normalize_playback_mode "$2")
+        # Canonical modes only — the alias table (ba/bv/…) is ut-play's, which normalizes
+        # before it calls an engine (AS-BUILT-contract.md §1.3).
+        validate_enum "$2" audio video fast ascii viz ||
+            die "-f must be one of: audio, video, fast, ascii, viz"
+        PLAYBACK_MODE="$2"
         shift 2
         ;;
     -S)
