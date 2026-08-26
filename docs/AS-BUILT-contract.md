@@ -615,8 +615,8 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
 好让每个动词的标志面保持窄。
 
 ```
-   标志（每次调用）：  -n -m -M -s -f -S -l -j -J -d -h -V --color --theme --engine
-                      --detach --status --stop --info --transcript --sub-lang
+   标志（每次调用）：  -n -m -M -s -p -f -S -l -j -J -d -h -V --color --theme --engine
+                      --detach --status --stop --info --auth --transcript --sub-lang
                       --set-volume --pause --resume --seek --seek-to --queue --enqueue
                       --next --id --all --volume
    环境变量（一次设定）：
@@ -644,8 +644,14 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                         当前生效值靠 `<engine>-resolve --auth` 问出来（§3），
                         而不是靠调用方自己去读环境。
                       YT_AUDIO_FORMAT (ba)  YT_VIDEO_FORMAT (bv*+ba/b)
-                      YT_VIDEO_FORMAT_FAST  —— 模式→格式表的那些值；它们跟那张表住在一起，
-                        也就是住在每个 <engine>-resolve 里。
+                      YT_VIDEO_FORMAT_FAST  —— **yt** 那张模式→格式表的值；它们跟那张表
+                        住在一起，也就是住在 yt-resolve 里。别的引擎的那张表按 §6 的
+                        前缀规矩拼自己的名字，不复用 YT_ 拼写。
+                      BILI_COOKIE_BROWSER (chrome)  BILI_AUDIO_FORMAT (ba/b)
+                      BILI_VIDEO_FORMAT (bv*+ba/b)  BILI_VIDEO_FORMAT_FAST
+                        —— bili 引擎自己的那组，与上面 yt 组逐一对应（bili-resolve 读）。
+                      BILI_UA  BILI_BUVID  —— bili-search 的 HTTP 传输旋钮
+                        （AS-BUILT-engine.md §7.1）。
                       YT_ASCII_VO (tct)  YT_MPV_INPUT_CONF  —— 播放器侧的 mpv 旋钮。
                       YT_ASCII （1 = ASCII 字形回落；非 UTF-8 locale 下自动开；
                         由播放器与 uting 读 —— 遗留别名 YT_TUI_ASCII）。
@@ -664,11 +670,16 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                       YT_SYNC (0|1|auto) = 同步重绘（DCS 1q/2q；auto：开，在 tmux 下关）。
                       YT_BRAND （=1：页眉 wordmark 用数学无衬线粗体，AS-BUILT-tui.md §11 字形一节；
                         opt-in，ASCII 模式压过它）。
+                      YT_AMBIG_WIDE （=1：East-Asian Ambiguous 那批字形（· — • … 箭头 ─ ━
+                        ○ ● ▶）量成两格。只在你的终端把 ambiguous 宽度设成双宽时才需要 ——
+                        每个终端出厂都是关的（AS-BUILT-tui.md §11）。）
                       NO_COLOR （=1：--color auto 渲染成朴素的；显式的 --color 压过它）。
    内部（由播放器为它自己的 detached 子进程设的，不是用户旋钮）：
                       YT_IPC_SOCK （每个播放器一个的 mpv IPC socket）  YT_DETACHED （=1：
                       没有终端，所以 mpv 安静且不过滤 stderr）  YT_PLAYER_ID （子进程把
                       title/format 补回哪一条记录，AS-BUILT-player.md §9.1）
+                      YT_DETACHED_LOG （detached mpv 的日志路径；死亡记录的分类器
+                      从它尾部读）
    （颜色**模式**是 --color 这个标志，**不是**一个环境变量 —— 脚本在启动时把
     COLOR_MODE=auto 写死，只有 --color 会改它，所以一个 COLOR_MODE 的环境值永远不会被读。
     主题与背景**是**读环境变量的：YT_THEME / YT_BG。）
@@ -701,10 +712,14 @@ Cookie 处理：`YT_COOKIE_BROWSER` 是按平台做存在性检查的（那个�
    等价。不吃位置参数，拒 `-f`/`-S`/`-J`，在依赖门之前作答。
    `tests/contract.sh` 把这几条当作对**每一个被发现的**引擎的不变量来断言，
    所以第三个引擎落地那天它就被覆盖了 —— 不是等谁想起来去加一行。
-4. **两半都要：** `ENGINE_NAME` 从一个常量印出来；每一个信封（包括错误）里都有 `status` 与
+4. **旋钮前缀：** 引擎自己的调校一律读 `FOO_*`（引擎名大写 —— cookie、格式、传输，
+   同一条规矩；§5 里 `BILI_*` 那族就是样子）。`UT_*` 是套件级的（`UT_STATE_DIR`、
+   `UT_DEFAULT_ENGINE`、`UT_HISTORY`），引擎不得新增；`YT_*` 是 yt 引擎自己的前缀，
+   外加那批冻结的遗留套件级名字（§5 结尾）—— 它不是模板。
+5. **两半都要：** `ENGINE_NAME` 从一个常量印出来；每一个信封（包括错误）里都有 `status` 与
    `engine`；一个信封一行（§3）；`-V` 在任何依赖门之前回答（§4）；
    门把跨界标志指向正确的动词（§2）。
-5. **别的什么也没有：** 没有播放，没有生命周期，不写 `players/` —— 播放器靠名字找到
+6. **别的什么也没有：** 没有播放，没有生命周期，不写 `players/` —— 播放器靠名字找到
    `foo-resolve`（§1.1），而 `uting` 靠在 PATH 上和自己旁边扫描 `foo-search` + `foo-resolve`
    这一对来发现它（AS-BUILT-tui.md §11）。
 
