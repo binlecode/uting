@@ -1157,6 +1157,23 @@ socket and the log instead, and `rm_player_files` removes all three (plus both l
 ONE function, because three call sites clean up after a player — the reaper and both `--stop`
 paths — and a file added to two of them is a leak in the third.
 
+**Why the queue is the PLAYER's, and the two homes that were costed first.** The criterion is
+one sentence: **a queue that survives a restart IS a playlist** (§9.4). A queue does not, so it
+is runtime state by definition and lives beside the socket and the log rather than in the
+durable store. The two rejected models are recorded because both are reasonable enough to be
+proposed again:
+
+- **The player reads an EXTERNAL queue file.** Keeps the single-owner invariant over
+  `players/` (§9.2) untouched and inherits the agent surface for free — the queue rides in the
+  `--status` envelope either way. It fails on ownership: the player would read a file it does
+  not own, mid-track, and "who may write it, and when" becomes a rule the suite would have to
+  invent and then defend.
+- **A seventh command, `ut-queue`.** Matches the suite's usual shape — a capability is a file —
+  and the player would not change by a line. It fails on the same invariant from the other
+  side: TWO processes would then drive one player, and `players/` having exactly one owner is
+  hard here (§9.2). That path has to answer "who reaps, and who writes the state file" before
+  it can start, and answering it means moving the lifecycle out of the player.
+
 **Two locks, never nested.** The queue does not share `lock_player_state`: the record and the
 queue are updated at rates an order of magnitude apart (one title backfill per track against
 one advance per track plus every `--enqueue`), and one lock for both would make each wait on
@@ -2387,7 +2404,9 @@ Moved → `AS-BUILT-contract.md` §5.
                   search builds; a playlist's --show and the log's --ls are one shape, so
                   one builder serves both), add_to_playlist (`a`), browse_playlists /
                   open_playlist (`b`), open_history (`h`, no prompt — the log is one
-                  thing), stored_rows (the predicate search_only is the other half of:
+                  thing), stash_search / back_to_search (`Esc`: a store replaces the
+                  rows, and what it replaced is local state, so going back is restoring
+                  it rather than re-searching), stored_rows (the predicate search_only is the other half of:
                   "these rows came from a store", the three-site test that would otherwise
                   be three drifting copies), prompt_name (the `n` prompt's reader, reused),
                   have_store / have_history / store_notice — all of them shelling out to
@@ -3116,9 +3135,23 @@ new-search/more-results instead of `n`/`m`; also corrected.
   for it (AS-BUILT-contract.md §4). `--volume N` remains the launch-time STARTING volume.
   The four playback verbs arrived after `--set-volume`, and **the criterion that had blocked
   them — "a verb is added only when a caller genuinely cannot speak to the socket" — is
-  retired**; why is a ROADMAP decision and lives in `ROADMAP.md` §11 (the short of it:
-  `--set-volume` was already a counter-example the rule could not explain). What belongs
-  here is what the code IS:
+  retired.** Four things retired it, written down here because a rule that sounds this
+  reasonable gets re-proposed:
+    1. **`--set-volume` was already a counter-example.** Volume and pause are equally
+       reachable over the socket — the criterion applied to both, word for word — and volume
+       had been a verb since before the rule was written. A rule that cannot explain the
+       surface already shipped is not a rule; the real trade had always been "the TUI needs
+       it, so it exists".
+    2. **The queue would have overturned it a second time.** `--next [--id ID]` has exactly
+       the same shape: a mutation on a running player, over the same socket, ambiguity → 4.
+       Once `--next` ships, refusing `--pause` is arbitrary.
+    3. **The cost runs the other way.** Opening the frozen surface is a deliberate, documented
+       act (ROADMAP D3). All five at once opens it ONCE; two batches open it twice.
+    4. **The code already existed, in the wrong file.** `uting`'s `toggle_pause` /
+       `seek_relative` had been driving the IPC directly for months, so this moved logic DOWN
+       and net-DELETED TUI code — the governing principle rather than an addition to the
+       player.
+  What belongs here is what the code IS:
     - The two constraints this section wrote down in advance shipped verbatim: `--seek`
       takes a SIGNED value and absolute is a distinct spelling (`--seek-to N`); there is no
       `--toggle-pause`, because mpv's `cycle pause` returns no value and the envelope could
