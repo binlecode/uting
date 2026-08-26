@@ -822,11 +822,10 @@ transcript_fail() {
 # dependency gate and makes no request, because it is a question about this process's own
 # configuration, not about the site.
 #
-# What it deliberately does NOT claim is that the session behind those cookies is valid.
-# `auth: "cookie"` means the cookies are SENT, never that they are ACCEPTED — an expired
-# login still reports "cookie". Proving the latter needs an authenticated round trip,
-# which is not this verb's job. The sibling engine carries the same note and the measured
-# case that produced it.
+# What it deliberately does NOT claim is that the session behind those cookies is valid, or
+# that a valid one buys anything. `auth: "cookie"` means the cookies are SENT: an expired
+# login still reports "cookie", and so does a live login on an account entitled to nothing
+# the anonymous client cannot already have. The sibling engine carries the measured case.
 resolve_auth() {
     local auth="anonymous" found=false
     if ((${#YT_COOKIE_ARGS[@]} > 0)); then

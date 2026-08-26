@@ -613,10 +613,12 @@ report "every search half refuses -S" "$NENG" "$_sdash"
 # wrong: reporting "cookie" from the env var alone, without checking the profile is really
 # there, which is exactly the case that silently degrades to anonymous at play time.
 #
-# What no check here claims, and none can: that the login behind those cookies is VALID.
-# Measured 2026-08-26 — 3159 cookies extracted from chrome, and the site still served the
-# anonymous audio ladder. The verb reports what is SENT; proving what is ACCEPTED needs an
-# authenticated round trip this suite does not make and the envelope does not promise.
+# What no check here claims, and none can: that the login behind those cookies is valid, or
+# that a valid one is worth anything. Measured 2026-08-26 — 3159 cookies extracted from
+# chrome, the profile browser-confirmed logged in, and this site still served exactly the
+# anonymous audio ladder because the account is not a premium member. The verb reports what
+# is SENT; what is ACCEPTED needs an authenticated round trip this suite does not make, and
+# what that buys is an account-tier question no envelope here answers.
 _auth=0
 for n in $ENGINES; do
     [ "$(jq_ok '.status=="ok" and .engine=="'"$n"'"

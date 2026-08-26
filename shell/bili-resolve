@@ -604,11 +604,18 @@ resolve_info() {
 # dependency gate and makes no request, because it is a question about this process's own
 # configuration, not about the site.
 #
-# What it deliberately does NOT claim is that the session behind those cookies is valid.
-# Measured 2026-08-26: 3159 cookies extracted from chrome and the site still served the
-# anonymous ladder, because that profile was not logged in. `auth: "cookie"` means the
-# cookies are SENT, never that they are ACCEPTED — proving the latter needs an
-# authenticated round trip, which is not this verb's job.
+# What it deliberately does NOT claim is that the session behind those cookies buys
+# anything. `auth: "cookie"` means the cookies are SENT. Whether the site accepts them, and
+# what the account behind them is entitled to, are two further questions this verb answers
+# neither of.
+#
+# Measured 2026-08-26, and the numbers are the argument: 3159 cookies extracted from chrome,
+# the profile browser-confirmed LOGGED IN, and this site still served exactly the anonymous
+# audio ladder (30216/30232/30280, 181 kbps AAC top; no Hi-Res 30251, no Dolby 30250) — the
+# account is not a premium member, and 1080P 高码率 was unreachable with the cookies too.
+# The video format list came back byte-identical with and without them. So an accepted login
+# can still be indistinguishable from no login at all, which is why quality is never the
+# evidence for this field, and why this field is never the evidence for quality.
 resolve_auth() {
     local auth="anonymous" found=false
     if ((${#BILI_COOKIE_ARGS[@]} > 0)); then
