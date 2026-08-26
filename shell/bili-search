@@ -180,7 +180,7 @@ require_deps() {
 # prelude, not a bash function, so a caller already shaping JSON pays one fork instead of
 # one per row. Each engine carries its own copy: they are independent executables sharing
 # no library, and the shared fact is the FORMAT, which is stated once in
-# docs/ARCHITECTURE.md §7.
+# docs/AS-BUILT-engine.md §7.
 #
 # Bilibili adds the site-specific half: `duration` arrives as "MM:SS" with UNBOUNDED
 # minutes and an UNPADDED seconds field ("222:28", "416:0", "682:4" all measured in one

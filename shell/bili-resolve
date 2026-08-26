@@ -197,7 +197,7 @@ require_deps() {
 
 # The ONE implementation of duration formatting: seconds -> "[Nd ]HHh:MMm:SSs". Each engine
 # carries its own copy — they are independent executables sharing no library — and the
-# shared fact is the FORMAT, stated once in docs/ARCHITECTURE.md §7.
+# shared fact is the FORMAT, stated once in docs/AS-BUILT-engine.md §7.
 JQ_PRELUDE='
 def p2: tostring | if length < 2 then "0" + . else . end;
 def fmt_dur:

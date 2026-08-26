@@ -198,7 +198,7 @@ require_deps() {
 # a bash version meant forking jq once per row just to read a field back out (25 results =
 # 50+ forks, measured 40x slower than one jq program) and keeping two copies of the same
 # padding logic. An unknown duration yields NULL rather than a fake "00h:00m:00s", so each
-# caller decides how to render it (a live stream has no duration). ARCHITECTURE.md §7.
+# caller decides how to render it (a live stream has no duration). AS-BUILT-engine.md §7.
 JQ_PRELUDE='
 def p2: tostring | if length < 2 then "0" + . else . end;
 def fmt_dur:

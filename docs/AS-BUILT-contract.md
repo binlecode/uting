@@ -87,7 +87,7 @@ there is no core to delegate to.
   decision, the site's read-only verbs, the yt-dlp error vocabulary.
 - **Flags:** `-f -S -j -J --color -h -V` + the verbs it has: `--info` (both engines),
   `--transcript --sub-lang` (`yt-resolve` only, D13).
-- **Behavior:** ARCHITECTURE.md §10. Non-own-site host → usage error (1).
+- **Behavior:** AS-BUILT-engine.md §10. Non-own-site host → usage error (1).
 - **Capability by presence (D13):** what an engine cannot do, it does not have a verb for.
 
 ### 1.4 `uting` — interactive terminal UI
@@ -259,13 +259,13 @@ entry). `-J`/`--json-full` = same envelope, `results` holds every raw field.
 `duration` and `duration_fmt` are **`null` together** when the duration is unknown (a live
 stream); `view_count` can be `null` too. On failure the envelope is instead
 `{status:"error", engine, query, count:0, results:[], reason}` with the same `reason` enum as
-playback, and the exit code is 2+ (ARCHITECTURE.md §7 / §4 here).
+playback, and the exit code is 2+ (AS-BUILT-engine.md §7 / §4 here).
 
 - **`engine` is a REQUIRED key of every engine envelope** — search, resolve, `--info`,
   `--transcript`, and each of their error shapes. It is the token that is also the command
   prefix, so a caller holding a result reaches the matching resolver by concatenation
   (`yt` → `yt-resolve`) and `uting` can pass `ut-play --engine <that value>` without a
-  mapping table. **This is the field the host allowlist protects** (ARCHITECTURE.md §10, ROADMAP D12): a
+  mapping table. **This is the field the host allowlist protects** (AS-BUILT-engine.md §10, ROADMAP D12): a
   resolver that accepted another site's URL would emit its own name here and the routing
   claim would be false. Every engine emits its own name from one constant (`ENGINE_NAME`)
   rather than deriving it, so the envelope and the filename cannot disagree.
@@ -299,7 +299,7 @@ load-bearing:
 - **`format`** is the format string the engine actually used. The player records it in the
   player state file verbatim and never reads it: `bv*+ba/b` is a yt-dlp expression and the
   player does not know that language.
-- **`retried`** = the engine fell back to an anonymous client (ARCHITECTURE.md §8.2). The player relays it
+- **`retried`** = the engine fell back to an anonymous client (AS-BUILT-engine.md §8.2). The player relays it
   into the playback envelope's `retried`; it no longer observes it.
 - **`engine`** = the token that is also the command prefix, so a caller holding a search
   result can reach the matching resolver by concatenation (`yt` → `yt-resolve`).
@@ -535,7 +535,7 @@ whose host is not its own site's exits **1** with a message on stderr and writes
 at all — nothing was attempted and nothing is retryable, so it is the same class as
 `--engine nope` and must not be confused with an extraction failure (2+) that a caller might
 retry. This is a contract on every engine, present and future: the host allowlist is an
-explicit list per engine (ARCHITECTURE.md §10), never a substring match. The bare-id path is the same rule
+explicit list per engine (AS-BUILT-engine.md §10), never a substring match. The bare-id path is the same rule
 in the other direction — an id that does not match this engine's shape is also 1.
 
 **One envelope, one line.** Every `-j` / `-J` payload the suite writes to stdout is a single
@@ -566,7 +566,7 @@ on-disk record read by jq, not an envelope.
         of the three stdin shapes, no items, a url with whitespace, a bad engine name) —
         refused in the PARENT, so a malformed queue never reaches a player,
         `--queue` without `-d`, with an action, or with a handle on argv,
-        an unknown --engine, a URL whose host is not this engine's (ARCHITECTURE.md §10 / §3 here),
+        an unknown --engine, a URL whose host is not this engine's (AS-BUILT-engine.md §10 / §3 here),
         --info / --transcript fetch failure (incl. no_subtitles_available)
    2+   propagated yt-dlp / mpv / HTTP failure (playback, resolve -j, SEARCH failure —
         search reports 2 even when yt-dlp exits 1, so a tool failure is never confused
@@ -604,7 +604,7 @@ on-disk record read by jq, not an envelope.
                          queue is a file, and --next reaches the player with a SIGNAL.
                          It needs NO yt-dlp and no curl.
           yt-search / yt-resolve / bili-resolve : yt-dlp + jq. curl is an OPTIONAL soft
-                         dep of yt-resolve, for the client probe (ARCHITECTURE.md §8.2).
+                         dep of yt-resolve, for the client probe (AS-BUILT-engine.md §8.2).
           bili-search  : curl + jq — curl is REQUIRED here; it is the transport.
           uting        : jq, plus the verbs it composes. ut-playlist is OPTIONAL —
                          absent, the two playlist keys say so and nothing else changes.

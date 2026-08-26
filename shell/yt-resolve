@@ -203,7 +203,7 @@ require_deps() {
 # The ONE implementation of duration formatting: seconds -> "[Nd ]HHh:MMm:SSs". A jq
 # prelude, not a bash function, so a caller already shaping JSON pays one fork instead of
 # one per row. An unknown duration yields NULL rather than a fake "00h:00m:00s", so each
-# caller decides how to render it (a live stream has no duration). ARCHITECTURE.md §7.
+# caller decides how to render it (a live stream has no duration). AS-BUILT-engine.md §7.
 JQ_PRELUDE='
 def p2: tostring | if length < 2 then "0" + . else . end;
 def fmt_dur:

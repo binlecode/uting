@@ -2488,6 +2488,6 @@ fi
 # Not a handle: nothing left to route. Search moved out to the engine (yt-search) when the
 # suite split into player + engines, and the core's old D2 contract (bare `yt "query"` ->
 # list) went with it. Anything reaching here is a caller holding the wrong tool.
-# docs/ARCHITECTURE.md §7.
+# docs/AS-BUILT-engine.md §7.
 # =-----------------------------------------------------------------------------
 die "'$QUERY' is not a video id or URL — run 'yt-search -- $QUERY' to search for it"
