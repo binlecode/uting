@@ -1925,7 +1925,7 @@ do_set_volume() {
     local sf tmp
     sf=$(player_state "$id")
     tmp="$sf.tmp.$$"
-    lock_player_state "$id"
+    lock_player_state "$id" || true
     if jq --argjson v "$n" '.volume = $v' "$sf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
         mv -f "$tmp" "$sf"
     else
