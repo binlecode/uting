@@ -4,7 +4,7 @@
 以及每一步开工前必须先成立的条件。
 
 范围：整个套件 —— 播放器 `ut-play`、人机面 `uting`、两对引擎 `yt-search`/`yt-resolve` 与
-`bili-search`/`bili-resolve`、状态存储 `ut-playlist` —— 外加"其中哪一部分该被公开发布"这个问题。不是功能清单 —— 单个功能的实现前规划写 `PLAN-<topic>.md`，一路带着进度、上线即删，契约并入
+`bili-search`/`bili-resolve`、持久状态的两半 `ut-playlist`/`ut-history` —— 外加"其中哪一部分该被公开发布"这个问题。不是功能清单 —— 单个功能的实现前规划写 `PLAN-<topic>.md`，一路带着进度、上线即删，契约并入
 `ARCHITECTURE.md`。
 
 > 四段文档流水线的定义在 `CLAUDE.md`。本文档是其中**唯一活过重写**的一环，所以它只装两样东西：
@@ -187,7 +187,8 @@
 - **D5 —— "播放器是否也去 Go" 是独立的、条件触发的决定**（§9）。触发前 `ut-play` 保持 shell。
   **引擎不在这个问题里**：它们随外部网站变，shell 的原地可改性在那半边是净收益（§7 第 6 条）。
 - **D6 —— 发布名 `uting`（§3）**；一个命令一个名字，不留第二种拼法。**命令名由 D9/D10 定死**：
-  `uting` / `ut-play` / `yt-search` / `yt-resolve` / `bili-search` / `bili-resolve`。
+  `uting` / `ut-play` / `yt-search` / `yt-resolve` / `bili-search` / `bili-resolve` /
+  `ut-playlist` / `ut-history`（后两个由 D10 的第三条规则命名，D14/D15 落地时加入）。
 - **D7 —— Go 版只发一个二进制加子命令，绝不发三个通用名的可执行文件。**
 
   ```sh
@@ -307,7 +308,7 @@
   **公共 API（semver 唯一要求先定死的东西）**：就是 D3 冻结的那一面 ——
 
   ```
-    在里面：六个命令名本身 · 各自的 argv 与 flag 面 · 退出码表(0/1/2+/4) ·
+    在里面：八个命令名本身 · 各自的 argv 与 flag 面 · 退出码表(0/1/2+/4) ·
             单行 JSON envelope 的字段与形状 · player record · 生命周期语义 ·
             引擎契约（<engine>-search / <engine>-resolve 两张 envelope，D3 补充项） ·
             YT_* / UT_* 环境变量
