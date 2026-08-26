@@ -140,7 +140,7 @@ Two files, one rule:
 
 | File | Drives | Gate |
 |---|---|---|
-| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux | none — run it before every commit |
+| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux, and that it left no player behind when it went | none — run it before every commit |
 | `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), that an engine's `http_headers` actually reach mpv, and the listening log's **wiring** — only here does a real track really end | none — it starts real players, but in a `TMPDIR` and a `UT_STATE_DIR` of its own; ~65s and needs the network, so run it when the player changed |
 
 `tests/drive.sh` is the only other file, and it is not a suite — it asserts nothing. It is a

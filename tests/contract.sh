@@ -18,12 +18,15 @@
 #
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md §28.
 #
-# Cost: ~80s and the network (four runs on 2026-08-25: 77/80/82/82s). CLAUDE.md asks for this
+# Cost: ~80s and the network (seven runs on 2026-08-25: 77/80/81/82/82/94/109s). CLAUDE.md asks for this
 # file before every commit, so the number belongs at the door: roughly 15 live engine round
 # trips, one 5s lock spin the stale-lock check has to sit through, and ~25s of tmux bringing
 # the TUI up. The OFFLINE half runs first, so a broken gate is red in about two seconds and
 # the network is not touched for 22 — see the section-order contract below. It starts no
 # process it did not have to and talks to no peer — every live claim is tests/playback.sh's.
+# The TUI section is the near-exception and is held to the same line: the process there is a
+# real `uting` on a real tty, it is CHECKED to leave no player behind, and the EXIT trap reaps
+# one if it ever does.
 #
 # Usage:  tests/contract.sh            all checks
 # Exit:   0 = every check held, 1 = at least one regression
@@ -46,8 +49,33 @@ cd "$(cd -P "$(dirname "$0")/.." && pwd -P)" || exit 1
 # top of the user's. The playlist store already had this in UT_STATE_DIR; the half that kills
 # processes is the half that needed it more.
 UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-contract.XXXXXX") || exit 1
-trap 'rm -rf "$UT_TEST_TMP"' EXIT INT TERM
 export TMPDIR="$UT_TEST_TMP"
+STATE_DIR="$TMPDIR/uting-$(id -u)"
+
+# The reap comes FIRST and the directory second — the order playback.sh's cleanup already
+# uses, and for a reason this file learned the hard way. Nothing here presses Enter, but the
+# TUI section runs a real `uting`, and on 2026-08-25 a run whose `q` check came back red left
+# an `ut-play --engine yt -f audio` child and its mpv behind. With `rm -rf` as the whole of
+# the cleanup, the player's RECORD went with the directory: the process was orphaned to PID 1
+# and `--stop --all` could no longer reach it — a suite that "does not touch your state" had
+# left audio running that nothing but `kill` could stop.
+#
+# The orphan report is scoped to this run's own socket dir, for the reason playback.sh scopes
+# its own: a bare `mpv .*--input-ipc-server` counts the user's players too. It is a report and
+# not a check because the CHECK for it is in the TUI section, where it can name the cause.
+cleanup() {
+    shell/ut-play --stop --all -j >/dev/null 2>&1
+    if pgrep -f "mpv .*--input-ipc-server=$STATE_DIR" >/dev/null 2>&1; then
+        echo "contract.sh: ORPHAN mpv still running after --stop --all:" >&2
+        pgrep -fl "mpv .*--input-ipc-server=$STATE_DIR" >&2
+    fi
+    rm -rf "$UT_TEST_TMP"
+    return 0
+}
+# INT/TERM exit rather than run the cleanup and carry on: the reap must not happen with the
+# rest of the file still to run. Same two lines as drive.sh, and the EXIT trap does the work.
+trap cleanup EXIT
+trap 'exit 130' INT TERM
 
 pass=0; fail=0
 FAILED=""
@@ -781,10 +809,31 @@ else
         sleep 0.25; i=$((i + 1))
     done
     report "quits on q with 0" 1 "$left"
+    # A red here is TWO reds: the FLAGS line the next check reads is printed by the same
+    # command line, after uting returns, so a TUI that did not leave takes the tty check down
+    # with it. And the pane is the only witness there will ever be. `q` cannot be SLOW —
+    # shell/uting:3485 prints and exits, and with no player the nav read blocks with no
+    # timeout — so the byte was eaten by a reader that is not the menu loop (press_any_key,
+    # the `n` prompt, the loading spinner's own `read -t 1`), and which one it was is legible
+    # in the frame and nowhere else. Measured once, 2026-08-25, and unreproducible since.
+    if [ "$left" != 1 ]; then
+        echo "  ---- pane at the moment q was not honoured ----" >&2
+        # `>&2` BEFORE `2>/dev/null`: the other order points stdout at stderr's CURRENT
+        # target, which by then is /dev/null, and the dump silently prints nothing.
+        tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
+        echo "  ---- end of pane ----" >&2
+    fi
     restored=0
     tui_flags=" $(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -o 'FLAGS=.*' | head -1) "
     case "$tui_flags" in *" echo "*) case "$tui_flags" in *" icanon "*) restored=1 ;; esac ;; esac
     report "hands the tty back on exit" 1 "$restored"
+    # The one place in this file where a PROCESS can outlive the run. Nothing above presses
+    # Enter, so zero is the honest expectation — and on 2026-08-25 it was not what a machine
+    # running this file got: a real player was up behind a red `q`, started from a URL off the
+    # result list. The trap reaps it now whatever happens, which is why this is a check rather
+    # than a silent stop: the reap makes the leak harmless, and only this line makes it VISIBLE.
+    report "the TUI left no player behind" 0 \
+        "$(shell/ut-play --status -j 2>/dev/null | jq '.players | length')"
     tmux kill-session -t "$TS" 2>/dev/null
 fi
 

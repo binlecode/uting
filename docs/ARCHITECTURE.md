@@ -3151,23 +3151,25 @@ new-search/more-results instead of `n`/`m`; also corrected.
 **Last run — a measurement, filled in from the run, not a constant kept in sync.** Each suite
 prints its own count on the last line, which is that number's one home; the entry here records
 what a particular run on a particular day cost, and goes stale by design rather than by drift.
-*2026-08-25, both suites green*: `contract.sh` **177 ok / 0 failed in 82s**, `playback.sh`
-**42 ok / 0 failed in 69s** (and 68s / 65s / 67s on three consecutive runs before it, because
-the queue's track-end claim rests on a race), with `pgrep mpv` empty afterwards. `contract.sh`
-now runs its **offline half first**: measured on that run, the flag gates are red at 1s, the
-idle lifecycle at 1s, the death record at 2s, and the last offline section finishes at 22s
-before any network call is made — 19 of those 22 being the playlist store's own deliberate 5s
-lock spin and eight concurrent writers. The order is stated as a contract in the file, since
-part of it is load-bearing (offline first; the death-record fixtures and then the TUI section
-last, because the pane's `uting` polls `--status` and every lifecycle verb reaps). All THREE entry points under
-`tests/` point `TMPDIR` at a directory of their own — the two suites and the `drive.sh` driver,
-which was the last one still using the user's — so none of them reaches the state dir of a
-player the user is listening to. The suites point `UT_STATE_DIR` at one too: a detached player
-writes a listening row per track (§9.6), so without it every run would append a dozen tracks
-nobody listened to to the user's real history, which unlike a player is not something `--stop`
-takes back. `drive.sh` deliberately leaves `UT_STATE_DIR` alone — a frame captured from it
-should show the store a human sees — and passes `UT_HISTORY=0` into the pane instead, which
-suppresses the write without emptying the read.
+*2026-08-25, both suites green*: `contract.sh` **178 ok / 0 failed in 94s** — 177 until the
+TUI-leak check below joined it, and 81–109s across five runs that evening, which is the
+network — and `playback.sh` **42 ok / 0 failed in 68s** (and 68s / 65s / 67s on three
+consecutive runs before it, because the queue's track-end claim rests on a race), with `pgrep
+mpv` empty afterwards. `contract.sh` now runs its **offline half first**: measured on that
+run, the flag gates are red at 1s, the idle lifecycle at 1s, the death record at 2s, and the
+last offline section finishes at 22s before any network call is made — 19 of those 22 being
+the playlist store's own deliberate 5s lock spin and eight concurrent writers. The order is
+stated as a contract in the file, since part of it is load-bearing (offline first; the
+death-record fixtures and then the TUI section last, because the pane's `uting` polls
+`--status` and every lifecycle verb reaps). All THREE entry points under `tests/` point
+`TMPDIR` at a directory of their own — the two suites and the `drive.sh` driver, which was the
+last one still using the user's — so none reaches the state dir of a player the user is
+listening to. The suites point `UT_STATE_DIR` at one too: a detached player writes a listening
+row per track (§9.6), so without it every run would append a dozen tracks nobody listened to
+to the user's real history, which unlike a player is not something `--stop` takes back.
+`drive.sh` deliberately leaves `UT_STATE_DIR` alone — a frame captured from it should show the
+store a human sees — and passes `UT_HISTORY=0` into the pane instead, which suppresses the
+write without emptying the read.
 
 **Functional only, and two files.** The renderer rig (`tui_pane.sh`) and its cell-grid prover
 were removed: layout is proved when a frame enters a doc (`.claude/skills/capture-pane`, which
@@ -3210,11 +3212,12 @@ finds the reasoning without the file carrying it twice.
 > reaps** — so one `ut-play --status` from anywhere, a TUI's liveness poll included, deleted a
 > tombstone fixture between its creation and the assertion that read it. The durable fix was
 > the per-run state dir, and every entry point under `tests/` now builds it: each exports a
-> `TMPDIR` of its own, so no other uting on the uid shares the directory. What survives is the ordering rule the same mechanism still implies inside a
-> single run — the death-record section must precede the TUI section, since the pane's own
-> `--status` poll reaps — and that is written at the section itself rather than left to layout.
+> `TMPDIR` of its own, so no other uting on the uid shares the directory. What survives is the
+> ordering rule the same mechanism still implies inside a single run — the death-record
+> section must precede the TUI section, since the pane's own `--status` poll reaps — and that
+> is written at the section itself rather than left to layout.
 >
-> **A third, observed once and NOT located — recorded because an unrecorded flake is a
+> **A third, observed TWICE and still NOT located — recorded because an unrecorded flake is a
 > flake nobody can recognise the second time.** On 2026-08-25, in the first of two
 > back-to-back runs, the TUI section's last two checks went red together — *"quits on q with
 > 0"* and *"hands the tty back on exit"* — and the second run passed 177/177 unchanged. The
@@ -3229,6 +3232,33 @@ finds the reasoning without the file carrying it twice.
 > is left is the machine: a second session was working in this checkout that afternoon and
 > had run the same suite, and whether the two overlapped was not captured. Filed as
 > unlocated, with the measurement, rather than explained.
+>
+> **It happened again the same evening — same two checks, again the first of two runs, the
+> second clean — and this time it left something behind.** Seven minutes after the run,
+> `ut-play --engine yt -f audio --` on a URL off the pane's own result list was still
+> running, parented to PID 1, its mpv on a socket under that run's own `uting-contract.*` directory.
+> Nothing in the section presses Enter, so the pane received input the suite did not send:
+> the cause is still unlocated. What the recurrence did settle is that the reading above —
+> another session on the machine — is the weaker one, because that evening there was none;
+> the day's other work had landed seven hours earlier.
+>
+> The player explains the CONSEQUENCE, and that half is now fixed. `uting` stops its playback
+> from `cleanup_on_exit` (EXIT INT TERM HUP), so a TUI that leaves takes its player with it,
+> and a TUI that does **not** leave is a TUI still holding one — the two reds and a live
+> player are one event, not two. `contract.sh`'s cleanup was `rm -rf` and nothing else, so
+> the state dir went and the player's RECORD went with it: the process outlived
+> `--stop --all`'s ability to find it, and nothing short of `kill` could stop the audio — in
+> a file whose own docstring says it does not touch your state. Three changes, each proved by
+> breaking it (a run that presses Enter and then never presses `q`):
+>
+> - the cleanup **reaps before it removes**, and reports an orphan mpv scoped to the run's own
+>   socket dir — the order `playback.sh`'s cleanup already used;
+> - a check, *"the TUI left no player behind"*, so a leak is **visible** and not merely
+>   harmless. It is red only in this exact situation, which is what makes it worth a line;
+> - the pane is **dumped** when `q` is not honoured. The frame is the only witness to which
+>   reader ate the byte and it dies with the session; in the sabotage run the dump carries
+>   `▶ Playing:` on its third line, which is precisely the fact the first occurrence had no
+>   way to record. The next occurrence will say what this one had to be reconstructed from.
 >
 > **The fourth is CLOSED too, and it is the one worth reading twice, because a red check
 > turned another one off.** On 2026-08-25 `playback.sh` ran 34s/35 ok/1 failed and then
