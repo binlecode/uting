@@ -1132,7 +1132,17 @@ playable: `play_selected` passes the ROW's engine, where the session engine woul
 Bilibili URL to `yt-resolve`. Because a playlist envelope produces the same seven-field row
 a search does, the list view, the filter and the paging are unchanged — the only keys that
 had to learn about the new source are the three that RE-FETCH a query (`m`, `o`, `e`), which
-a playlist does not have.
+a playlist does not have, and `Esc`, which is the way back out of one.
+
+**And `Esc` is what leaves it.** A store REPLACES the rows on screen, so without a back key
+the only exits were `n` (retype a query) and `q` — a one-way door, and the same door `h`
+opens (§9.6). Everything a store replaces is local state (the envelope, the rows built from
+it, the label, the cursor position), so the openers stash it and `Esc` restores it: no
+refetch, which would spend a network round trip rebuilding rows still in hand and could
+silently hand back a DIFFERENT set of results than the one the user left. The stash is taken
+only while the rows are still the search's, so `h` then `b` then `Esc` lands on the search
+rather than on the history, and the key is offered in the hints only while a store is on
+screen — the rule `e`, `a`/`b` and `h` already follow.
 
 **What is NOT here: the queue.** A queue is a playlist being consumed, and it belongs to the
 player, in the player's runtime state. A queue that survives a reboot IS a playlist — that
@@ -2376,7 +2386,9 @@ Moved → `AS-BUILT-contract.md` §5.
      Chrome     : layout_cols, print_hints (HINT_MEASURE), wrap_print/wrap_emit
                   (WRAP_MEASURE), print_details (DETAIL_MEASURE), card_divider,
                   repeat_glyph, render_prog_bar
-     Input      : read_nav_input/read_query_input, utf8_complete + init_lead_tables
+     Input      : read_nav_input/read_esc_tail (the ESC-[/O decoder, split out so the
+                  PENDING_ESC re-entry is not a second copy of it)/read_query_input,
+                  utf8_complete + init_lead_tables
                   (one key per CHARACTER), tty_echo_off/tty_echo_restore,
                   cursor_hide/cursor_show
      Queue      : enqueue_selected (`+`), skip_next (`>`), focused_payload (the focused
@@ -2930,7 +2942,10 @@ new tmux rigs; the premise was measured before a line was written):
 - The other rig lesson: `wait_for "Navigation"` is not proof that the filter was left, because
   the menu is drawn *during* filtering too — and sending the next key too early let
   `read_nav_input`'s ESC continuation read swallow it as the sequence's second byte. Wait for
-  the filter's own prompt to go.
+  the filter's own prompt to go. **That swallow was a defect in the app, and this is where it
+  sat written down as a property of the rig** — the reader keeps the early byte now (the
+  view-transition pass below); the wait is still the right rig discipline, because what a
+  frame shows and what the reader has consumed are two different clocks.
 - **The third lesson, found much later and the worst of the three: the echo rig had been
   passing for the wrong reason, and burning a core to do it.** Its blocking loop was
   `while true; do IFS= read -rsn1 _ || true; done`, meant to block in `read` the way the TUI
@@ -3100,6 +3115,44 @@ new-search/more-results instead of `n`/`m`; also corrected.
   to fire in. **A measurement taken through a saturated network is not a measurement of the
   program** — the same family as the echo-rig and probe-vs-mpv lessons above, and the reason
   the clock was finally verified against `av://lavfi:sine` instead of a video.
+
+**Closed by the view-transition pass — every edge between the views walked, not just the one
+that was reported** (`bash -n` clean, `contract.sh` green, each fix driven under tmux):
+
+- **The store was a one-way door.** `b` and `h` REPLACE the rows, and no key put them back:
+  `m`/`o`/`e` correctly refuse (there is no query to re-fetch), `Esc` was a documented no-op
+  in the list, and the only exits were `n` (retype a query) and `q`. Fixed in §9.4 — the
+  openers stash what they are about to overwrite and `Esc` restores it. **Reported by a user,
+  not by a check**, which is the finding under the finding: every existing TUI check drove a
+  key and asserted the app survived it, and survival is exactly what a one-way door does.
+  `contract.sh` now asserts the ROUND TRIP, both halves.
+- **The filter loop did half the main loop's per-frame work.** `filter_live` is a second key
+  loop over the same screen and it called `check_player_alive` but not `player_check_ready`,
+  so for the whole time `/` was open the starting-state spinner neither advanced nor resolved
+  — press Enter, then `/`, and a dead spinner frame sat there past its own 20 s cap. Any
+  future per-frame duty has to be added to both loops or to neither; they are not one loop.
+- **`apply_filter` read six names from a seven-field row.** The record grew `engine` when a
+  playlist became a row source (§9.4), and this reader was not widened. `read` gives the last
+  name the remainder, so `live` arrived as `is_live<US>yt`, the `is_live` test could never be
+  true, and typing `live` in the filter had matched nothing since. What hid it for that long
+  is worth recording: the loop re-emits the fields it just split, so pasting that trailing
+  variable back produced a **byte-identical row** — every row survived the filter intact and
+  only the synthesized haystack was wrong, which is a corruption with no visible corruption.
+- **Esc swallowed the key typed after it**, in every view. A lone Esc is only known to be lone
+  once the byte behind it has been read, and the reader dropped that byte — so any key inside
+  Esc's one-second window vanished (measured both ways: `Esc` then `o` left `sort=relevance`;
+  `Esc` then Right left the page on 1). Worse for a key whose first byte is another `\x1b`:
+  the introducer was eaten and the REST of the arrow arrived as literal keys, and `[` is the
+  seek key — so `Esc` then an arrow did not merely lose the arrow, it seeked. The reader now
+  keeps what it read too early, in the two shapes that byte can take: a whole key
+  (`PENDING_KEY`, UTF-8-completed at stash time because the continuation bytes are still
+  queued) or a position in the parse (`PENDING_ESC`). Found while confirming the fix above —
+  Esc was a no-op in the list until it became the way out of a store, so this had never been
+  a key anyone pressed there. A one-second window is the price of ESC being both a key and
+  every arrow's introducer; what is fixed is losing the NEXT key, not the window. **It had
+  been written down for years — as a rig lesson** (§27, "sending the next key too early"):
+  the harness was taught to wait around the behaviour instead of the behaviour being read as
+  a bug, which is how a defect hides inside a test-writing convention.
 
 ## 26. Non-goals / known constraints
 

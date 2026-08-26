@@ -101,7 +101,7 @@ there is no core to delegate to.
   `-f` is validated against `audio|video|fast`: playback is detached, and `ascii`/`viz`
   need a terminal (ARCHITECTURE.md §9.2).
   Keys: arrows nav/page · Enter non-blocking play · `Tab`/`p` toggle the two views ·
-  `Esc` back to list · `Space` pause · `[`/`]` seek ∓10s · `9`/`0` volume · `s` stop ·
+  `Esc` back to the list (in the card) / back to the search results (over a store) · `Space` pause · `[`/`]` seek ∓10s · `9`/`0` volume · `s` stop ·
   `v` cycle mode (audio→video→fast) · `e` switch source (hidden with one engine) ·
   `l` switch chrome language (en↔zh, any view) · `t` cycle palette family (any view) ·
   `n` new search · `m` more results · `o` sort · `/` filter · `q` quit ·
@@ -109,7 +109,10 @@ there is no core to delegate to.
   `h` open the listening log as the row source.
   `a`/`b` appear only when `ut-playlist` is installed (§1.5) and `h` only when `ut-history`
   is (§1.6), the same rule that hides `e`
-  on a single-engine install. `h` takes no name — the log is one thing — and shows the 50
+  on a single-engine install. Both REPLACE the rows on screen, and `Esc` puts the search
+  back — from the stashed envelope, not by re-running the query, so the rows a user goes
+  back to are the rows they left. It is offered in the key hints only while a store is on
+  screen, the same rule again. `h` takes no name — the log is one thing — and shows the 50
   newest rows. With a playlist or the log on screen the three keys that RE-FETCH a
   query — `m` `o` `e` — say so and do nothing; everything that works on the rows
   themselves is unchanged. Rows carry their own `engine`, so a list mixing sources plays

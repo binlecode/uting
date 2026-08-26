@@ -181,7 +181,7 @@ Keys (List View):
   ↑/↓      move selection              ←/→  change page
   Enter    play / switch track (non-blocking background playback)
   Tab / p  toggle view: List <-> Now Playing card
-  Esc      (in the card) back to List View
+  Esc      back to the search results (from a playlist or the listening log)
   Space    pause / resume playback
   s        stop playback
   9 / 0    volume down / up (via IPC)
@@ -194,6 +194,9 @@ Keys (List View):
   m        more results (re-fetch current query, +25 to count)
   o        rotate sort field / order (relevance → view_count → duration), re-fetch
   e        switch source, re-fetch the same query (only when >1 engine is installed)
+  a        add the focused row to a playlist        (needs ut-playlist)
+  b        open a stored playlist as the row source  (needs ut-playlist)
+  h        open the listening log as the row source  (needs ut-history)
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
   q        quit (stops background playback on exit)
 
@@ -2025,7 +2028,8 @@ display_list_menu() {
     # card's arrows seek 5s, these brackets seek 10s. That is why it is no longer called
     # S_SEEK5: the label never named a number, so the only thing the old name did was promise
     # a step size that the second caller does not honour. Still undocumented on purpose: p/P
-    # (a pure Tab alias) and Esc (a no-op in this view).
+    # (a pure Tab alias). Esc used to be listed here too, when it was a no-op in this view;
+    # over a store it is the way back and is printed above, under the same gate as e/a/b/h.
     #
     # HINT_SEP is set around the MEASURE call as well as the print call below, never just
     # one: the separator is 3 cells against the default 2, and across 11 gaps that is 11
@@ -2053,6 +2057,13 @@ display_list_menu() {
     # Same rule again: with no ut-history installed, h genuinely does nothing.
     if [[ -n "$UT_HISTORY_BIN" ]]; then
         nav_items+=("h	$S_HIST_KEY")
+    fi
+    # Same rule once more: Esc only means something when there is a search to go back TO,
+    # which is exactly when a store put these rows on screen — and NOT while the filter is
+    # open, where Esc clears the filter and the filter's own hint line already says so. Two
+    # contradicting Esc entries on one screen is worse than none.
+    if stored_rows && ((FILTER_MODE == 0)); then
+        nav_items+=("Esc	$S_BACK_SEARCH")
     fi
     # The queue keys are offered only while something is PLAYING: with no player they say
     # "nothing is playing" and nothing else, and a measured block must not spend cells on a
@@ -2860,6 +2871,7 @@ open_playlist() {
         store_notice "$S_PL_ACT:" "$S_PL_EMPTY"
         return 1
     fi
+    stash_search
     json="$out"
     LIST_SOURCE="playlist"
     # One label for the whole list, computed once: a mixed playlist says so rather than
@@ -2893,6 +2905,42 @@ search_only() {
     [[ "$LIST_SOURCE" == "search" ]] && return 0
     store_notice "$S_PL_ACT:" "$S_PL_SEARCH_ONLY"
     return 1
+}
+
+# ── BACK action (key: Esc, in the list) ─────────────────────────────────────────────────
+# b and h REPLACE the rows on screen, so without this the only ways out of a store were `n`
+# (retype a query) and `q`. Everything they replace is LOCAL state — the envelope, the rows
+# built from it, the label, and where the cursor was — so the way back is to put that state
+# back, not to re-run the search: a refetch would spend a network round trip rebuilding rows
+# we still hold, and would silently change them under a user who only asked to go back.
+#
+# The stash is taken by the store openers themselves and only while the rows are still the
+# search's, so search -> h -> b -> Esc lands on the search rather than on the history.
+stash_search() {
+    stored_rows && return 0
+    SEARCH_STASH_JSON="$json"
+    SEARCH_STASH_ROWS="$ALL_ROWS"
+    SEARCH_STASH_LABEL="$QUERY_LABEL"
+    SEARCH_STASH_ENGINES="$PLAYLIST_ENGINES"
+    SEARCH_STASH_SEL="$selected"
+    SEARCH_STASH_PAGE="$page_index"
+}
+
+back_to_search() {
+    stored_rows || return 0
+    json="$SEARCH_STASH_JSON"
+    ALL_ROWS="$SEARCH_STASH_ROWS"
+    QUERY_LABEL="$SEARCH_STASH_LABEL"
+    PLAYLIST_ENGINES="$SEARCH_STASH_ENGINES"
+    LIST_SOURCE="search"
+    FILTER_LABEL=""
+    FILTER_MODE=0
+    selected="$SEARCH_STASH_SEL"
+    page_index="$SEARCH_STASH_PAGE"
+    load_rows "$ALL_ROWS"
+    # Explicit, like the two openers: this runs bare from a case arm, so its status is the
+    # TUI's life. load_rows happens to end 0 today; that is not a promise it made.
+    return 0
 }
 
 # List what is stored, then ask which one. A picker widget would be a second list renderer
@@ -2939,6 +2987,7 @@ open_history() {
         store_notice "$S_HIST_ACT:" "$S_HIST_EMPTY"
         return 1
     fi
+    stash_search
     json="$out"
     LIST_SOURCE="history"
     # The same one-label rule a mixed playlist follows: the rows carry their own engine, and
@@ -3089,7 +3138,7 @@ cycle_sort() {
 
 # ── FILTER action (key: /) — LIVE incremental narrow ─────────────────────────────────────
 apply_filter() {
-    local q="$1" url title dur views chan live hay tok ok matched="" tokens=()
+    local q="$1" url title dur views chan live engine hay tok ok matched="" tokens=()
     selected=0
     page_index=1
     if [[ "$q" != *[![:space:]]* ]]; then
@@ -3100,7 +3149,12 @@ apply_filter() {
     FILTER_LABEL="$q"
     read -ra tokens <<<"$q"
     shopt -s nocasematch
-    while IFS="$US" read -r url title dur views chan live; do
+    # SEVEN fields, not six. `read` gives the last variable everything that is left, so with
+    # six names `live` arrived as "is_live<US>yt" and the is_live test below could never be
+    # true — the LIVE token has matched nothing since the engine field landed. The re-emit
+    # hid it: pasting that trailing variable back produced a byte-identical row, so every
+    # row survived and only the haystack was wrong.
+    while IFS="$US" read -r url title dur views chan live engine; do
         [[ -n "$url" ]] || continue
         # The haystack is SYNTHESIZED here, not carried as a seventh field: the row already
         # has the pieces, it is never printed, and a stored key would be one more thing to
@@ -3119,7 +3173,7 @@ apply_filter() {
         done
         # Re-emitted unchanged, so ALL_ROWS stays the one source and a filter never
         # degrades a row.
-        ((ok)) && matched+="${url}${US}${title}${US}${dur}${US}${views}${US}${chan}${US}${live}"$'\n'
+        ((ok)) && matched+="${url}${US}${title}${US}${dur}${US}${views}${US}${chan}${US}${live}${US}${engine}"$'\n'
     done <<<"$ALL_ROWS"
     shopt -u nocasematch
     load_rows "$matched"
@@ -3130,7 +3184,14 @@ filter_live() {
     FILTER_MODE=1
     apply_filter ""
     while true; do
-        check_player_alive   # this loop never returns to the main loop while / is open
+        # BOTH halves, exactly as the menu loop runs them: this loop never returns to the main
+        # loop while / is open, so whatever it skips is frozen for the whole filter session.
+        # It used to call only the first, and player_check_ready is the one that ADVANCES the
+        # starting-state spinner and clears it when mpv reports audio — so pressing / right
+        # after Enter parked a dead spinner frame and a "starting" label on screen until Esc,
+        # cap and all.
+        check_player_alive
+        player_check_ready
         display_menu "$page_index"
         read_nav_input || continue
         case "$READ_NAV_KEY" in
@@ -3232,9 +3293,77 @@ nav_tick() {
 }
 
 READ_NAV_KEY=""
+# What was read one key too early. A lone Esc is only known to BE lone once the byte after it
+# has been read, and that byte is the user's next key — it was being dropped on the floor, so
+# every key typed inside Esc's one-second window vanished (proved both ways: `Esc` then `o`
+# left the sort field alone; `Esc` then Right left the page on 1). Esc did not matter in the
+# list until it became the way out of a store, which is what made a decade-old terminal
+# nuisance into a key that "does nothing".
+#
+# Two slots because the byte read early is one of two different things. A plain key can be
+# handed up whole (PENDING_KEY). A second \x1b is the START of another key whose remaining
+# bytes have not arrived yet, so what carries over is the position in the parse, not a value
+# (PENDING_ESC) — without it those bytes are read as literal keys on the next call, and `[`
+# is the seek key, so `Esc` + an arrow did not merely lose the arrow, it seeked.
+PENDING_KEY=""
+PENDING_ESC=0
+
+# Everything after the \x1b introducer has been consumed. Split out of read_nav_input for one
+# reason: PENDING_ESC has to re-enter the parse HERE, and a copy of it would be a second escape
+# decoder to keep in step with the first.
+read_esc_tail() {
+    local next="" seq=""
+    if ! IFS= read -rsn1 -t 1 next; then
+        READ_NAV_KEY="ESC"
+        return 0
+    fi
+    if [[ "$next" == $'\x1b' ]]; then
+        # Two introducers: the first Esc stood alone, and the second belongs to the key still
+        # arriving. Report the Esc and resume mid-parse next time. Double-Esc therefore now
+        # delivers TWO Escs where it used to collapse into one — which is what a user pressing
+        # it twice (leave the filter, then leave the store) is asking for.
+        PENDING_ESC=1
+        READ_NAV_KEY="ESC"
+        return 0
+    fi
+    if [[ "$next" != "[" && "$next" != "O" ]]; then
+        # Not an introducer, so the Esc was lone and this byte opens the next key. Completed
+        # here rather than stashed raw: it may be the lead byte of a CJK character whose
+        # continuation bytes are still in the tty buffer, and the next call comes after a
+        # redraw — utf8_complete has to run while they are still queued.
+        utf8_complete "$next"
+        PENDING_KEY="$CHAR_IN"
+        READ_NAV_KEY="ESC"
+        return 0
+    fi
+    seq="$next"
+    while IFS= read -rsn1 -t 1 next; do
+        seq+="$next"
+        case "$next" in
+        [[:alpha:]~]) break ;;
+        esac
+    done
+    READ_NAV_KEY="$seq"
+    return 0
+}
+
 read_nav_input() {
     READ_NAV_KEY=""
-    local input="" next="" seq=""
+    local input=""
+    # A key already in hand is handed up before anything blocks: no tick, no WINCH gate, no
+    # read. Both slots are consumed by the very NEXT call, whichever loop makes it — so a key
+    # typed after an Esc that changed the view is handled by the view it arrives in, exactly
+    # as if it had been typed there.
+    if [[ -n "$PENDING_KEY" ]]; then
+        READ_NAV_KEY="$PENDING_KEY"
+        PENDING_KEY=""
+        return 0
+    fi
+    if ((PENDING_ESC)); then
+        PENDING_ESC=0
+        read_esc_tail
+        return 0
+    fi
     local -a t_opt=()
     # ONE clock, shared by every view that reads through this function (list, card, and the
     # live filter, which drives the same reader). It used to be card-only, which is why the
@@ -3266,27 +3395,12 @@ read_nav_input() {
     WINCH_OK=0
     if [[ "$input" != $'\x1b' ]]; then
         # One byte is not one key: finish the character before handing it up. The ESC/arrow
-        # decoding below is untouched — those sequences are all ASCII.
+        # decoding in read_esc_tail is untouched — those sequences are all ASCII.
         utf8_complete "$input"
         READ_NAV_KEY="$CHAR_IN"
         return 0
     fi
-    if ! IFS= read -rsn1 -t 1 next; then
-        READ_NAV_KEY="ESC"
-        return 0
-    fi
-    if [[ "$next" != "[" && "$next" != "O" ]]; then
-        READ_NAV_KEY="ESC"
-        return 0
-    fi
-    seq="$next"
-    while IFS= read -rsn1 -t 1 next; do
-        seq+="$next"
-        case "$next" in
-        [[:alpha:]~]) break ;;
-        esac
-    done
-    READ_NAV_KEY="$seq"
+    read_esc_tail
     return 0
 }
 
@@ -3363,6 +3477,13 @@ move_selection() {
 # /, v, the playback keys) does not care and is left alone.
 LIST_SOURCE="search"
 PLAYLIST_ENGINES=""
+# What Esc puts back when a store (b / h) replaced the search on screen.
+SEARCH_STASH_JSON=""
+SEARCH_STASH_ROWS=""
+SEARCH_STASH_LABEL=""
+SEARCH_STASH_ENGINES=""
+SEARCH_STASH_SEL=0
+SEARCH_STASH_PAGE=1
 PROMPT_NAME=""
 FILTER_LABEL=""
 FILTER_MODE=0
@@ -3483,7 +3604,7 @@ while true; do
     ">") skip_next ;;         # skip to the next queued track
     "/") filter_live ;;       # LIVE incremental filter
     q | Q) printf '%s%s\n' "$S_QUITTING" "$GL_ELL"; exit 0 ;;
-    ESC) ;;
+    ESC) back_to_search ;;    # leave a playlist / the log, back to the search results
     *) ;;
     esac
 done
