@@ -178,23 +178,34 @@ release_lock() {
 trap release_lock EXIT
 
 lock_playlist() {
-    local dir i
+    local dir i aged=0
     dir=$(playlist_lock "$1")
     for ((i = 0; i < 50; i++)); do
         if mkdir "$dir" 2>/dev/null; then
             LOCKS_HELD+=("$dir")
             return 0
         fi
+        # Staleness is tested on the FIRST failure, not after the spin. The holder of a lock
+        # older than a minute is GONE (the EXIT trap releases it on every normal death, `die`
+        # included), so waiting five seconds for it teaches nobody anything — it is five
+        # seconds every caller pays, the TUI included, for a writer that was SIGKILLed. The
+        # spin is for a LIVE writer; the steal is for a dead one, and they are different
+        # questions asked in the wrong order.
+        #
+        # Once per call, not per iteration: the test is a fork, and a lock that was fresh at
+        # i=0 cannot age past a minute inside a 5s spin. A steal that LOSES the race to
+        # another stealer falls back into the spin rather than failing on the spot — the
+        # winner holds a real lock, which is exactly what the spin is for.
+        if ((! aged)); then
+            aged=1
+            # -mmin +1 is understood by both BSD and GNU find; -maxdepth 0 tests the dir itself.
+            if [[ -n "$(find "$dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]]; then
+                rmdir "$dir" 2>/dev/null || true
+                continue
+            fi
+        fi
         sleep 0.1
     done
-    # -mmin +1 is understood by both BSD and GNU find; -maxdepth 0 tests the dir itself.
-    if [[ -d "$dir" ]] && [[ -n "$(find "$dir" -maxdepth 0 -mmin +1 2>/dev/null)" ]]; then
-        rmdir "$dir" 2>/dev/null || true
-        if mkdir "$dir" 2>/dev/null; then
-            LOCKS_HELD+=("$dir")
-            return 0
-        fi
-    fi
     fail 4 locked "playlist '$1' is locked by another process"
 }
 
