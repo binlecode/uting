@@ -38,8 +38,9 @@ shell/ut-history --ls -n 20 -j                                # the log: what a 
 UT_HISTORY=0 shell/ut-play -d -- URL                          # …and the switch that stops it being written
 shell/uting --version                                        # answers before any dependency gate
 
-tests/contract.sh                                             # the CLI contract; ~80s, offline half first
-tests/playback.sh                                             # real detached players; silent, ~65s
+tests/contract.sh --offline                                   # the hermetic half: ~14s, no packet sent
+tests/contract.sh                                             # …and the live half too: ~57s, 185 checks
+tests/playback.sh                                             # real detached players; silent, ~62s
 tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
 tests/drive.sh -k Enter -w Playing                            # …including a real detached play
 ```
@@ -140,8 +141,8 @@ Two files, one rule:
 
 | File | Drives | Gate |
 |---|---|---|
-| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux, and that it left no player behind when it went | none — run it before every commit |
-| `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), that an engine's `http_headers` actually reach mpv, and the listening log's **wiring** — only here does a real track really end | none — it starts real players, but in a `TMPDIR` and a `UT_STATE_DIR` of its own; ~65s and needs the network, so run it when the player changed |
+| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux, and that it left no player behind when it went | none — `--offline` before every commit (~14s, 144 of 185 checks, hermetic), the whole thing before every push (~57s) |
+| `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), that an engine's `http_headers` actually reach mpv, and the listening log's **wiring** — only here does a real track really end | none — it starts real players, but in a `TMPDIR` and a `UT_STATE_DIR` of its own; ~62s and needs the network, so run it when the player changed |
 
 `tests/drive.sh` is the only other file, and it is not a suite — it asserts nothing. It is a
 **driver**: it launches the TUI in tmux at a declared geometry, waits on the ready marker, optionally sends keys, and **always reaps the detached player** — which killing the tmux session does not do. Use it whenever a TUI change has to be driven rather than reasoned about.
@@ -168,7 +169,7 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 **The two suites in `tests/` ARE these checks.** A check that exists only as prose for someone to copy out reports green by default. A new check goes in the suite, never in a doc — and a fixed command sequence goes in a script, never in prose.
 
 - `/bin/bash -n shell/*` — enforced by `.githooks/pre-commit` on staged content and by `pre-push` on the worktree, so this is a backstop for a `--no-verify`, not a habit.
-- **Any change at all:** `tests/contract.sh` (it also drives the empty-argument paths on the 3.2 floor). It starts no process it did not have to and talks to no peer — every live claim is `playback.sh`'s.
+- **Any change at all:** `tests/contract.sh --offline` (it also drives the empty-argument paths on the 3.2 floor) — every gate, both stores, the lifecycle and the death record, in ~14s with nothing fetched, because a gate that cannot run without YouTube is a gate that gets skipped. **Before every push, the same file with no flag**: `--offline` is a prefix of that run, never a substitute for it. It starts no process it did not have to and talks to no peer — every live claim is `playback.sh`'s.
 - **Any change to the detached player:** `tests/playback.sh`. It starts real players (silent, `--volume 0`, in a state dir of its own) and does not pass until `pgrep` finds none of them left.
 - The shellcheck baseline is a tracked count, not a clean bill — `docs/RESEARCH-oss-landscape.md` §5.1.
 
@@ -287,7 +288,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 - **`main` is the working branch** — linear, no merges, single author. Commit straight to it for ordinary work; take a branch when the change is structural enough to want the staged A→E order below, or when it may need to be abandoned. No stacked branches.
 - Imperative, scoped commit subjects in the existing style — the file or surface first when it helps: `uting: stop Enter stalling a second in utf8_complete`, `add --version, declared once`, `docs: resync DESIGN with the detached-playback TUI`.
 - One logical change per commit. Renderer changes come with the proved capture (`capture-pane`) that shows them.
-- `bash -n` on every script in `shell/` before every commit; `tests/contract.sh` before every push.
+- `bash -n` on every script in `shell/` before every commit; `tests/contract.sh --offline` with it, and the full `tests/contract.sh` before every push.
 - **Always ask before `git push`.** Never force-push `main`.
 - **Versioning is semver 2.0.0 over the CLI contract, not over the code** (`docs/ROADMAP.md` D13 defines what counts as the public API). While the suite is `0.y.z`: a breaking change bumps **y**, an addition or a fix bumps **z**. `VERSION` is bumped deliberately, **alone, in its own commit**, and never once per commit. There is no release process to run and no CHANGELOG: the suite is not packaged (`docs/ROADMAP.md` D1), so a `v<VERSION>` tag is for a real release only — `1.0.0` waits for D1/D2 to reverse.
 
