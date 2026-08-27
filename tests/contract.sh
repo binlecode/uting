@@ -20,7 +20,7 @@
 #
 # Cost, measured 2026-08-26 and broken down because a number at the door is what a reader
 # decides on: ~57s in full, of which the live half is ~43s (roughly 15 engine round trips) and
-# tmux is ~4s. `--offline` stops before the first of them: ~14s, 144 of the 185 checks, no
+# tmux is ~4s. `--offline` stops before the first of them: ~13s, 152 of the 194 checks, no
 # packet sent. The 14 is dominated by one deliberate 5.5s lock spin — a FRESH held lock has to
 # be waited out, that being what the spin is for; the stale-lock steal beside it costs 0.1s
 # because staleness is tested before the spin, not after (shell/ut-playlist:lock_playlist).
@@ -73,6 +73,18 @@ done
 UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-contract.XXXXXX") || exit 1
 export TMPDIR="$UT_TEST_TMP"
 STATE_DIR="$TMPDIR/uting-$(id -u)"
+
+# ---- the config file, pointed somewhere disposable ----------------------------------
+# The same argument as TMPDIR above, one layer out. Every command in the suite now reads
+# ${XDG_CONFIG_HOME:-~/.config}/uting/config, so without this line a developer whose real
+# config sets UT_MAX_SEARCH_RESULTS or UT_SORT_FIELD would see this file go red on their
+# machine and green on everyone else's — the worst failure a suite can have, because the
+# red is not in the subject. It points at a real, EMPTY file rather than a missing path so
+# the loader's read path is the one exercised for the rest of the run; the checks that
+# prove the loader actually loads something write their own file and set UT_CONFIG
+# themselves.
+export UT_CONFIG="$UT_TEST_TMP/config"
+: > "$UT_CONFIG"
 
 # The reap comes FIRST and the directory second — the order playback.sh's cleanup already
 # uses, and for a reason this file learned the hard way. Nothing here presses Enter, but the
@@ -736,6 +748,97 @@ done
 report "yt-resolve still takes youtu.be" 1 \
     "$([ "$(http_proxy=$NOPROXY https_proxy=$NOPROXY rc shell/yt-resolve -j -- https://youtu.be/$MEDIA_ID)" != 1 ] && echo 1 || echo 0)"
 
+echo "── the config file: precedence, and what it refuses ───────────────"
+# WHY THESE CHECKS EXIST AT ALL. The config file is the one input in the suite that a user
+# hand-writes and no command validates on their behalf, so its failure modes are not the
+# usual ones: a knob that silently does not apply, a precedence order that quietly inverts,
+# and — the one that matters — a file that reaches past the suite into the environment. Each
+# check below feeds the discriminating input rather than the happy one: the happy path is
+# already covered by every other check in this file, all of which now read a config.
+CFGD=$(mktemp -d "${TMPDIR:-/tmp}/uting-cfg.XXXXXX")
+CFG="$CFGD/config"
+
+# Precedence, proved on ONE observable in three runs. `--engine` names a missing engine, so
+# the error text says which value won — a real gate on a real entry point, no parsing of an
+# internal. A naive loader that exported over the environment would answer "file" to the
+# second, and one that ran before argv parsing would answer "env" to the third.
+printf 'UT_DEFAULT_ENGINE=cfgwins\n' > "$CFG"
+eng() { UT_CONFIG="$CFG" "$@" 2>&1 | sed -n "s/.*unknown engine '\([^']*\)'.*/\1/p"; }
+report "config file sets the default engine" "cfgwins" \
+    "$(eng shell/ut-play -- https://x/y)"
+report "environment beats the config file" "envwins" \
+    "$(UT_DEFAULT_ENGINE=envwins eng shell/ut-play -- https://x/y)"
+report "the flag beats both" "flagwins" \
+    "$(UT_DEFAULT_ENGINE=envwins eng shell/ut-play --engine flagwins -- https://x/y)"
+
+# THE SECURITY BOUNDARY, and the reason the file is read as data instead of sourced. A config
+# that could be sourced would run the command substitution below and set PATH from a file the
+# suite never audited; the check is that nine characters arrive as nine characters and that
+# the file cannot name anything outside the suite's own namespaces.
+printf 'PATH=/nonexistent\nLD_PRELOAD=/evil.so\nlowercase_key=x\nUT_INJECT=$(touch %s/PWNED)\n' \
+    "$CFGD" > "$CFG"
+report "a config key outside UT_/YT_/BILI_ is inert" "0" \
+    "$(UT_CONFIG="$CFG" rc shell/uting --version)"
+report "command substitution is never executed" "absent" \
+    "$([ -e "$CFGD/PWNED" ] && echo present || echo absent)"
+
+# The player's own four. A file-level YT_IPC_SOCK would aim every player at one socket, so it
+# is refused INSIDE an allowed namespace — which is the case a prefix allowlist alone misses.
+printf 'YT_IPC_SOCK=%s/hijack.sock\n' "$CFGD" > "$CFG"
+report "the player still answers with YT_IPC_SOCK set" "0" \
+    "$(UT_CONFIG="$CFG" rc shell/ut-play --stop --all -j)"
+report "the file did not create the hijack socket" "absent" \
+    "$([ -e "$CFGD/hijack.sock" ] && echo present || echo absent)"
+
+# A TYPO MUST BE LOUD. An emptied cycle would otherwise abort on the first keypress (an empty
+# array expansion under set -u aborts on bash 3.2) and an unknown member would put a mode the
+# engines reject under the v key — both a long way from the line the user actually wrote.
+printf 'UT_THEME_CYCLE=nord,bogus\n' > "$CFG"
+report "an unknown cycle member exits 1" "1" "$(UT_CONFIG="$CFG" rc shell/uting q)"
+printf 'UT_MAX_SEARCH_RESULTS=-5\n' > "$CFG"
+# Over EVERY discovered engine, not just bili: the ceiling is cross-engine, so a check
+# driving one of them would be green while the other spent an unbounded fetch.
+for n in $ENGINES; do
+    report "$n-search rejects a negative ceiling" "1" \
+        "$(UT_CONFIG="$CFG" rc "shell/$n-search" -j -- q)"
+done
+
+# A restricted cycle must still START. The -f and -s defaults are validated against their
+# cycles, so a literal "audio" default would make `UT_MODE_CYCLE=video` a config that cannot
+# run — the user narrows the cycle and gets told their flag is wrong. Reaching the TTY refusal
+# is the pass: it is the gate immediately after the one under test.
+printf 'UT_MODE_CYCLE=video\nUT_SORT_CYCLE=duration\n' > "$CFG"
+report "a narrowed cycle reaches the TTY gate" "1" "$(UT_CONFIG="$CFG" rc shell/uting q)"
+# Captured and then matched, NOT piped into grep: this file runs under `set -o pipefail`, so
+# `shell/uting q | grep -q` reports uting's exit 1 rather than grep's 0 and a matched pattern
+# reads as no-match. Every check here asserts on a command that exits non-zero by design.
+CFG_OUT=$(UT_CONFIG="$CFG" shell/uting q 2>&1 || true)
+case "$CFG_OUT" in
+*"requires a terminal"*) CFG_HIT=yes ;;
+*) CFG_HIT=no ;;
+esac
+report "…and it is the TTY gate, not a flag error" "yes" "$CFG_HIT"
+
+# THE BROKEN CHECKOUT. Defaults now live in <checkout>/config and nowhere else, so a copy of
+# a script without that file has no values at all. The failure must be this one line and exit
+# 2 — not `set -u` reporting an unbound variable from 100 lines further down, which is what
+# the first attempt produced when --version and --help were let through. Driven by really
+# copying an entry point somewhere that has a VERSION and no config, which is exactly the
+# shape of a half-installed checkout.
+CFG_BROKE="$CFGD/broke"
+mkdir -p "$CFG_BROKE/shell"
+cp shell/ut-play "$CFG_BROKE/shell/" && echo 0.0.0 > "$CFG_BROKE/VERSION"
+report "no shipped defaults exits 2" "2" "$(rc "$CFG_BROKE/shell/ut-play" --version)"
+CFG_OUT=$("$CFG_BROKE/shell/ut-play" --version 2>&1 || true)
+case "$CFG_OUT" in
+*"cannot read the shipped defaults"*) CFG_HIT=yes ;;
+*) CFG_HIT=no ;;
+esac
+report "…naming the file, not an unbound variable" "yes" "$CFG_HIT"
+cp config "$CFG_BROKE/config"
+report "restoring the file restores --version" "0" "$(rc "$CFG_BROKE/shell/ut-play" --version)"
+rm -rf "$CFGD"
+
 if [ "$OFFLINE" = 1 ]; then
     echo
     echo "── the live half: SKIPPED (--offline) ─────────────────────────────"
@@ -756,6 +859,39 @@ fi
 # A call keeps its own invocation when its ARGV differs (-j and -J are two envelopes, not two
 # questions about one), when its ENVIRONMENT differs (the proxy checks), or when its INPUT
 # differs (a second query, chosen for content the first one does not have).
+
+echo "── the config file, on a real fetch ───────────────────────────────"
+# THE TWO CLAIMS THAT ONLY A REAL FETCH CAN SETTLE. Everything about the config file in the
+# offline half is about parsing and refusal; these two are about the values actually reaching
+# the code that spends requests, and the observable is the row count in a real envelope.
+#
+# Both are stated over EVERY discovered engine, because the whole point of these two keys is
+# that they are cross-engine: a check driving one of them would be green while the other
+# ignored the ceiling entirely. Two round trips per engine, which is why they live here.
+CFGL=$(mktemp -d "${TMPDIR:-/tmp}/uting-cfglive.XXXXXX")
+
+# The ceiling. -n asks for 20 and the file caps at 3, so an engine that honours it returns at
+# most 3 — and one that does not returns up to 20. That gap IS the check: before this key,
+# bili-search capped at ten pages and yt-search was bounded only by what the site stopped
+# sending, so "unclamped" is a real implementation, not a strawman.
+printf 'UT_MAX_SEARCH_RESULTS=3\n' > "$CFGL/config"
+for n in $ENGINES; do
+    report "$n-search honours the row ceiling" "true" \
+        "$(UT_CONFIG="$CFGL/config" shell/"$n"-search -j -n 20 -- lofi 2>/dev/null \
+           | jq -r '(.results | length) <= 3' 2>/dev/null)"
+done
+
+# The shared default really is shared. No -n at all, so the count comes from
+# UT_SEARCH_RESULTS in the config — and this is the check that would have caught the drift
+# the centralisation was for: an engine still carrying its own inlined 25 answers with more
+# than 4 here.
+printf 'UT_SEARCH_RESULTS=4\n' > "$CFGL/config"
+for n in $ENGINES; do
+    report "$n-search takes -n from the config" "true" \
+        "$(UT_CONFIG="$CFGL/config" shell/"$n"-search -j -- lofi 2>/dev/null \
+           | jq -r '(.results | length) <= 4' 2>/dev/null)"
+done
+rm -rf "$CFGL"
 
 echo "── search envelope ────────────────────────────────────────────────"
 # One live search, four claims — and the parity check further down reuses this same
@@ -787,7 +923,7 @@ report "resolve -j envelope" 0 \
 report "resolve -j is one line" 1 "$(lines "$YT_R")"
 echo "── the player's engine seam ───────────────────────────────────────"
 # A well-formed id that resolves to nothing is a PROPAGATED tool failure (2+), not usage,
-# and it must still say why. This is the semantic B-2 bought by moving the shape check down.
+# and it must still say why — the semantics the shape check sitting in the engine buys.
 # One resolve attempt answers both: the exit code and the envelope come off the same run,
 # which is also the only way they are guaranteed to be describing the same failure.
 DEAD=$(shell/ut-play -j -- AAAAAAAAAAA 2>/dev/null); DEAD_ST=$?
@@ -873,6 +1009,19 @@ report "bili duration is seconds" 0 \
                | length>0
                and all(type=="number" or type=="null")
                and any(type=="number")' "$BILI_S")"
+# The site filters duration itself, in four coarse buckets, and a -m/-M window that fits
+# inside ONE of them is pushed down — the only lever there is on a 20-per-page endpoint with
+# no page-size knob. `-M 600` fits bucket 1 exactly and `-M 601` fits nothing, which makes
+# this the discriminating input rather than a restatement of the bounds: measured 2026-08-26
+# on one request each, the pushed-down form returned 20 usable rows and the local-only form
+# returned 1. An engine that stops sending `duration` — a renamed parameter, a bucket
+# mis-mapped, the plan computed after the first page — passes every other check in this file
+# and quietly hands back a handful of rows where -n asked for twenty. The bound itself is
+# asserted with it, because the buckets are COARSE and pushing one down must never widen the
+# answer: 600 is the ceiling the caller named, not the ten minutes the site understood.
+report "bili pushes -M to the site" 0 \
+    "$(jq_ok '.count >= 15 and ([.results[].duration] | all(. == null or . < 600))' \
+        shell/bili-search -j -n 20 -M 600 -- 周杰伦)"
 # Titles arrive as search-result HTML (<em class="keyword">) and entity-escaped. Markup that
 # survives into a title is counted by the width layer, which reflows every row wrongly.
 report "bili titles carry no markup" 0 \

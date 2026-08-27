@@ -43,6 +43,51 @@ if [[ -r "$SCRIPT_DIR/../VERSION" ]]; then
 else
     UT_VERSION="unknown"
 fi
+
+# CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
+# in `<checkout>/config`, which is where every default value in the suite is declared once.
+# Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
+# AS-BUILT-contract.md §5 for the keys.
+UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
+UT_DEFAULTS="$SCRIPT_DIR/../config"
+ut_read_config() {
+    local file="$1" line key val
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        while [[ "$line" == [[:space:]]* ]]; do line="${line#[[:space:]]}"; done
+        while [[ "$line" == *[[:space:]] ]]; do line="${line%[[:space:]]}"; done
+        [[ -n "$line" && "$line" == *=* ]] || continue
+        key="${line%%=*}"
+        val="${line#*=}"
+        while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
+        while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
+        [[ "$key" =~ ^(UT|YT|BILI)_[A-Z0-9_]+$ ]] || continue
+        case "$key" in
+        UT_CONFIG | UT_DEFAULTS | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        esac
+        if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
+            val="${val#?}"
+            val="${val%?}"
+        fi
+        [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"
+        eval "[[ -n \"\${$key+x}\" ]]" && continue
+        eval "$key=\$val"
+    done < "$file"
+}
+# FAIL FAST AND SAY WHY. There is deliberately no escape hatch for --version or --help: they
+# were tried, and letting execution continue past a missing defaults file replaced this one
+# clear line with `YT_ASCII_VO: unbound variable` from set -u somewhere further down. A
+# checkout missing part of itself is not a dependency gate (yt-dlp, jq and mpv still answer
+# --version without being installed) — it is a broken checkout, and 2 is the exit code for a
+# failure that is not the caller's usage error.
+if [[ ! -r "$UT_DEFAULTS" ]]; then
+    printf '%s: cannot read the shipped defaults at %s — that file declares every default value in the suite and is not optional\n' \
+        "$(basename "$0")" "$UT_DEFAULTS" >&2
+    exit 2
+fi
+ut_read_config "$UT_CONFIG"
+ut_read_config "$UT_DEFAULTS"
 if [[ -x "$SCRIPT_DIR/ut-play" ]]; then
     UT_PLAY="$SCRIPT_DIR/ut-play"
 elif command -v ut-play >/dev/null 2>&1; then
@@ -181,7 +226,6 @@ refresh_engine_auth() {
 
 # Which engine this session starts on. The SAME variable ut-play reads, not a second one:
 # a user who set a default source once should not have to set it again per surface.
-: "${UT_DEFAULT_ENGINE:=yt}"
 ENGINE="$UT_DEFAULT_ENGINE"
 engine_seen "$ENGINE" || ENGINE="${ENGINES[0]}"
 ENGINE_SEARCH=""
@@ -254,6 +298,10 @@ Keys (Now Playing card):
   Space    pause / resume               s    stop playback     q  quit
 
 Environment:
+  Defaults for every knob below live in <checkout>/config, declared once for the whole
+  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
+  per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
+  config > the shipped defaults. See AS-BUILT-contract.md §5.
   YT_ASCII=1       Use ASCII glyphs (♫ ● ○ ❯ · ▶ ❚❚ • … → — arrows → ASCII) for
                    terminals whose font can't draw them. Auto-on for non-UTF-8 locales.
                    Shared with the rest of the suite. Legacy alias: YT_TUI_ASCII.
@@ -295,23 +343,39 @@ is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
 # Parse: search-shaping flags forwarded to <engine>-search (and captured for status line);
 # -f/-p/--color are menu-local. The rest is query. Reject anything else.
 SEARCH_ARGS=()
-RESULT_N=20          # fetch count; -n overrides. Runtime-mutable: m adds 20 (more_results).
-                     # 20, not 25: Bilibili's endpoint pages at 20 with no page-size knob
-                     # (bili-search PAGE_SIZE), so 20 keeps the first fetch — and every
-                     # +20 re-fetch — an exact page count instead of paying a second
-                     # request for 5 rows.
-PLAY_MODE="audio"        # -f flag overrides. Runtime-mutable: v key rotates it (cycle_mode).
-MODE_CYCLE=(audio video fast)  # order the v key steps through
-PLAY_VOLUME=""           # --volume flag overrides
+# THE FETCH BATCH — the first fetch's row count AND the increment m / → adds. One knob, not
+# two: they were the same 20 for the same reason, so a user who wants bigger bites should not
+# have to say it twice. 20 because Bilibili's endpoint pages at 20 with no page-size knob
+# (bili-search PAGE_SIZE), so it keeps the first fetch — and every re-fetch — an exact page
+# count. Cross-engine: this is the TUI's appetite, not a site's page size. Separate from
+# UT_SEARCH_RESULTS even though that is 20 too: that one is a TOTAL an engine returns
+# once, this one is the STEP m adds each press, so widening one must not widen the
+# other. AS-BUILT-contract.md §5.
+RESULT_N=$UT_FETCH_BATCH  # fetch count; -n overrides. Runtime-mutable: m adds one batch.
+# The order the v key steps through. Space- or comma-separated; a user who never wants video
+# drops it here rather than pressing past it every session.
+IFS=' ,' read -r -a MODE_CYCLE <<<"$UT_MODE_CYCLE"
+# The -f default, one value shared with ut-play and both resolve halves.
+PLAY_MODE="$UT_PLAY_MODE" # -f flag overrides. Runtime-mutable: v key rotates it (cycle_mode).
+PLAY_VOLUME="$UT_VOLUME"  # --volume flag overrides
 COLOR_MODE="auto"
 THEME="minimal"          # --theme / YT_THEME override: minimal | mono (palette family)
 BG_MODE="auto"           # YT_BG override: auto | light | dark (accent hue selection)
 BG="dark"
 [[ -n "${YT_THEME:-}" ]] && THEME="$YT_THEME"
 [[ -n "${YT_BG:-}" ]] && BG_MODE="$YT_BG"
-PAGE_OPT=10
-SORT_FIELD="relevance"   # -s flag overrides. Runtime-mutable: o key rotates it (cycle_sort).
-SORT_CYCLE=(relevance view_count duration)  # order the o key steps through
+# ROWS PER SCREEN PAGE — the display page, which is a different thing from both the fetch
+# batch above and bili-search's PAGE_SIZE (the remote API's own page, which is not a knob at
+# all). It is only a request: display_list_menu reflows it down against terminal height.
+PAGE_OPT=$UT_PAGE_ROWS
+# The order the o key steps through. Space- or comma-separated, like UT_MODE_CYCLE.
+IFS=' ,' read -r -a SORT_CYCLE <<<"$UT_SORT_CYCLE"
+# The -s default, one value shared with both search halves.
+SORT_FIELD="$UT_SORT_FIELD"   # -s flag overrides. Runtime-mutable: o rotates it (cycle_sort).
+# The order the t key steps through, defined here rather than beside cycle_theme so all three
+# cycles are built before the one block that validates them. Space- or comma-separated: a
+# user who wants two themes on the t key instead of seven says so once.
+IFS=' ,' read -r -a THEME_CYCLE <<<"$UT_THEME_CYCLE"
 MIN_DISP="0"
 MAX_DISP="0"
 query=()
@@ -366,8 +430,28 @@ while (($#)); do
     esac
 done
 
-is_uint "$PAGE_OPT" && ((PAGE_OPT > 0)) || die "-p must be a positive integer"
-is_uint "$RESULT_N" && ((RESULT_N > 0)) || die "-n must be a positive integer"
+is_uint "$PAGE_OPT" && ((PAGE_OPT > 0)) || die "-p must be a positive integer (UT_PAGE_ROWS)"
+is_uint "$RESULT_N" && ((RESULT_N > 0)) || die "-n must be a positive integer (UT_FETCH_BATCH)"
+
+# A CONFIG FILE FAILS LOUDLY OR IT FAILS SILENTLY, and silently is worse: a cycle emptied by
+# a typo would abort on the first keypress (an empty array expansion under set -u aborts on
+# bash 3.2), and an unknown member would put a mode the engines reject under the v key. Both
+# are cheap to catch here, once, naming the key the user actually wrote.
+validate_cycle() {
+    local key="$1" allowed="$2" m
+    shift 2
+    (($# > 0)) || die "$key must name at least one value (allowed: $allowed)"
+    for m in "$@"; do
+        case " $allowed " in
+        *" $m "*) : ;;
+        *) die "$key: unknown value '$m' (allowed: $allowed)" ;;
+        esac
+    done
+}
+validate_cycle UT_MODE_CYCLE "audio video fast" ${MODE_CYCLE[@]+"${MODE_CYCLE[@]}"}
+validate_cycle UT_SORT_CYCLE "relevance view_count duration" ${SORT_CYCLE[@]+"${SORT_CYCLE[@]}"}
+validate_cycle UT_THEME_CYCLE "minimal catppuccin tokyonight nord gruvbox onedark mono" \
+    ${THEME_CYCLE[@]+"${THEME_CYCLE[@]}"}
 # Duration bounds and volume are forwarded verbatim (-m/-M to yt-search, --volume to ut-play),
 # so the core would reject them anyway — but only at the first fetch or the first Enter, where
 # it reads as "search failed" / a play that silently does not start. Same three checks the core
@@ -375,7 +459,12 @@ is_uint "$RESULT_N" && ((RESULT_N > 0)) || die "-n must be a positive integer"
 is_uint "$MIN_DISP" || die "-m must be a non-negative integer"
 is_uint "$MAX_DISP" || die "-M must be a non-negative integer"
 ((MAX_DISP == 0 || MAX_DISP > MIN_DISP)) || die "-M must be greater than -m when both are set"
-case " ${SORT_CYCLE[*]} " in *" $SORT_FIELD "*) ;; *) die "-s must be one of: ${SORT_CYCLE[*]}" ;; esac
+# Validated against the CLOSED SET, not against SORT_CYCLE. The cycle is the order the o key
+# rotates through — a user narrowing it to one field is saying "stop showing me the others on
+# o", not "reject -s duration". Using the cycle as the validity domain was safe only while it
+# was a constant equal to the full set; the moment it became configurable it started rejecting
+# values the engines accept, and forced this file's -s default to differ from the engines'.
+case "$SORT_FIELD" in relevance | view_count | duration) ;; *) die "-s must be one of: relevance, view_count, duration" ;; esac
 # A mistyped engine is caught HERE, against what is actually installed, rather than at the
 # first fetch as "search failed". The message lists what there is, because the answer to
 # "which sources do I have" is not written down anywhere else.
@@ -386,7 +475,8 @@ refresh_engine_auth
 # Playback is DETACHED here (ut-play -d), and a detached player has no terminal, so the
 # terminal-rendering modes (ascii/viz) cannot work — the core rejects them for -d. Validate
 # up front instead of letting an Enter fail silently. Same list the v key cycles.
-case " ${MODE_CYCLE[*]} " in *" $PLAY_MODE "*) ;; *) die "-f must be one of: ${MODE_CYCLE[*]} (ascii/viz need a terminal, which detached playback has none of)" ;; esac
+# The closed set, for the same reason as -s above.
+case "$PLAY_MODE" in audio | video | fast) ;; *) die "-f must be one of: audio, video, fast (ascii/viz need a terminal, which detached playback has none of)" ;; esac
 case "$COLOR_MODE" in auto | always | never) ;; *) die "--color must be one of: auto, always, never" ;; esac
 case "$THEME" in minimal | mono | catppuccin | tokyonight | nord | gruvbox | onedark) ;; *) die "--theme must be one of: minimal, mono, catppuccin, tokyonight, nord, gruvbox, onedark" ;; esac
 case "$BG_MODE" in auto | light | dark) ;; *) die "YT_BG must be one of: auto, light, dark" ;; esac
@@ -654,7 +744,7 @@ cycle_ui_lang() {
 # used. Gated on COLORS_ON so --color never / NO_COLOR / non-TTY sessions cannot paint
 # the chrome mid-session. Order: minimal → catppuccin → tokyonight → nord → gruvbox →
 # onedark → mono → back.
-THEME_CYCLE=(minimal catppuccin tokyonight nord gruvbox onedark mono)
+# THEME_CYCLE is built in the settings block up top, with the other two cycles.
 cycle_theme() {
     ((COLORS_ON)) || return 0
     local i n=${#THEME_CYCLE[@]} cur=0
@@ -854,9 +944,9 @@ tty_echo_restore() {
 #    one never closes, and there `nc -U -w1` charges the full second per call — that is the
 #    case this shape actually rescues (3.12s -> 0.07s against a peer that never closes).
 #
-# The number: this used to claim ~1 s per round trip against any mpv, and it is wrong. It
-# was measured against a probe that never closes the connection; real mpv answers in
-# ~0.016 s. §25.1 keeps the correction.
+# The number: real mpv answers a round trip in ~0.016 s. A probe that never closes the
+# connection reads as ~1 s instead — that is the probe's number, not mpv's, and sizing this
+# path by it is how a redraw budget gets set sixty times too high.
 send_mpv_ipc() {
     # $1 is the command ARRAY body ("[\"cycle\",\"pause\"]"), not a finished object: this
     # function appends the request_id it then waits for, and the call sites lose a layer of
@@ -1769,7 +1859,7 @@ check_player_alive() {
     # non-empty, so clearing on an absent pid would blank a healthy player's chrome.
     [[ -n "$CURRENT_PLAY_PID" ]] || return 0
     # if-form, not `kill -0 … && return 0`: this file has shipped three set -e regressions
-    # already (§25.1), and an `if` is unambiguously safe where an AND-list is only safe by way
+    # already, and an `if` is unambiguously safe where an AND-list is only safe by way
     # of an exemption rule.
     if kill -0 "$CURRENT_PLAY_PID" 2>/dev/null; then
         return 0
@@ -2759,7 +2849,7 @@ press_any_key() {
 }
 
 # A failed play used to be silent: play_selected returned 1, the case arm's `|| true` swallowed
-# it (that guard is what stopped set -e from killing the TUI, §25.1 F2a), and Enter on an
+# it (that guard is what stops set -e from killing the TUI), and Enter on an
 # unplayable row did nothing and said nothing.
 #
 # The reason exists ONLY on the core's stderr. `die` writes prose there and exits 1 whatever -j
@@ -3420,7 +3510,7 @@ new_search() {
 more_results() {
     search_only || return 0
     local prev="$RESULT_N" rc=0 page="$page_index" sel="$selected"
-    RESULT_N=$(( RESULT_N + 20 ))
+    RESULT_N=$(( RESULT_N + UT_FETCH_BATCH ))
     printf '\n%s%s%s %s %s "%s" %s %s %s%s' \
         "$C_BOLD" "$S_MORE_ACT" "$C_RESET" "$GL_DASH" "$S_REFETCH" "$QUERY_LABEL" \
         "$GL_SEP" "$RESULT_N" "$S_RESULTS_N" "$GL_ELL"
@@ -3599,7 +3689,8 @@ filter_live() {
 # prefix applies to a simple command, and [[ is a reserved word, so bash tries to run the raw
 # byte as a command name and the test silently answers under the wrong collation), and a
 # ( LC_ALL=C … ) subshell would fork on every keypress and could not set a global anyway.
-# Verified on this machine's 3.2.57 (tmp/e-probe.sh): cw_range with an EMPTY prefix does build
+# Verified on this machine's 3.2.57 by building the tables in a scratch script and asserting
+# every byte 0x00-0xFF falls in exactly one class: cw_range with an EMPTY prefix does build
 # lone 0x80-0xFF bytes, and the membership test compares bytes even though the haystack is
 # invalid UTF-8 — every lead byte C2-F4 lands in exactly one class, and continuation bytes,
 # 0xC1, 0xF5-0xFF and ASCII land in none.
@@ -3736,7 +3827,7 @@ read_nav_input() {
     # ONE clock, shared by every view that reads through this function (list, card, and the
     # live filter, which drives the same reader). It used to be card-only, which is why the
     # list could not carry a live element at all: two timers would also be two places to
-    # change the cadence, and they drift (§25.1's F7 shape).
+    # change the cadence, and they drift.
     #
     # The gate is not WHICH view is up but whether anything on screen can change without a
     # keypress — that is playback, so it is one condition in one place. Consequences both

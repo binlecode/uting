@@ -216,25 +216,24 @@
 
 **`--` 停掉的是标志解析，不是参数校验。** 每个动词都在它自己的 `--` 排空循环里
 **重新施加**一次它的位置参数检查，因为那项检查就是这个动词存在的全部意义。这一课是付过学费的：
-`yt-play -- "some query"` 曾经绕过了 `yt-play "some query"` 会给出的那个"这不是一个 URL"的拒绝，
-一路走到 core，跑了一次**搜索** —— 印出一份散文列表，或者在 `-j` 下印出一整个搜索信封，
-而这个动词的契约说的是它播放 URL。一个只守着不带 `--` 的那种拼法的门，不是门。
-这条规则活得比教出它的那个 wrapper 更久：`ut-play` 对 `--` 之后的任何东西施加空白测试，
+一个把"这不是一个 URL"的拒绝只写在**不带** `--` 那条路径上的门，会让 `-- "some query"`
+从它旁边走过去 —— 一路走到动作，跑成一次**搜索**、印出一份散文列表或者在 `-j` 下印出
+一整个搜索信封，而这个动词的契约说的是它播放 URL。**一个只守着一种拼法的门，不是门。**
+所以 `ut-play` 对 `--` 之后的任何东西施加空白测试，
 而 `<engine>-search` 对它之后的每一个 token 施加 `reject_url`。
 
-**为什么门不再是一个层了（D7，已退役）。** 老模型是一个 core 加两个 wrapper，
-而门就是 wrapper 存在的理由：core 实现了一个宽的多态命令面（`yt "query"` 搜索、`yt <url>` 播放），
-wrapper 的活是保证调用方到达的是哪一半。一旦搜索搬去了 `<engine>-search`、
-抽取搬去了 `<engine>-resolve`，播放器就只剩下恰好一个动词 ——
-没有别的操作可供一次绕过去够到，也就没剩下什么好让一个层去守。
-那个 wrapper 贡献过的、值得留下来的东西是它的**错误文本**，而它的那些门臂正是它变成的东西（§1.1）。
+**为什么门不是一个层（D7）。** 一个 core 加几个 wrapper 的模型里，门就是 wrapper 存在的理由：
+core 实现一个宽的多态命令面（一个词是搜索、一个 URL 是播放），wrapper 的活是保证调用方
+到达的是哪一半。搜索归 `<engine>-search`、抽取归 `<engine>-resolve` 之后，
+播放器只剩下恰好一个动词 —— 没有别的操作可供一次绕过去够到，也就没剩下什么好让一个层去守。
+留下来的是那些**错误文本**：它们如今是这个动词自己的门臂（§1.1）。
 
 **为什么 `uting` 组合这些动词，而从不碰它们的内部（D8）。** `fetch_json` 解析搜索信封，
 而 `<engine>-search` 的 URL 拒绝正是让"`-j` = 搜索信封"这件事无条件成立的东西 ——
 一个粘进 TUI 的 `n`（新搜索）提示里的 URL，除了变成一次被拒绝的搜索之外不能变成任何东西。
 TUI 还**显式**传 `--engine`，**取自信封自己的 `engine` 字段**，从不让 `ut-play` 的默认值来决定：
 装了两个引擎时，那个默认值会把第二个引擎的 URL 送给第一个引擎的 resolver，
-而自 ROADMAP D12 起那是一个硬用法错误，不再是从前那种悄无声息的贴错标签。
+而按 ROADMAP D12 那是一个硬用法错误，不是一次悄无声息的贴错标签。
 D8 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md §9.3），
 播放器把它的路径发布在 `-d -j` 信封里，正是为了让一个客户端可以用它。
 
@@ -279,8 +278,8 @@ D8 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md §9.3），
 
 - **`stream_urls` 是一个数组，视频在前。** 单流时一个元素；引擎的格式把一条纯视频轨与一条纯音频轨
   合并时是两个，此时第 1 个元素是音频。播放器用 mpv 的 `--audio-file` 把它们接起来 ——
-  那正是 `ytdl_hook` 从前免费做掉的 EDL 合成（AS-BUILT-player.md §8.1）。
-- **`http_headers` 是必需键**，可以是 `{}`。它堵上了老的 `--get-url` 留下的那个洞：
+  那正是 mpv 的 `ytdl_hook` 会用一份合成 EDL 顺手做掉的事（AS-BUILT-player.md §8.1）。
+- **`http_headers` 是必需键**，可以是 `{}`。它堵上了"只交一个流 URL"留下的那个洞：
   在一个检查 `Referer` 或钉死 `User-Agent` 的 host 上，一个光秃秃的流 URL 不足以取到东西，
   而播放器无从把它们发明出来。一个引擎**不得**在这里返回凭据头 ——
   播放器把这些放在 mpv 的 argv 上，那是 `ps` 读得到的地方。
@@ -330,7 +329,7 @@ stopped_by_user | unknown | null(ok)`。**`network` 除了连通性之外也涵�
 YouTube 的限流器），但播放与搜索一直都够得到它，只是报成 `unknown` ——
 那个调用方唯一无法据以行动的 reason。
 
-**枚举是那个共享的事实；分类器不是。** 自 B-2 起它有三个读者，而它们刻意住在不同的文件里：
+**枚举是那个共享的事实；分类器不是。** 它有三个读者，而它们刻意住在不同的文件里：
 `yt-search` 与 `yt-resolve` 各自带一个懂 extractor 措辞的 `classify_yt_dlp_error`
 （*video unavailable*、*requested format*、*sign in to confirm*），
 而 `ut-play` 带一个小得多的、只懂 mpv 的 `classify_playback_error` —— 传输失败与 rc 130。
@@ -456,7 +455,7 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
    --stop   : {status:"stopped", id, stopped:bool}   （单一目标）
             | {status:"stopped", scope:"all", stopped:bool}   （--all）
             | {status:"ambiguous", …}                （2 个以上播放器且没有 --id；退出 4）
-   （--get-url 在 B-3 退役了：解析出一个流 URL 正是一次裸的 `yt-resolve` 调用**本身**，
+   （播放器**没有** --get-url：解析出一个流 URL 正是一次裸的 `yt-resolve` 调用**本身**，
     而播放器再发布一个它的拼法，就是一份契约有了两个名字。
     下面的 --info / --transcript 是 `yt-resolve` 的动词 —— 播放器不转发它们。）
    --info   : {status,engine,id,title,url,channel,uploader,upload_date,duration,duration_fmt,
@@ -611,8 +610,64 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
 
 ## 5. 配置面
 
-按次的选择是标志；一次设定的调校是环境变量 —— 刻意留在标志之外，
+按次的选择是标志；一次设定的调校是环境变量或**配置文件** —— 刻意留在标志之外，
 好让每个动词的标志面保持窄。
+
+**两个文件，四层，一条链：**
+
+```
+   标志（每次调用）  >  环境变量  >  用户的配置  >  出厂默认值文件
+```
+
+**出厂默认值住在 `<checkout>/config`** —— 每个入口点从自己**解析后**位置的上一级读它，
+和上面读 `VERSION` 同一个机制、同一个理由。**套件里每一个默认值都在那里声明，一次，
+供八个入口点共用。** 在它之前，每个默认值是各脚本内联的 `: "${KEY:=值}"`，
+于是一个跨引擎的值（`UT_MAX_SEARCH_RESULTS`）要写两遍、可以各自漂移而没有东西会发现 ——
+这次搬迁当场就抓出了两处：`UT_PLAY_MODE` 在四个脚本里不一致、`UT_SORT_FIELD` 在三个里不一致
+（根因是 `uting` 拿**轮换顺序**当**合法值域**用，见 §1.4）。
+
+所以这个文件**不是可选的**：缺了它的 checkout 是坏的，并且会这么说 —— 一行话，退 **2**。
+**没有给 `--version` / `--help` 留后门**，那条路试过：放行之后 `set -u` 会在一百行之后
+报一句 `YT_ASCII_VO: unbound variable`，把一句清楚的话换成一句不清楚的。
+一个缺了自己一部分的 checkout 不是**依赖门** —— yt-dlp / jq / mpv 没装时 `--version`
+照样答 —— 它是坏 checkout。
+
+**用户自己的文件是 `${XDG_CONFIG_HOME:-~/.config}/uting/config`**，没有扩展名，
+和 `yt-dlp` 自己的 `~/.config/yt-dlp/config` 同一个拼法：格式是平的 `KEY=value`，
+一个 `.toml`/`.yml` 会承诺这个套件加不了解析器（那是一条运行时依赖）的结构。
+它被**先**读，所以它压过出厂默认值。`UT_CONFIG` 换掉这个路径，而且**只能从环境**来 ——
+一个文件不能搬动自己，两个测试套件正是靠它从不去读用户真实的配置。
+两个文件都**没有任何命令会写** —— 套件不持久化配置。
+
+**格式与安全边界**：`KEY=value`，一行一个，`#` 到行尾是注释，一对匹配的引号会被剥掉，
+开头的 `~/` 展开成 `$HOME`。这个文件是**当数据读的，绝不 source** ——
+一个会被执行的配置文件可以运行任何东西，而这个套件的整个安全故事就是它的输入是数据；
+`eval` 从一个变量赋值，从不从那一行赋值，所以 `UT_X=$(cmd)` 存下的就是那九个字符。
+**只有套件自己的命名空间可设**（`UT_` / `YT_` / `BILI_`，正则 `^(UT|YT|BILI)_[A-Z0-9_]+$`），
+于是一个文件永远够不到 `PATH`、`TMPDIR` 或 `LD_PRELOAD`；而播放器为自己 detached 子进程
+设的那四个**在允许的命名空间之内被拒**（见本节末），因为一个文件级的 `YT_IPC_SOCK`
+会把每一个播放器都指向同一个 socket。载入块在**八个入口点里逐字重复**，
+和 `VERSION` 读法一样：逐字节的副本可以 grep 出漂移，而一个 source 进来的文件
+会把 `VERSION` 数据文件存在所要理正的依赖方向反过来。
+
+**三个旋钮刻意不在出厂文件里，因为它们的"未设置"本身就是一次自动探测** ——
+在文件里给它一个值，和用户自己设了它无从区分，于是恰好废掉了作为其默认值的那次探测：
+
+```
+   YT_LANG        未设置 = zh* locale 下 zh，否则英文
+   YT_ASCII       未设置 = 非 UTF-8 locale 下自动开，且它经由遗留别名 YT_TUI_ASCII
+                  回落 —— 文件里的一个值会让那条别名永远到不了
+   UT_STATE_DIR   默认是 ${XDG_STATE_HOME:-$HOME/.local/state}/uting ——
+                  一条穿过另一个变量的链，平的 KEY=value 文件表达不了，
+                  而摊平成一个字面路径会悄悄丢掉本节承诺的 XDG 支持
+```
+
+这三个仍然内联（前两个在 `uting` / 各引擎，第三个在 `ut-playlist` / `ut-history`），
+要钉住就在自己的配置或环境里设。
+
+**按 SCOPE 分组，不按前缀分组。** `YT_` 前缀是历史遗留，**不**代表"只关 YouTube"：
+`YT_THEME`、`YT_LANG`、`YT_ASCII` 由 `uting` 与 `ut-play` 读，而这两个都不知道什么是来源。
+`config` 因此按作用域排（suite / player / tui / engine:yt / engine:bili）。
 
 ```
    标志（每次调用）：  -n -m -M -s -p -f -S -l -j -J -d -h -V --color --theme --engine
@@ -638,12 +693,49 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                         **ut-play 与 uting 都读**，刻意是同一个变量：
                         一个已经挑过一次默认来源的用户，不该每个面再挑一次。
                         名字不在时，uting 回落到第一个装上的引擎。
+                      UT_MAX_SEARCH_RESULTS （默认 200；0 = 不封顶）= 一条查询最多返回
+                        多少**行**。按行数而不是页数算，因为行才是信封里装的东西：
+                        `bili-search` 把它换算成一份翻页计划（那个端点每页 20，
+                        请求是那台主机上稀缺的那一样），`yt-search` 用它夹住自己的
+                        `ytsearchN`。200 正是 bili 从前固定花掉的那十页，所以实测出来的
+                        预算没变；yt 侧则是**新**多了一个上限（从前只由站点何时不再发决定）。
+                        它取代了 `bili-search` 从前的 `MAX_PAGES` —— 页数只可能是那一个
+                        引擎的，`yt-search` 根本没有翻页循环给一个页数去落。
+                      UT_SEARCH_RESULTS   （默认 20）= `<engine>-search` 的 `-n` 默认值。
+                      UT_SORT_FIELD       （默认 relevance）= `-s` 的默认值。
+                      UT_PLAY_MODE        （默认 audio）= `-f` 的默认值，播放器与两个
+                        resolve 半边共用一个值。
+                      UT_VOLUME           （默认空 = 不动 mpv 自己的）= `--volume` 默认值。
+                      UT_DEAD_KEEP        （默认 8）= 保留多少条已死播放器记录
+                        （另有一小时的时间上限）。与站点无关：播放器不知道来源。
+                      UT_PAGE_ROWS        （默认 10）= `uting` 每屏一页多少行，`-p` 的默认值。
+                        只是一个请求：display_list_menu 会按窗口高度把它往下 reflow。
+                        它与 `bili-search` 的 `PAGE_SIZE`（远端 API 自己的页，**不是**旋钮）
+                        和下面的 UT_FETCH_BATCH 是三件不同的事。
+                      UT_FETCH_BATCH      （默认 20）= `uting` 第一次抓多少行，**以及**
+                        `m` / `→` 每次追加多少行 —— 一个旋钮而不是两个，它们本来就是
+                        同一个 20 出于同一个理由：Bilibili 的端点每页 20 且没有页大小
+                        旋钮，于是 20 让每一次抓取都是整数页。它与 UT_SEARCH_RESULTS 同为
+                        20 却不是同一件事 —— 那个是引擎一次返回的**总数**，这个是 `m`
+                        每按一次追加的**步长**，放宽其中一个不该顺带放宽另一个。
+                      UT_MODE_CYCLE / UT_SORT_CYCLE / UT_THEME_CYCLE
+                        （默认 `audio video fast` / `relevance view_count duration` /
+                        `minimal catppuccin tokyonight nord gruvbox onedark mono`）
+                        = `v` / `o` / `t` 三个键各自轮换的**顺序**，空格或逗号分隔。
+                        **轮换顺序不是合法值域**：`-f` / `-s` 对着**封闭集**校验，
+                        不对着 cycle —— 一个把 cycle 收窄到一项的用户是在说"别再在 v 上
+                        给我看别的"，不是"拒绝 `-f audio`"。拿 cycle 当值域，只在它还是
+                        一个等于全集的常量时才安全；它一变成可配置，就开始拒绝引擎接受的
+                        值，并逼着 `uting` 的默认值与引擎的不一致（这次搬迁抓出的那个 bug）。
+                        一个空的 cycle 或一个不认识的成员**在启动时就退 1 并点名那个键**：
+                        空数组在 3.2 的 set -u 下会在第一次按键时中止，那离用户真正写下的
+                        那一行太远了。
                       YT_COOKIE_BROWSER   （默认 chrome = 登录开着；"none" = 只匿名）
                         —— 由每个**引擎**读，播放器从不读。变量名是**引擎名大写**加
                         `_COOKIE_BROWSER`（`YT_` / `BILI_` / …），与命令前缀同一条拼接规矩；
                         当前生效值靠 `<engine>-resolve --auth` 问出来（§3），
                         而不是靠调用方自己去读环境。
-                      YT_AUDIO_FORMAT (ba)  YT_VIDEO_FORMAT (bv*+ba/b)
+                      YT_AUDIO_FORMAT (ba/b)  YT_VIDEO_FORMAT (bv*+ba/b)
                       YT_VIDEO_FORMAT_FAST  —— **yt** 那张模式→格式表的值；它们跟那张表
                         住在一起，也就是住在 yt-resolve 里。别的引擎的那张表按 §6 的
                         前缀规矩拼自己的名字，不复用 YT_ 拼写。
@@ -652,6 +744,15 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                         —— bili 引擎自己的那组，与上面 yt 组逐一对应（bili-resolve 读）。
                       BILI_UA  BILI_BUVID  —— bili-search 的 HTTP 传输旋钮
                         （AS-BUILT-engine.md §7.1）。
+                      BILI_RETRY_PAUSE (1) —— 412 突发之后那**一次**重试前等几秒。
+                        刻意是引擎专属的：这个停顿是为**这台**主机的突发限流存在的，
+                        而这个文件是套件里唯一一处手搭 HTTP 请求的地方；`yt-search`
+                        走 yt-dlp，根本没有一条重试路径给一个共享旋钮去管。
+                      YT_SUB_LANG_CHAIN (en,zh-Hans,zh,ja) —— `--transcript` 的字幕语言
+                        优先链。**引擎专属，而且必须是**：`bili-resolve` 根本没有
+                        `--transcript`（它点名那个标志只为说这个站点没有字幕轨）。
+                        一个跨引擎的拼法会是一个半个套件必须忽略的旋钮，
+                        那比没有旋钮更糟 —— 调用方分不出是哪一半。
                       YT_ASCII_VO (tct)  YT_MPV_INPUT_CONF  —— 播放器侧的 mpv 旋钮。
                       YT_ASCII （1 = ASCII 字形回落；非 UTF-8 locale 下自动开；
                         由播放器与 uting 读 —— 遗留别名 YT_TUI_ASCII）。
@@ -668,6 +769,13 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                         $COLORFGBG → OSC 11 查询 → dark。Light = 该主题自己的浅色变体
                         （minimal 把青换成蓝）。
                       YT_SYNC (0|1|auto) = 同步重绘（DCS 1q/2q；auto：开，在 tmux 下关）。
+                      YT_ICON (note|phones) = 页眉那个两格图标槽里放哪个字形：
+                        `note` = ♫ U+266B（一格，补一个空格填满槽），
+                        `phones` = 🎧 U+1F3A7（East-Asian Wide，自己就占两格）。
+                        两个都量成 2，所以 wordmark 起始列一样、查询在同一个字符处省略。
+                        未设置 = 每次启动掷一次硬币；要一帧出两次一样就钉住它。
+                        `YT_ASCII=1` 整个丢掉这个槽，并压过这个旋钮。
+                        不认识的值退 1。只有 `uting` 读它。
                       YT_BRAND （=1：页眉 wordmark 用数学无衬线粗体，AS-BUILT-tui.md §11 字形一节；
                         opt-in，ASCII 模式压过它）。
                       YT_AMBIG_WIDE （=1：East-Asian Ambiguous 那批字形（· — • … 箭头 ─ ━

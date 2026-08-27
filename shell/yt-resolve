@@ -38,6 +38,51 @@ else
     UT_VERSION="unknown"
 fi
 
+# CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
+# in `<checkout>/config`, which is where every default value in the suite is declared once.
+# Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
+# AS-BUILT-contract.md §5 for the keys.
+UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
+UT_DEFAULTS="$SCRIPT_DIR/../config"
+ut_read_config() {
+    local file="$1" line key val
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        while [[ "$line" == [[:space:]]* ]]; do line="${line#[[:space:]]}"; done
+        while [[ "$line" == *[[:space:]] ]]; do line="${line%[[:space:]]}"; done
+        [[ -n "$line" && "$line" == *=* ]] || continue
+        key="${line%%=*}"
+        val="${line#*=}"
+        while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
+        while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
+        [[ "$key" =~ ^(UT|YT|BILI)_[A-Z0-9_]+$ ]] || continue
+        case "$key" in
+        UT_CONFIG | UT_DEFAULTS | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        esac
+        if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
+            val="${val#?}"
+            val="${val%?}"
+        fi
+        [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"
+        eval "[[ -n \"\${$key+x}\" ]]" && continue
+        eval "$key=\$val"
+    done < "$file"
+}
+# FAIL FAST AND SAY WHY. There is deliberately no escape hatch for --version or --help: they
+# were tried, and letting execution continue past a missing defaults file replaced this one
+# clear line with `YT_ASCII_VO: unbound variable` from set -u somewhere further down. A
+# checkout missing part of itself is not a dependency gate (yt-dlp, jq and mpv still answer
+# --version without being installed) — it is a broken checkout, and 2 is the exit code for a
+# failure that is not the caller's usage error.
+if [[ ! -r "$UT_DEFAULTS" ]]; then
+    printf '%s: cannot read the shipped defaults at %s — that file declares every default value in the suite and is not optional\n' \
+        "$(basename "$0")" "$UT_DEFAULTS" >&2
+    exit 2
+fi
+ut_read_config "$UT_CONFIG"
+ut_read_config "$UT_DEFAULTS"
+
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
 # executables carry. Name == prefix is deliberate: it lets `ut-play --engine yt` find
 # `yt-resolve` by string concatenation, with no name->command registry to keep in sync in
@@ -48,12 +93,8 @@ ENGINE_NAME="yt"
 # 1. SETTINGS
 # ==============================================================================
 
-: "${YT_COOKIE_BROWSER:=chrome}"
-: "${YT_AUDIO_FORMAT:=ba/b}"
 # Default to highest quality video+audio. This can start slower than progressive streams.
-: "${YT_VIDEO_FORMAT:=bv*+ba/b}"
 # Optional fast-start progressive format for interactive playback.
-: "${YT_VIDEO_FORMAT_FAST:=b[height<=720][ext=mp4]/b[height<=720]/b[ext=mp4]/b}"
 
 # Cookies (login) are ON by default (browser: chrome) so login-gated / members / age-
 # restricted videos — invisible to an anonymous client — resolve. Verify the browser
@@ -124,7 +165,8 @@ fi
 ANON_ARGS=(--extractor-args "youtube:player_client=android")
 
 ACTION="stream"      # stream | info | transcript | auth
-PLAYBACK_MODE="audio"
+# The `-f` default, cross-engine: a user who listens rather than watches says so once.
+PLAYBACK_MODE="$UT_PLAY_MODE"
 FORMAT_SORT=""
 FORMAT_FLAG=""       # which of -f / -S was actually given (gate: stream resolution only)
 COLOR_MODE="auto"
@@ -137,7 +179,12 @@ SUB_LANG=""
 # because the useful answer is "whatever this video actually has, in my order of
 # preference" — and yt-dlp can be asked for all of them in the one round trip it was
 # already making. English first, then Simplified/generic Chinese, then Japanese.
-SUB_LANG_CHAIN="en,zh-Hans,zh,ja"
+#
+# ENGINE-SPECIFIC, and it has to be: `bili-resolve` has no --transcript at all — it names the
+# flag only to say the site carries no caption track. A cross-engine spelling would be a knob
+# half the suite must ignore, which is worse than no knob because the caller cannot tell
+# which half. AS-BUILT-contract.md §5.
+SUB_LANG_CHAIN="$YT_SUB_LANG_CHAIN"
 
 # Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII): a
 # terminal whose font can't draw ♫ can't draw it in either surface, and a non-UTF-8 locale

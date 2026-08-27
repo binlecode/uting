@@ -100,6 +100,47 @@ a playlist with a fixed name. A downloader and channel subscriptions are unsched
 
 Nothing is vendored. Install yt-dlp and mpv however you normally would.
 
+## Configuration
+
+Every default value in the suite lives in one tracked file at the root of the checkout,
+`config`, declared once for all eight entry points. It is **not optional** — a checkout
+without it exits 2 and says so, rather than letting an unset variable surface 100 lines
+later.
+
+To change settings for yourself, don't edit that file. Write only the keys you want in
+`${XDG_CONFIG_HOME:-~/.config}/uting/config`:
+
+```sh
+mkdir -p ~/.config/uting
+cat >> ~/.config/uting/config <<'EOF'
+UT_DEFAULT_ENGINE=bili        # search Bilibili unless --engine says otherwise
+UT_MAX_SEARCH_RESULTS=400     # let one query fetch more rows
+YT_THEME=nord
+UT_THEME_CYCLE=nord minimal   # and only offer those two on the t key
+EOF
+```
+
+Four layers, and each one wins over the next:
+
+```
+flag (per call)  >  environment  >  your config  >  the shipped defaults
+```
+
+`KEY=value`, one per line, `#` to end of line is a comment, a leading `~/` expands.
+Extensionless and flat, the same spelling `yt-dlp` uses for `~/.config/yt-dlp/config` — a
+`.toml` or `.yml` would promise structure this suite cannot parse without taking a runtime
+dependency it refuses.
+
+Both files are **read as data, never sourced**, so `UT_X=$(cmd)` stores those characters
+instead of running anything, and only `UT_`/`YT_`/`BILI_` keys are read — no config can
+reach `PATH`, `TMPDIR` or `LD_PRELOAD`. Nothing in the suite ever writes either file.
+
+`UT_CONFIG` relocates your file, from the environment only. Three knobs are deliberately
+absent from the shipped defaults because their unset state *is* an auto-detection that a
+value would defeat: `YT_LANG` (zh under a zh\* locale), `YT_ASCII` (on under a non-UTF-8
+locale) and `UT_STATE_DIR` (its default chains through `XDG_STATE_HOME`). Set those in your
+own config or the environment. Every key is listed in `docs/AS-BUILT-contract.md` §5.
+
 ## Try it
 
 ```sh
@@ -185,7 +226,7 @@ one runs, or it is not claimed. Each file's header says what it proves; run eith
 |---|---|
 | `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the idle lifecycle verbs (including the queue verbs, where a
 payload this process cannot use is a usage error and a well-formed one with nothing playing is
-"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. ~57s and 185 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 144 of those checks in ~14s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
+"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. ~61s and 194 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 152 of those checks in ~13s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
 | `tests/playback.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, and zero orphan mpv at the end. It also owns the **live read** — the `--status` fields off a real mpv socket, `paused:false` distinguished from `paused:null`, and a really-running player whose socket is really removed degrading to nulls with volume off the record — because the peer has no stand-in and never will. It drives a **queue** end to end for the same reason — a mock engine would skip the
 resolve between two tracks, which is the thing most likely to break: `--queue` launches,
 `--enqueue` appends (six concurrent writers, no lost update), `--next` moves the position and

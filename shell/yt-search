@@ -43,6 +43,51 @@ else
     UT_VERSION="unknown"
 fi
 
+# CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
+# in `<checkout>/config`, which is where every default value in the suite is declared once.
+# Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
+# AS-BUILT-contract.md §5 for the keys.
+UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
+UT_DEFAULTS="$SCRIPT_DIR/../config"
+ut_read_config() {
+    local file="$1" line key val
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        while [[ "$line" == [[:space:]]* ]]; do line="${line#[[:space:]]}"; done
+        while [[ "$line" == *[[:space:]] ]]; do line="${line%[[:space:]]}"; done
+        [[ -n "$line" && "$line" == *=* ]] || continue
+        key="${line%%=*}"
+        val="${line#*=}"
+        while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
+        while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
+        [[ "$key" =~ ^(UT|YT|BILI)_[A-Z0-9_]+$ ]] || continue
+        case "$key" in
+        UT_CONFIG | UT_DEFAULTS | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        esac
+        if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
+            val="${val#?}"
+            val="${val%?}"
+        fi
+        [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"
+        eval "[[ -n \"\${$key+x}\" ]]" && continue
+        eval "$key=\$val"
+    done < "$file"
+}
+# FAIL FAST AND SAY WHY. There is deliberately no escape hatch for --version or --help: they
+# were tried, and letting execution continue past a missing defaults file replaced this one
+# clear line with `YT_ASCII_VO: unbound variable` from set -u somewhere further down. A
+# checkout missing part of itself is not a dependency gate (yt-dlp, jq and mpv still answer
+# --version without being installed) — it is a broken checkout, and 2 is the exit code for a
+# failure that is not the caller's usage error.
+if [[ ! -r "$UT_DEFAULTS" ]]; then
+    printf '%s: cannot read the shipped defaults at %s — that file declares every default value in the suite and is not optional\n' \
+        "$(basename "$0")" "$UT_DEFAULTS" >&2
+    exit 2
+fi
+ut_read_config "$UT_CONFIG"
+ut_read_config "$UT_DEFAULTS"
+
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
 # executables carry. Name == prefix is deliberate: it lets `ut-play --engine yt` find
 # `yt-resolve` by string concatenation, with no name->command registry to keep in sync in
@@ -53,7 +98,6 @@ ENGINE_NAME="yt"
 # 1. SETTINGS
 # ==============================================================================
 
-: "${YT_COOKIE_BROWSER:=chrome}"
 
 # Cookies (login) are ON by default (browser: chrome) so login-gated / members / age-
 # restricted videos — invisible to an anonymous client — are searchable. Verify the browser
@@ -119,10 +163,18 @@ if [[ -n "${YT_COOKIE_BROWSER:-}" && "$YT_COOKIE_BROWSER" != "none" ]]; then
     fi
 fi
 
-NUM_RESULTS=25
+# THE FETCH CEILING, in rows and cross-engine — see the same knob in bili-search for why it
+# is counted in rows rather than pages. Here it clamps the `ytsearchN` count: yt-dlp owns
+# YouTube's continuation paging, so this engine has no page loop of its own, and before this
+# knob a fat `-n` was bounded only by what the site would eventually stop sending.
+
+# The `-n` default. Cross-engine: a caller who wants a different result count by default
+# wants it from whichever source they asked. AS-BUILT-contract.md §5.
+NUM_RESULTS=$UT_SEARCH_RESULTS
 MIN_DURATION=0
 MAX_DURATION=0
-SORT_FIELD="relevance"
+# The `-s` default, cross-engine like `-n`.
+SORT_FIELD="$UT_SORT_FIELD"
 COLOR_MODE="auto"
 OUTPUT_MODE="list"
 QUERY=""
@@ -396,7 +448,7 @@ Usage:
   yt-search [options] <search query>
 
 Options:
-  -n NUM   Number of results to fetch (default: 25)
+  -n NUM   Number of results to fetch (default: 20)
   -m SEC   Minimum duration in seconds
   -M SEC   Maximum duration in seconds
   -s FIELD Sort field: relevance | view_count | duration (default: relevance)
@@ -538,6 +590,15 @@ fi
 
 if ! is_non_negative_int "$NUM_RESULTS"; then
     die "-n must be a non-negative integer"
+fi
+# The row ceiling is applied AFTER validation and BEFORE the ytsearchN string is built, so
+# one place decides how many rows a query may cost. Silent by design, exactly as the page
+# budget it replaces was: a caller asking for more than the ceiling gets the ceiling.
+if ((UT_MAX_SEARCH_RESULTS > 0 && NUM_RESULTS > UT_MAX_SEARCH_RESULTS)); then
+    NUM_RESULTS=$UT_MAX_SEARCH_RESULTS
+fi
+if ! is_non_negative_int "$UT_MAX_SEARCH_RESULTS"; then
+    die "UT_MAX_SEARCH_RESULTS must be a non-negative integer (0 = no ceiling)"
 fi
 if ! is_non_negative_int "$MIN_DURATION"; then
     die "-m must be a non-negative integer"

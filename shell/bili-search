@@ -48,6 +48,51 @@ else
     UT_VERSION="unknown"
 fi
 
+# CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
+# in `<checkout>/config`, which is where every default value in the suite is declared once.
+# Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
+# AS-BUILT-contract.md §5 for the keys.
+UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
+UT_DEFAULTS="$SCRIPT_DIR/../config"
+ut_read_config() {
+    local file="$1" line key val
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        while [[ "$line" == [[:space:]]* ]]; do line="${line#[[:space:]]}"; done
+        while [[ "$line" == *[[:space:]] ]]; do line="${line%[[:space:]]}"; done
+        [[ -n "$line" && "$line" == *=* ]] || continue
+        key="${line%%=*}"
+        val="${line#*=}"
+        while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
+        while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
+        [[ "$key" =~ ^(UT|YT|BILI)_[A-Z0-9_]+$ ]] || continue
+        case "$key" in
+        UT_CONFIG | UT_DEFAULTS | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        esac
+        if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
+            val="${val#?}"
+            val="${val%?}"
+        fi
+        [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"
+        eval "[[ -n \"\${$key+x}\" ]]" && continue
+        eval "$key=\$val"
+    done < "$file"
+}
+# FAIL FAST AND SAY WHY. There is deliberately no escape hatch for --version or --help: they
+# were tried, and letting execution continue past a missing defaults file replaced this one
+# clear line with `YT_ASCII_VO: unbound variable` from set -u somewhere further down. A
+# checkout missing part of itself is not a dependency gate (yt-dlp, jq and mpv still answer
+# --version without being installed) — it is a broken checkout, and 2 is the exit code for a
+# failure that is not the caller's usage error.
+if [[ ! -r "$UT_DEFAULTS" ]]; then
+    printf '%s: cannot read the shipped defaults at %s — that file declares every default value in the suite and is not optional\n' \
+        "$(basename "$0")" "$UT_DEFAULTS" >&2
+    exit 2
+fi
+ut_read_config "$UT_CONFIG"
+ut_read_config "$UT_DEFAULTS"
+
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
 # executables carry. Name == prefix is what lets `ut-play --engine bili` find `bili-resolve`
 # by string concatenation, with no name->command registry. docs/ARCHITECTURE.md §4.
@@ -68,7 +113,6 @@ BILI_REFERER="https://www.bilibili.com/"
 # has gone stale (yt-dlp carried a commit for exactly that), and a suite that cannot be
 # nudged without an edit would need a release to survive it. It must not contain `curl` or
 # `python`: those substrings are refused.
-: "${BILI_UA:=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36}"
 
 # A buvid3 is a DEVICE identifier, not a credential: no account, no token, nothing read
 # from a browser profile — this engine generates a random one and throws it away when the
@@ -92,20 +136,31 @@ BILI_BUVID="${BILI_BUVID:-}"
 # retry, once, converts that into a success without turning a failing search into a
 # hammering loop. Anything past this is the caller's to decide — it gets `network`, which
 # is the enum member that already means "retryable".
-RETRY_PAUSE=1
+#
+# ENGINE-SPECIFIC on purpose: this pause exists for THIS host's burst limiter, and this file
+# is the only place in the suite that builds an HTTP request by hand. `yt-search` shells out
+# to yt-dlp and has no retry path for a shared knob to govern. AS-BUILT-contract.md §5.
 
 # The server's page size, not ours: the endpoint returns 20 per page regardless of what we
 # ask. It is a constant here so `-n` can span pages without the caller knowing that.
 PAGE_SIZE=20
-# Ceiling on how many pages one `-n` may spend. Requests against this host are the scarce
-# resource (rate limiting has been observed at roughly 15 in a session), so a fat `-n` must
-# cost a bounded number of them rather than however many it asks for.
-MAX_PAGES=10
+# THE FETCH CEILING IS COUNTED IN ROWS, NOT PAGES — and it is CROSS-ENGINE. Requests
+# against this host are the scarce resource (rate limiting has been observed at roughly 15
+# in a session), so a fat `-n` must cost a bounded number of them rather than however many
+# it asks for. That budget used to be spelled as a page count, which could only ever be this
+# engine's: a page is 20 rows HERE, and `yt-search` has no page loop at all for a page count
+# to bind on. Rows are what the envelope contains, so a row ceiling is a promise both
+# engines can keep — this one converts it to a page plan below, `yt-search` clamps its
+# `ytsearchN`. The default is 200, which is exactly the ten pages this engine spent before,
+# so the measured budget is unchanged. AS-BUILT-contract.md §5.
 
-NUM_RESULTS=25
+# The `-n` default. Cross-engine: a caller who wants a different result count by default
+# wants it from whichever source they asked. AS-BUILT-contract.md §5.
+NUM_RESULTS=$UT_SEARCH_RESULTS
 MIN_DURATION=0
 MAX_DURATION=0
-SORT_FIELD="relevance"
+# The `-s` default, cross-engine like `-n`.
+SORT_FIELD="$UT_SORT_FIELD"
 COLOR_MODE="auto"
 OUTPUT_MODE="list"
 QUERY=""
@@ -234,18 +289,27 @@ def clean_title:
 # the shared fact and lives in AS-BUILT-contract.md §3 — no member may be added here that
 # it does not already have.
 #
-# TWO LAYERS, BOTH CHECKED. This host says "no" in two different places: an HTTP status,
-# and a `code` inside a body served with HTTP 200. Reading only the first reports a rate
-# limit as a success with zero results.
+# THREE LAYERS, ALL CHECKED. This host says "no" in three different places: an HTTP status,
+# a `code` inside a body served with HTTP 200, and — the quietest one — a body served with
+# HTTP 200 AND code:0 that carries a risk-control voucher instead of results. Reading only
+# the first reports a rate limit as a success with zero results; reading only the first two
+# reports a captcha challenge the same way.
 #
 # The rate-limit codes (-352, -412, and HTTP 412) land in `network`, not `forbidden` or
 # `unknown`: they are RETRYABLE, and `network` is the member that already means "try again
 # later" — the same call 429 gets in the yt-dlp-side classifiers. `forbidden` would tell a
 # caller these credentials never work, which is the wrong instruction.
 classify_http_error() {
-    local curl_rc=$1 http=$2 code=$3
+    local curl_rc=$1 http=$2 code=$3 risk=${4:-0}
     # curl never got an answer: DNS, connection refused, TLS, timeout. All transport.
     if ((curl_rc != 0)); then
+        echo "network"
+        return
+    fi
+    # A risk-control challenge (see fetch_page_once) is the same bursty limiter the 412 is,
+    # wearing a success's clothes — so it gets the same retryable member, and it is checked
+    # BEFORE the status/code tables because both of those read as "fine" here.
+    if ((risk)); then
         echo "network"
         return
     fi
@@ -311,12 +375,53 @@ ensure_buvid() {
     return 0
 }
 
-# One attempt. Sets PAGE_HTTP / PAGE_CODE / PAGE_CURL_RC and leaves the body on disk; the
-# caller decides whether the answer is worth a second try. Globals rather than a return
-# value because three of them travel together and bash 3.2 command substitution would strip
-# the file the fourth wrote.
+# WHAT THE SITE WILL FILTER FOR US, and why that is a request-count question rather than a
+# feature. The endpoint pages at 20 and has no page-size knob, so the only way to spend
+# fewer requests on a filtered search is to make each page's 20 rows ones the local pass
+# will keep. `duration` is the site's own filter and it is COARSE — four buckets: 1 under
+# 10 minutes, 2 for 10-30, 3 for 30-60, 4 over 60 (measured 2026-08-26: duration=1 returns
+# a full page whose every row is under 10 minutes).
+#
+# A bucket is chosen ONLY when every duration the local bounds would accept falls inside it
+# — a superset of the answer, never a narrower cut. That is the whole discipline here: a
+# bucket that clipped one accepted row would make the server filter change the ANSWER
+# instead of the cost, and the bucket edges (is exactly 600s bucket 1 or 2?) are not
+# something this engine can know. A window straddling two buckets — `-M 900`, the very
+# example in the help text — therefore gets 0 and no server help. The local bounds stay in
+# place either way: they are exact, and the bucket is not.
+DURATION_BUCKET=0
+duration_bucket() {
+    local lo=$1 hi=$2
+    if ((hi > 0 && hi <= 600)); then
+        echo 1
+    elif ((lo >= 600 && hi > 0 && hi <= 1800)); then
+        echo 2
+    elif ((lo >= 1800 && hi > 0 && hi <= 3600)); then
+        echo 3
+    elif ((lo >= 3600)); then
+        echo 4
+    else
+        echo 0
+    fi
+}
+
+# The site's `order`, for the one sort field it shares with us. `-s view_count` asks for the
+# most-played tracks, and asking the SITE for them (order=click) means the 20 rows that
+# arrive are the most-played of the whole result set rather than the 20 most relevant
+# re-ordered locally — a correctness gain at identical cost. `relevance` is the site's own
+# default (totalrank), so it sends nothing and the request stays byte-for-byte the measured
+# one. `-s duration` has NO server equivalent — this endpoint orders by click, pubdate,
+# danmaku, favourite and comment, and not by length — so it stays a local re-order of the
+# fetched set, which is the honest limit of a sort the site does not offer.
+ORDER_PARAM=""
+
+# One attempt. Sets PAGE_HTTP / PAGE_CODE / PAGE_RISK / PAGE_CURL_RC and leaves the body on
+# disk; the caller decides whether the answer is worth a second try. Globals rather than a
+# return value because four of them travel together and bash 3.2 command substitution would
+# strip the file the fifth wrote.
 PAGE_HTTP=""
 PAGE_CODE=""
+PAGE_RISK=0
 PAGE_CURL_RC=0
 fetch_page_once() {
     local page=$1 body=$2
@@ -331,15 +436,25 @@ fetch_page_once() {
         -H "User-Agent: $BILI_UA"
         -H "Referer: $BILI_REFERER"
     )
+    ((DURATION_BUCKET > 0)) && cmd+=(--data-urlencode "duration=$DURATION_BUCKET")
+    [[ -n "$ORDER_PARAM" ]] && cmd+=(--data-urlencode "order=$ORDER_PARAM")
     [[ -n "$BILI_BUVID" ]] && cmd+=(-H "Cookie: buvid3=$BILI_BUVID")
 
     PAGE_CURL_RC=0
     PAGE_HTTP=$("${cmd[@]}" 2>/dev/null) || PAGE_CURL_RC=$?
     PAGE_CODE=""
+    PAGE_RISK=0
     if [[ -s "$body" ]]; then
         PAGE_CODE=$(jq -r '.code // empty' "$body" 2>/dev/null) || PAGE_CODE=""
+        # The quiet refusal: HTTP 200, code:0, and a `data` holding a v_voucher — a captcha
+        # ticket — where the result array should be (measured 2026-08-26 against the wbi
+        # endpoint unsigned). Every layer above reads this as a search that found nothing,
+        # so it has to be caught HERE, where the body is still in front of us. Both halves
+        # are required: an exhausted page also omits `result`, and it is not a refusal.
+        jq -e '(.data.v_voucher // null) != null and (.data.result | type) != "array"' \
+            "$body" >/dev/null 2>&1 && PAGE_RISK=1
     fi
-    ((PAGE_CURL_RC == 0)) && [[ "$PAGE_HTTP" == "200" && "$PAGE_CODE" == "0" ]]
+    ((PAGE_CURL_RC == 0)) && ((PAGE_RISK == 0)) && [[ "$PAGE_HTTP" == "200" && "$PAGE_CODE" == "0" ]]
 }
 
 fetch_page() {
@@ -349,16 +464,16 @@ fetch_page() {
 
     if ! fetch_page_once "$page" "$body"; then
         local reason
-        reason=$(classify_http_error "$PAGE_CURL_RC" "$PAGE_HTTP" "$PAGE_CODE")
+        reason=$(classify_http_error "$PAGE_CURL_RC" "$PAGE_HTTP" "$PAGE_CODE" "$PAGE_RISK")
         # Only the retryable class earns a second attempt. A `forbidden` or `unavailable`
         # answer will say the same thing a second later, and asking again is just another
         # request against a host that counts them.
         if [[ "$reason" != "network" ]]; then
             search_fail "$reason"
         fi
-        sleep "$RETRY_PAUSE"
+        sleep "$BILI_RETRY_PAUSE"
         if ! fetch_page_once "$page" "$body"; then
-            search_fail "$(classify_http_error "$PAGE_CURL_RC" "$PAGE_HTTP" "$PAGE_CODE")"
+            search_fail "$(classify_http_error "$PAGE_CURL_RC" "$PAGE_HTTP" "$PAGE_CODE" "$PAGE_RISK")"
         fi
     fi
 
@@ -369,12 +484,22 @@ fetch_page() {
 fetch_results() {
     ensure_scratch
 
+    # Decide the request plan ONCE, before the first page: every page of one search asks the
+    # same question, and a filter that changed between pages would paginate two result sets.
+    DURATION_BUCKET=$(duration_bucket "$MIN_DURATION" "$MAX_DURATION")
+    case "$SORT_FIELD" in
+    view_count) ORDER_PARAM="click" ;;
+    esac
+
     # Pages are requested only while both the caller still wants rows and the site is still
-    # sending them: a short tail must not cost MAX_PAGES round trips against a host that
-    # rate-limits.
+    # sending them: a short tail must not cost the whole row budget in round trips against a
+    # host that rate-limits.
+    # The row ceiling is applied to `wanted` FIRST, and the page plan is derived from what
+    # survives it: PAGE_SIZE is the server's, so pages are an implementation detail of
+    # spending a row budget, never a number a caller states.
     local wanted=$NUM_RESULTS
+    ((UT_MAX_SEARCH_RESULTS > 0 && wanted > UT_MAX_SEARCH_RESULTS)) && wanted=$UT_MAX_SEARCH_RESULTS
     local pages=$(((wanted + PAGE_SIZE - 1) / PAGE_SIZE))
-    ((pages > MAX_PAGES)) && pages=$MAX_PAGES
 
     local all="$SCRATCH_DIR/all.json"
     echo '[]' >"$all"
@@ -390,8 +515,13 @@ fetch_results() {
         page=$((page + 1))
     done
 
-    # Sort is a client-side re-order of the fetched set; "relevance" keeps the site's own
-    # ranking — no re-sort. Numeric fields sort descending with unknown values last.
+    # The local pass is the EXACT half of a filter the site did coarsely, and it runs even
+    # when the site helped: `duration=1` means "under ten minutes", never "under $MAX_DURATION".
+    #
+    # Sort stays a client-side re-order of the fetched set even for view_count, which the
+    # site also ordered (ORDER_PARAM above): the field this engine PUBLISHES is `.play`, and
+    # the emitted rows must be that field descending with unknowns last, which is a promise
+    # only this pass can keep. "relevance" keeps the site's own ranking — no re-sort.
     # SORT_FIELD is validated at startup, so there is no unknown-field branch here.
     local sort_expr=""
     case "$SORT_FIELD" in
@@ -475,10 +605,14 @@ Usage:
   bili-search [options] <search query>
 
 Options:
-  -n NUM   Number of results to fetch (default: 25; the site pages at 20)
+  -n NUM   Number of results to fetch (default: 20 = exactly one of the site's pages)
   -m SEC   Minimum duration in seconds
   -M SEC   Maximum duration in seconds
+           A -m/-M window that fits inside one of the site's own 10 / 30 / 60-minute
+           buckets is filtered by the SITE, so a page's 20 rows arrive already short
+           instead of being fetched and discarded. The bounds are applied exactly either way
   -s FIELD Sort field: relevance | view_count | duration (default: relevance)
+           view_count asks the site for its most-played; duration re-orders what was fetched
   -l       Plain text list output (default)
   -j       JSON: {status, engine, query, count, results[]} — 8 lean fields per result
   -J       JSON with every field the site sent per result (same envelope)
@@ -499,11 +633,16 @@ yt-dlp.
 
 Note: this site's music results are dominated by multi-hour COLLECTIONS — the top hits for
 an artist name are routinely 50- to 100-track compilations. -M is the blunt instrument for
-excluding them (e.g. -M 900 for tracks under 15 minutes).
+excluding them (e.g. -M 900 for tracks under 15 minutes; -M 600 is the value the site can
+filter itself, so it comes back a full page of short tracks rather than 20 rows to discard).
 
 Exit codes: 0 ok · 1 usage/validation · 2 the site did not answer usefully (see .reason)
 
 Environment:
+  Defaults for every knob below live in <checkout>/config, declared once for the whole
+  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
+  per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
+  config > the shipped defaults. See AS-BUILT-contract.md §5.
   BILI_UA     User-Agent sent with the search request (a browser UA; must not contain
               "curl" or "python", which the site refuses)
   BILI_BUVID  Device id to send instead of a freshly generated one
@@ -626,6 +765,9 @@ fi
 
 if ! is_non_negative_int "$NUM_RESULTS"; then
     die "-n must be a non-negative integer"
+fi
+if ! is_non_negative_int "$UT_MAX_SEARCH_RESULTS"; then
+    die "UT_MAX_SEARCH_RESULTS must be a non-negative integer (0 = no ceiling)"
 fi
 if ! is_non_negative_int "$MIN_DURATION"; then
     die "-m must be a non-negative integer"

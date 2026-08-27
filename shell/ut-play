@@ -40,12 +40,88 @@ if [[ -r "$SCRIPT_DIR/../VERSION" ]]; then
 else
     UT_VERSION="unknown"
 fi
+
+# CONFIGURATION — TWO FILES, FOUR LAYERS. Set-once tuning arrives from a file as well as the
+# environment, because an agent invoking these commands never sources a shell profile, so a
+# knob that exists only as an export is a knob half the callers cannot set.
+#
+#   flag  >  environment  >  the user's config  >  the shipped defaults
+#
+# The shipped defaults are `<checkout>/config`, read from one level above this script's own
+# RESOLVED location — the same mechanism, and the same reason, as the VERSION read above.
+# That file is where every default value in the suite is declared, ONCE, for all eight entry
+# points. Before it existed each default was inlined per script, which meant a cross-engine
+# value like UT_MAX_SEARCH_RESULTS was written twice and could drift apart with nothing to
+# catch it. It is therefore NOT optional: a checkout without it is broken, and says so with
+# exit 2 rather than letting set -u abort somewhere further in. --version and --help still
+# answer, because those two must work on a broken checkout to be worth having.
+#
+# The user's own file is ${XDG_CONFIG_HOME:-~/.config}/uting/config — read FIRST, so it wins
+# over the shipped defaults; UT_CONFIG relocates it (environment only: a file cannot move
+# itself, and the two suites set it so they never read a real user's config). Both files are
+# optional to WRITE and neither is written by any command — nothing in the suite persists
+# configuration.
+#
+# `KEY=value`, one per line, `#` to end of line is a comment, one matching quote pair
+# stripped, a leading ~/ expanded. Deliberately NOT sourced as shell: a config file that is
+# executed can run anything, and this suite's safety story is that its inputs are DATA.
+# `eval` assigns from a variable, never from the line, so `UT_X=$(cmd)` stores those nine
+# characters. Only UT_/YT_/BILI_ keys are read, so no file can reach PATH, TMPDIR or
+# LD_PRELOAD; and the four the player sets for its own detached child are refused inside
+# those namespaces — a file-level YT_IPC_SOCK would aim every player at one socket.
+#
+# Two defaults stay inline and are named in `config`'s own header: UT_STATE_DIR (its default
+# chains through XDG_STATE_HOME, which a flat file cannot express) and YT_ASCII (it falls
+# back through the legacy alias YT_TUI_ASCII).
+#
+# The key list is AS-BUILT-contract.md §5. This block is duplicated VERBATIM in all eight
+# entry points: eight independent executables share no library, and a byte-for-byte copy is
+# greppable for drift where a sourced file would invert the dependency direction the VERSION
+# data file exists to keep straight.
+UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
+UT_DEFAULTS="$SCRIPT_DIR/../config"
+ut_read_config() {
+    local file="$1" line key val
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        while [[ "$line" == [[:space:]]* ]]; do line="${line#[[:space:]]}"; done
+        while [[ "$line" == *[[:space:]] ]]; do line="${line%[[:space:]]}"; done
+        [[ -n "$line" && "$line" == *=* ]] || continue
+        key="${line%%=*}"
+        val="${line#*=}"
+        while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
+        while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
+        [[ "$key" =~ ^(UT|YT|BILI)_[A-Z0-9_]+$ ]] || continue
+        case "$key" in
+        UT_CONFIG | UT_DEFAULTS | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        esac
+        if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
+            val="${val#?}"
+            val="${val%?}"
+        fi
+        [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"
+        eval "[[ -n \"\${$key+x}\" ]]" && continue
+        eval "$key=\$val"
+    done < "$file"
+}
+# FAIL FAST AND SAY WHY. There is deliberately no escape hatch for --version or --help: they
+# were tried, and letting execution continue past a missing defaults file replaced this one
+# clear line with `YT_ASCII_VO: unbound variable` from set -u somewhere further down. A
+# checkout missing part of itself is not a dependency gate (yt-dlp, jq and mpv still answer
+# --version without being installed) — it is a broken checkout, and 2 is the exit code for a
+# failure that is not the caller's usage error.
+if [[ ! -r "$UT_DEFAULTS" ]]; then
+    printf '%s: cannot read the shipped defaults at %s — that file declares every default value in the suite and is not optional\n' \
+        "$(basename "$0")" "$UT_DEFAULTS" >&2
+    exit 2
+fi
+ut_read_config "$UT_CONFIG"
+ut_read_config "$UT_DEFAULTS"
 # Path to this script, used to re-exec a detached playback child (see detach_play).
 SELF="${BASH_SOURCE[0]}"
 
-: "${YT_ASCII_VO:=tct}"
 # Optional custom mpv input.conf path; empty means use mpv defaults.
-: "${YT_MPV_INPUT_CONF:=}"
 
 # WHICH ENGINE turns a handle into bytes. An engine is a PAIR of executables sharing a name
 # prefix (`<engine>-search`, `<engine>-resolve`); the player calls only the resolve half,
@@ -53,7 +129,6 @@ SELF="${BASH_SOURCE[0]}"
 # format string looks like. Name == command prefix is what keeps the lookup a string
 # concatenation instead of a registry the player and the TUI would both have to hold.
 # Per-call override: --engine. AS-BUILT-contract.md §1.1
-: "${UT_DEFAULT_ENGINE:=yt}"
 
 # THE LISTENING LOG, on by default; `UT_HISTORY=0` turns it off. A history that ships off is
 # not a history — nobody finds the knob that has to be found before the feature has ever
@@ -62,7 +137,6 @@ SELF="${BASH_SOURCE[0]}"
 # account, where "what this login listened to" stops being one person's record.
 # The writing happens here (the child is the only process that knows a track ended and why);
 # the storing is ut-history's, called by name like an engine. AS-BUILT-contract.md §5
-: "${UT_HISTORY:=1}"
 
 YT_MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar --no-video)
 # Keep video output auto-selected by mpv for compatibility across terminals/displays.
@@ -189,6 +263,10 @@ Dependencies: mpv (playback) + jq; nc (every socket verb: --set-volume, --pause,
               player's — see 'yt-resolve -h' for those.
 
 Environment:
+  Defaults for every knob below live in <checkout>/config, declared once for the whole
+  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
+  per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
+  config > the shipped defaults. See AS-BUILT-contract.md §5.
   UT_DEFAULT_ENGINE    Engine used when --engine is not given (default: yt)
   UT_HISTORY           0 stops a detached player writing to the listening log (default: on)
   YT_ASCII_VO          mpv terminal video output driver (default: tct)
@@ -1655,8 +1733,9 @@ record_player_death() {
 # Two bounds, both enforced on disk rather than at render time, so the directory cannot grow
 # into a history nobody asked for: nothing older than an hour, and never more than 8 records.
 # `find -mmin` is stock on macOS and Linux alike; the count cap reuses jq's sort so "oldest"
-# means the same thing here as it does in the output.
-DEAD_KEEP=8
+# means the same thing here as it does in the output. Cross-engine — the player is
+# source-agnostic, so nothing about this number belongs to a site.
+DEAD_KEEP=$UT_DEAD_KEEP
 prune_dead_players() {
     local dead="$PLAYERS_DIR/dead" files=() extra x
     [[ -d "$dead" ]] || return 0
@@ -2069,9 +2148,11 @@ do_next() {
 # 5. CLI OPTIONS PARSING & VALIDATION
 # ==============================================================================
 
-PLAYBACK_MODE="audio"
+# The `-f` and `--volume` defaults, both cross-engine: set-once choices about how this user
+# listens, not about where the bytes came from. AS-BUILT-contract.md §5.
+PLAYBACK_MODE="$UT_PLAY_MODE"
 FORMAT_SORT=""
-VOLUME=""
+VOLUME="$UT_VOLUME"
 COLOR_MODE="auto"
 # Default output is prose; -j/-J select a machine envelope.
 OUTPUT_MODE="list"
@@ -2459,7 +2540,7 @@ if [[ "$PLAYBACK_MODE" == "ascii" ]]; then
 fi
 
 # =-----------------------------------------------------------------------------
-# ROUTING: play a handle. Search left for yt-search (B-1); extraction for yt-resolve (B-2).
+# ROUTING: play a handle. Search lives in yt-search; extraction in yt-resolve.
 # =-----------------------------------------------------------------------------
 if ((IS_HANDLE)); then
     if ((DETACH)); then

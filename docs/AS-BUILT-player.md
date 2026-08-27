@@ -43,21 +43,22 @@
 `stream_urls[0]`（合并格式时再带一个 `--audio-file=<stream_urls[1]>`），以及 detached 专有的
 `--no-term-osd-bar --msg-level=all=error`（把日志钉在有界大小）。
 
-**`--no-ytdl`，以及 `ytdl_hook` 曾经免费替我们做的三件事。** mpv 拿到的是直链，自己不做任何抽取
-（ARCHITECTURE.md §6.1）。那个 hook 隐式做的三件事如今各自显式地来自解析信封的一个字段：
+**`--no-ytdl`，以及 mpv 的 `ytdl_hook` 会顺手替我们做的三件事。** mpv 拿到的是直链，
+自己不做任何抽取（ARCHITECTURE.md §6.1）。那个 hook 隐式做的三件事，
+这里各自显式地来自解析信封的一个字段：
 
 - **请求头** —— `--http-header-fields-append` 重复给，而不是一个逗号拼起来的
   `--http-header-fields`：后者是一个**列表**选项，一个值里带逗号的头会被劈成两个坏头。
 - **媒体标题** —— `--force-media-title`，否则 OSD 上显示的是一条 googlevideo 路径。
-- **视频+音频配对** —— `--audio-file`，mpv 原生的合流方式；hook 当年是合成一份 EDL。
+- **视频+音频配对** —— `--audio-file`，mpv 原生的合流方式；hook 走的是合成一份 EDL。
 
 **请求头的值落在 mpv 的 argv 上，因此在 `ps` 里看得见。** 引擎**不得**在 `http_headers` 里
 返回任何凭据类的头（`Cookie`、`Authorization`）；YouTube 引擎只返回 `User-Agent` / `Accept` /
 `Accept-Language` / `Sec-Fetch-Mode`。这是一条**对引擎的契约**，在这里说一次，
 在 AS-BUILT-contract.md §3 说一次。
 
-**cookie 已经完全不是 mpv 的事。** 当年 mpv 自己抽取时，cookie 是经 `--ytdl-raw-options` 传进去的；
-如今 cookie 的决定完全归发起 yt-dlp 调用的那个引擎（§8.2），播放器没有 cookie 代码、
+**cookie 完全不是 mpv 的事。** mpv 自己抽取时，cookie 要经 `--ytdl-raw-options` 传进去；
+这里 cookie 的决定完全归发起 yt-dlp 调用的那个引擎（§8.2），播放器没有 cookie 代码、
 不读 `YT_COOKIE_BROWSER`、也没有任何一条能把它泄出去的路径。
 
 **终端噪声压制与视口保护（video 与 audio 模式）。** `video`/`fast` 会把媒体**标题**经 libass
@@ -92,7 +93,7 @@ detached 子进程则写自己的日志。其二它会**损坏正确性**：进�
 退出码照传）。
 
 ### 8.2 登录、PO token，与"先探后播"的客户端选择
-已移出 → `AS-BUILT-engine.md` §8.2 —— 它一直是引擎的知识，只是从前挂在播放器的标题下面。
+已移出 → `AS-BUILT-engine.md` §8.2 —— 它是引擎的知识。
 
 ### 8.3 播放输出模式与错误分类
 
@@ -100,8 +101,8 @@ detached 子进程则写自己的日志。其二它会**损坏正确性**：进�
    ut-play -- <handle>       → play_url_directly → prose（"Playing audio: …"）  [默认]
    ut-play -j -- <handle>    → play_url_json     → 最后一行 JSON，闲话全部压掉
    ut-play -d -- <handle>    → detach_play       → 后台；JSON/prose 报 "started"
-   （只要流 URL 而不播，是 `<engine>-resolve -j`，不是播放器的动词 —— §10；
-     旧的 `--get-url` 拼法已退役，并用那条调用来回答。）
+   （只要流 URL 而不播，是 `<engine>-resolve -j`，不是播放器的动词 —— §10。
+     播放器**没有** `--get-url`：那正是那次调用本身。）
 ```
 
 `play_url_json` 把播放器的 stdout+stderr 收走（压掉闲话）并只发一行 JSON。
@@ -118,7 +119,7 @@ detached 子进程则写自己的日志。其二它会**损坏正确性**：进�
    rc == 0 ........................................... reason = null（status ok）
 ```
 
-**两个分类器，一份枚举，而播放器那个是小的那个。** 自 B-2 起，识别*一次抽取为什么失败*的那些
+**两个分类器，一份枚举，而播放器那个是小的那个。** 识别*一次抽取为什么失败*的那些
 措辞 —— 视频不可用、请求的格式没有、需要登录确认 —— 只有引擎见得到，由它分类并报出 `reason`。
 播放器通过 `yt_reason=` 这个标记**转述**那个裁决，而不是从它只能猜的散文里重新推导；它自己分类的，
 只有"URL 已经在手时 mpv 还能怎么失败"：传输，以及 rc 130。`forbidden` 在两边都仍然可达，
@@ -191,21 +192,21 @@ soft ref：`shell/ut-play` 的 `detach_play()` / `stop_group()` / `group_alive()
 无界增长。所以子进程的 `run_mpv` 追加 `--no-term-osd-bar --msg-level=all=error`
 （放在模式选项之后，于是它们赢），并跳过 stderr 噪声过滤。修后实测：日志 59 字节，12 秒内
 零增长，而真实失败仍然记得下（`[ytdl_hook] ERROR: …`）。`-S` 与 `--engine` 像 `--volume`
-一样转发给子进程 —— `-S` 曾经在 detached 路径上被悄悄丢掉 —— 句柄跟在 `--` 之后传。
+一样转发给子进程 —— 一个不转发的 detached 路径会把 `-S` 悄悄丢掉 —— 句柄跟在 `--` 之后传。
 
 **`title` 与 `format` 由**子进程**回填，而不是由一个后台兄弟进程（`patch_player_meta`）。**
 父进程必须在毫秒级返回，因此它两个字段都不可能知道；子进程从它本来就要取的解析信封里学到这两样，
-然后自己去补自己的记录。它像老的更新器那样自我保护：那段 jq 程序只有在记录的 `pid` 仍是本进程时
+然后自己去补自己的记录。它自我保护：那段 jq 程序只有在记录的 `pid` 仍是本进程时
 才输出内容，所以一次落在解析窗口内的 `--stop` 会赢，且永远不会被覆盖回去。它用一个有界轮询
 （50 × 0.1s）等那条记录，而不是固定 sleep，因为 `detach_play` 是在启动子进程**之后**才写
 `players/<id>.json`，而一次快解析可能先到；正常情况下这只花一次 `stat`。
 
-> **那个已退役的后台更新器当年的代价 —— 记下来是因为这个坑是通用的。** 它是每次 detached
-> 播放额外一整个 `yt-dlp --print "%(title)s"`，作为后台作业跑 —— 而后台作业会继承 shell 的
+> **为什么回填不用后台作业 —— 记下来是因为这个坑是通用的。** 一个后台作业
+> （比如每次 detached 播放额外跑一整个 `yt-dlp --print "%(title)s"`）会继承 shell 的
 > stdout，于是一个**捕获**我们输出的调用方（`out=$(ut-play -d -j …)`，正是 `uting` 干的事）
-> 会一直阻塞到那个管道的**每一个**写端都关闭为止，而不是到我们退出为止。在它的 fd 被重定向
-> 之前，"瞬时"的 detach 实测是**捕获下 1.67s、不捕获 0.04s**。信封喂出来的回填根本没有后台
-> 作业，所以这个坑在这里不会重现 —— 但任何未来写在动词里、且调用方可能捕获的 `… &`，
+> 会一直阻塞到那个管道的**每一个**写端都关闭为止，而不是到我们退出为止：一次"瞬时"的 detach
+> 实测**捕获下 1.67s、不捕获 0.04s**，fd 一重定向就回到 0.04s。信封喂出来的回填根本没有后台
+> 作业，所以这个坑在这里不会出现 —— 但任何未来写在动词里、且调用方可能捕获的 `… &`，
 > 都必须自己关掉 fd。
 
 ### 9.2 状态机（多播放器）
@@ -261,9 +262,9 @@ soft ref：`shell/ut-play` 的 `detach_play()` / `stop_group()` / `group_alive()
 同一条规矩的另一面）、**最多 8 条**、**不超过一小时**，而且它住在状态目录里，随目录一起死。
 没有墓志铭就没有墓碑：一份被截断的日志、或一次 `kill -9`，报的是沉默，而不是一次被推断出来的死亡。
 
-> **这条边界活过了范围变更，也因此更要紧。** 收听历史曾经是 `ROADMAP.md` §0 的 non-goal，
-> 那时"`failed[]` 不是历史"很容易说。自 ROADMAP D14 起它成了一个**功能**，并且已经落地（§9.6）
-> —— 于是这条规矩从"缺席"规矩变成了一条**分离**规矩，而且两边都是真实文件：历史是持久的、
+> **这条边界活过了范围变更，也因此更要紧。** 收听历史按 ROADMAP D14 是一个**功能**、
+> 并且已经落地（§9.6），所以"`failed[]` 不是历史"不再是一条"缺席"规矩，
+> 而是一条**分离**规矩，两边都是真实文件：历史是持久的、
 > 用户级的、每一首都记，住在 `$UT_STATE_DIR`；`failed[]` 仍是易失的、有界的、只记失败，
 > 住在 `$TMPDIR`。两者由同一个子进程在同一瞬间写下，不是重复。把这个数组长成历史功能，
 > 等于把一份面向用户的记录放进一个重启即清的目录。
@@ -274,8 +275,8 @@ soft ref：`shell/ut-play` 的 `detach_play()` / `stop_group()` / `group_alive()
 `uting` 用同一张清单校验 `-f`。
 
 **`-d -j` 的信封带着 `sock` 与 `log`。** 它们本来就在状态文件里，而信封里没有它们时，客户端
-只能从播放器**私有的**状态布局去**重建** socket 路径 —— `uting` 当年就是这么干的，在第二个脚本里
-硬编码 `$TMPDIR/uting-$(id -u)/mpv-<id>.sock`，一旦播放器搬了状态目录就会静默失效（§9.3）。
+只能从播放器**私有的**状态布局去**重建** socket 路径 —— 在第二个脚本里硬编码
+`$TMPDIR/uting-$(id -u)/mpv-<id>.sock`，一旦播放器搬了状态目录就会静默失效（§9.3）。
 （schema → AS-BUILT-contract.md §3。）
 
 ### 9.3 运行时 IPC 控制（`--set-volume`、`--pause`/`--resume`、`--seek`/`--seek-to`）
@@ -284,7 +285,7 @@ soft ref：`shell/ut-play` 的 `detach_play()` / `stop_group()` / `group_alive()
 不需要 kill+重启。它们跨**多个并发**播放器工作，每个独立寻址，并共享同一套形状：解析目标
 （或退 4）→ 经该播放器的 socket 发一条命令 → 再一次往返，**读回**信封要报的那个属性
 （`ipc_command` → `do_set_volume` / `do_playback_verb`；信封在 AS-BUILT-contract.md §3，
-那条曾经把四个播控动词挡在门外、如今已作废的判据在 ARCHITECTURE.md §26）。
+哪些读刻意留在 socket 上、以及决定它的那个数字在 ARCHITECTURE.md §26）。
 
 **为什么并发的 detached 播放器是可能的（mpv 不构成障碍）。** mpv 默认非独占
 （`--audio-exclusive=no`）；默认的 coreaudio / PulseAudio / PipeWire 输出是共享的，
@@ -334,11 +335,11 @@ soft ref：`shell/ut-play` 的 `detach_play()` / `stop_group()` / `group_alive()
 与 `--set-volume`，所以一个经 socket 改音量的客户端会让它说谎。因此 `--status` 报的是**活的**
 音量，取不到时才回退到记录值。它对 `nc` 是软门，从而保住 `--status` "只依赖 jq" 的性质
 （AS-BUILT-contract.md §4）。已验证：在 `uting` 里按两下 `0`，把一个以 `--volume 0` 启动的播放器
-推到 `10`，`--status` 报的就是 `10`（它从前会永远报 `0`）。
+推到 `10`，`--status` 报的就是 `10` —— 只读记录值的话它会永远报 `0`。
 
 **四个属性，一次往返（`live_props` / `read_player_live`）。** 同样的论证覆盖 `pause`、
 `time-pos` 与 `duration`，而且更糟：状态文件从来就没存过它们，所以 socket 是它们**唯一**存在的
-地方，而当时只有 `uting` 在读。它们如今是播放器记录的一部分（AS-BUILT-contract.md §3），
+地方。它们是播放器记录的一部分（AS-BUILT-contract.md §3），
 由 `live_props(sock, prop…)` 读出 —— 它把整份属性清单顺着**一条**连接发下去，吐出
 `<request_id><US><value>` 行 —— 再由 `read_player_live` 做关联，`--status` 的两种输出模式共用它，
 于是归一化只存在一份。三条规矩是承重的：
@@ -435,8 +436,8 @@ Linux 的 `nc -U` 行为不同，属于已接受的已知缺口（ARCHITECTURE.m
 **一条记录是一次调用，不是一个引用。** 一个条目是 `{engine, id, url, title, duration,
 added_at}` —— 搜索结果的一个子集，外加从信封里折进来的 `engine`，因为 `engine` + `url`
 恰好就是 `ut-play --engine E -- URL` 的那两个参数。只存一个光秃秃的 URL 等于把路由这个事实
-扔掉，逼后面某个面去猜它 —— 而自 ROADMAP D12 起，那是一个硬性的用法错误，
-不再是从前那种静默的错标。`channel`、`view_count`、`live_status` 刻意不存：播放用不着它们，
+扔掉，逼后面某个面去猜它 —— 而按 ROADMAP D12，那是一个硬性的用法错误，
+不是一次静默的错标。`channel`、`view_count`、`live_status` 刻意不存：播放用不着它们，
 而它们会过期成错误答案。schema → AS-BUILT-contract.md §3。
 
 **为什么是第七个命令，而不是在已有东西上加个 flag。** 这个存储与播放器只共享锁这一个原语，
@@ -453,7 +454,7 @@ added_at}` —— 搜索结果的一个子集，外加从信封里折进来的 `
 这正是这套模式要挡住的读-改-写竞态。
 
 **陈旧判定放在第一次 `mkdir` 失败处，而不是自旋之后。** 这两件事是两个不同的问题，
-从前问反了顺序：自旋是为一个**活着的**写者准备的，抢锁是为一个**已经死了**的写者准备的 ——
+顺序反过来问就白等：自旋是为一个**活着的**写者准备的，抢锁是为一个**已经死了**的写者准备的 ——
 而一把超过一分钟的锁，其持有者必然已经死了（EXIT trap 在每一种正常死法里都会释放它），
 所以为它等满五秒，谁也没有学到任何东西，只是每一个调用方（TUI 也在内）白等五秒。
 实测：陈旧锁被抢的那条路径 5.46s → **0.10s**；而一个**新鲜**的被持有的锁仍然照旧自旋满 5s
