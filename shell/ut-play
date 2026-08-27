@@ -1132,18 +1132,18 @@ detached_epitaph() {
 # the row, never the file, and knows nothing about JSONL or month shards. Not on PATH, nothing
 # is written and nothing is said: a capability this suite does not have is stated by not
 # having the command, the rule that also gives bili-resolve no --transcript.
-UT_HISTORY_BIN=""
-UT_HISTORY_LOOKED=0
+HISTORY_BIN=""
+HISTORY_LOOKED=0
 history_bin() {
-    if ((UT_HISTORY_LOOKED == 0)); then
-        UT_HISTORY_LOOKED=1
+    if ((HISTORY_LOOKED == 0)); then
+        HISTORY_LOOKED=1
         if [[ -x "$SCRIPT_DIR/ut-history" ]]; then
-            UT_HISTORY_BIN="$SCRIPT_DIR/ut-history"
+            HISTORY_BIN="$SCRIPT_DIR/ut-history"
         elif command -v ut-history >/dev/null 2>&1; then
-            UT_HISTORY_BIN=$(command -v ut-history)
+            HISTORY_BIN=$(command -v ut-history)
         fi
     fi
-    [[ -n "$UT_HISTORY_BIN" ]]
+    [[ -n "$HISTORY_BIN" ]]
 }
 
 # history_record <url> <engine> <rc> <id> <title>   — best-effort, ALWAYS 0. Nothing about a
@@ -1222,7 +1222,7 @@ history_record() {
               reason: (if $reason == "" then null else $reason end)}' 2>/dev/null) || exit 0
         [[ -n "$row" ]] || exit 0
 
-        printf '%s' "$row" | "$UT_HISTORY_BIN" --record - >/dev/null 2>&1
+        printf '%s' "$row" | "$HISTORY_BIN" --record - >/dev/null 2>&1
     ) || true
     return 0
 }
