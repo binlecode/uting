@@ -265,6 +265,10 @@ Environment:
                    query, then dark. For minimal/mono, light swaps cyan for blue; for
                    community themes it picks the theme's own light variant.
   YT_SYNC=0|1|auto  Synchronized redraws (DCS 1q/2q; default auto: on, off under tmux).
+  YT_ICON=note|phones  Which glyph fills the header's two-cell icon slot: ♫ (padded to
+                   two) or 🎧. Unset, it is a coin flip per startup — pin it when a
+                   frame has to come out the same twice. ASCII mode (YT_ASCII=1) drops
+                   the slot entirely and this knob with it.
   YT_BRAND=1       Header wordmark in mathematical sans-serif bold ("𝗨 𝗧 𝗜 𝗡 𝗚").
                    OPT-IN: your terminal font must cover the U+1D5D4 block, else tofu.
                    ASCII mode (YT_ASCII=1) always wins.
@@ -676,7 +680,7 @@ init_ui_strings() {
 init_ui_strings
 
 # ── Glyphs (init_glyphs): Unicode by default; ASCII fallbacks ───────────────────────────
-GL_NOTE="♫"; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
+GL_NOTE="♫ "; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
 # Everything else the chrome draws. These used to be hardcoded, so YT_ASCII=1 still left
 # ▶ / ❚❚ / ● and the arrow hints as tofu on a font that can't draw them.
 GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_DOT="●"; GL_DOT_OFF="○"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="↵"
@@ -704,6 +708,20 @@ init_glyphs() {
         GL_BULLET="-"; GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
         GL_SPIN=("|" "/" "-" "\\")
     fi
+    # The header icon is a two-cell SLOT, not a character, and which glyph fills it is a
+    # coin flip per startup. ♫ U+266B is one cell (tabled in CW_NARROW) so it carries a
+    # pad; 🎧 U+1F3A7 is East-Asian Wide, which char_w's default two already gets right.
+    # Both therefore measure two, the wordmark starts at the same column either way, and
+    # no caller — the header's own elision included — can tell which one it got.
+    # YT_ICON pins the pick: a captured doc frame has to come out the same twice, and a
+    # coin flip does not. The headphone is the ONE emoji in the suite; see the width
+    # layer's note above init_cell_tables for why it stays out of every table.
+    ((ASCII_GLYPHS)) || case "${YT_ICON:-}" in
+    note) GL_NOTE="♫ " ;;
+    phones) GL_NOTE="🎧" ;;
+    "") ((RANDOM % 2)) && GL_NOTE="♫ " || GL_NOTE="🎧" ;;
+    *) die "YT_ICON must be note or phones (got '$YT_ICON')" ;;
+    esac
     # Brand wordmark (YT_BRAND=1): the three view headers render "𝗨 𝗧 𝗜 𝗡 𝗚" in
     # mathematical sans-serif bold (U+1D5D4 block). OPT-IN on purpose: terminal fonts
     # vary, and a font without that block shows tofu — your call, your eyes. Width is
@@ -1012,9 +1030,11 @@ card_divider() {
 #
 # The chrome's own glyphs are one such table, and they are safe to table because the suite's
 # glyph inventory is deliberately all text-presentation — "non-graphical". There is no emoji
-# anywhere in ut-play / yt-search / yt-resolve / uting, so none of these characters can carry a
-# U+FE0F and silently become a 2-cell emoji glyph behind the table's back. All 17 measured
-# at ONE cell (tmux over Ghostty, `tmux display-message -p '#{cursor_x}'`):
+# in ut-play / yt-search / yt-resolve, and exactly one in uting: the 🎧 face of the header icon
+# (init_glyphs). It is deliberately in NO table — U+1F3A7 is East-Asian Wide, so the default two
+# is already its true width, and it is a lone codepoint that carries no selector. Nothing that IS
+# tabled can therefore pick up a U+FE0F and silently become a 2-cell emoji behind the table's
+# back. All 17 measured at ONE cell (tmux over Ghostty, `tmux display-message -p '#{cursor_x}'`):
 #   Neutral EAW    ↵ ♫ ❚ ❯                      one cell in EVERY terminal
 #   Ambiguous EAW  · — • … ← ↑ → ↓ ─ ━ ○ ● ▶    one cell unless a terminal is explicitly
 #                                               configured ambiguous-wide
