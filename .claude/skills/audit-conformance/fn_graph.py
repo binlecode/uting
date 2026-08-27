@@ -21,9 +21,10 @@ import re
 import sys
 import pathlib
 
-FILES = [pathlib.Path(p) for p in (sys.argv[1:] or
-         ["shell/ut-play", "shell/yt-search", "shell/yt-resolve",
-          "shell/bili-search", "shell/bili-resolve", "shell/uting"])]
+# Globbed, not listed — the same rule .githooks/pre-push follows. A hardcoded list here
+# made ut-playlist and ut-history invisible to R10/R4 for two whole features.
+FILES = ([pathlib.Path(p) for p in sys.argv[1:]] or
+         sorted(p for p in pathlib.Path("shell").iterdir() if p.is_file()))
 DEF = re.compile(r'^\s*(?:function\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*\(\)\s*\{')
 
 defs = {}
