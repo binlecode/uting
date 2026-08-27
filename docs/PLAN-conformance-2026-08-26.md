@@ -1,14 +1,14 @@
 # PLAN — conformance audit (uting) · 2026-08-26
 
-Status: **CLOSED — every row landed.** The round (the engine seam) landed in `d7b5d34`,
-`4eb7a49` and the `AS-BUILT-contract.md` §5/§6 edits; the R9 backlog row in `3806c3d` +
-`f14c6af`; and the last two — R13 `C_YELLOW` and R5's five bare `((var += …))` — in the
+Status: **CLOSED — every row landed.** The round (the engine seam) landed in `1558db7`,
+`397e82c` and the `AS-BUILT-contract.md` §5/§6 edits; the R9 backlog row in `024cda6` +
+`610a8e9`; and the last two — R13 `C_YELLOW` and R5's five bare `((var += …))` — in the
 working tree now. Every `done_when` was executed, not read. Nothing is deferred.
 
 Scope: all eight scripts in `shell/`   ·   Functions graphed: 226   ·   Prior report folded: none
 
 **The clean-class sweeps were NOT carried forward, and the next audit must re-run them.** They
-were swept before the configuration surface existed (`04f28a9`: `config`, `ut_read_config`, the
+were swept before the configuration surface existed (`d9625f9`: `config`, `ut_read_config`, the
 four-layer chain — `AS-BUILT-contract.md` §5), which added a precedence layer and a new read
 path in all eight entry points. That surface has never been audited. R3 / R7 / R8 / R12 start
 from scratch.
@@ -25,4 +25,4 @@ carries the itemization and the measurement history.
 - **`engine_resolve_bin` in `ut-play:361` + `uting:187`** — same name, different questions: the player's resolves one engine's binary for a play, the TUI's probes a candidate while **discovering** which engines are installed. Neither is on the other's hot path. Not merged, and the player must not gain a discovery loop.
 - **`lock_player_state` has no stale-lock steal where `lock_playlist` does** (`ut-play:1245` vs `ut-playlist:225`) — deliberate and documented at `ut-playlist:206-209`: the player's writes are best-effort field patches, the store's can drop a track a user just added. The player's stale dirs are cleared by `rm_player_files` at reap and at both `--stop` paths.
 - **No path holds both `lock_player_state` and `lock_queue_state`** — re-checked all five call-site regions (`483-498`, `1376-1383`, `1398-1406`, `1419-1431`, `2007-2013`); each holds exactly one lock family. The hard rule at `ut-play:1291` holds.
-- **Three plain internal globals still wear a knob prefix, and that is not drift**: `UT_VERSION` (the version string each entry point reads), `UT_DEFAULTS` (`ut-play:82` — the shipped-defaults path) and `BILI_REFERER` (`bili-search:110`, a constant). None is an env read; §5 owes them nothing, and `ut_read_config`'s refuse list (`ut-play:96-98`) already blocks `UT_DEFAULTS` from a config file. The rest of this class is gone: the argv arrays, the sibling-binary paths (`PLAY_BIN` / `PLAYLIST_BIN` / `HISTORY_BIN`) and the memo flag (`HISTORY_LOOKED`) all dropped the prefix in `3806c3d` / `f14c6af`.
+- **Three plain internal globals still wear a knob prefix, and that is not drift**: `UT_VERSION` (the version string each entry point reads), `UT_DEFAULTS` (`ut-play:82` — the shipped-defaults path) and `BILI_REFERER` (`bili-search:110`, a constant). None is an env read; §5 owes them nothing, and `ut_read_config`'s refuse list (`ut-play:96-98`) already blocks `UT_DEFAULTS` from a config file. The rest of this class is gone: the argv arrays, the sibling-binary paths (`PLAY_BIN` / `PLAYLIST_BIN` / `HISTORY_BIN`) and the memo flag (`HISTORY_LOOKED`) all dropped the prefix in `024cda6` / `610a8e9`.
