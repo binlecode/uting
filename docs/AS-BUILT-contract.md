@@ -646,12 +646,14 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
 **只有套件自己的命名空间可设**（`UT_` / `YT_` / `BILI_`，正则 `^(UT|YT|BILI)_[A-Z0-9_]+$`），
 于是一个文件永远够不到 `PATH`、`TMPDIR` 或 `LD_PRELOAD`；而播放器为自己 detached 子进程
 设的那四个**在允许的命名空间之内被拒**（见本节末），因为一个文件级的 `YT_IPC_SOCK`
-会把每一个播放器都指向同一个 socket。载入块在**八个入口点里逐字重复**，
+会把每一个播放器都指向同一个 socket；`UT_CONFIG` 与 `UT_DEFAULTS`（两个配置文件各自的路径）
+同样被拒 —— 一个文件不能搬动自己 —— 拒收名单共六个名字。载入块在**八个入口点里逐字重复**，
 和 `VERSION` 读法一样：逐字节的副本可以 grep 出漂移，而一个 source 进来的文件
 会把 `VERSION` 数据文件存在所要理正的依赖方向反过来。
 
-**三个旋钮刻意不在出厂文件里，因为它们的"未设置"本身就是一次自动探测** ——
-在文件里给它一个值，和用户自己设了它无从区分，于是恰好废掉了作为其默认值的那次探测：
+**三个旋钮刻意不在出厂文件里 —— 前两个因为它们的"未设置"本身就是一次自动探测**（在文件里
+给它一个值，和用户自己设了它无从区分，于是恰好废掉了作为其默认值的那次探测），
+**第三个因为它的默认值是一条平的 KEY=value 表达不了的链**：
 
 ```
    YT_LANG        未设置 = zh* locale 下 zh，否则英文
@@ -666,7 +668,8 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
 要钉住就在自己的配置或环境里设。
 
 **按 SCOPE 分组，不按前缀分组。** `YT_` 前缀是历史遗留，**不**代表"只关 YouTube"：
-`YT_THEME`、`YT_LANG`、`YT_ASCII` 由 `uting` 与 `ut-play` 读，而这两个都不知道什么是来源。
+`YT_THEME` 与 `YT_LANG` 只有 `uting` 读，`YT_ASCII` 由 `uting` 和全部四个引擎脚本读，
+`YT_ASCII_VO` 由 `ut-play` 读 —— 而 `uting` 与 `ut-play` 都不知道什么是来源。
 `config` 因此按作用域排（suite / player / tui / engine:yt / engine:bili）。
 
 ```
@@ -755,7 +758,7 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                         那比没有旋钮更糟 —— 调用方分不出是哪一半。
                       YT_ASCII_VO (tct)  YT_MPV_INPUT_CONF  —— 播放器侧的 mpv 旋钮。
                       YT_ASCII （1 = ASCII 字形回落；非 UTF-8 locale 下自动开；
-                        由播放器与 uting 读 —— 遗留别名 YT_TUI_ASCII）。
+                        由 uting 与全部四个引擎脚本读，播放器不读它 —— 遗留别名 YT_TUI_ASCII）。
                         它覆盖**整个**字形集：♫ ● ○ ❯ · ▶ ❚❚ • … → — ↑/↓ ←/→ ↵ ▘▝▗▖
                         以及那些条与轨的连排。验证方式是断言一个渲染出来的 pane
                         除了标签文字之外不含任何非 ASCII。

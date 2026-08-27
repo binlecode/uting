@@ -20,12 +20,13 @@
 #   NO_COLOR is honoured by the suite but is an environment convention, not a uting knob.
 #
 #   Grouped by SCOPE, not by prefix. The YT_ prefix is historical and does NOT mean
-#   YouTube-specific: YT_THEME, YT_LANG and YT_ASCII are read by uting and ut-play, neither
-#   of which knows what a source is. AS-BUILT-contract.md §5 is the authority on every key.
+#   YouTube-specific: YT_THEME and YT_LANG are read only by uting, YT_ASCII by uting and
+#   all four engine scripts, YT_ASCII_VO by ut-play — and neither uting nor ut-play knows
+#   what a source is. AS-BUILT-contract.md §5 is the authority on every key.
 #
 #   A KNOB WHOSE UNSET STATE MEANS "AUTO-DETECT" MUST NOT APPEAR HERE. Giving it a value in
 #   this file is indistinguishable from a user setting it, so it defeats the very detection
-#   that is its default. Three are excluded for that reason:
+#   that is its default. Two are excluded for that reason:
 #     YT_LANG   unset = zh under a zh* locale, English otherwise
 #     YT_ASCII  unset = on under a non-UTF-8 locale, and it falls back through the legacy
 #               alias YT_TUI_ASCII, which a value here would make unreachable
@@ -48,7 +49,10 @@ UT_DEFAULT_ENGINE=yt                # which engine --engine defaults to
 UT_MAX_SEARCH_RESULTS=200
 UT_SEARCH_RESULTS=20                # the -n default for <engine>-search; one bili page
 UT_SORT_FIELD=relevance             # the -s default: relevance | view_count | duration
-UT_PLAY_MODE=audio                  # the -f default: audio | video | fast
+UT_PLAY_MODE=audio                  # the -f default. -f itself accepts audio | video |
+                                    # fast | ascii | viz, but a detached player — so every
+                                    # play from uting — rejects ascii/viz; only the first
+                                    # three make sense as a default
 UT_VOLUME=                          # the --volume default; empty = leave mpv's own
 
 # ── scope: player (ut-play) ─────────────────────────────────────────────────────────────
@@ -90,7 +94,8 @@ BILI_BUVID=                         # a device id; generated per process when un
 BILI_RETRY_PAUSE=1                  # seconds before the one retry of a 412 burst
 
 # ── not settable here ───────────────────────────────────────────────────────────────────
-# UT_CONFIG relocates this file, so it can only come from the environment.
-# YT_IPC_SOCK, YT_DETACHED, YT_PLAYER_ID and YT_DETACHED_LOG are set by the player for its
-# own detached child; a file-level value would aim every player at one socket. All five are
-# refused if written here.
+# UT_CONFIG relocates the user config file, so it can only come from the environment, and
+# UT_DEFAULTS — this file's own path — is not settable at all: each entry point derives it
+# from its resolved location. YT_IPC_SOCK, YT_DETACHED, YT_PLAYER_ID and YT_DETACHED_LOG are
+# set by the player for its own detached child; a file-level value would aim every player at
+# one socket. All six are refused if written here.

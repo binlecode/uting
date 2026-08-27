@@ -70,9 +70,9 @@ fi
 # LD_PRELOAD; and the four the player sets for its own detached child are refused inside
 # those namespaces — a file-level YT_IPC_SOCK would aim every player at one socket.
 #
-# Two defaults stay inline and are named in `config`'s own header: UT_STATE_DIR (its default
-# chains through XDG_STATE_HOME, which a flat file cannot express) and YT_ASCII (it falls
-# back through the legacy alias YT_TUI_ASCII).
+# Three defaults stay inline and are named in `config`'s own header: UT_STATE_DIR (its
+# default chains through XDG_STATE_HOME, which a flat file cannot express), YT_LANG (unset
+# IS the locale probe) and YT_ASCII (it falls back through the legacy alias YT_TUI_ASCII).
 #
 # The key list is AS-BUILT-contract.md §5. This block is duplicated VERBATIM in all eight
 # entry points: eight independent executables share no library, and a byte-for-byte copy is
