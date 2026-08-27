@@ -504,17 +504,17 @@ require_cmd jq nc
 # C_GREEN, with C_YELLOW for paused), which read as "not this theme" wherever the accent
 # was not green — gruvbox orange chrome beside an olive status. Now both states take the
 # accent and the GLYPH carries the state (● playing / ❚❚ paused, the latter dimmed), so
-# the card matches its own rails and marker in every palette. C_GREEN and C_YELLOW are
-# both retired; C_YELLOW stays defined ("" everywhere) because a stale read of it is
-# harmless, while C_GREEN is gone outright — a live variable holding a real color that
-# nothing prints is a trap, not a spare. Its per-theme hexes are in git history if a
-# second hue is ever wanted back. C_MARK is the selection/filter marker (bold + accent). Light/dark
+# the card matches its own rails and marker in every palette. Both second-hue variables
+# (C_GREEN, C_YELLOW) are gone outright — a variable nothing prints is a trap, not a
+# spare, and one kept only so a stale read stays harmless is a rationale with no read
+# left to defend. Their per-theme hexes are in git history if a second hue is ever
+# wanted back. C_MARK is the selection/filter marker (bold + accent). Light/dark
 # (YT_BG=auto → $COLORFGBG → OSC 11 query → dark) picks the theme's own light variant
 # (mocha/latte, night/day, polar-night/snow-storm, gruvbox dark/light, onedark/one-light);
 # for minimal it swaps cyan for blue, readable on white.
 # --color auto honors NO_COLOR. YT_SYNC: synchronized redraws (DCS 1 q/2 q), on by default,
 # off under tmux (see display_menu).
-C_RESET=''; C_BOLD=''; C_CYAN=''; C_YELLOW=''; C_DIM=''; C_MARK=''
+C_RESET=''; C_BOLD=''; C_CYAN=''; C_DIM=''; C_MARK=''
 SYNC_ON=0
 COLORTERM_TC=0
 COLORS_ON=0             # set by init_colors; gates the live theme cycle (t key)
@@ -535,17 +535,16 @@ set_theme() {
     local acc_r acc_g acc_b a16
     case "$THEME" in
     minimal)
-        C_CYAN=$'\033[36m'; C_YELLOW=''
+        C_CYAN=$'\033[36m'
         C_MARK=$'\033[1;36m'
         if [[ "$BG" == light ]]; then
             C_CYAN=$'\033[34m'; C_MARK=$'\033[1;34m'
         fi
         ;;
     mono)
-        C_CYAN=''; C_YELLOW=''; C_MARK=$'\033[1m'
+        C_CYAN=''; C_MARK=$'\033[1m'
         ;;
     catppuccin | tokyonight | nord | gruvbox | onedark)
-        C_YELLOW=''
         case "$THEME:$BG" in
         catppuccin:dark)  acc_r=203; acc_g=166; acc_b=247; a16=35 ;;
         catppuccin:light) acc_r=136; acc_g=57;  acc_b=239; a16=35 ;;
@@ -1329,7 +1328,7 @@ print_hints() {
         iw=$DISP_W
         if [[ -n "$label" ]]; then
             disp_w "$label"
-            ((iw += 1 + DISP_W))
+            iw=$((iw + 1 + DISP_W))
         fi
         if [[ -n "$out" ]] && ((out_w + sep_w + iw > width)); then
             if ((first)); then
@@ -1346,14 +1345,14 @@ print_hints() {
         fi
         if [[ -n "$out" ]]; then
             out+="${C_DIM}${sep}${C_RESET}"
-            ((out_w += sep_w))
+            out_w=$((out_w + sep_w))
         fi
         if [[ -n "$label" ]]; then
             out+="${kc}${key}${C_RESET} ${C_DIM}${label}${C_RESET}"
         else
             out+="${kc}${key}${C_RESET}"
         fi
-        ((out_w += iw))
+        out_w=$((out_w + iw))
     done
     if [[ -n "$out" ]]; then
         if ((first)); then
@@ -1568,7 +1567,7 @@ wrap_print() {
         fi
 
         local need_w=$w_len
-        [[ -n "$line" ]] && ((need_w += 1))
+        [[ -n "$line" ]] && need_w=$((need_w + 1))
 
         if ((cur_w + need_w > max_w)); then
             if ((first)); then
@@ -1585,7 +1584,7 @@ wrap_print() {
                 cur_w=$w_len
             else
                 line="$line $w"
-                ((cur_w += w_len + 1))
+                cur_w=$((cur_w + w_len + 1))
             fi
         fi
     done
@@ -2856,7 +2855,7 @@ press_any_key() {
 # The reason exists ONLY on the core's stderr. `die` writes prose there and exits 1 whatever -j
 # asked for, so a synchronous -d failure puts nothing on stdout — there is no envelope field to
 # read it out of. AS-BUILT-contract.md §3's `reason` taxonomy belongs to the BLOCKING play path, which uting never
-# takes. Not colored: C_YELLOW is retired (see the palette block), and the n/m/o failures next
+# takes. Not colored: the chrome carries ONE accent (see the palette block), and the n/m/o failures next
 # to it print plain too.
 play_failed_notice() {
     printf '\n%sPlay failed:%s %s\n' "$C_BOLD" "$C_RESET" "$1"
