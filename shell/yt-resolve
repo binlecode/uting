@@ -101,7 +101,7 @@ ENGINE_NAME="yt"
 # profile exists on this platform; if not, run anonymously rather than break, so a machine
 # without the configured browser degrades gracefully to no-login.
 # Set YT_COOKIE_BROWSER=none to force anonymous-only (skips the keychain read and the probe).
-YT_COOKIE_ARGS=()
+COOKIE_ARGS=()
 if [[ -n "${YT_COOKIE_BROWSER:-}" && "$YT_COOKIE_BROWSER" != "none" ]]; then
     browser_exists=0
     case "$YT_COOKIE_BROWSER" in
@@ -155,7 +155,7 @@ if [[ -n "${YT_COOKIE_BROWSER:-}" && "$YT_COOKIE_BROWSER" != "none" ]]; then
     esac
 
     if ((browser_exists)); then
-        YT_COOKIE_ARGS=(--cookies-from-browser "$YT_COOKIE_BROWSER")
+        COOKIE_ARGS=(--cookies-from-browser "$YT_COOKIE_BROWSER")
     fi
 fi
 
@@ -535,8 +535,8 @@ resolve_stream() {
 
     local raw_c="" rc_c=0 raw_a="" rc_a=0
 
-    if ((${#YT_COOKIE_ARGS[@]} > 0)); then
-        raw_c=$(dump_once "${YT_COOKIE_ARGS[@]}") || rc_c=$?
+    if ((${#COOKIE_ARGS[@]} > 0)); then
+        raw_c=$(dump_once "${COOKIE_ARGS[@]}") || rc_c=$?
         if ((rc_c == 0)) && [[ -n "$raw_c" ]] && probe_raw "$raw_c"; then
             emit_stream "$raw_c" 0
             return 0
@@ -578,8 +578,8 @@ resolve_stream() {
 resolve_info() {
     ensure_scratch
     local cmd=(yt-dlp --dump-single-json --skip-download)
-    if ((${#YT_COOKIE_ARGS[@]} > 0)); then
-        cmd+=("${YT_COOKIE_ARGS[@]}")
+    if ((${#COOKIE_ARGS[@]} > 0)); then
+        cmd+=("${COOKIE_ARGS[@]}")
     fi
     cmd+=(--no-warnings --quiet "$TARGET_URL")
 
@@ -722,8 +722,8 @@ resolve_transcript() {
     mkdir -p "$dir" 2>/dev/null || true
 
     local cmd=(yt-dlp --skip-download --no-simulate)
-    if ((${#YT_COOKIE_ARGS[@]} > 0)); then
-        cmd+=("${YT_COOKIE_ARGS[@]}")
+    if ((${#COOKIE_ARGS[@]} > 0)); then
+        cmd+=("${COOKIE_ARGS[@]}")
     fi
     cmd+=(
         --write-subs --write-auto-subs
@@ -864,7 +864,7 @@ transcript_fail() {
 # the anonymous client cannot already have. The sibling engine carries the measured case.
 resolve_auth() {
     local auth="anonymous" found=false
-    if ((${#YT_COOKIE_ARGS[@]} > 0)); then
+    if ((${#COOKIE_ARGS[@]} > 0)); then
         auth="cookie"
         found=true
     fi

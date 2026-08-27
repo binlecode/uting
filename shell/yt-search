@@ -105,7 +105,7 @@ ENGINE_NAME="yt"
 # without the configured browser degrades gracefully to no-login.
 # Set YT_COOKIE_BROWSER=none to force anonymous-only (skips the keychain read).
 # The browser's cookie DB should be readable (Chrome ideally closed) for a clean extraction.
-YT_COOKIE_ARGS=()
+COOKIE_ARGS=()
 if [[ -n "${YT_COOKIE_BROWSER:-}" && "$YT_COOKIE_BROWSER" != "none" ]]; then
     browser_exists=0
     case "$YT_COOKIE_BROWSER" in
@@ -159,7 +159,7 @@ if [[ -n "${YT_COOKIE_BROWSER:-}" && "$YT_COOKIE_BROWSER" != "none" ]]; then
     esac
 
     if ((browser_exists)); then
-        YT_COOKIE_ARGS=(--cookies-from-browser "$YT_COOKIE_BROWSER")
+        COOKIE_ARGS=(--cookies-from-browser "$YT_COOKIE_BROWSER")
     fi
 fi
 
@@ -344,8 +344,8 @@ fetch_results() {
     fi
     [[ -n "$match_filter" ]] && cmd+=(--match-filter "$match_filter")
 
-    if (( ${#YT_COOKIE_ARGS[@]} > 0 )); then
-        cmd+=("${YT_COOKIE_ARGS[@]}")
+    if (( ${#COOKIE_ARGS[@]} > 0 )); then
+        cmd+=("${COOKIE_ARGS[@]}")
     fi
 
     cmd+=(

@@ -138,7 +138,7 @@ SELF="${BASH_SOURCE[0]}"
 # The writing happens here (the child is the only process that knows a track ended and why);
 # the storing is ut-history's, called by name like an engine. AS-BUILT-contract.md §5
 
-YT_MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar --no-video)
+MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar --no-video)
 # Keep video output auto-selected by mpv for compatibility across terminals/displays.
 # Video-mode terminal-noise fix (video/fast). mpv draws the media TITLE as a video OSD via
 # libass; a title with glyphs no font covers (emoji — pervasive on YouTube) makes libass emit
@@ -153,9 +153,9 @@ YT_MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-
 # OSD); ascii uses --really-quiet. Rejected: --osd-level=0 (kills the noise but also the
 # on-window OSD/OSC); --msg-level=all=error (blanks the status bar); OS_ACTIVITY_MODE=disable
 # (does NOT stop CoreText). See AS-BUILT-player.md §8.1.
-YT_MPV_VIDEO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar)
+MPV_VIDEO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar)
 # mpv docs suggest sw-fast/really-quiet for terminal VOs to reduce glitches and improve speed.
-YT_MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term-osd-bar)
+MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term-osd-bar)
 
 
 # ==============================================================================
@@ -578,7 +578,7 @@ run_mpv() {
 
     # Execute mpv natively. The STDERR filter drops the macOS CoreText ".LastResort" notes
     # (no mpv flag reaches them) plus any residual libass fontselect warning that
-    # emoji-titled video would otherwise flood (see YT_MPV_VIDEO_OPTIONS). The useful
+    # emoji-titled video would otherwise flood (see MPV_VIDEO_OPTIONS). The useful
     # --term-osd-bar/AV status prints on STDOUT, so the progress bar is never touched; real
     # (non-noise) errors still pass through to >&2 for the -j classifier. Process
     # substitution (not a pipe) leaves $? as mpv's own exit code.
@@ -629,17 +629,17 @@ run_mpv() {
 
 
 play_audio_url() {
-    run_mpv "${YT_MPV_AUDIO_OPTIONS[@]}"
+    run_mpv "${MPV_AUDIO_OPTIONS[@]}"
 }
 
 
 play_video_url() {
-    run_mpv "${YT_MPV_VIDEO_OPTIONS[@]}"
+    run_mpv "${MPV_VIDEO_OPTIONS[@]}"
 }
 
 
 play_ascii_url() {
-    run_mpv "${YT_MPV_ASCII_OPTIONS[@]}"
+    run_mpv "${MPV_ASCII_OPTIONS[@]}"
 }
 
 play_viz_url() {

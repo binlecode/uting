@@ -241,7 +241,7 @@ soft ref：`shell/yt-resolve` 的 `resolve_stream()` / `dump_once()` / `probe_ra
 探测早在拆分时就整体搬进了引擎，任何还在 `ut-play` 里找 `play_url_with_probe` 的描述都是过期的
 （这份文档在切出来时原样继承了那段过期伪码，这里按真代码改正）。
 
-实现要点：`local YT_COOKIE_ARGS=()` 借 bash 的动态作用域遮住全局量，
+实现要点：`local COOKIE_ARGS=()` 借 bash 的动态作用域遮住全局量，
 于是那一次解析可以丢掉 cookie 而不碰真正的设置；裁决以 `retried` 出现在**解析**信封里，
 `ut-play` 把它**转述**进播放信封的 `retried`，而不是自己去观察（AS-BUILT-contract.md §3）。
 代价：每次播放多一次解析 + 一个 1 字节 GET（cookie-403 的视频是两次）。
