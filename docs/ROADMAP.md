@@ -287,9 +287,10 @@
   非本站 URL 是 **usage 错误(1)** 而不是抽取失败(2+)：什么都没尝试,也没什么可重试的 ——
   调用方点错了引擎,与 `--engine nope` 是同一个错误,评分也该相同。
 
-  **要付的账,如实记**：URL-only 音源（Bandcamp / Apple Podcasts / 喜马拉雅）因此**接不进来** ——
+  **要付的账,如实记**：URL-only 音源（Bandcamp / Apple Podcasts 一类）因此**接不进来** ——
   没有引擎对就没有入口。**重开条件**：若它们成为真实需求,正确做法是**给它写一对**,
-  不是放宽 host 校验。
+  不是放宽 host 校验。**这条重开条件已经兑现过一次**：喜马拉雅原本也在这张"接不进来"的名单上,
+  它成为真实需求之后走的正是"给它写一对"（D20）,而不是放宽任何一处 host 校验。
 
 ---
 
@@ -406,6 +407,60 @@
   把它编进二进制，那时 `<checkout>/config` 不再存在。**链的顺序与键的命名空间不跟着重开**：
   那是调用方与 agent 已经在依赖的东西。
 
+- **D19 —— 引擎按 site 切，不按 stack 切。** 被提议的方案是把 resolve 半边按背后的工具重切成
+  `resolve-curl` + `resolve-ytdlp`，好让新音源"无缝接进来"。**否决，判据是量出来的**
+  （2026-08-28，`yt-resolve` 1110 行 / `bili-resolve` 894 行）：
+
+  ```
+    两个 resolver 的 diff            666 行
+    逐字相同的部分                    85 行 —— 且全是样板（ut_read_config / die /
+                                      validate_enum / require_cmd / require_deps /
+                                      cleanup_scratch / url_host / dump_once）
+    dump_once —— 所谓"yt-dlp 那一层"    6 行，两个引擎里已经逐字相同
+  ```
+
+  **按 stack 切能共用的是那 6 行，被迫按 site 参数化的是另外 600 行** —— `normalize_target`
+  （handle 语法）、`is_own_host`（host 白名单）、`format_for_mode`（格式表）、
+  `classify_yt_dlp_error`（错误词汇）、`resolve_info`、`print_usage` 全都逐站不同。
+  那 600 行会长成 `if site ==` 树，正是 D9 从接第二个音源的实测里得出的教训。
+
+  **三样会跟着塌的东西**，每一样单独就足以否掉它：
+  1. **`engine` 是被持久化的路由键。** `{engine,url}` 就是 `ut-play --engine E -- URL`
+     这一次调用，而 **stack 会变、site 不会** —— 同一条音频从免费变 VIP、或上游修好一个明文
+     端点，stack 就翻了，`ut-playlist` 里存了半年的行会路由到错的地方。
+  2. **host 白名单（D12）写不出来**：`resolve-ytdlp` 要么收 yt-dlp 的 1700 个 host
+     （`engine` 字段就此说谎），要么带一张表 —— 那是注册表，正是"引擎名即命令前缀、
+     一次字符串拼接就能找到 resolver"要避免的东西。
+  3. **发现机制没了**：TUI 靠 glob 配 `*-search` / `*-resolve` 对，播放器靠拼接找 resolver。
+     stack 切之后需要一张 source→stack 映射表，而唯一同时知道两边的地方是**播放器** ——
+     站点知识进播放器，是整个架构在防的那一件事。
+
+  **压垮它的是喜马拉雅本身**：一个 source 同时需要两条 stack（免费条目站点自己给直链，
+  `curl` 305ms；VIP 条目要 `mpay` + RC4，yt-dlp 已实现）。按 site 切，那是一个文件里的
+  `if is_paid`；按 stack 切，解一条音频要跨两个脚本 —— 那就是**引擎间委托**，D12 已经
+  连同"通用引擎"一起否决过的另一半。
+
+  **真正的重复是另一件事，且与 stack 正交**：那 85 行样板在八个脚本里各有一份
+  （`ut_read_config` 8 份、`die` 8 份……），cookie 决定另有 3 份（D17）。它的解法是
+  "要不要一个被 source 的共享库"，**那是一个独立的决定，不是这一个**——
+  `resolve-curl` 与 `resolve-ytdlp` 之间照样各存一份。
+
+  **重开条件**：出现一个音源，它的 resolve 半边与某个既有引擎**逐字**相同（连 handle 语法、
+  格式表、错误词汇、白名单都一样）。那时共用的就不再是 6 行，判据自然翻转。
+
+- **D20 —— 第三对引擎是喜马拉雅（`xmly-search` / `xmly-resolve`），网易云是记录在案的备选。**
+  选它不是因为它最大，是因为它是**唯一一个能证明 D19 的音源**：两条 stack 在一个 source 里，
+  而且它会是套件里第一个 `X-resolve` 不以 yt-dlp 为主路径的引擎 ——
+  `bili-search` 已经证明 search 半边可以不用 yt-dlp，这一对补上 resolve 半边。
+  **前置未成立**：该站搜索要登录态（web 端点 `riskLevel:5`、mobile 端点直接
+  `needLogin:true`），而绕过尝试（首页 cookie、`xm-sign`）都没过。所以整件事卡在一个
+  待验证的问题上 —— 一个真登录 cookie 能不能过风控。**它会成为套件里第一个搜索半边送凭据的
+  引擎**（`yt-search` 做 cookie 决定，所以这是第二例而非新机制；`bili-search` 仍是零凭据）。
+  **备选是网易云**：搜索明文公开零凭据、解流走 yt-dlp，**形状与 B 站完全一致**，
+  零新机制，代价是它证明不了 D19。展开、实测数据与退路在 `PLAN-engine-xmly.md`。
+  **不进本条的**：`album/<id>` 这种"一条结果 ≠ 一个可播对象"的形态与 §11 第一条是同一个问题，
+  一起解。
+
 ---
 
 ## 9. 把播放器推向 Go 的触发条件
@@ -476,7 +531,8 @@
   可选策略（`PLAN-` 展开）：按 `duration` 阈值标注、把合集单列一栏、或只在焦点卡上加一个"合集"标记。
   **哪一种都行，但"不标"不行。** 注意这是**引擎的**活（形态是站点事实），按"correctness 加在下面"
   该由 `bili-search` 在 envelope 里说清楚，而不是让 `uting` 去猜 —— 一个只在 TUI 里加标记的修法，
-  是把 agent 面漏掉的那半个功能。
+  是把 agent 面漏掉的那半个功能。**喜马拉雅的 `album/<id>` 是同一个问题的第三种形态**
+  （D20 因此把它排除在第一版之外）—— 三种一起解，不要一站一个补丁。
 
 - **B 站音频区（`au` 号）的歌词，走已有的字幕管线。** B 站的**视频区**没有字幕，所以
   `bili-resolve` 今天没有 `--transcript`（一个引擎用动词的有无来声明能力）。但**音频区是另一套
