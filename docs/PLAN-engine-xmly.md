@@ -1,8 +1,10 @@
 # PLAN-engine-xmly —— 第三对引擎：喜马拉雅
 
-> **状态**：草拟，**未开工**。两个前置：Gate 0（§3 —— 三段式，含 VIP 分支的 Gate 0b），
-> 以及 `PLAN-search-row.md` 的 A 半（行加 `kind`/`access` —— 本引擎照定死的行写，一次写对；
-> `is_paid` 正是 `access` 的判据）。
+> **状态**：草拟，**未开工，且当前被 Gate 0 挡住**（2026-08-28）。
+> 前置一，`PLAN-search-row.md` 的 A 半：**已落地**（行带 `kind`/`access`）。
+> 前置二，Gate 0（§3）：**凭据三段跑不了** —— 本机 Chrome 里一条 ximalaya cookie 都没有
+> （§3 的执行记录）。**Gate 0b 已跑，红**；§2.1 的 a/b/d 已补齐，c 待 +1h 复测。
+> 解除条件只有一个：在 `XMLY_COOKIE_BROWSER` 指的那个浏览器里真正登录一次喜马拉雅。
 > **实现的 ROADMAP 条目**：**D20**（第三对引擎选喜马拉雅）· **D19**（引擎按 site 切不按 stack 切 —— 本引擎是它的第一个实例）。
 > **冷读预演已做**（2026-08-28，见 §8）：11 条 finding，全部接受，已编入正文。
 > **落地即删**：内容按 `CLAUDE.md` 的规矩拆进 `AS-BUILT-engine.md` / `AS-BUILT-contract.md`，本文件删除。
@@ -50,9 +52,30 @@ cookie store 的是 yt-dlp；curl 做不了这件事，所以本引擎要自带�
 | c | **`play_path_64` 的 TTL**：取到直链一小时后重新 `curl -r 0-2000` 同一条 | 206 探测是在取到后几秒做的。若直链带签名 TTL，暂停几小时的播放器 mpv 重连会死在半场 —— 队列的 just-in-time resolve 保护的是**开播**，不是重连 |
 | d | **tracks 端点自身的风控**：Gate 0 的 burst（§3 第 3 段）同时打 `tracks/<id>.json` 十次 | Gate 0 原版只测了搜索端点；resolve 主路径挂上同一个 WAF 时的行为要归进错误词汇（§4.3） |
 
+### 2.2 §2.1 的执行记录（2026-08-28 第二轮，本机，无凭据，yt-dlp 2026.08.19）
+
+**基线先复现了 §2**：匿名 `revision/search/main` 仍 `riskLevel:5`；
+`m.ximalaya.com/tracks/47740352.json` 仍明文，`is_paid:false`，双直链在场。
+
+| # | 结果 | 对本 plan 的作用 |
+|---|---|---|
+| a | **Gate 0b 已跑 → 红，但 extractor 没有腐。** 匿名 `yt-dlp -g` 打一条真 `is_paid:true` 的 sound（`700000000`，`is_free:false`，三个 `play_path_*` 全空）→ `ERROR: An extractor error has occurred. (caused by KeyError('fileId'))`，**崩，不是一句干净的拒绝**。判别输入分开了两种解释：同一个 yt-dlp 匿名解**免费** sound 两条（`47740352` → `group31/…m4a`、`620000000` → `storages/…aac`）**都成功** —— 所以 mpay/RC4 那条路没 bitrot，红的是"付费 + 无权益"。**VIP 账号下能不能通,本机量不了**（无任何 ximalaya 登录），这一格仍是空的 | **D19 的展示件塌了一半**：`is_paid:true` 分支今天交付不了"yt-dlp 兜住 VIP"。裁定见 §3 |
+| b | **URL 形状实测收窄，且站点自己已经改口。** 该 sound 页面的 `rel="canonical"` 就是 `https://www.ximalaya.com/sound/47740352` —— 站点今天的规范形状。yt-dlp 只吃 `/sound/<id>`（`www` / `m` / 带尾斜杠都行）；`/{分类}/{专辑}/{曲目}` 那个历史形状是 `Unsupported URL`；`/album/<aid>/sound/<id>` 更糟 —— yt-dlp 把**专辑 id** 当成目标去解，崩在同一个 `KeyError` 上 | §4.4 的 handle 表**不是变窄，是多了一项工作**：历史形状与 `/album/…/sound/…` 必须由本引擎**自己归一化成 `/sound/<id>`** 再交给 yt-dlp。句柄文法是引擎的活（`AS-BUILT-contract.md` §1.3），所以这是本引擎的工，不是缺陷 |
+| c | **未完。** 直链已捕获、`t0` 已记（`tmp/` 下，2026-08-28 14:42:20），**t+1h 的复测还没做**。已知的半边：`play_path_64` **不带任何查询串** —— 无签名、无 expiry 参数，且它与同一条 sound 的 `yt-dlp -g` 输出**是逐字同一条 URL**。t=0 的 ranged GET **206 / 2001 字节** | 无签名让"直链带 TTL"变得不像，但**那是假设不是测量** —— 这一格在 +1h 复测落下之前不许当成事实。curl 路径与 yt-dlp 路径同一条 URL，则把 §4.3 的"永远先走 curl"从一次取舍变成了纯粹的提速：**同一个答案，快 3 倍**（本轮复测 curl 347ms vs yt-dlp 1059ms，§2 那组 305/1082 复现） |
+| d | **绿。** 无凭据连打 `tracks/<id>.json` 十次，**10/10 作答，4 秒**，零风控 | resolve 的主路径**不挂在**搜索那个 WAF 上。§4.3 的错误词汇表因此不需要为 resolve 侧的 `riskLevel` 准备一支；顺带测到另一种拒答形状 `{"res":false,…,"needLogin":…}`（下架/不可达），那一支要进表 |
+
+**顺带落到手里的两条事实**（不在 §2.1 的清单上，但改设计）：
+
+- **`is_paid:false` 并不蕴含直链在场。** `480000000` 是 `is_paid:false` 而 `play_path_64` 为空。
+  §4.3 的分叉判据写的是 `is_paid:false` **且** `play_path_64` 非空 —— 两个条件，
+  现在这条"免费但没有直链"的实例证明了第二个条件不是多余的。
+- **`access` 的判据在 resolve 侧现成，在 search 侧仍未知。** `is_paid` 就在 `tracks/<id>.json` 里，
+  但 `kind`/`access` 是**行**上的必填字段，而行来自搜索 —— 搜索今天被风控挡着，
+  所以"搜索响应里有没有 `is_paid` 同类字段"在 Gate 0 通过之前**量不了**。
+
 ---
 
-## 3. Gate 0 —— 开工的门（三段式 + Gate 0b；**未验证**）
+## 3. Gate 0 —— 开工的门（三段式 + Gate 0b；凭据三段**被挡**、Gate 0b **已跑**，见 §3.1）
 
 > **一个真登录 cookie 能不能过 `riskLevel:5`？—— 且过的是不是"登录"？**
 
@@ -78,6 +101,29 @@ or an extracted token"）。
    预期事故形状。
 3. **burst**（冷读补）：同一 jar 60 秒内 10 次搜索 + 10 次 `tracks/<id>.json`，全绿才算过。
    一次通过只是对一个**自适应**控制器的点采样；contract.sh 的调用节奏就是这个形状。
+
+### 3.1 执行记录（2026-08-28）
+
+**凭据三段：一段都没跑成，原因是确定的 —— 没有凭据可用。**
+按 §3 的卫生规矩用 `yt-dlp --cookies-from-browser chrome --cookies <jar>` 导出，
+jar 落 `tmp/`、`umask 077`、滤到 ximalaya 域、全量 jar 当场销毁。
+结果：**ximalaya 域 0 条**。这不是过滤写错了 —— 同一次导出共 3217 条，
+阳性对照 `bilibili` 28 条、`youtube` 32 条，且 host 里连一个含 `xima` 的都没有。
+**本机 Chrome 从来没有登录过喜马拉雅**，判别对、二分、burst 三段因此都无从谈起。
+
+> **解除条件**：在 `XMLY_COOKIE_BROWSER` 指的浏览器里真正登录一次喜马拉雅，
+> 然后重跑本节三段。在那之前 §7 的建造顺序不开始 —— 这一条按原文执行，不放宽。
+
+**Gate 0b：跑了，红。** 结果与判别输入见 §2.2 a。
+**§3 要求的"当场二选一"，裁定如下（待你确认）：**
+**取第一项 —— `access:"paywalled"` 的行照发，`xmly-resolve` 对付费条目答
+`{status:"error", engine:"xmly", url, mode, reason:"forbidden"}` 并退 2+，
+不把 Gate 0b 抬成停止条件。** 理由是判别输入给出的：extractor 没腐，
+免费条目两条 stack 都通，红的只是"付费 + 无权益"这一格 —— 而一个引擎对匿名解不了的东西
+如实说 `forbidden`，正是契约 §3 给 `access:"paywalled"` 准备的那句话。
+**代价要如实认领**：D19 的展示件（一个 source 内部两条 stack）今天只剩**一条半** ——
+免费走 curl 成立，VIP 走 yt-dlp **未经证实**，而 §1 是拿它当本引擎"证明什么"的理由的。
+若这一点不能接受，替代动作是 §9 第 1 项（换网易云），而不是放宽本裁定。
 
 **Gate 0b（冷读补，独立于搜索）**：无凭据 `yt-dlp -g 'https://www.ximalaya.com/sound/<真 is_paid:true id>'`。
 逐字记录结果进 §2.1a。失败则**当场二选一并写进 §4.3**：paid 条目的契约答案是
