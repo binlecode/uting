@@ -1,6 +1,8 @@
 # PLAN-search-row —— 搜索行的形状定死 + `ut-search`
 
-> **状态**：草拟，**未开工**。无外部前置 —— 所需的站点字段已实测存在（§2）。
+> **状态**：**A 半已落地**（2026-08-28，行字段 + 契约断言）；B（`ut-search`）、B2（TUI）待开工。
+> 开工前按 §2 重跑实测，**推翻了原 §2 的两条站点前提** —— B 站两个字段都无信号可算；
+> 裁定见 §9。
 > **实现的 ROADMAP 条目**：**D21**（`ut-search`）· **§11 第一条**（一条结果 ≠ 一个可播对象）。
 > **是 `PLAN-engine-xmly.md` 的前置**：第三对引擎照着本文定死的行写，一次写对。
 > **冷读预演已做**（2026-08-28，见 §8）：10 条 finding，全部接受，已编入正文 ——
@@ -22,8 +24,8 @@
 
 | 站 | 字段 | 在哪 | 实测 |
 |---|---|---|---|
-| B 站 | `episode_count_text` / `is_union_video` / `is_pay` | `search/type` 响应，`bili-search` 已经拿到的那份 JSON 里 | 2026-08-28：搜"周杰伦"第一条 `duration:"222:28"`，字段俱在。**零额外请求** |
-| B 站 | 分 P（一个 BV 几十 part） | 同上（`episode_count_text`） | 同上 |
+| ~~B 站~~ | ~~`episode_count_text` / `is_pay`~~ | ~~`search/type` 响应~~ | **2026-08-28 二次实测推翻**：字段在场但语义不是这个。`episode_count_text` 是 `ketang`（课堂）行的课时数 —— 真有 200 P 的「【经典】周杰伦全MV 【200P】」（`x/web-interface/view` 报 `videos:200`）这一格是 `""`；200P 行与短单曲行的 **key 集合逐字段相同**。`is_pay` 在四个查询 × 20 行里无一非零，且在唯一那条确实付费的 ketang 行上报 `0` |
+| B 站 | 分 P 与付费的真信号 | `x/web-interface/view`（`videos` / `rights.pay`） | 2026-08-28：`videos:200` 实测可得 —— 但**一行一个额外请求**，打破本 plan 的零额外请求前提。裁定：不做（§9） |
 | 网易云 | `fee`（1=VIP 只给试听；8=可播、低码率） | `cloudsearch/pc` 响应 | 2026-08-28：`fee:1` 直链 720KB vs 应有 3.81MB（≈45 秒试听）。`fee:8` 时间轴完整 → 映射 `full`（§3 的判据句） |
 | 喜马拉雅 | `is_paid` | `tracks/<id>.json` | 2026-08-28：resolve 侧可得；搜索侧待 Gate 0 后确认 |
 | YouTube | 无同类形态 | — | 行即单视频；**两个新字段恒为默认值是合法状态** |
@@ -59,6 +61,9 @@
   所以跟着每一种 results 形状走 —— 否则要更多数据的那个 agent 恰好丢了路由字段，
   且按契约自己的论证无从与截断区分。
 - 不知道就如实填默认（`track`/`full`）；YouTube 恒为默认值是合法状态。
+  **实测之后，B 站也恒为默认值**（§9 的裁定）：`search_type=video` 两个信号都不携带，
+  而"引擎说它知道的，不猜它没有的信号"是同一条规矩的另一面。真正的区分能力随第三引擎到
+  —— 网易云 `fee:1`/`fee:8` 是实测过的真信号。
 - 判据落在引擎（correctness 加在下面）；TUI 的呈现另开小改，字段先于呈现。
 - `bili-search` usage 里 `-M` 那段话术保留：`kind` 是标注，`-M` 仍是排除的钝器。
 
@@ -150,13 +155,13 @@ ut-search --engine all -- "周杰伦"       # 发现到的全部（*-search + *-
 | 文件 | 改什么 |
 |---|---|
 | `shell/ut-search` | **新文件** |
-| `shell/yt-search` / `shell/bili-search` | 各加 `kind`/`access`（yt 恒默认；bili 从已到手的响应字段算），`-j` 与 `-J` 都注入 |
+| `shell/yt-search` / `shell/bili-search` | **已落地**：各加 `kind`/`access`，**两个引擎都印恒定的 `track`/`full`**（§9），注入点在 `FILTERED_JSON` 而不是 lean 投影里 —— 这样 `-j` 与 `-J` 一起拿到，且引擎的判断压过任何同名原始字段。usage 的字段数 8→10。**外加 `bili-search` 一行改动**：`select(.id != null)` → `select(.url != null)`，丢掉 `ketang` 那类不可播的行（§9 的现役缺陷） |
 | `shell/ut-playlist` | **一处 jq**（冷读击穿点）：`read_items` 的 `has("results")` 分支改逐行 `engine: (.engine // $e)`，仅当**两级都缺**才 error；配一条 `--offline` 夹具检查（合并形状信封进 stdin ⇒ `added == count`） |
 | `shell/uting` | 三处（冷读击穿点 —— 原版"今天已如此"对搜索信封不成立）：(a) `build_all_rows` 行 engine 改 `(.engine // $e // "")`；(b) `FOCUSED_PAYLOAD` 重建单行信封时把**行的** engine 写进去（今天写的是信封级、fan-out 下为 null，会喂给 `read_items` 一个它拒收的形状）；(c) `fetch_json` 的 `CURRENT_ENGINE` 回退只在单引擎取数时成立，多选取数时留空、永不作行回退。外加 `e` 键从轮换升级为**引擎勾选单**（all / 逐个，条目来自 `scan_engines` 既有注册表），取数走 `ut-search` —— TUI 不自己长合并逻辑，人面与 agent 面吃同一条路径。`kind`/`access` 先不渲染 |
 | `shell/ut-play` | **零行**（`read_queue_items` 已逐行回退，实测确认） |
 | `config` | 无新键；`UT_MAX_SEARCH_RESULTS` 的注释补"也封顶 ut-search 合并后的总行数" |
 | `docs/AS-BUILT-contract.md` | §3 行加两字段（含判据两问、映射不长大句、`-J` 注入句）+ `ut-search` 两张信封（含 `failed` 键、全失败无顶层 reason、排序分策）；§1 加命令节；§6 清单补"新引擎必须算 `kind`/`access`" |
-| `docs/AS-BUILT-engine.md` | B 站判据（`episode_count_text`→`multipart`/`collection`、`is_pay`→`access`）；网易云 `fee:8`→`full` 的映射记录 |
+| `docs/AS-BUILT-engine.md` | **已落地**：B 站两个字段**无信号可算**的实测记录（§9）+ `ketang` 行为何被丢；网易云 `fee:8`→`full` 的映射记录随第三引擎落 |
 | `docs/AS-BUILT-verification.md` | §27 "刻意不覆盖"登记加捕获悬挂的结构性主张 |
 | `docs/ROADMAP.md` | §11 第一条随本 plan 落地删除；D21 状态 |
 | `README.md` | 顶部示例块加 `ut-search` 一行；`## What it is` 加一段 |
@@ -176,7 +181,7 @@ ut-search --engine all -- "周杰伦"       # 发现到的全部（*-search + *-
 | 4 | `--engine yt,bili`：合并信封形状、行级 engine、`count`=Σ、`failed:0`；`-s duration` 下合并序为全局数值序 | live 半 |
 | 5 | 部分失败 —— **真实环境而非替身**（冷读修正：原拟的 cookie 判别输入只会让引擎匿名回退**成功**）：构造一个含 curl/jq/nc、**不含 yt-dlp** 的 PATH 跑 `--engine yt,bili` ⇒ 信封 ok、`failed:1`、yt 格 `reason` 为枚举成员（无信封的孩子 → `unknown`）、退 0 | `--offline` |
 | 6 | 全失败 ⇒ `status:"error"` 退 2+、顶层无 `reason`；`--engine nope` ⇒ 退 1 | `--offline` |
-| 7 | B 站判别输入：已知合集 `kind:"collection"`；普通单曲 `kind:"track"` | live 半 |
+| ~~7~~ | ~~B 站判别输入：已知合集 `kind:"collection"`~~ —— **不可写**：B 站搜索响应无此信号（§9），恒默认之下无输入可分对错。取而代之的是**已落地**的跨引擎不变式：每个**发现到的**引擎 × `-j`/`-J` 两形状，行的 `url`/`id` 非空且 `kind`/`access` 落在封闭枚举内（判别性来自枚举而非 `has()`：写 `kind:"video"` —— 站点自己的词、最可能的错答 —— 会红）。第三引擎带来真信号的那天，这条不变式已经在等它 | live 半（已绿：`contract.sh` 217 ok） |
 | 8 | 合并信封 ⇒ `ut-playlist --add`（夹具，断 `added==count` 且逐行 engine 保留）；⇒ `ut-play --queue -`（夹具解析层） | `--offline` |
 | 9 | `-n` 大 + 低 `UT_MAX_SEARCH_RESULTS` 环境 ⇒ 合并 `count` == 上限 | `--offline` |
 | 10 | 捕获绊线：有界轮询后台跑 `out=$(ut-search --engine yt,bili -j …)`，超时红、不悬挂 | `--offline`（夹具引擎不可用也无妨 —— 绊的是悬挂，不是内容） |
@@ -186,8 +191,9 @@ ut-search --engine all -- "周杰伦"       # 发现到的全部（*-search + *-
 
 ## 7. 建造顺序（加面 = 结构性，走 A→E）
 
-- **A** 行字段先行：`bili-search` 算 `kind`/`access`，`yt-search` 印默认值；契约断言跟上。
-  —— A 半落地即解锁 `PLAN-engine-xmly.md`，不必等 `ut-search`。
+- **A** ✅ **已落地**（2026-08-28）：两个引擎都印 `kind`/`access`（恒默认，§9），
+  `bili-search` 丢掉不可播的行，`contract.sh` 加一条跨引擎 × 两形状的不变式（217 ok / 0 failed），
+  usage 与 §3/§6 契约同步。—— `PLAN-engine-xmly.md` 由此解锁，不必等 `ut-search`。
 - **B** `shell/ut-search`：先单引擎 `exec` 转发（确定性对断言），再 fan-out；
   同一步修 `ut-playlist` 的那处 jq（§5）—— 合并信封的第一个消费者要在信封存在的同一个
   commit 里就能吃它。
@@ -215,3 +221,26 @@ plan 全文（不带作者会话）交给冷读者写失败回顾。**10 条 fin
 8. `UT_MAX_SEARCH_RESULTS` 被 fan-out 乘引擎数 → 合并后封顶
 9. `-s duration` 全轮转违约 → 排序分策
 10. `-J` 行悄悄缺必填字段 → 注入句 + 检查 2 扩两形状
+
+---
+
+## 9. 开工日重跑实测 —— 推翻的两条前提与裁定（2026-08-28）
+
+§2 要求"开工前重跑"，重跑的结果推翻了两条 plan 前提。冷读拿不到这一层：它只有 plan 文本，
+而 plan 记的是"字段在场"，不是"字段是这个意思"。
+
+| # | 原前提 | 实测 | 裁定 |
+|---|---|---|---|
+| 1 | `episode_count_text` 标记分 P | 它是 `ketang` 行的课时数；200P 的视频这一格是 `""`，且 200P 行与短单曲行 key 集合逐字段相同。真信号 `videos:200` 只在 `x/web-interface/view` 里 —— 一行一个请求 | **B 站 `kind` 恒 `track`**。不为它加 20 个请求（打破零额外请求前提，且是对一个已需风控防御的端点 burst 20 发） |
+| 2 | `is_pay` 标记付费 | 四个查询 × 20 行无一非零；付费内容根本不在 `search_type=video` 这张表里；唯一漏进来的那条真付费 ketang 行也报 `0` | **B 站 `access` 恒 `full`**。同上 |
+
+**由此收窄**：A 半只落契约面 —— 两个必填字段、封闭枚举、`-j`/`-J` 同时注入、跨引擎不变式。
+区分能力随第三引擎到（网易云 `fee` 是实测过的真信号）。B 站补上的条件写在这里：
+出现**不加请求**的分 P / 付费信号，或搜索端点本身开始携带它。
+
+**顺带修掉的现役缺陷**（与 §11 第一条同一前提）：`search_type=video` 混进 `ketang`
+（付费课程）记录，它们没有 `bvid`，而**空串在 jq 里为真**，所以 `select(.id != null)` 放它们
+过去了 —— 发货的是 `id:""` / `url:null`，一条 `ut-play` 不可能消费的行（实测"钢琴" 20 行里 3 条）。
+改判据为 `select(.url != null)`：**一行结果是一次调用，否则不是一行**。这也覆盖将来任何
+"handle 建不出来"的形状，而不只是今天漏的这一种。检查落在同一条不变式里。
+

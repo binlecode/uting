@@ -19,8 +19,8 @@
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md §28.
 #
 # Cost, measured 2026-08-26 and broken down because a number at the door is what a reader
-# decides on: ~57s in full, of which the live half is ~43s (roughly 15 engine round trips) and
-# tmux is ~4s. `--offline` stops before the first of them: ~13s, 152 of the 194 checks, no
+# decides on: ~82s in full, of which the live half is ~67s (roughly 19 engine round trips) and
+# tmux is ~4s. `--offline` stops before the first of them: ~15s, 167 of the 217 checks, no
 # packet sent. The 14 is dominated by one deliberate 5.5s lock spin — a FRESH held lock has to
 # be waited out, that being what the spin is for; the stale-lock steal beside it costs 0.1s
 # because staleness is tested before the spin, not after (shell/ut-playlist:lock_playlist).
@@ -977,6 +977,35 @@ report "search envelopes agree" \
 report "search result keys agree" \
     "$(printf '%s' "$YT_S" | jq -Sc '.results[0]|keys' 2>/dev/null)" \
     "$(printf '%s' "$BILI_S" | jq -Sc '.results[0]|keys' 2>/dev/null)"
+
+# The row's own premise, over every DISCOVERED engine and BOTH envelope shapes — two places
+# a real implementation has already been wrong, and neither is caught by the parity check
+# above (two engines agree on a key set they are both missing, and it only ever reads -j).
+#
+#   · `kind`/`access` are the ENGINE'S JUDGEMENT about a row (AS-BUILT-contract.md §3), which
+#     is why they are injected before the lean projection rather than inside it: an engine
+#     that adds them to the projection alone hands the caller who asked for MORE data (-J) an
+#     envelope missing two required fields, and every -j check in this file stays green.
+#   · A row whose `url` is null is not a row: `ut-play` has nothing to call. bili-search
+#     shipped exactly that — search_type=video mixes in `ketang` (paid-course) records that
+#     carry no `bvid`, 3 of 20 on "钢琴", and an EMPTY bvid is TRUTHY in jq, so the `.id !=
+#     null` gate passed them through with `id: ""` and `url: null`.
+#
+# Asserted against the CLOSED ENUM, never against `has("kind")`: an engine writing
+# kind:"video" — the site's own word, the likeliest wrong answer — satisfies presence and
+# fails here. The non-empty result requirement is what stops the whole thing passing
+# vacuously on an engine that returned nothing.
+ROW_IS_A_CALL='(.results|length)>0 and all(.results[];
+      (.url|type=="string") and (.url|length)>0
+      and (.id|type=="string") and (.id|length)>0
+      and (.kind|IN("track","collection","multipart"))
+      and (.access|IN("full","preview","paywalled")))'
+for n in $ENGINES; do
+    report "$n-search -j rows are calls" 0 \
+        "$(jq_ok "$ROW_IS_A_CALL" shell/"$n"-search -j -n 5 -- lofi)"
+    report "$n-search -J rows are calls" 0 \
+        "$(jq_ok "$ROW_IS_A_CALL" shell/"$n"-search -J -n 5 -- lofi)"
+done
 report "resolve envelopes agree" \
     "$(printf '%s' "$YT_R" | jq -Sc 'keys' 2>/dev/null)" \
     "$(printf '%s' "$BILI_R" | jq -Sc 'keys' 2>/dev/null)"

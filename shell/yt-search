@@ -395,8 +395,17 @@ fetch_results() {
     ((MIN_DURATION > 0)) && bounds+=" and (.duration != null and .duration > $MIN_DURATION)"
     ((MAX_DURATION > 0)) && bounds+=" and (.duration != null and .duration < $MAX_DURATION)"
 
+    # `kind` and `access` (AS-BUILT-contract.md §3) are the ENGINE'S JUDGEMENT about a row,
+    # not a site field carried over, so they are merged LAST and win over any raw entry key of
+    # the same name. Both are constants on this site and that is the whole answer, not a stub:
+    # a YouTube search row IS one video, and anonymous extraction returns the whole timeline or
+    # no stream at all — there is no preview form to report. Injecting them here rather than in
+    # the lean projection is what puts them in -J as well: they are the engine's routing
+    # judgement, and the caller that asked for MORE data must not be the one that loses it.
     FILTERED_JSON=$(printf '%s' "$result_json" | jq "$JQ_PRELUDE
-        [ (.entries // [])[] | select($bounds) | . + {duration_fmt: (.duration | fmt_dur)} ]$sort_expr")
+        [ (.entries // [])[]
+          | select($bounds)
+          | . + {duration_fmt: (.duration | fmt_dur), kind: \"track\", access: \"full\"} ]$sort_expr")
 }
 
 # Prose list. One jq program (it used to fork five jq per row — 125 for -n 25 — and
@@ -418,7 +427,7 @@ print_list() {
 # a result count, and — since the split — the NAME OF THE ENGINE that produced them, which
 # is what lets `ut-play` route a chosen result back to the matching `<engine>-resolve`
 # without pattern-matching its URL. Default (OUTPUT_MODE=json) projects each entry to a
-# lean, high-signal 8-field schema — the raw yt-dlp entries carry ~23 fields (thumbnail
+# lean, high-signal 10-field schema — the raw yt-dlp entries carry ~23 fields (thumbnail
 # arrays, ie_key, x-forwarded-for, two URL variants, …) that are pure token ballast for a
 # headless caller. OUTPUT_MODE=json_full (-J) keeps every raw field for the rare case
 # fidelity is needed. FILTERED_JSON's own shape is left untouched (print_list still reads
@@ -432,7 +441,8 @@ emit_search_json() {
     else
         printf '%s' "$FILTERED_JSON" | jq -c --arg e "$ENGINE_NAME" --arg q "$QUERY" \
             '{status: "ok", engine: $e, query: $q, count: length,
-              results: map({id, title, url, channel, duration, duration_fmt, view_count, live_status})}'
+              results: map({id, title, url, channel, duration, duration_fmt, view_count,
+                            live_status, kind, access})}'
     fi
 }
 
@@ -453,15 +463,18 @@ Options:
   -M SEC   Maximum duration in seconds
   -s FIELD Sort field: relevance | view_count | duration (default: relevance)
   -l       Plain text list output (default)
-  -j       JSON: {status, engine, query, count, results[]} — 8 lean fields per result
+  -j       JSON: {status, engine, query, count, results[]} — 10 lean fields per result
   -J       JSON with full raw yt-dlp fields per result (same envelope)
   --color MODE  auto | always | never (default: auto)
   -h       This help
   -V       Print the suite version
 
 Output (JSON, -j): {"status","engine","query","count","results":[{id,title,url,channel,
-                    duration,duration_fmt,view_count,live_status}, ...]}
+                    duration,duration_fmt,view_count,live_status,kind,access}, ...]}
   results[].id is this engine's media id — the input to `yt-resolve`.
+  kind (track|collection|multipart) and access (full|preview|paywalled) are always
+  track/full on this site: a row IS one video, and anonymous extraction returns the
+  whole timeline or no stream at all.
 
 Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp failure (see .reason)
 

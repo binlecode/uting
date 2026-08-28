@@ -44,7 +44,7 @@ AS-BUILT-contract.md §1。下面的一切 —— 那**一个** jq 程序、内�
   │     stderr → 捕获；非零 rc ⇒ 错误信封 + 退出
   │        │
   │        ▼  **一个** jq 程序（JQ_PRELUDE + 整形）：
-  │           按上下界 select → + {duration_fmt: dur|fmt_dur}
+  │           按上下界 select → + {duration_fmt: dur|fmt_dur, kind, access}
   │           → sort_by(duration|view_count)|reverse
   │  FILTERED_JSON （数组；**内部**形状 —— 永不改动）
   └───────────────┬───────────────────────┬─────────────────────
@@ -52,7 +52,7 @@ AS-BUILT-contract.md §1。下面的一切 —— 那**一个** jq 程序、内�
                   ▼                        ▼
            print_list()            emit_search_json()
         "♫ N. 标题 / 时长 /        {status,engine,query,count,results:[ 投影 ]}
-         播放量 / url"             json：8 个精瘦字段；json_full：原始记录
+         播放量 / url"             json：10 个精瘦字段；json_full：原始记录
 ```
 
 `engine` 之所以在信封里，是因为一个拿着结果的调用方必须能把它**路由回**懂它的那个 resolver ——
@@ -186,7 +186,7 @@ reason 枚举上，而**只有** `network` 那一类值得在 `RETRY_PAUSE` 之�
 
 **整形用的是同一个 jq 程序** —— 只多一份活，因为这条传输返回的是一个*搜索 API 的*记录，
 而不是一个 extractor 的。归一化后的字段被合并**盖在**原始记录之上，
-于是 `-J` 保留站点发来的每一个字段，而 `-j` 投影出与 `yt-search` 同样的那八个字段，
+于是 `-J` 保留站点发来的每一个字段，而 `-j` 投影出与 `yt-search` 同样的那十个字段，
 并且 `title`/`duration` 在**两者**里都是清洗过、类型正确的值 ——
 没有任何一个面会拿到那段 HTML 或那个 `"MM:SS"` 字符串。两处值得点名的归一化：
 `url` 是**从 `bvid` 构造**的而不是取自 `arcurl`（后者是 `av` 拼法、走 `http://`），
@@ -195,6 +195,40 @@ reason 枚举上，而**只有** `network` 那一类值得在 `RETRY_PAUSE` 之�
 在 `search_type=video` 下那个字段根本不是这套套件 is_live/was_live 的概念，
 把那个 0 带过去会让某个渲染器画出一个站点从没声称过的直播状态。
 **一个引擎不知道的字段是 null，而那个键仍然在**（AS-BUILT-contract.md §3）。
+那十个字段里的 `kind`/`access` 是新来的两个，见 §7.2。
+
+### 7.2 `kind` 与 `access` —— 引擎的判断落在哪里，以及 B 站为什么两个都是默认值
+
+契约（AS-BUILT-contract.md §3）要求每一行都带 `kind` 与 `access`。两处实现事实：
+
+**注入点在 `FILTERED_JSON`，不在 lean 投影里。** 它们是**引擎的判断**，不是站点的原始记录，
+所以在整形那一步就合并**盖在**记录之上：`-j` 与 `-J` 由此一起拿到它们，且引擎的判断压过
+任何同名的原始字段。只写进投影的实现会让 `-J` 少两个必填字段 —— 而每一条 `-j` 检查照旧全绿，
+这正是 `tests/contract.sh` 那条不变式要跨**两种形状**断言的原因。
+
+**两个引擎今天都印恒定的 `track`/`full`，而这是实测结论，不是占位。**
+YouTube 一行就是一个视频，匿名抽取要么拿到完整时间轴要么什么都拿不到 —— 没有试听这种形态。
+B 站这一侧曾以为 `episode_count_text` 与 `is_pay` 就是那两个信号，**2026-08-28 实测推翻**：
+
+- `episode_count_text` 是 `ketang`（课堂）行的**课时数**。真有 200 个分 P 的
+  「【经典】周杰伦全MV 【200P】」这一格是 `""`，而这一行与一条普通短单曲的
+  **key 集合逐字段相同** —— `search_type=video` 根本不携带分 P 信号。
+  真信号 `videos: 200` 只在 `x/web-interface/view` 里，那是**一行一个额外请求**：
+  20 行就是对一个已经需要风控防御的端点 burst 20 发，代价与收益不成比例。
+- `is_pay` 在四个查询 × 20 行里**无一非零**，而且在唯一那条确实付费的 `ketang` 行上也报 `0`：
+  付费内容不在 `search_type=video` 这张表里。
+
+于是 B 站两个字段都如实印默认值。**引擎说它知道的，不猜它没有的信号** ——
+恒为默认值是合法状态（AS-BUILT-contract.md §3），而一个猜出来的 `kind` 会以事实的面目发货。
+补上的条件：出现**不加请求**就能拿到的分 P / 付费信号，或搜索端点本身开始携带它。
+
+**`ketang` 行不进信封。** 同一次实测发现的现役缺陷：`search_type=video` 会混进课堂记录，
+它们**没有 `bvid`**，而**空串在 jq 里为真** —— 于是 `select(.id != null)` 把它们放了过去，
+发出去的是 `id:""` / `url:null`，一条 `ut-play` 不可能消费的行（实测"钢琴" 20 行里 3 条）。
+判据因此改为 **`select(.url != null)`：一行结果是一次调用，否则不是一行**
+（AS-BUILT-contract.md §3）。这条判据同时覆盖将来任何"handle 建不出来"的形状，
+而不只是今天漏进来的这一种；代价是 `-n 20` 可能答 17 行 —— 与 `-m`/`-M` 早已如此，
+`-n` 说的是取多少，从来不是保证发多少。
 
 ## 8.2 登录、PO token，与"先探后播"的客户端选择 —— **在 `yt-resolve` 内部**
 

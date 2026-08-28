@@ -244,9 +244,10 @@ D8 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md §9.3），
 { "status":"ok", "engine":"yt", "query": "lofi", "count": 25,
   "results": [ { "id":"…", "title":"…", "url":"https://www.youtube.com/watch?v=…",
     "channel":"…", "duration":213, "duration_fmt":"00h:03m:33s",
-    "view_count":12345, "live_status":"not_live" } ] }
+    "view_count":12345, "live_status":"not_live",
+    "kind":"track", "access":"full" } ] }
 ```
-`-j` = 上面那 8 个结果字段（高信噪比，比原始那条约 23 字段的 yt-dlp 记录小约 4 倍）。
+`-j` = 上面那 10 个结果字段（高信噪比，比原始那条约 23 字段的 yt-dlp 记录小约 4 倍）。
 `-J`/`--json-full` = 同一个信封，`results` 里装每一个原始字段。
 时长未知时（一路直播）`duration` 与 `duration_fmt` **一起是 `null`**；`view_count` 也可以是 `null`。
 失败时信封改为 `{status:"error", engine, query, count:0, results:[], reason}`，
@@ -264,6 +265,24 @@ D8 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md §9.3），
   可以先在一个字段上分支，套件写出的每一个信封都如此。
 - **两个键都是引擎级的，不是 YouTube 级的：** `bili-search` 印出一模一样的信封，
   只是 `engine:"bili"`。一个漏掉其中任一个的第三引擎，将与一次被截断的读无从分辨。
+- **`kind` 与 `access` 同样是行上的必需键，且枚举封闭** ——
+  `kind` ∈ {`track`, `collection`, `multipart`}、`access` ∈ {`full`, `preview`, `paywalled`}。
+  判据是**引擎无关的两问**，不是任何一个站点的字段名（否则第三引擎作者只能猜，
+  而必填 + 封闭意味着猜的结果会以事实的面目发货）：
+  - **`kind`** —— `ut-play --engine E -- <本行 url>` 会发生什么？恰好播**一个** = `track`；
+    一个 handle 出**多个 part** = `multipart`；本行是**多个 handle 的容器** = `collection`。
+  - **`access`** —— 匿名解出来的**时间轴**完整吗？完整 = `full`（**码率/音质降级仍是 `full`**）；
+    被截断 = `preview`；解不出流 = `paywalled`。报的是站点事实，不是登录裁决（ROADMAP D16）。
+
+  **枚举装不下的新形态，按这两问映射到最近的值，映射记进 AS-BUILT-engine.md —— 枚举不为它长大。**
+  两个字段是**引擎的判断**而不是站点的原始记录，所以 **`-J` 的行同样携带它们**，
+  并且压过任何同名的原始字段：要更多数据的那个调用方，不该恰好是丢掉路由字段的那个。
+  站点没有对应形态时就如实印默认值（`track`/`full`）——
+  **恒为默认值是合法状态**，今天两个引擎都是（AS-BUILT-engine.md §7、§7.2）。
+- **一行结果是一次调用。** 一行的存在意义就是 `ut-play --engine <engine> -- <url>`，
+  所以 `url` 建不出来的记录**在信封之前**就被引擎丢掉，而不是带着 `url:null` 发货
+  （AS-BUILT-engine.md §7.2 是这条规矩的实测由来）。`tests/contract.sh` 把它连同上面的
+  封闭枚举一起，当作对**每一个被发现的**引擎 × `-j`/`-J` 两种形状的不变量来断言。
 
 解析信封（`<engine>-resolve -j -f MODE -- <handle>`）：
 ```json
@@ -812,7 +831,9 @@ Cookie 处理：`YT_COOKIE_BROWSER` 是按平台做存在性检查的（那个�
 
 1. **`foo-search`** —— §1.2 那个面：标志 `-n -m -M -s -l -j -J --color -h -V`，
    一个 QUERY 位置参数（拒绝 URL，`--` 之后重新检查），§3 那个搜索信封且
-   `engine:"foo"`，错误按 §3 且退出 2+（§4）。
+   `engine:"foo"`，错误按 §3 且退出 2+（§4）。**每一行还要算出 `kind` 与 `access`**
+   （§3 的两问、封闭枚举、`-j` 与 `-J` 都要；没有信号就如实印默认值，不猜），
+   并且**不把 `url` 建不出来的记录放进信封**。
 2. **`foo-resolve`** —— §1.3 那个面：标志 `-f -S -j -J --color -h -V`
    加上**仅仅**这个站点支持的那些动词（§1.3：以"有没有"声明能力）；`-f` 只收那五个
    规范模式 —— 别名是 `ut-play` 的（§1.3）；§3 那个解析信封
