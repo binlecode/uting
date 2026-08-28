@@ -1,10 +1,12 @@
 # PLAN-engine-xmly —— 第三对引擎：喜马拉雅
 
-> **状态**：草拟，**未开工，且当前被 Gate 0 挡住**（2026-08-28）。
-> 前置一，`PLAN-search-row.md` 的 A 半：**已落地**（行带 `kind`/`access`）。
-> 前置二，Gate 0（§3）：**凭据三段跑不了** —— 本机 Chrome 里一条 ximalaya cookie 都没有
-> （§3 的执行记录）。**Gate 0b 已跑，红**；§2.1 的 a/b/d 已补齐，c 待 +1h 复测。
-> 解除条件只有一个：在 `XMLY_COOKIE_BROWSER` 指的那个浏览器里真正登录一次喜马拉雅。
+> **状态**：**Gate 0 已跑，未通过 —— 本 plan 按 §3 原文停**（2026-08-28）。
+> 一份真登录的 24 条 cookie jar 过不了风控：`www` 侧与匿名逐字同答 `riskLevel:5`，
+> `m` 侧认了登录却卡在 `webtk缺失`，而 `webtk` **不是 cookie**（§3.1 的判别输入）。
+> 拦路的东西住在 cookie jar 之外，`XMLY_COOKIE_BROWSER` 这个机制**够不到它**。
+> 下一步是 §9 第 1 项（换网易云做第三对），**不是**放宽本裁定 —— 建议见 §3.1。
+> 前置一，`PLAN-search-row.md` 的 A 半：已落地（行带 `kind`/`access`），与本裁定无关，照常有效。
+> §2.1 的 a/b/d 已补齐（§2.2），c 的 +1h 复测未做且现已无关紧要。
 > **实现的 ROADMAP 条目**：**D20**（第三对引擎选喜马拉雅）· **D19**（引擎按 site 切不按 stack 切 —— 本引擎是它的第一个实例）。
 > **冷读预演已做**（2026-08-28，见 §8）：11 条 finding，全部接受，已编入正文。
 > **落地即删**：内容按 `CLAUDE.md` 的规矩拆进 `AS-BUILT-engine.md` / `AS-BUILT-contract.md`，本文件删除。
@@ -75,7 +77,7 @@ cookie store 的是 yt-dlp；curl 做不了这件事，所以本引擎要自带�
 
 ---
 
-## 3. Gate 0 —— 开工的门（三段式 + Gate 0b；凭据三段**被挡**、Gate 0b **已跑**，见 §3.1）
+## 3. Gate 0 —— 开工的门（三段式 + Gate 0b；**已跑，未通过**，见 §3.1）
 
 > **一个真登录 cookie 能不能过 `riskLevel:5`？—— 且过的是不是"登录"？**
 
@@ -102,28 +104,63 @@ or an extracted token"）。
 3. **burst**（冷读补）：同一 jar 60 秒内 10 次搜索 + 10 次 `tracks/<id>.json`，全绿才算过。
    一次通过只是对一个**自适应**控制器的点采样；contract.sh 的调用节奏就是这个形状。
 
-### 3.1 执行记录（2026-08-28）
+### 3.1 执行记录（2026-08-28）—— **Gate 0 未通过**
 
-**凭据三段：一段都没跑成，原因是确定的 —— 没有凭据可用。**
-按 §3 的卫生规矩用 `yt-dlp --cookies-from-browser chrome --cookies <jar>` 导出，
-jar 落 `tmp/`、`umask 077`、滤到 ximalaya 域、全量 jar 当场销毁。
-结果：**ximalaya 域 0 条**。这不是过滤写错了 —— 同一次导出共 3217 条，
-阳性对照 `bilibili` 28 条、`youtube` 32 条，且 host 里连一个含 `xima` 的都没有。
-**本机 Chrome 从来没有登录过喜马拉雅**，判别对、二分、burst 三段因此都无从谈起。
+> **门问的那句话有了答案：一个真登录 cookie 过不了 `riskLevel:5`。过不了的原因不是登录无效，
+> 而是拦路的东西根本不是 cookie。**
 
-> **解除条件**：在 `XMLY_COOKIE_BROWSER` 指的浏览器里真正登录一次喜马拉雅，
-> 然后重跑本节三段。在那之前 §7 的建造顺序不开始 —— 这一条按原文执行，不放宽。
+**取凭据**：按 §3 的卫生规矩，`yt-dlp --cookies-from-browser chrome --cookies <jar>` 导出，
+`umask 077`、滤到 ximalaya 域、全量 jar 当场销毁，cookie 只经 `-b <jar文件>` 到 curl，
+从未进过 argv。**验证完两份 jar 都已销毁。**
 
-**Gate 0b：跑了，红。** 结果与判别输入见 §2.2 a。
-**§3 要求的"当场二选一"，裁定如下（待你确认）：**
-**取第一项 —— `access:"paywalled"` 的行照发，`xmly-resolve` 对付费条目答
-`{status:"error", engine:"xmly", url, mode, reason:"forbidden"}` 并退 2+，
-不把 Gate 0b 抬成停止条件。** 理由是判别输入给出的：extractor 没腐，
-免费条目两条 stack 都通，红的只是"付费 + 无权益"这一格 —— 而一个引擎对匿名解不了的东西
-如实说 `forbidden`，正是契约 §3 给 `access:"paywalled"` 准备的那句话。
-**代价要如实认领**：D19 的展示件（一个 source 内部两条 stack）今天只剩**一条半** ——
-免费走 curl 成立，VIP 走 yt-dlp **未经证实**，而 §1 是拿它当本引擎"证明什么"的理由的。
-若这一点不能接受，替代动作是 §9 第 1 项（换网易云），而不是放宽本裁定。
+第一次导出得 **11 条**（登录后、尚未在站内搜索过）：会话半 `1&_token` / `1&remember_me` /
+`1_l_flag`（外加 passport 域的 `s&e` / `s&a`），设备半 `HWWAFSESID` / `HWWAFSESTIME` /
+`x_xmly_traffic` / `_xmLog` / `impl` / `trackType`。
+随后在 Chrome 里**真的执行了一次站内搜索**并重导，得 **24 条** —— 多出 13 条,含 `web_login`、
+`crystal`、`wfp`、`assva5` / `assva6` / `cmci9xde` / `pmck9xge` / `vmce9xdq` / `DATE`
+（华为 WAF 那族动态令牌）与百度统计的 `Hm_*`。
+
+**第 1 段·判别对 —— 红，且两个端点红得不一样。**
+
+| 端点 | 带 24 条 jar | 不带 jar（对照） | 读法 |
+|---|---|---|---|
+| `www` `revision/search/main` | `{"ret":200,…,"riskLevel":5}` | **逐字相同** | 登录在这里**什么也没买到**。对照证明的不是"端点又通了"，而是 jar 对它完全无效 |
+| `m` `m-revision/page/search` | `{"ret":0,…,"isIllegal":true,"sq":"webtk缺失"}`，三个结果数组全空 | `{"ret":303,"needLogin":true}` | 登录**被认了**（不再要求登录），但搜索仍被拒，理由换成了缺 `webtk` |
+
+`m` 侧那对是本次最有信息量的一格：它把"登录无效"从嫌疑里排除掉了 —— jar 确实改变了答案。
+（`-v` 核对过 9 条 cookie 真的上了 `Cookie:` 头；passport 域那 2 条不适用于 `www`/`m`，符合预期。）
+
+**`webtk` 不是 cookie —— 这是本次的判别输入，也是判死本 plan 的那一条。**
+在 Chrome 里真搜过一次之后重导，24 条里**没有任何一条叫 `webtk`**；
+`m` 的搜索页只有 7200 字节的壳，`webtk` 字样不在页面里，
+两个 JS bundle 里也搜不到（`dws2.0.0.js` 直取回 0 字节）。
+结论：它是**每请求现算的令牌**，住在 cookie jar 之外。
+于是 §4.2 设想的整套机制 —— "`XMLY_COOKIE_BROWSER` 指浏览器 → yt-dlp 当解密器导 jar →
+curl `-b` 送出" —— **在原理上就够不到它**。不是这次没配好，是这条路不通。
+
+参数形状也排查过了，空结果不是参数写错：`core=all|track|album`、`+device=iPhone`、
+`+condition=relation`、以及一个纯 ASCII 查询，八种组合全部 `ret:0` + `isIllegal:true` + 零结果；
+去掉 `core` 或把 `kw` 换成 `keyword` 则连 JSON 都不成形。
+
+**裁定：按 §3 原文，本 plan 停。**
+门的原话是"不能，则本 plan **停**：引擎 = 两个动词（D9），只有 resolve 没有 search 的东西不是引擎"。
+resolve 半边其实**很健康**（§2.2：免费条目 curl 305→347ms 直出、10/10 无风控、
+与 yt-dlp 同一条直链），但那恰恰是 D9 明令不算数的那一半。
+
+**不采取的两条路，以及为什么**：
+- **实现 `webtk`**：那是把一个混淆过的反爬 bundle 逆向进 bash。它违反本仓"引擎只做薄薄一层"的
+  取向，且反爬令牌是持续腐化的东西 —— §2 记的 `xm-sign` 尝试已经是同一类努力失败过一次。
+- **只做 `xmly-resolve`**：§9 第 2 项已经答过，不行。
+
+**建议的下一步：§9 第 1 项，第三对引擎改用网易云。**
+它在 §9 里是量过的：搜索端点明文、公开、**零凭据**，形状与 B 站完全一致，零新机制；
+且 `fee` 就在搜索响应里，`access:"preview"` 的判据现成 —— 那正是本 plan 拿 `is_paid` 想做、
+却因为搜索半边不通而**在 search 侧始终没量到**的那件事（§2.2 末条）。
+**代价要如实认领**：它证明不了 D19（一个 source 两条 stack）。
+D19 需要另找展示件，或者接受它暂时只是一条写下来的原则。
+
+**重开条件**（§9 第 3 项）：站点风控会变。重跑的入口是本节第 1 段那张两行表 ——
+`m` 侧一旦不再答 `webtk缺失`，这道门就值得重走一遍。记下日期：**2026-08-28**。
 
 **Gate 0b（冷读补，独立于搜索）**：无凭据 `yt-dlp -g 'https://www.ximalaya.com/sound/<真 is_paid:true id>'`。
 逐字记录结果进 §2.1a。失败则**当场二选一并写进 §4.3**：paid 条目的契约答案是
