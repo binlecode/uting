@@ -80,7 +80,7 @@ Not a general-purpose terminal music player: that layer is full and well maintai
 ncmpcpp, rmpc, musikcube, kew, termusic — and this is not a replacement for it. What plays here
 comes from an engine, not from `~/Music`.
 
-**All three listening features have landed** (`docs/ROADMAP.md` D14/D15, P4): playlist
+**All three listening features have landed** (`docs/ROADMAP.md` D14/D15): playlist
 management (`ut-playlist`, the `a` and `b` keys), the queue (`ut-play
 --queue/--enqueue/--next`, `+` and `>`), and the listening history (`ut-history`, the `h` key).
 Each shipped with the rule they all carry: an agent surface — a verb and a `-j` envelope —
@@ -274,9 +274,10 @@ Lessons these paid for, every one of which produced a wrong result first:
 **Everything under `docs/` is written in Chinese**; this README and `CLAUDE.md` are the English
 surface.
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the umbrella: topology, seams, the control-flow
-  diagrams, the function map and every non-obvious decision. Diagrams, flows and decisions;
-  the detail is in the per-scope docs below.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the umbrella: what this suite is positioned to
+  be and what it deliberately is not (§1), topology, seams, the control-flow diagrams, the
+  function map and every non-obvious decision. Diagrams, flows and decisions; the detail is in
+  the per-scope docs below.
 - [`docs/AS-BUILT-contract.md`](docs/AS-BUILT-contract.md) — the frozen CLI contract: envelopes, exit codes,
   lifecycle semantics, and the checklist for adding an engine.
 - [`docs/AS-BUILT-engine.md`](docs/AS-BUILT-engine.md) — the site half: query shaping, the Bilibili
@@ -287,8 +288,9 @@ surface.
   the width layer, the reflow and the three play states.
 - [`docs/AS-BUILT-verification.md`](docs/AS-BUILT-verification.md) — the risk register and the
   verification matrix: what each check proves, and what is deliberately not covered.
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — positioning and non-goals, the decisions and their
-  reopen conditions, and the conditions under which the core would move to Go.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — the decisions and their reopen conditions, what is not
+  built yet, and the conditions under which the core would move to Go. No changelog, no survey
+  data, and no positioning — that is §1 of the architecture doc.
 - [`docs/RESEARCH-oss-landscape.md`](docs/RESEARCH-oss-landscape.md) — the measured survey those
   decisions rest on, kept separate so the roadmap holds decisions rather than data: the six-way
   name screening, what comparable projects do, and what publishing this shell version costs.

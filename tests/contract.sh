@@ -293,7 +293,7 @@ report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - -
 # A detached player that dies on its own is the one lifecycle path the caller does not
 # drive, and it used to be silent: --status went empty, which is what a NORMAL finish looks
 # like too (docs/AS-BUILT-player.md §9.2). These checks own the boundary that keeps the tombstone
-# list an error record rather than the listening history ROADMAP.md §0 rules out — a normal
+# list an error record rather than the listening history ARCHITECTURE.md §1 rules out — a normal
 # finish must leave nothing, a log with no epitaph must not be read as a death, and the list
 # must stay bounded. The input is a state file + log written by hand — a FIXTURE, which is
 # the only thing this suite is allowed to author: it is data the real reaper really reads, not
