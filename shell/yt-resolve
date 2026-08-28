@@ -930,6 +930,18 @@ Auth JSON (--auth -j): {status,engine,auth,cookie_browser,profile_found}
 
 Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp failure (see .reason)
 
+Environment:
+  Defaults for every knob below live in <checkout>/config, declared once for the whole
+  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
+  per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
+  config > the shipped defaults. See AS-BUILT-contract.md §5.
+  YT_COOKIE_BROWSER      Browser profile cookies are read from (default: chrome; "none"
+                         for anonymous) — the decision --auth reports
+  YT_AUDIO_FORMAT        Format for audio/viz modes (default: ba/b)
+  YT_VIDEO_FORMAT        Format for video/ascii modes (default: bv*+ba/b)
+  YT_VIDEO_FORMAT_FAST   Format for fast mode
+  YT_SUB_LANG_CHAIN      --transcript language priority chain (default: en,zh-Hans,zh,ja)
+
 To search: yt-search <query>   ·   To play: ut-play <id|URL>
 EOF
 }

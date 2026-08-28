@@ -478,6 +478,15 @@ Output (JSON, -j): {"status","engine","query","count","results":[{id,title,url,c
 
 Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp failure (see .reason)
 
+Environment:
+  Defaults for every knob below live in <checkout>/config, declared once for the whole
+  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
+  per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
+  config > the shipped defaults. See AS-BUILT-contract.md §5.
+  YT_COOKIE_BROWSER  Browser profile cookies are read from (default: chrome; "none" for
+                     anonymous). A login makes age-restricted videos searchable; a profile
+                     absent from this machine degrades to anonymous rather than failing
+
 To play a result, pass its url or id to: ut-play
 EOF
 }
