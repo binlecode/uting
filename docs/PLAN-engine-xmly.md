@@ -1,6 +1,8 @@
 # PLAN-engine-xmly —— 第三对引擎：喜马拉雅
 
-> **状态**：草拟，**未开工**。卡在 Gate 0（搜索需要登录态，尚未验证登录 cookie 能否过风控）。
+> **状态**：草拟，**未开工**。两个前置：Gate 0（搜索需要登录态，尚未验证登录 cookie 能否过风控），
+> 以及 `PLAN-search-row.md` 的 A 半（行加 `kind`/`access` —— 本引擎照定死的行写，一次写对；
+> `is_paid` 正是 `access` 的判据）。
 > **实现的 ROADMAP 条目**：**D20**（第三对引擎选喜马拉雅）· **D19**（引擎按 site 切不按 stack 切 —— 本引擎是它的第一个实例）。
 > **落地即删**：内容按 `CLAUDE.md` 的规矩拆进 `AS-BUILT-engine.md` / `AS-BUILT-contract.md`，本文件删除。
 

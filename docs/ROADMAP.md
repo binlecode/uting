@@ -460,6 +460,37 @@
   零新机制，代价是它证明不了 D19。展开、实测数据与退路在 `PLAN-engine-xmly.md`。
   **不进本条的**：`album/<id>` 这种"一条结果 ≠ 一个可播对象"的形态与 §11 第一条是同一个问题，
   一起解。
+  **前置**：`PLAN-search-row.md` 的 A 半（行加 `kind`/`access`）—— 第三对引擎照定死的行写，
+  一次写对，而不是落地后回头再改三个引擎。
+
+- **D21 —— `ut-search`：统一搜索入口；默认单引擎，fan-out 只向显式要求它的调用收费。**
+
+  ```sh
+    ut-search -- q                      # UT_DEFAULT_ENGINE（config 已有的键，不新增）
+    ut-search --engine bili -- q        # 选一个
+    ut-search --engine yt,bili -- q     # 显式 fan-out；--engine all = 发现到的全部
+  ```
+
+  **它存在的理由是 fan-out + 合并信封** —— 任何现有命令做不到的能力；单引擎转发只是退化
+  情形。没有这个能力它就是每个 `X-search` 的第二拼法，D10 直接毙掉 —— 所以砍 fan-out 时
+  这个命令整个跟着砍，不留一个纯转发壳。**agent 面就此收敛为 `ut-search` + `ut-play` 两个
+  名字**，加第三个音源不再加 agent 要认识的名字 —— 与播放半边早已成立的
+  `ut-play → <engine>-resolve`（D9）左右对称。`<engine>-search` 留在 PATH 上原样可用，
+  与 `yt-resolve` 同理：直接调低层不是第二拼法。TUI 的 `e` 键从轮换升级为**引擎勾选单**
+  （all / 逐个），取数改走 `ut-search` —— 人面与 agent 面吃同一条 fan-out 路径，
+  TUI 不自己长合并逻辑。
+
+  **先例与默认值的账**：Mopidy `library.search(uris=None)` 默认打全部 backend、`uris`
+  收窄 —— 同拓扑十五年实践，证明 fan-out 是这一格的正规能力。但它的聚合活在 daemon 后面，
+  一个 backend 挂了 log 一行就跳过；本仓的等价物必须把部分失败**写进冻结的单行信封**
+  （agent 读不到 log）。所以默认反着取：单引擎（形状同 `git fetch` 默认 origin、`--all`
+  显式），fan-out 的三笔复杂度 —— 部分失败信封、每引擎 `-n`、轮转交错不编跨站分数 ——
+  只落在显式要求它的调用上；默认路径**逐字**等于该引擎自己的信封，零新语义。
+
+  **多引擎信封的形状、行级 `engine` 与两个 store 的零改直通、以及 bash 3.2 的后台作业账**：
+  `PLAN-search-row.md` 展开；落地后契约进 `AS-BUILT-contract.md` §3。
+  **重开条件**：出现一个调用方真的需要跨站统一排序（今天判为"编分数即撒谎"）——
+  那时重开的是排序那一小节，不是命令本身。
 
 ---
 
@@ -533,6 +564,7 @@
   该由 `bili-search` 在 envelope 里说清楚，而不是让 `uting` 去猜 —— 一个只在 TUI 里加标记的修法，
   是把 agent 面漏掉的那半个功能。**喜马拉雅的 `album/<id>` 是同一个问题的第三种形态**
   （D20 因此把它排除在第一版之外）—— 三种一起解，不要一站一个补丁。
+  **已入 plan**：行加 `kind`/`access` 两个必填字段，`PLAN-search-row.md` §3 —— 本条随它落地删除。
 
 - **B 站音频区（`au` 号）的歌词，走已有的字幕管线。** B 站的**视频区**没有字幕，所以
   `bili-resolve` 今天没有 `--transcript`（一个引擎用动词的有无来声明能力）。但**音频区是另一套
