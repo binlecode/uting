@@ -195,6 +195,13 @@ D19 需要另找展示件，或者接受它暂时只是一条写下来的原则�
 - 输出：`AS-BUILT-contract.md` §3 的搜索 envelope + `PLAN-search-row.md` 的 `kind`/`access`。
 - **风控拒答归进封闭 reason 枚举**（冷读补）：搜索被 `riskLevel` 拒 → `network`（可重试），
   与 `bili-search` 把风控券判 `network` 同一先例 —— 于是套件中途一次风控红是**被分类的红**。
+- **`--auth` 只长在 resolve 半上,而本引擎的 search 半自己也做 cookie 决定**（2026-08-28 清点四个
+  引擎的面时发现）。今天没有任何面能报告 search 半的凭据决定：`yt-search` 读 `YT_COOKIE_BROWSER`
+  但不报，`bili-search` 明令不送，两者都没事 —— 因为它们的决定要么与 resolve 半一致、要么不存在。
+  本引擎会是第一个让这个洞承重的：`xmly-search` 的 cookie 决定与 `xmly-resolve` 的**不是同一个**
+  （search 要登录，resolve 免费条目不要）。两个选项 —— 给 `xmly-search` 自己的 `--auth`，
+  或让 `xmly-resolve --auth` 代答整对引擎并在信封里分两半 —— **本 plan 暂停时未定**，
+  恢复时先定它，因为它改的是契约 §1.2 那张面，不是本引擎的内部事。
 - `auth` 语义与 D16 一致（报 cookie 决定，不做登录裁决），但**本引擎的特殊之处写进 usage**：
   这里 `auth=none` 意味着搜索**会失败**（站点要登录态），是套件里唯一一处 cookie 决定与
   "能不能用"直接挂钩的引擎。Gate 0 第 2 段若判出"设备半就够"，本段语义随之重写。
