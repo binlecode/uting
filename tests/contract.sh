@@ -115,6 +115,31 @@ report_real_config() {
     report "your own config is untouched" "$REAL_CFG_SUM" "$(cfg_fingerprint)"
 }
 
+# ---- …and the real STATE DIR, watched the same way ------------------------------------
+# The config file got this guard when uting learned to write one. The playlist store and the
+# listening log have been writable by every check in this file since long before that, and
+# they had no guard at all — the discipline was three sections each remembering to point
+# UT_STATE_DIR somewhere disposable, which is exactly the kind of discipline that holds until
+# it doesn't. It didn't: a section added after the one that ends with `unset UT_STATE_DIR`
+# assigned the variable without exporting it, and every ut-playlist call in it went to the
+# user's real store and left a playlist there.
+#
+# So the same two fingerprints the config gets, around the same run, over the whole state
+# tree. `ls -R` piped through cksum rather than the files' contents: what must not change is
+# WHICH lists and logs exist, and a real listening session running in another window will
+# legitimately grow today's .jsonl while this file runs. A name appearing or vanishing is the
+# shape a leak takes, and it is the shape this catches.
+REAL_STATE="${XDG_STATE_HOME:-$HOME/.local/state}/uting"
+state_fingerprint() { ls -R "$REAL_STATE" 2>/dev/null | cksum || echo absent; }
+REAL_STATE_SUM=$(state_fingerprint)
+report_real_state() {
+    if [ ! -d "$REAL_STATE" ]; then
+        echo "  skip  (no state dir at $REAL_STATE to watch)"
+        return 0
+    fi
+    report "your own store is untouched" "$REAL_STATE_SUM" "$(state_fingerprint)"
+}
+
 # The reap comes FIRST and the directory second — the order playback.sh's cleanup already
 # uses, and for a reason this file learned the hard way. Nothing here presses Enter, but the
 # TUI section runs a real `uting`, and on 2026-08-25 a run whose `q` check came back red left
@@ -202,6 +227,20 @@ jq_in() { local f=$1 p=$2; shift 2; jqv "$f" "$(printf '%s' "$p" | "$@" 2>/dev/n
 
 # lines <json>                    — 1 for a single-line envelope.
 lines() { printf '%s\n' "$1" | wc -l | tr -d ' '; }
+
+# err_has <pattern> <command...>  — does what it printed on STDERR match? 0 yes, 1 no.
+# Captured FIRST, never piped straight from the command, and for a sharper version of
+# jq_ok's reason: every command asked this question is a REFUSAL, so it exits non-zero BY
+# CONSTRUCTION. Under `set -o pipefail` the pipeline then carries the refusal's status and
+# the grep verdict is thrown away — which is not a hypothetical, it is how the two
+# capability checks below first read GREEN against an engine that had neither verb.
+err_has() {
+    local pat=$1
+    shift
+    local e
+    e=$("$@" 2>&1 >/dev/null)
+    printf '%s' "$e" | grep -qi -- "$pat" && echo 0 || echo 1
+}
 
 # ---- the offline half, FIRST -------------------------------------------------------
 # Everything below this line to the live-fixture preamble runs without a network: flag gates,
@@ -586,6 +625,11 @@ echo "── gates: verbs, engine names and the host allowlist (no network) ─"
 # title assertion depend on which part that is.
 MEDIA_ID="jNQXAC9IVRw"
 BILI_ID="BV1mL411E7Fb"
+# A third handle, and it earns its own line because BILI_ID above is deliberately SINGLE-part
+# and --parts has nothing to say about a list of one. A long-lived public 100-part course; the
+# checks on it assert `>= 2` and never the count, because the site's own numbers change and a
+# regression on 100 would be a regression in Bilibili's catalogue, not in this engine.
+BILI_PARTS_ID="BV1vKEn6eE6Q"
 # An unreachable proxy is the cheapest deliberate network failure, and it works offline too.
 # Declared here because the host-allowlist checks below borrow it; the failure-taxonomy
 # section in the live half is where it is asserted ON.
@@ -605,6 +649,28 @@ report "bili-resolve rejects a non-id" 1 "$(rc shell/bili-resolve -j -- "not an 
 # Capability differs per engine and is stated, not faked: this site's videos carry no
 # caption track, so the verb is absent rather than always answering "none".
 report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcript -- "$BILI_ID")"
+
+# --parts is the other half of that same statement-by-capability rule, read from the other
+# direction: this site HAS multi-part videos and the sibling site does not, so the verb
+# exists on one engine and must never appear on the other.
+#
+# THE PAIR IS ALSO THE FEASIBILITY PROOF for how `uting` will probe an engine for the verb
+# without spending a request (PLAN §5.1): it invokes `--parts` with NO handle. The engine
+# that has the verb answers with a usage error about the missing handle; the engine that
+# does not falls into the unknown-flag arm every gate in this suite shares
+# (AS-BUILT-contract.md §2). BOTH exit 1 — which is exactly why the exit code cannot be the
+# probe, and why what these two pin is the stderr WORDING. An engine that grew --parts and
+# a `c` key that reads the wrong side of this pair are each caught by one of them alone.
+report "bili-resolve has --parts"  1 "$(err_has 'unknown flag' shell/bili-resolve --parts)"
+report "bili --parts needs a handle" 1 "$(rc shell/bili-resolve --parts)"
+report "yt-resolve has no --parts"  0 "$(err_has 'unknown flag' shell/yt-resolve --parts)"
+report "yt --parts is usage"        1 "$(rc shell/yt-resolve --parts)"
+# A flag that cannot act is REJECTED, not ignored: -f and -S select a stream format, and
+# enumerating parts resolves no stream. Same rule --info is already held to above.
+report "bili --parts refuses -f"   1 "$(rc shell/bili-resolve --parts -f audio -- "$BILI_ID")"
+report "bili --parts refuses -S"   1 "$(rc shell/bili-resolve --parts -S abr -- "$BILI_ID")"
+report "bili --parts takes ONE handle" 1 \
+    "$(rc shell/bili-resolve --parts -- "$BILI_ID" "$BILI_ID")"
 report "bili-search rejects -d" 1 "$(rc shell/bili-search -d -- 音乐)"
 # A mistyped engine must be a USAGE error. If it fell into 2+ an agent would read it as
 # "the tool failed, retry later" and retry a name that will never exist.
@@ -777,6 +843,66 @@ done
 report "yt-resolve still takes youtu.be" 1 \
     "$([ "$(http_proxy=$NOPROXY https_proxy=$NOPROXY rc shell/yt-resolve -j -- https://youtu.be/$MEDIA_ID)" != 1 ] && echo 1 || echo 0)"
 
+echo "── a part list is a playlist nobody saved yet ─────────────────────"
+# THE CLAIM --parts EXISTS TO MAKE GOOD ON: every element of a part list IS an item record,
+# so the list feeds the durable store and the player's queue with NO field renamed. The
+# SUBJECTS here are ut-playlist and ut-play; the part list is their INPUT.
+#
+# It is a FIXTURE — data a real command really reads — and it is a real capture, not a
+# hand-written shape: `bili-resolve --parts -j -- av170001` on 2026-08-29, ten parts, kept
+# whole. Hermetic because the pipeline is what is under test and re-fetching the same ten
+# rows would only add a way for it to go red for the network's reasons. The one thing a
+# frozen fixture cannot prove — that the engine still EMITS this shape — is asserted
+# against a LIVE envelope in the half below, which compares its key sets against this very
+# string. Neither half covers the other; together they close it.
+# EXPORT, not assign. The listening-log section above ends with `unset UT_STATE_DIR`, so by
+# the time control reaches here the variable is gone from the environment and a bare
+# assignment sets a variable this shell can read and a CHILD cannot — which is not a check
+# that fails, it is a check that quietly runs against the user's REAL playlist store. It did:
+# this block wrote an 80-row `parts` playlist into ~/.local/state/uting before the line below
+# said `export`. The guard that turns a repeat of that into a red is at the top of the file.
+export UT_STATE_DIR
+UT_STATE_DIR=$(mktemp -d "${TMPDIR:-/tmp}/uting-parts.XXXXXX")
+PARTS_FIXTURE='{"status":"ok","engine":"bili","id":"BV17x411w7KC","url":"https://www.bilibili.com/video/BV17x411w7KC","title":"【MV】保加利亚妖王AZIS视频合辑","count":10,"total_duration":2412,"total_duration_fmt":"00h:40m:12s","parts":[{"n":1,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=1","title":"Хоп","duration":199,"duration_fmt":"00h:03m:19s"},{"n":2,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=2","title":"Imash li surce","duration":205,"duration_fmt":"00h:03m:25s"},{"n":3,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=3","title":"No Kazvam Ti Stiga","duration":308,"duration_fmt":"00h:05m:08s"},{"n":4,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=4","title":"Samo za teb","duration":273,"duration_fmt":"00h:04m:33s"},{"n":5,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=5","title":"Tochno sega","duration":241,"duration_fmt":"00h:04m:01s"},{"n":6,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=6","title":"Kak boli","duration":336,"duration_fmt":"00h:05m:36s"},{"n":7,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=7","title":"Obicham Te","duration":250,"duration_fmt":"00h:04m:10s"},{"n":8,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=8","title":"Mrazish","duration":201,"duration_fmt":"00h:03m:21s"},{"n":9,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=9","title":"Няма накъде","duration":201,"duration_fmt":"00h:03m:21s"},{"n":10,"engine":"bili","url":"https://www.bilibili.com/video/BV17x411w7KC?p=10","title":"Gadna poroda","duration":198,"duration_fmt":"00h:03m:18s"}]}'
+PARTS_ITEMS=$(printf '%s' "$PARTS_FIXTURE" | jq -c '{items: .parts}')
+
+report "a part list adds to a playlist" 0 \
+    "$(jq_in '.status=="ok" and .added==10 and .count==10' "$PARTS_ITEMS" shell/ut-playlist --add parts -j)"
+# Read back FIELD BY FIELD, because "it was accepted" is not the claim — the claim is that
+# what came out the other side is still a CALL: an engine to route to and a per-part URL to
+# hand it. A part list that stored its rows without the `?p=N` would round-trip clean here
+# and play part one ten times.
+report "…and every stored row is a call"  0 \
+    "$(jq_ok '(.items|length)==10 and all(.items[];
+                 .engine=="bili"
+                 and (.url|startswith("https://www.bilibili.com/video/BV17x411w7KC?p="))
+                 and (.title|type)=="string" and (.title|length)>0
+                 and (.duration|type)=="number")' shell/ut-playlist --show parts -j)"
+
+# --enqueue, NOT --queue. `--queue -` without -d is refused on ARGV — the gate never reads
+# stdin — so a check on it would be green for any payload at all, including an empty one:
+# it cannot fail. `--enqueue` parses the items FIRST and only then discovers there is no
+# player to hand them to, which is `not_playing` and exit 4; malformed input is exit 1 on
+# that same surface (measured, both). That gap is what makes this able to go red.
+report "a part list enqueues"             4 "$(rc_in "$PARTS_ITEMS" shell/ut-play --enqueue - -j)"
+report "…parsed, not refused"             0 \
+    "$(jq_in '.status=="not_playing"' "$PARTS_ITEMS" shell/ut-play --enqueue - -j)"
+# The contrast that gives the two above their meaning: the same surface, a payload whose
+# records are NOT calls. 1, not 4 — so the pair really is reading the fixture's shape.
+report "…and a record with no url is 1"   1 \
+    "$(rc_in '[{"engine":"bili"}]' shell/ut-play --enqueue - -j)"
+
+# --parts runs ONE HTTP request and no yt-dlp — the same backwards gate --auth refuses, one
+# verb over. Under the dead proxy this verb reaches its transport and fails with 2; a
+# version that had grown a yt-dlp call on this path (to fetch the title, say) would die 1 at
+# the dependency gate before any transport existed. The PATH guard further up is what stops
+# it passing vacuously on a machine with yt-dlp in /usr/bin.
+report "--parts needs no yt-dlp"          2 \
+    "$(env "PATH=$NODEP_PATH" "http_proxy=$NOPROXY" "https_proxy=$NOPROXY" \
+        shell/bili-resolve --parts -j -- "$BILI_ID" >/dev/null 2>&1; echo $?)"
+rm -rf "$UT_STATE_DIR"
+unset UT_STATE_DIR
+
 echo "── the config file: precedence, and what it refuses ───────────────"
 # WHY THESE CHECKS EXIST AT ALL. The config file is the one input in the suite that a user
 # hand-writes and no command validates on their behalf, so its failure modes are not the
@@ -876,6 +1002,7 @@ if [ "$OFFLINE" = 1 ]; then
     echo "  not run: both engines' live envelopes and their parity, --transcript, the dead"
     echo "  id, the network taxonomy, and the TUI under tmux. Run without --offline to push."
     report_real_config
+    report_real_state
     summary
 fi
 
@@ -1091,6 +1218,47 @@ report "bili titles carry no markup" 0 \
 # engine, which is exactly the contract hole the key was added to close.
 report "bili resolve sends a Referer" 0 \
     "$(jqv '.http_headers|has("Referer")' "$BILI_R")"
+# --parts, live: the two claims the hermetic half above structurally cannot make. One, that
+# the engine still EMITS the shape that fixture froze — asserted as a key-set comparison
+# against the fixture ITSELF, so a field renamed or added on either side is red here and the
+# fixture can never quietly rot into a description of an older engine. Two, that it is still
+# ONE request: this verb talks HTTP rather than going through yt-dlp precisely because one
+# GET answers the whole question (0.5s measured), and a version that started paying a second
+# round trip — or an extractor start — would still be CORRECT and would have given away the
+# only reason the transport is here. 5s against a measured 0.5 is ten-fold headroom, so what
+# trips it is a new round trip, not a slow afternoon.
+_pt0=$(date +%s)
+BILI_P=$(shell/bili-resolve --parts -j -- "$BILI_PARTS_ID" 2>/dev/null)
+_pt1=$(date +%s)
+report "bili --parts is one request" 1 "$([ $((_pt1 - _pt0)) -lt 5 ] && echo 1 || echo 0)"
+report "bili --parts is one line"    1 "$(lines "$BILI_P")"
+# Every part is asserted, not just the first: `?p=N` is built per element, and an off-by-one
+# or a base URL that kept the caller's own query string shows up on element two onwards. The
+# base is taken from the envelope's OWN top-level url, so the claim is internal consistency
+# — the thing a caller relies on when it pipes .parts straight into the player.
+report "bili --parts envelope"       0 \
+    "$(jqv '.status=="ok" and .engine=="bili" and (.id|startswith("BV"))
+              and (.title|type)=="string" and (.title|length)>0
+              and (.count|type)=="number" and .count>=2 and .count==(.parts|length)
+              and (.total_duration|type)=="number"
+              and (.total_duration_fmt|type)=="string"
+              and (.url as $b | all(.parts[];
+                    (.n|type)=="number" and .engine=="bili"
+                    and (.title|type)=="string" and (.title|length)>0
+                    and (.duration|type)=="number"
+                    and (.duration_fmt|type)=="string"
+                    and .url == ($b + "?p=" + (.n|tostring))))' "$BILI_P")"
+report "the offline fixture still fits" \
+    "$(printf '%s' "$PARTS_FIXTURE" | jq -Sc '[keys, (.parts[0]|keys)]' 2>/dev/null)" \
+    "$(printf '%s' "$BILI_P" | jq -Sc '[keys, (.parts[0]|keys)]' 2>/dev/null)"
+# A single-part video is a list of ONE and is NOT an error — the contract says so, and the
+# plausible wrong implementation (treat "no parts to choose between" as a failure) would pass
+# every other --parts check in this file. BILI_ID is that handle, which is why it is separate
+# from BILI_PARTS_ID above.
+report "one part is still a list"    0 \
+    "$(jq_ok '.status=="ok" and .count==1 and (.parts|length)==1
+                and .parts[0].url==(.url + "?p=1")' shell/bili-resolve --parts -j -- "$BILI_ID")"
+
 # The player routes by NAME, and the name is the command prefix — the whole reason the
 # lookup is a string concatenation instead of a registry.
 report "ut-play routes to the bili engine" 0 \
@@ -1450,4 +1618,5 @@ else
 fi
 
 report_real_config
+report_real_state
 summary

@@ -103,6 +103,24 @@ ENGINE_NAME="bili"
 # Highest quality video+audio. This can start slower than a progressive stream.
 # Optional fast-start format for interactive playback.
 
+# THE PARTS ENDPOINT — this file's second transport, and the suite's second (and last)
+# hand-built HTTP request; the sibling half's `fetch_page_once` is the first. It is here
+# rather than behind yt-dlp because yt-dlp cannot answer the question: `--flat-playlist`
+# returns {ie_key,_type,url} per part and NO title and NO duration (measured 2026-08-29),
+# which is an envelope with nothing in it. One GET answers the whole thing in 0.38-0.43s.
+#
+# `view` rather than `/x/player/pagelist`: the two return a byte-identical `pages[]`/`data[]`
+# for the same cost, and only `view` also carries `.data.title` and `.data.duration` — the
+# two top-level fields of the envelope below. Sending UA and Referer is not strictly
+# required by this endpoint today (measured: a bare request answers 200) and is sent anyway,
+# for the reason bili-search states about a stale UA. Nothing else is sent: no cookie, no
+# buvid, no signature. AS-BUILT-engine.md.
+#
+# UNPREFIXED, like bili-search's SEARCH_ENDPOINT/SEARCH_REFERER and for the same reason:
+# since D16 the prefix IS config reachability, so a constant must not wear a settable name.
+VIEW_ENDPOINT="https://api.bilibili.com/x/web-interface/view"
+VIEW_REFERER="https://www.bilibili.com/"
+
 # Cookies (login) are ON by default (browser: chrome). On this site they buy AUDIO QUALITY
 # rather than access: an account — more so a premium one — is offered Hi-Res / Dolby /
 # lossless renditions that an anonymous client is not, and this suite's main use is
@@ -167,7 +185,7 @@ if [[ -n "${BILI_COOKIE_BROWSER:-}" && "$BILI_COOKIE_BROWSER" != "none" ]]; then
     fi
 fi
 
-ACTION="stream"      # stream | info | auth
+ACTION="stream"      # stream | info | parts | auth
 # The `-f` default, cross-engine: a user who listens rather than watches says so once.
 PLAYBACK_MODE="$UT_PLAY_MODE"
 FORMAT_SORT=""
@@ -387,6 +405,43 @@ normalize_target() {
         die "'$t' is neither a Bilibili URL nor a BV/av id (to search, run bili-search)"
         ;;
     esac
+}
+
+# The BV/av id inside a normalised watch URL, or empty when it carries none.
+#
+# `--parts` is the one verb here whose input grammar is NARROWER than stream resolution's:
+# its endpoint takes an id (`bvid=` / `aid=`) and has no URL form, while `-f`'s yt-dlp takes
+# the URL and works out the rest. A b23.tv short link is the shape that separates them — it
+# is a REDIRECT, not a spelling of an id, so serving it would mean a second request this
+# verb deliberately does not make. Empty is returned and the caller is told which handle to
+# pass instead; guessing an id is the one thing that must not happen.
+#
+# Both the path form (.../video/BV…) and the query form (?bvid=…) are read, because share
+# URLs use both and either is a handle a person really pastes.
+target_id() {
+    local u="${1%%#*}" q="" seg
+    case "$u" in *\?*)
+        q="${u#*\?}"
+        u="${u%%\?*}"
+        ;;
+    esac
+    u="${u%/}"
+    seg="${u##*/}"
+    if [[ ! "$seg" =~ ^(BV[A-Za-z0-9]{10}|av[0-9]+)$ ]]; then
+        case "&$q" in
+        *[\&]bvid=*)
+            seg="${q##*bvid=}"
+            seg="${seg%%&*}"
+            ;;
+        *[\&]aid=*)
+            seg="${q##*aid=}"
+            seg="av${seg%%&*}"
+            ;;
+        *) seg="" ;;
+        esac
+        [[ "$seg" =~ ^(BV[A-Za-z0-9]{10}|av[0-9]+)$ ]] || seg=""
+    fi
+    printf '%s' "$seg"
 }
 
 # ==============================================================================
@@ -627,7 +682,197 @@ resolve_info() {
 }
 
 # ==============================================================================
-# 5. THE AUTH VERB (read-only: no network, no yt-dlp, no state file)
+# 5. THE PARTS VERB (read-only: one HTTP request, no yt-dlp, no state file)
+# ==============================================================================
+
+# ONE video number can be MANY playable files here — `?p=N` — and that is this site's own
+# shape, not a suite-wide one: on the sibling site an id is a file and its many-item form is
+# a playlist under a different URL. So the verb exists on this engine and never on that one.
+# An engine states a capability by HAVING the verb (AS-BUILT-contract.md §1.3), which is the
+# same way this file states the absence of captions by having no --transcript.
+#
+# The search half cannot answer this and must not try: its response carries no part count at
+# all (measured — every numeric field on a 100-part row, and not one of them is it), so
+# reporting it there would mean one extra request PER ROW against the endpoint where
+# requests are the scarce resource (D11). The resolve half answers it in one.
+
+VIEW_CURL_RC=0
+VIEW_HTTP=""
+VIEW_CODE=""
+
+# The transport seam, twin of bili-search's `fetch_page_once`: arguments reach curl as an
+# ARRAY and the id through --data-urlencode, so nothing in a handle can be read as a further
+# curl argument or leak into the query. Success is all three of curl exiting 0, HTTP 200 and
+# a body `code` of 0 — this host answers 200 with a negative body code for a video that is
+# gone, so the HTTP status alone is not the answer.
+#
+# NO RETRY, unlike the sibling half's one. That retry exists for a BURST: bili-search spends
+# several requests per query and this host's limiter is bursty, so a 412 in the middle of a
+# page plan is very often a 200 a second later. This verb spends exactly one request per
+# invocation and has no burst to smooth out — a retry here would just be a second request
+# made on the caller's behalf without being asked. `network` is the enum member that already
+# means retryable, and the decision to spend another request is the caller's.
+fetch_view_once() {
+    local id=$1 body=$2
+    local cmd=(
+        curl -sS --compressed
+        --max-time 15 --retry 0
+        -o "$body" -w '%{http_code}'
+        -G "$VIEW_ENDPOINT"
+        -H "User-Agent: $BILI_UA"
+        -H "Referer: $VIEW_REFERER"
+    )
+    case "$id" in
+    av*) cmd+=(--data-urlencode "aid=${id#av}") ;;
+    *) cmd+=(--data-urlencode "bvid=$id") ;;
+    esac
+
+    VIEW_CURL_RC=0
+    VIEW_HTTP=$("${cmd[@]}" 2>/dev/null) || VIEW_CURL_RC=$?
+    VIEW_CODE=""
+    if [[ -s "$body" ]]; then
+        VIEW_CODE=$(jq -r '.code // empty' "$body" 2>/dev/null) || VIEW_CODE=""
+    fi
+    ((VIEW_CURL_RC == 0)) && [[ "$VIEW_HTTP" == "200" && "$VIEW_CODE" == "0" ]]
+}
+
+# HTTP status + body code -> the suite's shared reason enum (AS-BUILT-contract.md §3). The
+# same two tables bili-search classifies with, because they describe the same host — and
+# separate from `classify_yt_dlp_error` above, which reads an extractor's prose. The
+# distinction that earns the table its lines: a bogus id answers HTTP 200 / code -400
+# (measured), and calling that `network` would tell an agent to retry forever a handle that
+# will never resolve.
+classify_view_error() {
+    local rc=$1 http=$2 code=$3
+    ((rc != 0)) && {
+        echo "network"
+        return
+    }
+    case "$http" in
+    412 | 429 | 5??)
+        echo "network"
+        return
+        ;;
+    403)
+        echo "forbidden"
+        return
+        ;;
+    404)
+        echo "unavailable"
+        return
+        ;;
+    esac
+    case "$code" in
+    -352 | -412 | -509 | -799)
+        echo "network"
+        return
+        ;;
+    -403 | 62002)
+        echo "forbidden"
+        return
+        ;;
+    -404 | -400)
+        echo "unavailable"
+        return
+        ;;
+    esac
+    echo "unknown"
+}
+
+# The error envelope --info already publishes, minus the fields a part list has no opinion
+# on. Exit 2, never 1: nothing here is the caller's usage error by the time a request has
+# been made, and the taxonomy reserves 1 for the ones decided from argv (AS-BUILT-contract.md §4).
+parts_fail() {
+    local reason=$1
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        jq -nc --arg engine "$ENGINE_NAME" --arg url "$TARGET_URL" --arg reason "$reason" \
+            '{status: "error", engine: $engine, url: $url, reason: $reason}'
+    else
+        echo "bili-resolve: could not list the parts of $TARGET_URL ($reason)" >&2
+    fi
+    exit 2
+}
+
+# EVERY PART IS AN ITEM RECORD. `{engine, url, title, duration, …}` is exactly what
+# ut-playlist stores and what ut-play --queue consumes, so `--parts -j | jq '{items:.parts}'`
+# pipes into either of them with no field renamed — a part list IS a playlist the caller has
+# not saved yet. That is the whole reason the elements carry `engine` and a full `url`
+# rather than a bare part number: a record here is a CALL, never a reference.
+#
+# The canonical id is the one the SITE returns (.data.bvid), not the one that was typed: an
+# av handle resolves to its BV spelling, so every url built below is the canonical form and
+# a record stored from an av call still names the same video a search row does.
+JQ_PARTS='
+(.data.bvid // $fallback) as $id
+| ("https://www.bilibili.com/video/" + $id) as $base
+| (.data.duration // ([.data.pages[].duration] | add)) as $total
+| {status: "ok", engine: $engine, id: $id, url: $base,
+   title: (.data.title // null),
+   count: (.data.pages | length),
+   total_duration: ($total // null),
+   total_duration_fmt: (($total | fmt_dur) // null),
+   parts: [ .data.pages[]
+            | {n: .page, engine: $engine,
+               url: ($base + "?p=" + (.page | tostring)),
+               title: (.part // null),
+               duration: (.duration // null),
+               duration_fmt: ((.duration | fmt_dur) // null)} ]}
+'
+
+resolve_parts() {
+    ensure_scratch
+
+    local id
+    id=$(target_id "$TARGET_URL")
+    [[ -n "$id" ]] ||
+        die "--parts needs a BV or av id and '$TARGET' carries none (a b23.tv link is a redirect, not an id — open it once, or pass the BV id bili-search returns)"
+
+    local body="$SCRATCH_DIR/view.json"
+    fetch_view_once "$id" "$body" ||
+        parts_fail "$(classify_view_error "$VIEW_CURL_RC" "$VIEW_HTTP" "$VIEW_CODE")"
+
+    # A 200/code:0 whose record has no parts is not a video this verb can describe. Checked
+    # before the projection rather than after: `.data.pages[]` on a missing key would emit an
+    # envelope with count 0 and an empty list, which reads as "this video has no parts" —
+    # and every video here has at least one.
+    jq -e '(.data.pages | type) == "array" and (.data.pages | length) > 0' "$body" >/dev/null 2>&1 ||
+        parts_fail "unavailable"
+
+    if [[ "$OUTPUT_MODE" == "json_full" ]]; then
+        jq -c '.' "$body"
+        return 0
+    fi
+
+    local env_json
+    env_json=$(jq -c --arg engine "$ENGINE_NAME" --arg fallback "$id" \
+        "$JQ_PRELUDE $JQ_PARTS" "$body") ||
+        parts_fail "unknown"
+
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        printf '%s\n' "$env_json"
+        return 0
+    fi
+
+    # Prose, in the vocabulary --info and ut-playlist --show already speak: the title, a
+    # dashed summary line, then one line per part. A single-part video is not a special
+    # case and not an error — it prints one row and says so in the count.
+    local title count total_fmt
+    title=$(printf '%s' "$env_json" | jq -r '.title // "(untitled)"')
+    count=$(printf '%s' "$env_json" | jq -r '.count')
+    total_fmt=$(printf '%s' "$env_json" | jq -r '.total_duration_fmt // "?"')
+
+    if [[ -n "$MUSIC_CHAR" ]]; then
+        printf '%s %s\n' "$MUSIC_CHAR" "$title"
+    else
+        printf '%s\n' "$title"
+    fi
+    printf '  - parts: %s   total: %s\n' "$count" "$total_fmt"
+    printf '%s' "$env_json" | jq -r '.parts[] | "  \(.n). \(.title // "")  \(.duration_fmt // "")"'
+    return 0
+}
+
+# ==============================================================================
+# 6. THE AUTH VERB (read-only: no network, no yt-dlp, no state file)
 # ==============================================================================
 
 # Report the cookie DECISION this engine made at startup: which browser profile playback
@@ -668,7 +913,7 @@ resolve_auth() {
 }
 
 # ==============================================================================
-# 6. CLI
+# 7. CLI
 # ==============================================================================
 
 print_usage() {
@@ -678,6 +923,7 @@ bili-resolve — the Bilibili resolve engine: a handle becomes bytes (non-intera
 Usage:
   bili-resolve [-f MODE] [-S SORT] [-j|-J] -- <BV id | av id | URL>
   bili-resolve --info [-j|-J] -- <BV id | av id | URL>
+  bili-resolve --parts [-j|-J] -- <BV id | av id | URL>
   bili-resolve --auth [-j]
 
 The handle is a Bilibili URL, a BV id (what `bili-search -j` returns as results[].id), or
@@ -690,6 +936,9 @@ Options:
   -j       JSON envelope (see below)
   -J       Full raw yt-dlp record
   --info   Metadata only (title, channel, description) — nothing is resolved
+  --parts  List the parts (?p=N) of a multi-part video — one HTTP request, no yt-dlp.
+           Every element is an item record, so the list pipes into ut-playlist --add and
+           ut-play --queue unmapped. A single-part video lists one part, not an error
   --auth   Report the cookie decision: which browser profile playback will read, and
            whether it exists here. No network, no handle. Says cookies are SENT, not
            that they are accepted — an expired login still reports "cookie"
@@ -706,6 +955,14 @@ Resolve JSON (-j): {"status","engine","id","url","title","duration","mode","form
 Info JSON (--info -j): {status,engine,id,title,url,channel,uploader,upload_date,duration,
                         duration_fmt,view_count,like_count,live_status,description,chapters}
 
+Parts JSON (--parts -j): {status,engine,id,title,url,count,total_duration,
+                          total_duration_fmt,parts:[{n,engine,url,title,duration,
+                                                     duration_fmt}]}
+  parts[] elements ARE item records:  --parts -j | jq '{items:.parts}' | ut-playlist --add …
+  The verb needs an id, so a b23.tv short link (a redirect) is refused — pass the BV id.
+  There is no --parts on yt-resolve: one id there is one file, and its many-item form is a
+  playlist under its own URL. A caller probes for the verb by invoking it with no handle.
+
 Auth JSON (--auth -j): {status,engine,auth,cookie_browser,profile_found}
   auth is "cookie" exactly when cookie_browser is not "none" AND profile_found.
 
@@ -714,7 +971,8 @@ There is no --transcript: this site's videos carry no caption track for yt-dlp t
 "none" is worse than a verb that says it does not exist.
 
 A multi-part video resolves to PART ONE. Most music results here are multi-hour
-collections, so this is the useful default; to pick another part, pass the URL with ?p=N.
+collections, so this is the useful default; to pick another part, pass the URL with ?p=N —
+or ask --parts for the whole list, which is where those URLs come from.
 
 Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp failure (see .reason)
 
@@ -729,6 +987,10 @@ Environment:
   BILI_AUDIO_FORMAT        Format for audio/viz modes (default: ba/b)
   BILI_VIDEO_FORMAT        Format for video/ascii modes (default: bv*+ba/b)
   BILI_VIDEO_FORMAT_FAST   Format for fast mode
+  BILI_UA                  User-Agent sent with the --parts request (a browser UA; the
+                           site is known to start refusing one that has gone stale). It is
+                           the ONLY verb here that sends a request of its own making —
+                           every other one goes through yt-dlp, which carries its own.
 
 To search: bili-search <query>   ·   To play: ut-play --engine bili <BV id>
 EOF
@@ -766,6 +1028,10 @@ while (($#)); do
         ;;
     --info)
         ACTION="info"
+        shift
+        ;;
+    --parts)
+        ACTION="parts"
         shift
         ;;
     --auth)
@@ -825,7 +1091,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "bili-resolve: unknown flag '$1' (resolve flags: -f -S -j -J --info --auth)" >&2
+        echo "bili-resolve: unknown flag '$1' (resolve flags: -f -S -j -J --info --parts --auth)" >&2
         exit 1
         ;;
     *)
@@ -884,6 +1150,15 @@ if [[ "$ACTION" == "auth" ]]; then
 fi
 
 normalize_target "$TARGET"
+
+# --parts runs NO yt-dlp — it is one HTTP request — so requiring the extractor for it would
+# be the same backwards gate --auth refuses above. curl is this verb's dependency and jq
+# parses what comes back; both are already required elsewhere in the engine pair.
+if [[ "$ACTION" == "parts" ]]; then
+    require_deps curl jq
+    resolve_parts
+    exit 0
+fi
 
 require_deps yt-dlp jq
 
