@@ -3746,10 +3746,11 @@ more_results() {
     apply_search_results
     # → APPENDS: rows 1..N are unchanged, so the page and row the user was looking at are
     # still the same video — apply_search_results' reset to page 1 threw away a position
-    # that did not need to move. Safe to restore: no filter can be open here (filter_live
-    # owns its own key loop and clears the filter on the way out), display_list_menu clamps
-    # both against the new geometry, and this path only ever grows the row count.
-    # Deliberately NOT done in cycle_sort.
+    # that did not need to move. Safe to restore: no filter can be open here — and that is
+    # now enforced at the call site (move_selection tests FILTER_MODE) rather than asserted,
+    # because filter_live drives the same arrows and this comment used to be wrong.
+    # display_list_menu clamps both against the new geometry, and this path only ever grows
+    # the row count. Deliberately NOT done in cycle_sort.
     page_index=$page
     selected=$sel
     # Both edges record the same key: what is stored is the count a query STARTS from, so the
@@ -4194,7 +4195,7 @@ move_selection() {
     "[C" | "OC" | "["*C | "O"*C) # right → next page
         if ((page_index < NUM_PAGES)); then
             page_index=$(( page_index + 1 )); selected=$(( (page_index - 1) * PAGE_SIZE ))
-        elif [[ "$LIST_SOURCE" == "search" ]]; then
+        elif [[ "$LIST_SOURCE" == "search" ]] && ((FILTER_MODE == 0)); then
             # Past the last page of a SEARCH, → keeps going: fetch one more batch
             # and step onto the first new page. Only if the row count actually
             # grew — on a fetch failure more_results rolled back and reported, and
@@ -4203,6 +4204,15 @@ move_selection() {
             # to fetch, so there the arrow just stops: this LIST_SOURCE test is
             # what keeps that a silent no-op rather than a notice about a query
             # those rows never had — and it is the same test the ← arm below makes.
+            #
+            # FILTER_MODE is the second half of the same guard, and it was MISSING
+            # (measured 2026-08-29: `/` then `zzz` then → against 20 rows fetched
+            # 20 more and dropped the filter). filter_live drives this very
+            # function for its arrows, so "no filter can be open here" was an
+            # assertion, not a fact — the page a filter is showing is a page of the
+            # MATCHES, and running off its end is not a request for more rows. Both
+            # edges take the test, so growing cannot discard the filter and
+            # shrinking cannot reload ALL_ROWS underneath it.
             prev_pages=$NUM_PAGES
             more_results
             if ((NUM_PAGES > prev_pages)); then
@@ -4212,7 +4222,7 @@ move_selection() {
     "[D" | "OD" | "["*D | "O"*D) # left → prev page
         if ((page_index > 1)); then
             page_index=$(( page_index - 1 )); selected=$(( (page_index - 1) * PAGE_SIZE ))
-        elif [[ "$LIST_SOURCE" == "search" ]]; then
+        elif [[ "$LIST_SOURCE" == "search" ]] && ((FILTER_MODE == 0)); then
             # Before page 1 of a SEARCH, ← keeps going the other way: drop the last batch
             # of rows. The exact mirror of the arm above — same key grammar, no modifier,
             # same LIST_SOURCE guard — and it lands on what was a dead no-op. It cannot be

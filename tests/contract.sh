@@ -19,10 +19,10 @@
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md §28.
 #
 # Cost, measured 2026-08-29 and broken down because a number at the door is what a reader
-# decides on: ~84s in full, of which the live half is ~69s (roughly 21 engine round trips) and
+# decides on: ~83s in full, of which the live half is ~68s (roughly 21 engine round trips) and
 # the tmux section is ~16s of that — it was 4s until the write-back checks landed, and the 12
 # is two re-fetches its own keys ask for. `--offline` stops before the first of them: ~15s,
-# 168 of the 227 checks, no packet sent. That 15 is dominated by one deliberate 5.5s lock
+# 168 of the 229 checks, no packet sent. That 15 is dominated by one deliberate 5.5s lock
 # spin — a FRESH held lock has to be waited out, that being what the spin is for; the
 # stale-lock steal beside it costs 0.1s
 # because staleness is tested before the spin, not after (shell/ut-playlist:lock_playlist).
@@ -1288,6 +1288,33 @@ else
     done
     report "the count lands in its own key" 1 "$appended"
     report "and not in the step key" 0 "$(grep -c '^UT_FETCH_BATCH' "$TUI_CFG")"
+
+    # A filter is a page of MATCHES, so running off its end is not a request for more rows.
+    # This went red before the guard landed (measured 2026-08-29): `/` then `zzz` then `→`
+    # against 20 rows fetched 20 more and dropped the filter — filter_live drives the same
+    # move_selection, so more_results' "no filter can be open here" was an assertion, not a
+    # fact. `zzz` matches nothing, which is what makes the check discriminating: the filtered
+    # count is 0, and an unguarded edge replaces it with a whole re-fetched row set.
+    tmux send-keys -t "$TS" / z z z
+    narrowed=0; i=0
+    while [ $i -lt 40 ]; do
+        [ "$(pane_results)" = 0 ] && { narrowed=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "a filter narrows to nothing" 1 "$narrowed"
+    # Esc right behind the arrow, so the wait has a MARKER instead of a guessed duration:
+    # leaving the filter restores the rows, and the count that comes back is the answer —
+    # 20 if the arrow did nothing, 40 if it re-fetched (Esc is read after the blocking fetch
+    # returns, so the number is settled by the time it is non-zero again).
+    tmux send-keys -t "$TS" Right
+    tmux send-keys -t "$TS" Escape
+    n=""; i=0
+    while [ $i -lt 60 ]; do
+        n=$(pane_results)
+        [ -n "$n" ] && [ "$n" != 0 ] && break
+        sleep 0.25; i=$((i + 1))
+    done
+    report "the edge does not fire under it" 20 "$n"
 
     # The refusal. `o` re-fetches and rotates the sort on screen either way — what must not
     # happen is the WRITE, because the environment pins this key and the next startup would
