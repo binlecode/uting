@@ -186,7 +186,7 @@ addition bumps `z`; `1.0.0` is a promise this reference implementation does not 
 ## Keys
 
 `↑/↓` select · `←/→` page · `Enter` play · `Tab` focus card · `/` filter · `n` new search ·
-`m` more results · `o` sort · `v` playback mode · `e` switch source · `a` add to playlist ·
+`o` sort · `v` playback mode · `e` switch source · `a` add to playlist ·
 `b` open a playlist · `d` remove from the playlist on screen · `h` listening history · `+` add to the queue · `>` next track ·
 `Space` pause · `9/0` volume ·
 `[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
@@ -197,9 +197,13 @@ drawn only when `ut-playlist` is installed and `h` only when `ut-history` is, by
 `h` asks for no name — the log is one thing — and shows the 50 newest listenings. `d` is the
 mirror: it is drawn only with a **playlist** on screen, because a search result is a row of
 nothing and the log has no per-row removal to call. It names the track and defaults to no.
-With a
-playlist or the log on screen the three keys that re-fetch a query — `m`, `o`, `e` — say so and
-do nothing; both can mix sources, and each row plays under the engine that produced it. `+` and `>` appear only while
+The row count lives on the two page EDGES rather than on a key of its own: `→` past the last
+page fetches one batch more, and `←` on page 1 drops one again — a local truncation, no
+re-fetch, with a screenful as the floor. Six of these keys — engine, sort, mode, theme,
+language and that count — are written back to your own config file, in place, so the next
+session opens where this one left off (`docs/AS-BUILT-contract.md` §5). With a
+playlist or the log on screen the two keys that re-fetch a query — `o`, `e` — say so and
+do nothing, and the two edges are a silent no-op there; both can mix sources, and each row plays under the engine that produced it. `+` and `>` appear only while
 something is playing: the queue belongs to the player, so with no player there is nothing to
 append to.
 

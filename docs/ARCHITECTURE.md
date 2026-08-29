@@ -710,6 +710,16 @@ reflow、共享时钟与三个播放态。
      Width layer: char_w/disp_w/truncate_disp/cluster_back, cw_range/init_cell_tables
      Fetch UX   : spin_start/spin_stop（后台子 shell，sleep 0.12 一帧）夹住 fetch_json ——
                   每一条取数路径都有动画
+     Row count  : more_results（`→` 越过末页：用当前查询重取，+1 批）,
+                  fewer_results（`←` 在第 1 页：ALL_ROWS 就地截断，−1 批，零网络，
+                  地板是一屏）—— 两条边，一个键都不占（tui §11）
+     Prefs      : mark_pref（cycle 成功之后置脏位；被环境压住的键在这里被拒并说一次）,
+                  flush_prefs（冲刷点是 nav_tick 与 cleanup_on_exit 两个现成的地方）,
+                  write_prefs（就地改写用户配置：一遍扫描、一个临时文件、一次 mv；
+                  注释与空白逐字节搬过去）, pref_value（键→变量的映射，同时**就是**
+                  那张白名单）, pref_value_ok（round-trip 闸）, pref_listed
+                  （3.2 没有关联数组，一个集合就是一个字符串）
+                  —— 六个键，且只写**用户那份**（contract §5「写回」、ROADMAP D18）
      Chrome     : layout_cols, print_hints（HINT_MEASURE）, wrap_print/wrap_emit
                   （WRAP_MEASURE）, print_details（DETAIL_MEASURE）, card_divider,
                   repeat_glyph, render_prog_bar
@@ -787,10 +797,12 @@ reflow、共享时钟与三个播放态。
 ```
    $ uting "lofi hip hop" -n 40 [-f video] [-p 15] [--theme nord] [--engine bili]
      → 自绘菜单（tui §11），两个视图用 Tab/p 切换：
-       列表  ：↑/↓ 移动 · ←/→ 翻页 · Enter 播放（**detached、非阻塞** —— 菜单保住它的终端，
-               而音乐在 n / m / o / 过滤之间继续放）· / 过滤（实时收窄）· n 新搜索 ·
-               m 更多结果 · o 排序 · v 轮换模式（audio→video→fast，对下一次 Enter 生效）·
+       列表  ：↑/↓ 移动 · ←/→ 翻页（→ 越过末页 = 多取一批，← 在第 1 页 = 少要一批，
+               本地截断不取数）· Enter 播放（**detached、非阻塞** —— 菜单保住它的终端，
+               而音乐在 n / o / 过滤之间继续放）· / 过滤（实时收窄）· n 新搜索 ·
+               o 排序 · v 轮换模式（audio→video→fast，对下一次 Enter 生效）·
                e 换源并重新取数（只有装了 2 个以上引擎时才画出来）
+               —— 这六个改的设置会写回用户配置（contract §5「写回」，ROADMAP D18）
        卡片  ：←/→ seek ∓5s · ↑/↓ 音量 · Esc 回到列表
        两者  ：Space 暂停/恢复 · s 停止 · 9/0 音量 · [ ] seek ∓10s ·
                l chrome 语言（en↔zh）· t 调色板家族 · q 退出（回收它的播放器）

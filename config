@@ -9,6 +9,10 @@
 #   ${XDG_CONFIG_HOME:-~/.config}/uting/config
 # which is read first and wins over everything here.
 #
+# THIS FILE IS NEVER WRITTEN BY ANY COMMAND. Your file is: `uting` writes six keys back to
+# it when you change one at runtime (engine, sort, mode, theme, language, result count) —
+# in place, comments and layout kept. AS-BUILT-contract.md §5 (write-back), ROADMAP.md D18.
+#
 #   Precedence:  flag  >  environment  >  your config  >  this file
 #
 #   KEY=value, one per line. `#` to end of line is a comment. One matching quote pair is
@@ -32,11 +36,16 @@
 #               alias YT_TUI_ASCII, which a value here would make unreachable
 #   Set either in your own config or the environment when you want to pin it.
 #
-#   NOT HERE, deliberately: UT_STATE_DIR. Its default is
-#   ${XDG_STATE_HOME:-$HOME/.local/state}/uting — a chain through another variable, which a
-#   flat KEY=value file cannot express, and flattening it to a literal path would silently
-#   drop the XDG support §5 promises. It stays inline in ut-playlist and ut-history. Set it
-#   in your own config or the environment to override.
+#   NOT HERE, deliberately: UT_STATE_DIR and UT_START_RESULTS. Both defaults are a chain
+#   through ANOTHER variable, which a flat KEY=value file cannot express:
+#     UT_STATE_DIR      ${XDG_STATE_HOME:-$HOME/.local/state}/uting — flattening it to a
+#                       literal path would silently drop the XDG support §5 promises. It
+#                       stays inline in ut-playlist and ut-history.
+#     UT_START_RESULTS  unset = follow UT_FETCH_BATCH below. How many rows a query STARTS
+#                       from, as opposed to the step each edge moves by. It stays inline in
+#                       uting, and it is the one key of the four that uting WRITES into your
+#                       own file — pressing → or ← is what first puts it there.
+#   Set either in your own config or the environment to override.
 
 # ── scope: suite ────────────────────────────────────────────────────────────────────────
 UT_HISTORY=1                        # 0 = a detached player writes no listening row
@@ -62,8 +71,10 @@ YT_MPV_INPUT_CONF=                  # path to an mpv input.conf for detached pla
 
 # ── scope: terminal UI (uting) ──────────────────────────────────────────────────────────
 UT_PAGE_ROWS=10                     # rows per screen page; reflowed down to fit the window
-UT_FETCH_BATCH=20                   # first fetch AND the increment m / → adds; a STEP,
-                                    # not a total — UT_SEARCH_RESULTS above is the total
+UT_FETCH_BATCH=20                   # the STEP each page edge moves by: → past the last page
+                                    # adds this many rows, ← on page 1 drops this many. Also
+                                    # the fallback for UT_START_RESULTS (the first fetch).
+                                    # A STEP, not a total — UT_SEARCH_RESULTS is the total
 UT_MODE_CYCLE=audio video fast      # order the v key steps through
 UT_SORT_CYCLE=relevance view_count duration          # order the o key steps through
 UT_THEME_CYCLE=minimal catppuccin tokyonight nord gruvbox onedark mono   # the t key
