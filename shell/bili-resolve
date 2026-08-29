@@ -694,7 +694,7 @@ resolve_info() {
 # The search half cannot answer this and must not try: its response carries no part count at
 # all (measured — every numeric field on a 100-part row, and not one of them is it), so
 # reporting it there would mean one extra request PER ROW against the endpoint where
-# requests are the scarce resource (D11). The resolve half answers it in one.
+# requests are the scarce resource (ROADMAP D5.2). The resolve half answers it in one.
 
 VIEW_CURL_RC=0
 VIEW_HTTP=""

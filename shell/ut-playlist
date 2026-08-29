@@ -605,7 +605,7 @@ while (($#)); do
         ;;
     # One spelling each. --playlists and --delete used to be accepted as second names for
     # --ls and --del; a second official spelling is a second thing to keep in sync and it
-    # doubles the surface a small model has to choose from (CLAUDE.md, D10).
+    # doubles the surface a small model has to choose from (CLAUDE.md, ROADMAP D4).
     --ls) set_action ls; shift ;;
     --show | --add | --rm | --del)
         [[ $# -ge 2 ]] || { echo "ut-playlist: $1 requires a playlist name" >&2; exit 1; }

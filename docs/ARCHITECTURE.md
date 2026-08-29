@@ -62,7 +62,7 @@ V. 对齐的最佳实践。**
 参数 EQ/频谱、Lua 插件 ABI、同步歌词上 —— 全是别人靠语言和库免费拿到、而 bash 3.2 要从零
 手写的东西（§1.1 第 1 条：那是负债，不是护城河）。也不去和 cmus 抢本地/MPD 那一格 ——
 这里播的是引擎给的东西，不是 `~/Music/*.mp3`。**在范围内**的是这套音源上的收听完整度
-（播放列表、队列、收听历史，ROADMAP D14/D15）。其余非目标与已知约束在 §26。
+（播放列表、队列、收听历史，ROADMAP D6）。其余非目标与已知约束在 §26。
 
 判断一个新功能进不进来，先问这一节；答案是"不"的默认成立，除非定位本身被改写。
 
@@ -91,7 +91,7 @@ V. 对齐的最佳实践。**
 
    | 想要的 | bash 为何不行 | 归属 |
    |---|---|---|
-   | MCP stdio server | 手写 JSON-RPC 帧、长连接、并发 | 第三张脸（既非播放器也非引擎，ROADMAP D7） |
+   | MCP stdio server | 手写 JSON-RPC 帧、长连接、并发 | 第三张脸（既非播放器也非引擎，ROADMAP D10） |
    | 流式进度 | 阻塞 `read`、一次性 jq | 引擎（search）+ 播放器（`--status`） |
 
 5. **yt-dlp 与 mpv 在任何方案里都是子进程，Go 也一样。** 引擎的真实价值是 **flag 学问**
@@ -133,13 +133,13 @@ V. 对齐的最佳实践。**
 ## 3. 设计决定（索引）
 
 每条一行；完整理由住在被引用的那一节。**这些 `D#` 是这份文档自己的编号序列** ——
-`ROADMAP.md` 另有一套，引用那一套时永远写成 `ROADMAP D9`，绝不写成光秃秃的 `D9`。
+`ROADMAP.md` 另有一套，引用那一套时永远写成 `ROADMAP D5`，绝不写成光秃秃的 `D5`。
 
 ```
   D0  名字：ut-play、yt-search、yt-resolve、bili-search、bili-resolve、ut-playlist、
       ut-history、uting ——
       每一份文档、每一段帮助文本、每一条错误消息都用的那个规范名。一个命令一个名字，
-      且**不发**短名（ROADMAP D10）。三条命名规矩，一条对一类受众：
+      且**不发**短名（ROADMAP D4）。三条命名规矩，一条对一类受众：
       人机面用发行名（`uting`），播放器带套件前缀（`ut-`），一个引擎带它那个**站点**的名字
       —— 因为那是调用方必须知道的唯一一件事。（§4）
       用 "tui" 而不是 "ui"：uting 恰恰是一个全屏的*终端* UI。
@@ -184,7 +184,7 @@ V. 对齐的最佳实践。**
       （读哪个 profile、它在不在），不是一次鉴权裁决 —— `auth:"cookie"` 与 `retried:false`
       都不代表站点认了那份登录。这个动词归 resolve 半边（cookie 决定本来就住在那儿），
       也是这一半里唯一不吃句柄的动词，且在依赖门之前作答。
-      （ROADMAP D16/D17、AS-BUILT-contract.md §1.3/§3、AS-BUILT-engine.md §8.2）
+      （ROADMAP D7、AS-BUILT-contract.md §1.3/§3、AS-BUILT-engine.md §8.2）
   D16 **默认值是一个根上的数据文件，不是八份内联。** `config` 与 `VERSION` 并排坐在仓库根，
       每个入口点从自己**解析之后**的位置往上一层读它 —— 同一个机制，同一条依赖方向的规矩。
       配置**当数据读，绝不 source**，且只认 `UT_`/`YT_`/`BILI_` 三个命名空间。
@@ -216,7 +216,7 @@ V. 对齐的最佳实践。**
         ├── bili-resolve → <checkout>/shell/bili-resolve   agent 面
         ├── ut-playlist  → <checkout>/shell/ut-playlist    agent 面（可选）
         └── ut-history   → <checkout>/shell/ut-history     agent 面（可选）
-              一个命令一个名字；不发短名（ROADMAP D10）
+              一个命令一个名字；不发短名（ROADMAP D4）
 
    运行时依赖图 —— 站点知识**只**在一对引擎里，播放**只**在播放器里：
 
@@ -259,7 +259,7 @@ V. 对齐的最佳实践。**
 它坐在**仓库根**，而不是脚本旁边：它版本化的是这套套件，不是 `shell/`，
 而根目录是读者 —— 以及其他任何项目 —— 找它的地方。每个入口点都从自己**解析之后**的位置
 往上一层去够它，这也是为什么 `SCRIPT_DIR` 前面那段符号链接链的行走是承重的、不是装饰：
-`~/bin/ut-play` 是一条指进 checkout 的符号链接（ROADMAP D1/D2），所以一个朴素的 `dirname`
+`~/bin/ut-play` 是一条指进 checkout 的符号链接（ROADMAP D2），所以一个朴素的 `dirname`
 得到的是 `~/bin`，那里既没有 `VERSION` 也没有引擎。`ut-play` 曾是唯一一个不走这段行走的
 入口点，于是通过符号链接调用时 `--version` 答的是 `unknown`；现在它按它兄弟们一直以来的
 方式解析。`tests/contract.sh` **通过一条真符号链接**把这个值钉死在文件上，
@@ -355,7 +355,7 @@ dotfiles 布局里成立；把套件抽成自己的仓库，才把它暴露出�
 **一个引擎的两半不必用同一种原语。** `bili-search` 用 `curl` 说 HTTP，
 而 `bili-resolve` 外壳调用 `yt-dlp`；YouTube 那一对两半都用 `yt-dlp`。
 一半与它的调用方之间的接缝是**信封**（AS-BUILT-contract.md §3），不是背后那件工具 ——
-这也是为什么拆分是按*操作*而不是按站点（ROADMAP D11）。
+这也是为什么拆分是按*操作*而不是按站点（ROADMAP D5.2）。
 
 **yt-dlp 是在表里那些点上被调用的，而不是收在单一接缝后** —— 但它是每个客户端都依赖的
 抽取标准，所以"替换它"不是一个现实目标；价值在于每一处都是一个朴素的 `yt-dlp …` 数组，
@@ -480,7 +480,7 @@ AS-BUILT-contract.md §3）。`bili-resolve` 根本没有 `--transcript` 那一�
    │         ▼
    │  ┌───────────────────────────────────────────────────────────
    │  │ 进程 2 ：<engine>-resolve -j -f MODE -- <handle>
-   │  │    host 白名单：不是本站的 host → 退 1（ROADMAP D12）
+   │  │    host 白名单：不是本站的 host → 退 1（ROADMAP D5.3）
    │  │    resolve_stream ──► yt-dlp --dump-single-json -f <fmt>   [#1]
    │  │    （仅 yt）探测 ──► curl 取 1 字节；失败就匿名重解     [#1']
    │  │                      并把 retried:true 置上（engine §8.2）
@@ -588,7 +588,7 @@ reflow、共享时钟与三个播放态。
 # 第三部分 —— 模块 API（契约面）
 
 **已移出：** 整个契约面 —— 命令规格、把门模型、JSON 数据契约、退出码表与配置面 ——
-如今住在 `docs/AS-BUILT-contract.md`，也就是 ROADMAP D3/D13 的那个冻结面。
+如今住在 `docs/AS-BUILT-contract.md`，也就是 ROADMAP D3 的那个冻结面。
 下面的节号作为墓碑保留，好让旧引用仍然解析得开。
 
 ## 12. 命令规格
@@ -680,7 +680,7 @@ reflow、共享时钟与三个播放态。
      Shared shape: die, validate_enum, require_cmd/require_deps,
                   cleanup_scratch/ensure_scratch, normalize_playback_mode,
                   format_for_mode（模式→格式表）, url_host, is_own_host,
-                  normalize_target（句柄文法 + host 白名单，ROADMAP D12）,
+                  normalize_target（句柄文法 + host 白名单，ROADMAP D5.3）,
                   dump_once, emit_stream, resolve_fail, resolve_stream, resolve_info,
                   resolve_auth（--auth：报告 cookie 决定本身，不承诺它买到了什么）,
                   classify_yt_dlp_error, print_usage
@@ -727,7 +727,7 @@ reflow、共享时钟与三个播放态。
                   注释与空白逐字节搬过去）, pref_value（键→变量的映射，同时**就是**
                   那张白名单）, pref_value_ok（round-trip 闸）, pref_listed
                   （3.2 没有关联数组，一个集合就是一个字符串）
-                  —— 六个键，且只写**用户那份**（contract §5「写回」、ROADMAP D18）
+                  —— 六个键，且只写**用户那份**（contract §5「写回」、ROADMAP D8）
      Chrome     : term_size（TERM_LINES/TERM_COLS —— 走这个 UI 本来就要求的那个 TTY 的真
                   ioctl，不信 $LINES/$COLUMNS；reflow 与分页的输入，tui §11）, layout_cols,
                   print_hints（HINT_MEASURE）, wrap_print/wrap_emit
@@ -819,7 +819,7 @@ reflow、共享时钟与三个播放态。
                而音乐在 n / o / 过滤之间继续放）· / 过滤（实时收窄）· n 新搜索 ·
                o 排序 · v 轮换模式（audio→video→fast，对下一次 Enter 生效）·
                e 换源并重新取数（只有装了 2 个以上引擎时才画出来）
-               —— 这六个改的设置会写回用户配置（contract §5「写回」，ROADMAP D18）
+               —— 这六个改的设置会写回用户配置（contract §5「写回」，ROADMAP D8）
        卡片  ：←/→ seek ∓5s · ↑/↓ 音量 · Esc 回到列表
        两者  ：Space 暂停/恢复 · s 停止 · 9/0 音量 · [ ] seek ∓10s ·
                l chrome 语言（en↔zh）· t 调色板家族 · q 退出（回收它的播放器）
@@ -937,7 +937,7 @@ reflow、共享时钟与三个播放态。
   `audio` 是常态，而 `video`/`fast` 会开它们自己的 GUI 窗口。
 - 阻塞式播放（`ut-play -- <handle>` / `-j`）只在播放结束时才返回；非阻塞的 agent 流程请用
   `--detach` + `--status`/`--stop`，或者 `<engine>-resolve`。
-- **范围说明（ROADMAP D14/D15）：三个收听功能全部已落地**，在 shell 版里，
+- **范围说明（ROADMAP D6）：三个收听功能全部已落地**，在 shell 版里，
   按它们彼此依赖的顺序 —— 播放列表管理（player §9.4、AS-BUILT-contract.md §1.5）、
   队列（player §9.5、§1.1）、收听日志（player §9.6、§1.6）。每一个都与它的键位在**同一个提交**里
   带着自己的 agent 动词与 `-j` 信封一起到达，而这正是它们共同继承的那条约束：

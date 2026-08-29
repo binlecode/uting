@@ -98,7 +98,7 @@ bili-resolve --info ?p=7   BV1vKEn6eE6Q   00h:06m:22s   ← 第 7 P
    0.38s / 一次请求 / 100 条，每条带真标题（`part`）与整数秒时长**（P1=727、P7=383，与
    `--info` 实测的 726.855/382.572 吻合）。`yt-dlp --flat-playlist`（带 bili-resolve 同款
    浏览器 cookie）→ 2.3s 能通，**但每条只有 `{ie_key,_type,url}` —— 无标题无时长**，
-   正是 D11 记过的「flat 无元数据」；匿名则 412。**机制只能是手搓 HTTP，不能是 yt-dlp** ——
+   正是 ROADMAP D5.2 记过的「flat 无元数据」；匿名则 412。**机制只能是手搓 HTTP，不能是 yt-dlp** ——
    打哪个端点由 §5.1 定（那里改成了 `view`，理由与实测同样记在那）。
 
 9. **「全500集」是标题营销：pagelist 实报 100 P。** 搜索行的聚合时长（37923s ≈ 100 P × 平均 379s）
@@ -123,13 +123,13 @@ bili-resolve --info ?p=7   BV1vKEn6eE6Q   00h:06m:22s   ← 第 7 P
 
 ### P1 —— `--parts` 归 resolve 半边，不归 search 半边
 
-**照 D17 的原样。** D17 否掉「往搜索信封里加 `auth` 字段」的两条理由，这里逐条对上：
+**照 ROADMAP D7 的原样。** 它否掉「往搜索信封里加 `auth` 字段」的两条理由，这里逐条对上：
 
 - **两个引擎不对称**：B 站有分 P，YouTube 没有。让 `yt-search` 报一个恒为 `null` 的字段，
   描述的是「这个站没有这个概念」，不是这条结果的事实。
 - **搜索半边算不出来**：§2 第 4 条实测，搜索响应里根本没有 P 数。要让 `bili-search` 报它，
   得**对每条结果多打一次 `/x/web-interface/view`** —— 而 `bili-search` 的稀缺资源恰恰是请求数
-  （`ROADMAP.md` D11 量过：非 flat 的 yt-dlp 搜索 10 条要 >120s）。
+  （`ROADMAP.md` D5.2 量过：非 flat 的 yt-dlp 搜索 10 条要 >120s）。
 
 而 resolve 半边**一次调用就知道**。引擎用动词的有无声明能力（`AS-BUILT-contract.md` §1.3 末条）：
 `bili-resolve` 长出 `--parts`，`yt-resolve` 永远不长。第三个引擎当天自愿加入。
@@ -295,7 +295,7 @@ subject 正在播时章节可跳，不在播时章节只是一份目录。
 `p` 在 **mpv、ncmpcpp、cmus 三家全是「暂停」**，而这里它是一个**不在任何提示里**的视图切换别名
 （`shell/uting:4344`）：一个播放器用户按 `p` 想暂停，得到的是换屏。未公开 + 三家反义，
 两条单独都够退役；顺带把一个字母还给本已砍半的键空间（大小写同绑，26 个可用位）。
-TUI 键位不属于冻结面（D3/D13 只冻 CLI），零契约成本。落地是删一个 `||` 条件 + grep 门。
+TUI 键位不属于冻结面（ROADMAP D3 只冻 CLI），零契约成本。落地是删一个 `||` 条件 + grep 门。
 
 ### P11 —— `j`/`k` = ↓/↑ 别名（键位审计 §12 的第二条）
 
@@ -317,7 +317,7 @@ cmus 的 j/k 本来就是导航，零反义。**只取 j/k，不取 hjkl 全套*
 - **`？`（全角）与 `?` 同绑** —— 这是一个双语（你听）TUI，zh 输入法下的 shift-/ 出的是全角问号，
   utf8_complete 本来就会把它组装成一个键。
 - **`?` 加入写回家族**：`UT_KEYS=core|full` 进 `config`，`?` 现场切换并写回用户文件 ——
-  与 v/o/e/l/t/f 同一条 D18 机制，没有新形状。PREF_KEYS 再 +1（P9 清点时一并改）。
+  与 v/o/e/l/t/f 同一条 ROADMAP D8 机制，没有新形状。PREF_KEYS 再 +1（P9 清点时一并改）。
 - **业界对照**：`?` 是 lazygit / k9s / tig / less / ranger 的通用 help 键，此处空闲、零反义。
   被否的替代：一个独立的全键 overlay（第二个键文档面 ——「相邻两行 chrome 不得都记键」
   那条关切的放大版）；三态循环 core→full→hidden（第三态省一行、丢全部提示，不成交易）。
@@ -342,7 +342,7 @@ cmus 的 j/k 本来就是导航，零反义。**只取 j/k，不取 hjkl 全套*
 
 - **机制：`curl GET /x/web-interface/view?bvid=<id>`**，UA/Referer 与 bili-search 同款，零凭据。
   这给 `bili-resolve` 添了第二个传输原语，先例与理由都是现成的：`yt-resolve` 的 `probe_raw`
-  已经在 resolve 半边用 curl，D11 的分界本来就按「操作选传输」。新 seam 名 `fetch_view_once`，
+  已经在 resolve 半边用 curl，ROADMAP D5.2 的分界本来就按「操作选传输」。新 seam 名 `fetch_view_once`，
   与 `fetch_page_once` 同族 —— **本套件第二处手搓 HTTP 请求，只许这两处**。curl 是本动词的门：
   缺失 → `require_cmd` 同款 `die`（用法层 1，同 bili-search 对 curl 的既有姿态）。
 - **端点改过一次，理由记在这里（2026-08-29，本节初版写的是 `/x/player/pagelist`）。**
@@ -393,7 +393,7 @@ cmus 的 j/k 本来就是导航，零反义。**只取 j/k，不取 hjkl 全套*
 本来就取最优，`max` 与 `auto` 无从区分）。**别名表归 `ut-play`**（照 §1.3 对 `-f` 的规定：
 引擎接缝只运载规范拼写）。
 
-**`quality_sort_for_tier(mode, tier)` 的出厂表**（两个引擎各持一份同值副本，D9 允许的引擎间复制）：
+**`quality_sort_for_tier(mode, tier)` 的出厂表**（两个引擎各持一份同值副本，ROADMAP D5.1 允许的引擎间复制）：
 
 | mode \ tier | low | medium | high |
 |---|---|---|---|
@@ -416,7 +416,7 @@ UT_KEYS=core                                # keymap 档位：core | full（? �
 ```
 
 **注意 `PREF_KEYS` 会从六个变成八个**（`shell/uting:55`：+`UT_PLAY_QUALITY`、+`UT_KEYS`）。
-`CLAUDE.md`、`config` 的抬头注释、`ROADMAP.md` D18、`AS-BUILT-contract.md` §5 里
+`CLAUDE.md`、`config` 的抬头注释、`ROADMAP.md` D8、`AS-BUILT-contract.md` §5 里
 **四处都写着「六个键」** —— P9 必须全部改掉，否则就是 `audit-conformance` 抓的那类陈旧散文。
 
 ---

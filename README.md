@@ -80,7 +80,7 @@ Not a general-purpose terminal music player: that layer is full and well maintai
 ncmpcpp, rmpc, musikcube, kew, termusic — and this is not a replacement for it. What plays here
 comes from an engine, not from `~/Music`.
 
-**All three listening features have landed** (`docs/ROADMAP.md` D14/D15): playlist
+**All three listening features have landed** (`docs/ROADMAP.md` D6): playlist
 management (`ut-playlist`, the `a` and `b` keys), the queue (`ut-play
 --queue/--enqueue/--next`, `+` and `>`), and the listening history (`ut-history`, the `h` key).
 Each shipped with the rule they all carry: an agent surface — a verb and a `-j` envelope —
@@ -174,7 +174,7 @@ The human face carries the project's own name, so `~/bin/uting` is a plain symli
 `shell/uting` — same word at both ends, no alias in between. Want something shorter to type?
 Make one — `alias ut=uting`, or a symlink of your own. Nothing reads its own `argv[0]`, so any
 name works. The suite ships no short form itself, because a second official spelling is a second
-thing to keep in sync (`docs/ROADMAP.md` D10).
+thing to keep in sync (`docs/ROADMAP.md` D4).
 
 `uting --version` (or `-V`) answers before any dependency check, so it works on a machine that
 has not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. Every
@@ -184,7 +184,7 @@ That number is **semver over the CLI contract, not over the code**: the command 
 flags, the exit-code table, the JSON envelopes, and the player lifecycle are the public API — a
 renderer or a comment is not. While the suite is `0.y.z`, a breaking change bumps `y` and an
 addition bumps `z`; `1.0.0` is a promise this reference implementation does not make yet, and
-`docs/ROADMAP.md` D13 says what would change that.
+`docs/ROADMAP.md` D3 says what would change that.
 
 ## Keys
 

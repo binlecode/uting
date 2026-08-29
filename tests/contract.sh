@@ -595,7 +595,7 @@ done
 report "one version, every entry point" 1 \
     "$(for c in $ENTRY_POINTS; do "$c" --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
 # …and that the one version is the FILE's, asserted through a SYMLINK — the documented
-# install (ROADMAP D1/D2: users symlink these onto their own PATH) and the configuration this
+# install (ROADMAP D2: users symlink these onto their own PATH) and the configuration this
 # breaks in. A script that does not resolve its own symlink chain looks for VERSION next to
 # the LINK, finds none, and prints "unknown". Seven entry points all printing "unknown" agree
 # with each other perfectly, so the check above stays green while every one of them is wrong;
@@ -1396,7 +1396,7 @@ else
     # All of it on the pane that is ALREADY up: no second cold start, no second cold search.
     # The rows on screen are the fixture these keys need, and the keys are the only way to
     # reach the write path — there is no verb for it, deliberately (the agent surface for a
-    # preference IS the config file, ROADMAP.md D18).
+    # preference IS the config file, ROADMAP.md D8).
     #
     # The write is DEFERRED — a cycle sets a dirty bit and the flush happens on the reader's
     # idle tick — so every assertion below POLLS the file instead of reading it once. That is
