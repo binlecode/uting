@@ -24,8 +24,8 @@ ut-history --ls -n 20 -j               # machine: what was played, when, for how
 
 **Reference implementation.** This is a working shell suite that its author uses daily, published
 together with a design document that is longer than most of the code it describes. It is not
-packaged: there is no installer and no Homebrew formula, and none is planned for the shell version
-(see [`docs/ROADMAP.md`](docs/ROADMAP.md) for why, and for what a Go rewrite would change).
+packaged: there is no installer and no Homebrew formula, and none is planned
+(see [`docs/ROADMAP.md`](docs/ROADMAP.md) for why — and for why a Go rewrite was ruled out).
 
 The document may be the more useful artifact. `docs/ARCHITECTURE.md` records things that are usually
 learned and then forgotten: East-Asian-width handling in a terminal renderer, DCS frame
@@ -285,9 +285,9 @@ surface.
   the width layer, the reflow and the three play states.
 - [`docs/AS-BUILT-verification.md`](docs/AS-BUILT-verification.md) — the risk register and the
   verification matrix: what each check proves, and what is deliberately not covered.
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — the decisions and their reopen conditions, what is not
-  built yet, and the conditions under which the core would move to Go. No changelog, no survey
-  data, and no positioning — that is §1 of the architecture doc.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — the decisions and their reopen conditions, and what is
+  not built yet. No changelog, no survey data, and no positioning — that is §1 of the
+  architecture doc.
 - [`docs/RESEARCH-tui-player.md`](docs/RESEARCH-tui-player.md) — the survey those decisions rest
   on, kept separate so the roadmap holds decisions rather than data. Two halves, and §1 says
   which is which: **§2–§5 are measured** — the name screening, what comparable projects do by
