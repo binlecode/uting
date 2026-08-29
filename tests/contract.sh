@@ -18,11 +18,13 @@
 #
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md §28.
 #
-# Cost, measured 2026-08-26 and broken down because a number at the door is what a reader
-# decides on: ~82s in full, of which the live half is ~67s (roughly 19 engine round trips) and
-# tmux is ~4s. `--offline` stops before the first of them: ~15s, 167 of the 217 checks, no
-# packet sent. The 14 is dominated by one deliberate 5.5s lock spin — a FRESH held lock has to
-# be waited out, that being what the spin is for; the stale-lock steal beside it costs 0.1s
+# Cost, measured 2026-08-29 and broken down because a number at the door is what a reader
+# decides on: ~84s in full, of which the live half is ~69s (roughly 21 engine round trips) and
+# the tmux section is ~16s of that — it was 4s until the write-back checks landed, and the 12
+# is two re-fetches its own keys ask for. `--offline` stops before the first of them: ~15s,
+# 168 of the 227 checks, no packet sent. That 15 is dominated by one deliberate 5.5s lock
+# spin — a FRESH held lock has to be waited out, that being what the spin is for; the
+# stale-lock steal beside it costs 0.1s
 # because staleness is tested before the spin, not after (shell/ut-playlist:lock_playlist).
 #
 # Three of those numbers were wrong here for a while — the file claimed ~80s, "one 5s lock
@@ -85,6 +87,33 @@ STATE_DIR="$TMPDIR/uting-$(id -u)"
 # themselves.
 export UT_CONFIG="$UT_TEST_TMP/config"
 : > "$UT_CONFIG"
+
+# ---- …and the real one, WATCHED --------------------------------------------------------
+# The export above redirects every command this shell runs. It does not reach a tmux pane —
+# a new session inherits the tmux SERVER's environment, not this shell's, which is why the
+# TUI section passes its own knobs explicitly — and it does not reach whatever a future check
+# forks in a way nobody predicted here. That gap used to be harmless because nothing in the
+# suite WROTE a config; uting now writes six preference keys back to the user's file, so an
+# unisolated caller does not merely read a developer's config, it edits it, and the value it
+# leaves is one they never chose.
+#
+# Two fingerprints around the whole run catch ANY such caller, including one added long after
+# this line was written — which is exactly what three call sites each remembering to export
+# cannot do. cksum rather than a timestamp: it is POSIX (macOS `stat` and GNU `stat` do not
+# share a format string), and the claim is that the file's CONTENT is the one the user left.
+REAL_CFG="${XDG_CONFIG_HOME:-$HOME/.config}/uting/config"
+cfg_fingerprint() { cksum < "$REAL_CFG" 2>/dev/null || echo absent; }
+REAL_CFG_SUM=$(cfg_fingerprint)
+# Called before each summary, so both exits make the claim. Absent on both sides is a skip and
+# not a green: a machine with no config to damage proves nothing about one that has it. Absent
+# then PRESENT is a fail, which is the shape a leaked write takes on that same machine.
+report_real_config() {
+    if [ "$REAL_CFG_SUM" = absent ] && [ "$(cfg_fingerprint)" = absent ]; then
+        echo "  skip  (no config at $REAL_CFG to watch)"
+        return 0
+    fi
+    report "your own config is untouched" "$REAL_CFG_SUM" "$(cfg_fingerprint)"
+}
 
 # The reap comes FIRST and the directory second — the order playback.sh's cleanup already
 # uses, and for a reason this file learned the hard way. Nothing here presses Enter, but the
@@ -846,6 +875,7 @@ if [ "$OFFLINE" = 1 ]; then
     # than a green run, and a reader who cannot see the list will assume it is nothing.
     echo "  not run: both engines' live envelopes and their parity, --transcript, the dead"
     echo "  id, the network taxonomy, and the TUI under tmux. Run without --offline to push."
+    report_real_config
     summary
 fi
 
@@ -1120,7 +1150,21 @@ else
         UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --add seeded-list -j >/dev/null 2>&1
     report "the playlist fixture really seeded" 1 \
         "$(UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --ls -j 2>/dev/null | jq -r '.count // 0')"
-    TUI_CMD="cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' shell/uting 'lofi hip hop'"
+    # A config file of the pane's own, and the fixture for every write-back check below. Its
+    # SHAPE is the discriminator: UT_PLAY_MODE is present, so `v` has to edit that line in
+    # place and leave the comment on it alone — a naive `printf '%s=%s\n'` rewrite passes the
+    # value check and fails the comment beside it. UT_START_RESULTS is absent, so the count
+    # keys have to APPEND. UT_SORT_FIELD is absent too, and pinned in the pane's environment
+    # below: "the file never grew that key" is how a refused write is asserted without
+    # needing to know when the write would have happened.
+    TUI_CFG="$UT_TEST_TMP/tui-config"
+    printf '%s\n' '# a config a human wrote' 'UT_PLAY_MODE=audio    # keep me' >"$TUI_CFG"
+    # UT_SORT_FIELD in the pane's ENVIRONMENT is the discriminating input for the refusal:
+    # the environment beats the file at every startup, so a uting that wrote this key would
+    # record view_count and then discard it on the next run. The value it would write
+    # (view_count) differs from the pinned one (relevance), so the check cannot pass by
+    # accident — which is exactly what a fixture that agreed with the environment would do.
+    TUI_CMD="cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance shell/uting 'lofi hip hop'"
     TUI_CMD="$TUI_CMD"'; printf "RC=%s\n" $?'
     TUI_CMD="$TUI_CMD"'; stty -a </dev/tty | tr " " "\n" | grep -E "^-?(echo|icanon)$" | tr "\n" " " | sed "s/^/FLAGS= /"; echo; sleep 20'
     tmux new-session -d -s "$TS" -x 100 -y 30 "$TUI_CMD"
@@ -1173,6 +1217,95 @@ else
     # an `h` that quietly did nothing would leave the search on screen and make the return
     # leg pass for free.
     tmux resize-window -t "$TS" -x 100 -y 30 2>/dev/null
+
+    # ---- the preference write-back and the two count edges ----------------------------
+    # All of it on the pane that is ALREADY up: no second cold start, no second cold search.
+    # The rows on screen are the fixture these keys need, and the keys are the only way to
+    # reach the write path — there is no verb for it, deliberately (the agent surface for a
+    # preference IS the config file, ROADMAP.md D18).
+    #
+    # The write is DEFERRED — a cycle sets a dirty bit and the flush happens on the reader's
+    # idle tick — so every assertion below POLLS the file instead of reading it once. That is
+    # not a workaround for a race; it is the claim: a preference must reach the disk without
+    # anyone quitting the app.
+    pane_results() {
+        tmux capture-pane -t "$TS" -p -J 2>/dev/null |
+            grep -o 'results=[0-9][0-9]*' | head -1 | cut -d= -f2
+    }
+    tmux send-keys -t "$TS" v
+    wrote=0; i=0
+    while [ $i -lt 40 ]; do
+        grep -q '^UT_PLAY_MODE=video' "$TUI_CFG" && { wrote=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "v writes the mode to your config" 1 "$wrote"
+    report "the comment on that line survived" 1 "$(grep -c '# keep me' "$TUI_CFG")"
+
+    # → past the last page fetches one more batch. Two presses is the geometry this pane has
+    # (10 rows a page, 20 rows on screen), and the round repeats rather than assuming it: a
+    # reflow that made the pages shorter would just take another lap. The assertion is
+    # RELATIONAL — it grew — so a lap that overshoots to three batches still proves the edge.
+    grew=0; i=0
+    while [ $i -lt 3 ]; do
+        tmux send-keys -t "$TS" Right; sleep 0.4
+        tmux send-keys -t "$TS" Right
+        j=0
+        while [ $j -lt 48 ]; do
+            n=$(pane_results)
+            [ -n "$n" ] && [ "$n" -gt 20 ] && { grew=1; break; }
+            sleep 0.25; j=$((j + 1))
+        done
+        [ "$grew" = 1 ] && break
+        i=$((i + 1))
+    done
+    report "the right edge grows the count" 1 "$grew"
+
+    # ← on page 1 is the mirror, and the reason it can live on a bare arrow: it truncates
+    # what is already in hand, so it costs nothing and cannot fail. Twelve presses is a walk
+    # back to page 1 from wherever the growth left the cursor plus the steps down; the ones
+    # that land at the floor are the next check's, and they must do nothing at all.
+    i=0
+    while [ $i -lt 12 ]; do tmux send-keys -t "$TS" Left; sleep 0.12; i=$((i + 1)); done
+    shrank=0; i=0
+    while [ $i -lt 40 ]; do
+        [ "$(pane_results)" = 20 ] && { shrank=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "the left edge drops it again" 1 "$shrank"
+    # The floor. An implementation without one walks 20 → 0 and renders an empty list, which
+    # is the shape this catches: the count must sit still, not fall.
+    i=0
+    while [ $i -lt 6 ]; do tmux send-keys -t "$TS" Left; sleep 0.12; i=$((i + 1)); done
+    sleep 1
+    report "and stops at a screenful" 20 "$(pane_results)"
+    # The append path, and the key that must NOT be written: UT_FETCH_BATCH is the STEP each
+    # edge moves by, so storing a total in it would make the next → add 20 rows at a time
+    # more than the last. The count lives in its own key or nowhere.
+    appended=0; i=0
+    while [ $i -lt 24 ]; do
+        grep -q '^UT_START_RESULTS=20$' "$TUI_CFG" && { appended=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "the count lands in its own key" 1 "$appended"
+    report "and not in the step key" 0 "$(grep -c '^UT_FETCH_BATCH' "$TUI_CFG")"
+
+    # The refusal. `o` re-fetches and rotates the sort on screen either way — what must not
+    # happen is the WRITE, because the environment pins this key and the next startup would
+    # read the file's value and throw it away. The notice names the key, which is what makes
+    # this greppable in either chrome language.
+    tmux send-keys -t "$TS" o
+    said=0; i=0
+    while [ $i -lt 60 ]; do
+        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'UT_SORT_FIELD' && { said=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "a pinned key is refused out loud" 1 "$said"
+    report "and never reaches the file" 0 "$(grep -c '^UT_SORT_FIELD' "$TUI_CFG")"
+    # The notice holds the frame on a press-any-key; Space is inert here (there is no player
+    # to pause), so it dismisses the notice without doing anything if the notice never came.
+    tmux send-keys -t "$TS" Space
+    sleep 0.5
+
     tmux send-keys -t "$TS" h
     opened=0; i=0
     while [ $i -lt 40 ]; do
@@ -1280,4 +1413,5 @@ else
     rm -rf "$TUI_STATE"
 fi
 
+report_real_config
 summary

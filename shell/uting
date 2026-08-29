@@ -44,6 +44,21 @@ else
     UT_VERSION="unknown"
 fi
 
+# WHAT THE ENVIRONMENT ALREADY PINS, noted BEFORE the chain below resolves — this is the one
+# fact reading the config destroys. ut_read_config skips every key that is already set (that
+# is what makes the environment beat a file), so once it has run, "the user exported it" and
+# "the file supplied it" are indistinguishable. The write-back path needs the difference: a
+# key the environment pins would be written to the file and then IGNORED at the next startup,
+# and a file recording a value the program has already decided to throw away is a lie that
+# surfaces months later. Ahead of the block below rather than inside it, because that block is
+# duplicated verbatim in all eight entry points and this is uting's alone.
+PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_SORT_FIELD YT_LANG UT_START_RESULTS"
+PREF_PINNED=""
+for _pk in $PREF_KEYS; do
+    if eval "[[ -n \"\${$_pk+x}\" ]]"; then PREF_PINNED="$PREF_PINNED $_pk"; fi
+done
+unset _pk
+
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
 # Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
@@ -88,6 +103,181 @@ if [[ ! -r "$UT_DEFAULTS" ]]; then
 fi
 ut_read_config "$UT_CONFIG"
 ut_read_config "$UT_DEFAULTS"
+
+# ── PREFERENCE WRITE-BACK ───────────────────────────────────────────────────────────────
+# The six keys above are the ones this TUI changes at runtime, and they are written back to
+# the USER's config file in place. A preference that has to be re-pressed every session is not
+# a preference; the reasoning and the reopen condition are ROADMAP.md D18, the key table is
+# AS-BUILT-contract.md §5. What the code below is:
+#
+#   WHICH FILE  the user's own ($UT_CONFIG). The shipped `config` is NEVER written — it is
+#               this checkout's declared defaults, not anybody's preferences.
+#   WHICH KEYS  PREF_KEYS, and nothing else. pref_value is the whitelist as well as the
+#               key→variable map, so a key it does not name has no value to write and the
+#               path cannot reach it.
+#   WHEN        deferred. A cycle sets a dirty bit and returns; the file is written from
+#               nav_tick or from the exit trap. t and l are held down, and a rewrite per
+#               keypress would put a whole file rewrite inside the same loop that is
+#               reassembling a multi-byte character out of single bytes.
+#   HOW         the value on the matching line is replaced and NOTHING else on it is: the
+#               key's own spacing, the gap before a trailing comment and the comment itself
+#               are carried over byte for byte. Re-padding the comment column was considered
+#               and refused — the width layer that knows a CJK comment is two cells per
+#               character lives in the RENDERER, and padding by bytes here would misalign
+#               every Chinese comment in a file that stays perfectly legal and reports nothing.
+#   ROUND TRIP  the only correctness test that matters: what is written must read back
+#               identically through ut_read_config. That is what pref_value_ok enforces.
+PREF_DIRTY=""      # keys whose value has changed and is not on disk yet
+PREF_WRITE_OFF=0   # a write failed once; stop retrying at every tick
+PREF_SAID=""       # keys already refused out loud, so the notice is said once each
+
+# The whitelist AND the key→variable map. One case, because two of them would be two places
+# to add the seventh key and one place to forget it.
+pref_value() {
+    case "$1" in
+    UT_DEFAULT_ENGINE) printf '%s' "$ENGINE" ;;
+    YT_THEME)          printf '%s' "$THEME" ;;
+    UT_PLAY_MODE)      printf '%s' "$PLAY_MODE" ;;
+    UT_SORT_FIELD)     printf '%s' "$SORT_FIELD" ;;
+    YT_LANG)           printf '%s' "$UI_LANG" ;;
+    UT_START_RESULTS)  printf '%s' "$RESULT_N" ;;
+    esac
+}
+
+# pref_listed <needle> <space-separated haystack>. bash 3.2 has no associative arrays and
+# these lists are six long, so a set is a string and membership is a glob.
+pref_listed() {
+    case " $2 " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+
+# A value is acceptable only if ut_read_config would read it back UNCHANGED. The six are
+# enumerations and a number, so this never fires today; it is here so a seventh key cannot
+# quietly write a line the loader mangles — `#` starts a comment, one matching quote pair is
+# stripped, surrounding space is trimmed and a leading ~/ becomes $HOME.
+pref_value_ok() {
+    case "$1" in
+    "" | *"#"* | *'"'* | *"'"* | "~/"*) return 1 ;;
+    esac
+    case "$1" in
+    [[:space:]]* | *[[:space:]] | *$'\n'*) return 1 ;;
+    esac
+    return 0
+}
+
+# mark_pref <key> — called on the SUCCESS path of a cycle, never before it: a cycle whose
+# re-fetch failed has been rolled back on screen, and the file must agree with the screen.
+mark_pref() {
+    local k="$1"
+    if ! pref_listed "$k" "$PREF_KEYS"; then return 0; fi
+    # REFUSED, not silently written: the environment wins over the file at every startup, so
+    # writing this key would record a value the next run reads and discards.
+    if pref_listed "$k" "$PREF_PINNED"; then
+        if ! pref_listed "$k" "$PREF_SAID"; then
+            PREF_SAID="$PREF_SAID $k"
+            store_notice "$S_PREF_ACT:" "$k $S_PREF_PINNED"
+        fi
+        return 0
+    fi
+    if ! pref_listed "$k" "$PREF_DIRTY"; then PREF_DIRTY="$PREF_DIRTY $k"; fi
+    return 0
+}
+
+# write_prefs <keys> — ONE pass over the file, one temp, one rename, however many keys are
+# pending. Deliberately no lock: two uting sessions writing the same file is last-writer-wins
+# on a whole file that is always internally consistent, and what is lost is one preference,
+# not user data. A lock spin inside a key loop would be the worse trade.
+write_prefs() {
+    local keys="$1" line lhs rhs key val pre gap comment trimmed lead bare tmp
+    local out="" seen="" k
+    if [[ -e "$UT_CONFIG" ]]; then
+        [[ -r "$UT_CONFIG" ]] || return 1
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            if [[ "$line" == *=* ]]; then
+                lhs="${line%%=*}"
+                key="$lhs"
+                while [[ "$key" == [[:space:]]* ]]; do key="${key#[[:space:]]}"; done
+                while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
+                # A commented-out line keeps its `#`, so its key never matches and it is
+                # carried through untouched — which is the right answer: the user disabled it.
+                if pref_listed "$key" "$keys" && ! pref_listed "$key" "$seen"; then
+                    val=$(pref_value "$key")
+                    if pref_value_ok "$val"; then
+                        rhs="${line#*=}"
+                        comment=""
+                        pre="$rhs"
+                        if [[ "$rhs" == *"#"* ]]; then
+                            pre="${rhs%%#*}"
+                            comment="#${rhs#*#}"
+                        fi
+                        # Split the value off its own whitespace so both halves survive:
+                        # `lead` is what sits between the = and the value, `gap` is the run
+                        # of spaces that aligns the comment. Anchored strips only — pattern
+                        # SUBSTITUTION is quadratic on bash 3.2 (§28).
+                        trimmed="$pre"
+                        while [[ "$trimmed" == *[[:space:]] ]]; do trimmed="${trimmed%[[:space:]]}"; done
+                        gap="${pre#"$trimmed"}"
+                        bare="$trimmed"
+                        while [[ "$bare" == [[:space:]]* ]]; do bare="${bare#[[:space:]]}"; done
+                        lead="${trimmed%"$bare"}"
+                        line="$lhs=$lead$val$gap$comment"
+                        seen="$seen $key"
+                    fi
+                fi
+            fi
+            out="$out$line"$'\n'
+        done < "$UT_CONFIG"
+    else
+        mkdir -p "$(dirname "$UT_CONFIG")" 2>/dev/null || return 1
+        out="# uting — your own settings, and the file uting writes a changed one back to."$'\n'
+        out="$out# Hand-edit it freely: comments and layout are preserved, only values move."$'\n'
+        out="$out# Precedence: flag > environment > THIS FILE > the shipped <checkout>/config."$'\n'
+    fi
+    # A key the file does not carry yet is appended. This is the only line the write ADDS,
+    # and it is how UT_START_RESULTS — which is deliberately absent from the shipped config,
+    # its unset state meaning "follow UT_FETCH_BATCH" — first appears anywhere.
+    for k in $keys; do
+        if ! pref_listed "$k" "$seen"; then
+            val=$(pref_value "$k")
+            if pref_value_ok "$val"; then out="$out$k=$val"$'\n'; fi
+        fi
+    done
+    tmp="$UT_CONFIG.tmp.$$"
+    # cp -p FIRST, so a config the user chmod'ed 600 comes back 600: the redirect below
+    # truncates the copy rather than creating a fresh file at whatever the umask says.
+    if [[ -f "$UT_CONFIG" ]]; then cp -p "$UT_CONFIG" "$tmp" 2>/dev/null || true; fi
+    if ! printf '%s' "$out" >"$tmp" 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null || true
+        return 1
+    fi
+    if ! mv -f "$tmp" "$UT_CONFIG" 2>/dev/null; then
+        rm -f "$tmp" 2>/dev/null || true
+        return 1
+    fi
+    return 0
+}
+
+# The flush. Both call sites are places that already exist: nav_tick, which the reader falls
+# into when its read times out, and cleanup_on_exit, which is already trapped on
+# EXIT/INT/TERM/HUP. The worst case is no longer "a rewrite per keypress" but "one preference
+# lost if the process dies inside a tick window".
+flush_prefs() {
+    local keys="$PREF_DIRTY"
+    [[ -n "$keys" ]] || return 0
+    PREF_DIRTY=""
+    # if-form, not `((PREF_WRITE_OFF)) && return 0`: a bare arithmetic list that evaluates to
+    # zero is a FAILED command, and under set -e that would abort the TUI here (§28).
+    if ((PREF_WRITE_OFF)); then return 0; fi
+    if ! write_prefs "$keys"; then
+        PREF_WRITE_OFF=1
+        # Soft failure: a read-only ~/.config must not kill a TUI that is playing music. It
+        # must not be silent either — this line goes into the scroll area and the exit repeats
+        # it, because the redraw after a tick wipes whatever is there.
+        printf '\n%s%s%s %s\n' "$C_BOLD" "$S_PREF_ACT:" "$C_RESET" "$S_PREF_FAILED"
+    fi
+    return 0
+}
+
 if [[ -x "$SCRIPT_DIR/ut-play" ]]; then
     PLAY_BIN="$SCRIPT_DIR/ut-play"
 elif command -v ut-play >/dev/null 2>&1; then
@@ -267,7 +457,7 @@ Menu options:
 
 Keys (List View):
   ↑/↓      move selection              ←/→  change page (→ past the last page
-           fetches more results, as m does)
+           fetches one batch more; ← on page 1 drops one, no re-fetch)
   Enter    play / switch track (non-blocking background playback)
   Tab / p  toggle view: List <-> Now Playing card
   Esc      (in the card) back to List View
@@ -280,7 +470,6 @@ Keys (List View):
   t        cycle palette family live (minimal → catppuccin → tokyonight → nord →
            gruvbox → onedark → mono), any view; no-op when colors are off
   n        new search (fetch a different query without interrupting music)
-  m        more results (re-fetch current query, +20 to count)
   o        rotate sort field / order (relevance → view_count → duration), re-fetch
   e        switch source, re-fetch the same query (only when >1 engine is installed)
   a        add the focused row to a playlist               (needs ut-playlist)
@@ -292,6 +481,12 @@ Keys (List View):
            returns to the search results                    (needs ut-history)
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
   q        quit (stops background playback on exit)
+
+  The six settings these keys change — engine, sort field, playback mode, theme, chrome
+  language and the result count — are written back to YOUR config file
+  (${XDG_CONFIG_HOME:-~/.config}/uting/config), in place: comments and layout are kept,
+  only the value moves. The shipped defaults file is never written. A key you have pinned
+  in the environment is left alone, and says so once.
 
 Keys (Now Playing card):
   ←/→      seek backward / forward 5s   ↑/↓  volume down / up
@@ -344,15 +539,21 @@ is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
 # Parse: search-shaping flags forwarded to <engine>-search (and captured for status line);
 # -f/-p/--color are menu-local. The rest is query. Reject anything else.
 SEARCH_ARGS=()
-# THE FETCH BATCH — the first fetch's row count AND the increment m / → adds. One knob, not
-# two: they were the same 20 for the same reason, so a user who wants bigger bites should not
-# have to say it twice. 20 because Bilibili's endpoint pages at 20 with no page-size knob
-# (bili-search PAGE_SIZE), so it keeps the first fetch — and every re-fetch — an exact page
-# count. Cross-engine: this is the TUI's appetite, not a site's page size. Separate from
-# UT_SEARCH_RESULTS even though that is 20 too: that one is a TOTAL an engine returns
-# once, this one is the STEP m adds each press, so widening one must not widen the
-# other. AS-BUILT-contract.md §5.
-RESULT_N=$UT_FETCH_BATCH  # fetch count; -n overrides. Runtime-mutable: m adds one batch.
+# THE FETCH BATCH — the STEP the two edges move by: → past the last page adds one, ← on page
+# one drops one. One knob, not two: they were the same 20 for the same reason, so a user who
+# wants bigger bites should not have to say it twice. 20 because Bilibili's endpoint pages at
+# 20 with no page-size knob (bili-search PAGE_SIZE), so it keeps the first fetch — and every
+# re-fetch — an exact page count. Cross-engine: this is the TUI's appetite, not a site's page
+# size. Separate from UT_SEARCH_RESULTS even though that is 20 too: that one is a TOTAL an
+# engine returns once, this one is the STEP each press moves by, so widening one must not
+# widen the other. AS-BUILT-contract.md §5.
+#
+# WHERE THE FIRST FETCH STARTS is a different question from how big a step is, which is why
+# UT_START_RESULTS exists and why its unset state means "follow the step". It is the one key
+# uting writes back that is NOT in the shipped `config`: a default whose meaning is "the
+# value of another key" is a chain a flat KEY=value file cannot express (the same judgement
+# that keeps UT_STATE_DIR out of it). AS-BUILT-contract.md §5.
+RESULT_N=${UT_START_RESULTS:-$UT_FETCH_BATCH}  # -n overrides; → grows it, ← shrinks it
 # The order the v key steps through. Space- or comma-separated; a user who never wants video
 # drops it here rather than pressing past it every session.
 IFS=' ,' read -r -a MODE_CYCLE <<<"$UT_MODE_CYCLE"
@@ -432,7 +633,7 @@ while (($#)); do
 done
 
 is_uint "$PAGE_OPT" && ((PAGE_OPT > 0)) || die "-p must be a positive integer (UT_PAGE_ROWS)"
-is_uint "$RESULT_N" && ((RESULT_N > 0)) || die "-n must be a positive integer (UT_FETCH_BATCH)"
+is_uint "$RESULT_N" && ((RESULT_N > 0)) || die "-n must be a positive integer (UT_START_RESULTS / UT_FETCH_BATCH)"
 
 # A CONFIG FILE FAILS LOUDLY OR IT FAILS SILENTLY, and silently is worse: a cycle emptied by
 # a typo would abort on the first keypress (an empty array expansion under set -u aborts on
@@ -655,7 +856,7 @@ UI_LANG=""
 # `l` key can re-resolve it live without re-reading the environment. NOTHING drawn as chrome
 # may be a literal at its print site. The last holdouts were the play state (S_PLAYING /
 # S_PAUSED, drawn twice — the list banner's label and the card's status), the card's own
-# header, and every TRANSIENT line: the startup prompt, the n prompt, searching, the m/o
+# header, and every TRANSIENT line: the startup prompt, the n prompt, searching, the →/o
 # action echoes, the no-matches copy, the filter banner, press-any-key and Quitting. The
 # transient ones lasted longest because they print into the scroll area and the next redraw
 # wipes them — they are in no captured frame, so no frame check could see them.
@@ -666,17 +867,19 @@ UI_LANG=""
 # literal em dash would survive YT_ASCII=1, which is the whole point of the glyph table.
 # What stays English on purpose: help text, error sentences (`Play failed:`, `no results`,
 # `search failed`) and the `k=v` field labels of the header/status rows.
-# S_MORE_ACT/S_SORT_ACT repeat S_MORE/S_SORT's zh value on purpose: the hint row spells the
-# keys in lower case ("more", "sort") and the action heading in Title case ("More", "Sort"),
-# a distinction English has and Chinese does not — one entry per SITE, not per word, keeps the
-# en output unchanged. The m echo's count phrase is the ONE deliberate change to English:
-# "for 50 results" became "· 50 results" so a single printf format serves both word orders
-# (zh wants "，共 50 条"), instead of putting a per-language format string in the table.
+# S_SORT_ACT repeats S_SORT's zh value on purpose: the hint row spells the key in lower case
+# ("sort") and the action heading in Title case ("Sort"), a distinction English has and
+# Chinese does not — one entry per SITE, not per word, keeps the en output unchanged.
+# S_MORE_ACT has no hint-row twin: → carries that action now, and the two arrows are ONE
+# entry on the hint row, so the heading is all that is left of it. The → echo's count phrase
+# is the ONE deliberate change to English: "for 50 results" became "· 50 results" so a single
+# printf format serves both word orders (zh wants "，共 50 条"), instead of putting a
+# per-language format string in the table.
 set_ui_lang() {
     UI_LANG=$1
     if [[ "$UI_LANG" == "zh" ]]; then
         S_SELECT="选择"; S_PAGE="翻页"; S_PLAY="播放"; S_VIEW="视图"; S_MODE="模式"
-        S_SEARCH="搜索"; S_MORE="更多"; S_SORT="排序"; S_FILTER="过滤"
+        S_SEARCH="搜索"; S_SORT="排序"; S_FILTER="过滤"
         S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"
         S_FOCUS="专注卡片"; S_PAUSE="暂停"; S_VOL="音量"
         S_BACK_LIST="列表"; S_PAUSE_RESUME="暂停"; S_SEEK="跳转"
@@ -702,9 +905,12 @@ set_ui_lang() {
         S_HIST_EMPTY="还没有收听记录"; S_HIST_ABSENT="未安装 ut-history"
         S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_NEXT="下一首"; S_Q_ACT="队列"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
+        S_PREF_ACT="配置"
+        S_PREF_PINNED="由环境变量固定，没有写入配置文件"
+        S_PREF_FAILED="配置文件写不了，这次改的偏好没有存下来"
     else
         S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_VIEW="view"; S_MODE="mode"
-        S_SEARCH="search"; S_MORE="more"; S_SORT="sort"; S_FILTER="filter"
+        S_SEARCH="search"; S_SORT="sort"; S_FILTER="filter"
         S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"
         S_FOCUS="focus card"; S_PAUSE="pause"; S_VOL="volume"
         S_BACK_LIST="list"; S_PAUSE_RESUME="pause"; S_SEEK="seek"
@@ -730,6 +936,9 @@ set_ui_lang() {
         S_HIST_EMPTY="nothing listened to yet"; S_HIST_ABSENT="ut-history is not installed"
         S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_NEXT="next"; S_Q_ACT="Queue"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
+        S_PREF_ACT="Config"
+        S_PREF_PINNED="is fixed by the environment — not written to your config"
+        S_PREF_FAILED="could not be written — this session's preferences were not saved"
     fi
 }
 
@@ -737,6 +946,7 @@ set_ui_lang() {
 # view redraws when the menu loop comes back around.
 cycle_ui_lang() {
     if [[ "$UI_LANG" == "zh" ]]; then set_ui_lang en; else set_ui_lang zh; fi
+    mark_pref YT_LANG
 }
 
 # Cycle the palette family in place (key: t). set_theme is a pure function of
@@ -753,6 +963,7 @@ cycle_theme() {
     done
     THEME="${THEME_CYCLE[$(( (cur + 1) % n ))]}"
     set_theme
+    mark_pref YT_THEME
 }
 
 init_ui_strings() {
@@ -1939,6 +2150,14 @@ stop_current_playback() {
 cleanup_on_exit() {
     cursor_show
     tty_echo_restore
+    # The other flush point. After the echo is back and before the player goes, so the one
+    # line a failed write prints lands on a terminal that is behaving again.
+    flush_prefs
+    if ((PREF_WRITE_OFF)); then
+        # Said twice on purpose: the copy printed at the moment of failure was wiped by the
+        # next redraw, and nothing repaints after this one.
+        printf '%s %s\n' "$S_PREF_ACT:" "$S_PREF_FAILED"
+    fi
     stop_current_playback
 }
 trap cleanup_on_exit EXIT INT TERM HUP
@@ -2215,7 +2434,7 @@ display_list_menu() {
     local nav_pad="  "
     local nav_items=(
         "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY" "Tab	$S_VIEW" "v	$S_MODE"
-        "n	$S_SEARCH" "m	$S_MORE" "o	$S_SORT" "/	$S_FILTER" "l	$S_LANGKEY"
+        "n	$S_SEARCH" "o	$S_SORT" "/	$S_FILTER" "l	$S_LANGKEY"
         "9/0	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "s	$S_STOP" "q	$S_QUIT"
     )
     # The source key is offered ONLY when a second engine is installed. This block is
@@ -2223,7 +2442,7 @@ display_list_menu() {
     # do nothing must not spend a cell — and on a single-engine install `e` genuinely does
     # nothing (cycle_engine returns immediately).
     if ((${#ENGINES[@]} > 1)); then
-        nav_items=("${nav_items[@]:0:9}" "e	$S_ENGINE" "${nav_items[@]:9}")
+        nav_items=("${nav_items[@]:0:8}" "e	$S_ENGINE" "${nav_items[@]:8}")
     fi
     # Same rule as the source key: a key that cannot do anything must not spend a cell of a
     # measured block. With no ut-playlist installed, `a` and `b` genuinely do nothing.
@@ -3204,7 +3423,7 @@ reload_playlist() {
 # Load a playlist as the row source. The list view is unchanged — same renderer, same
 # filter, same keys — because a playlist envelope produces the same seven-field row a
 # search does (build_playlist_rows). What changes is LIST_SOURCE, which is what the
-# search-only keys (m / o / e) test before re-fetching a query that is no longer on screen.
+# search-only keys (o / e) test before re-fetching a query that is no longer on screen.
 open_playlist() {
     local name="$1" out
     show_playlist "$name" || return 1
@@ -3234,8 +3453,8 @@ open_playlist() {
     return 0
 }
 
-# The three keys that RE-FETCH a query (m / o / e) cannot run against a playlist, which has
-# no query behind it. One guard, called by all three: three copies of it drifted apart in
+# The two keys that RE-FETCH a query (o / e) cannot run against a playlist, which has
+# no query behind it. One guard, called by both: three copies of it drifted apart in
 # every earlier duplication this file has had (ARCHITECTURE.md's F11/F12), and the
 # no-shared-library trade that licenses copies BETWEEN the six commands does not license
 # them WITHIN one file.
@@ -3465,11 +3684,12 @@ cycle_mode() {
         [[ "${MODE_CYCLE[$i]}" == "$PLAY_MODE" ]] && { cur=$i; break; }
     done
     PLAY_MODE="${MODE_CYCLE[$(( (cur + 1) % n ))]}"
+    mark_pref UT_PLAY_MODE
 }
 
-# One failure path for the three re-fetch actions (n / m / o). It replaces three copies of this
-# block that had already drifted in wording — m and o said "no results" where n said
-# 'no results for "…"' — which is the standard signal that a block wants to be a function.
+# One failure path for the re-fetch actions (n / → / o / e). It replaces three copies of this
+# block that had already drifted in wording — the count and sort keys said "no results"
+# where n said 'no results for "…"' — the standard signal that a block wants to be a function.
 # rc is fetch_json's: 2 means the search ran and matched nothing, anything else means it failed
 # and SEARCH_ERR holds the core's own sentence. The query is passed in rather than read off
 # QUERY_LABEL because every caller restores its own mutated global BEFORE reporting, so by the
@@ -3506,9 +3726,12 @@ new_search() {
     apply_search_results
 }
 
-# ── MORE action (key: m) ────────────────────────────────────────────────────────────────
+# ── MORE action (key: → past the last page) ─────────────────────────────────────────────
+# No search_only here, and none in fewer_results either: both edges are reached through ONE
+# arm of move_selection, which tests LIST_SOURCE itself so a stored row gets a silent stop
+# rather than a notice about a query it never had. A guard the single call site already
+# makes is not a defence, it is a second place to keep the same fact.
 more_results() {
-    search_only || return 0
     local prev="$RESULT_N" rc=0 page="$page_index" sel="$selected"
     RESULT_N=$(( RESULT_N + UT_FETCH_BATCH ))
     printf '\n%s%s%s %s %s "%s" %s %s %s%s' \
@@ -3521,14 +3744,51 @@ more_results() {
         return 0
     fi
     apply_search_results
-    # m APPENDS: rows 1..N are unchanged, so the page and row the user was looking at are
+    # → APPENDS: rows 1..N are unchanged, so the page and row the user was looking at are
     # still the same video — apply_search_results' reset to page 1 threw away a position
     # that did not need to move. Safe to restore: no filter can be open here (filter_live
     # owns its own key loop and clears the filter on the way out), display_list_menu clamps
-    # both against the new geometry, and m only ever grows the row count. Deliberately NOT
-    # done in cycle_sort.
+    # both against the new geometry, and this path only ever grows the row count.
+    # Deliberately NOT done in cycle_sort.
     page_index=$page
     selected=$sel
+    # Both edges record the same key: what is stored is the count a query STARTS from, so the
+    # next session opens on the size this one settled at.
+    mark_pref UT_START_RESULTS
+}
+
+# ── FEWER action (key: ← on page 1) ─────────────────────────────────────────────────────
+# The mirror of the edge above, and deliberately not its equal: growing costs a network round
+# trip, shrinking costs nothing at all. The rows are already in ALL_ROWS, so this is a
+# truncation — no engine is asked anything, which is the whole reason it can sit on a bare
+# arrow key. Before it existed the count only ever went up (the most passive gesture in the
+# app, → held down past the last page, took 20 to 200) and the only way back down was to quit.
+#
+# RESULT_N is what was ASKED for and NUM_ENTRIES is what came back; the two differ whenever a
+# query is thinner than the appetite. The step is taken off RESULT_N, because that is the
+# number the next query starts from — a search that happened to return 37 rows must not pin
+# the next one at 37.
+#
+# The floor is a screenful, never zero: one batch, or one page when the terminal is showing
+# more rows than a batch holds. At the floor this returns without touching anything, which is
+# exactly what ← on page 1 did before this function existed.
+fewer_results() {
+    local floor=$UT_FETCH_BATCH target
+    ((floor >= PAGE_SIZE)) || floor=$PAGE_SIZE
+    target=$(( RESULT_N - UT_FETCH_BATCH ))
+    ((target >= floor)) || target=$floor
+    ((target < RESULT_N)) || return 0
+    RESULT_N=$target
+    ALL_ROWS=$(printf '%s\n' "$ALL_ROWS" | head -n "$target")
+    load_rows "$ALL_ROWS"
+    mark_pref UT_START_RESULTS
+    # No action echo, unlike the other edge: that one prints because it is about to block on a
+    # fetch, and this one is already done by the time the frame repaints. The status row's
+    # results= IS the feedback.
+    #
+    # Page and selection are left alone on purpose. This only runs on page 1, so the menu
+    # loop's own clamp (page_min/page_max) already holds the highlight inside a list that got
+    # shorter, and the floor guarantees page 1 is still full.
 }
 
 # ── SORT action (key: o) ────────────────────────────────────────────────────────────────
@@ -3570,6 +3830,9 @@ cycle_engine() {
     # and the token must describe the engine actually on screen.
     refresh_engine_auth
     apply_search_results
+    # After the revert window too, and for the same reason: the file must record the engine
+    # that is on screen, never the one a failed fetch just rolled back.
+    mark_pref UT_DEFAULT_ENGINE
 }
 
 cycle_sort() {
@@ -3592,6 +3855,7 @@ cycle_sort() {
         return 0
     fi
     apply_search_results
+    mark_pref UT_SORT_FIELD
 }
 
 # ── FILTER action (key: /) — LIVE incremental narrow ─────────────────────────────────────
@@ -3745,6 +4009,10 @@ utf8_complete() {
 # `nc` + `jq` pair, i.e. two forks), and a view that repaints between ticks simply reuses the
 # last values — at most one second old, which is the resolution the rail is drawn at anyway.
 nav_tick() {
+    # The idle flush, ahead of every early return below: a preference changed in the card view
+    # or with nothing playing must land too. What ARMS the timeout that gets us here when
+    # nothing is playing is the PREF_DIRTY test in read_nav_input.
+    flush_prefs
     if [[ "$TUI_VIEW_MODE" == "card" ]]; then return 0; fi
     if [[ -z "$CURRENT_PLAY_ID" ]]; then return 0; fi
     fetch_play_times
@@ -3838,7 +4106,11 @@ read_nav_input() {
     #
     # Deliberately NOT shared: read_query_input, the `n` new-search prompt. A tick there would
     # repaint the screen mid-keystroke while a query is being typed.
-    if [[ -n "$CURRENT_PLAY_ID" ]] || ((CURRENT_PLAY_LOADING)); then
+    # A pending preference arms the same clock: without this the reader BLOCKS with nothing
+    # playing, nav_tick never runs, and a change made in a silent session would sit in memory
+    # until the user quit. One extra wake-up per burst of cycle keys, and the burst is what
+    # the deferral exists to absorb.
+    if [[ -n "$CURRENT_PLAY_ID" ]] || ((CURRENT_PLAY_LOADING)) || [[ -n "$PREF_DIRTY" ]]; then
         t_opt=(-t 1)
     fi
     # The resize gate is armed for THIS read only — the wait that owns the whole screen —
@@ -3923,14 +4195,14 @@ move_selection() {
         if ((page_index < NUM_PAGES)); then
             page_index=$(( page_index + 1 )); selected=$(( (page_index - 1) * PAGE_SIZE ))
         elif [[ "$LIST_SOURCE" == "search" ]]; then
-            # Past the last page of a SEARCH, → keeps going: fetch the next batch
-            # (exactly what m does) and step onto the first new page. Only if the
-            # row count actually grew — on a fetch failure more_results rolled
-            # back and reported, and an exhausted query appends nothing; in both
-            # cases the cursor must stay where it was. Stored rows (playlist /
-            # history) have nothing more to fetch, so there the arrow just stops:
-            # the LIST_SOURCE guard is what keeps that case a silent no-op
-            # instead of more_results' "search only" notice.
+            # Past the last page of a SEARCH, → keeps going: fetch one more batch
+            # and step onto the first new page. Only if the row count actually
+            # grew — on a fetch failure more_results rolled back and reported, and
+            # an exhausted query appends nothing; in both cases the cursor must
+            # stay where it was. Stored rows (playlist / history) have nothing more
+            # to fetch, so there the arrow just stops: this LIST_SOURCE test is
+            # what keeps that a silent no-op rather than a notice about a query
+            # those rows never had — and it is the same test the ← arm below makes.
             prev_pages=$NUM_PAGES
             more_results
             if ((NUM_PAGES > prev_pages)); then
@@ -3940,12 +4212,20 @@ move_selection() {
     "[D" | "OD" | "["*D | "O"*D) # left → prev page
         if ((page_index > 1)); then
             page_index=$(( page_index - 1 )); selected=$(( (page_index - 1) * PAGE_SIZE ))
+        elif [[ "$LIST_SOURCE" == "search" ]]; then
+            # Before page 1 of a SEARCH, ← keeps going the other way: drop the last batch
+            # of rows. The exact mirror of the arm above — same key grammar, no modifier,
+            # same LIST_SOURCE guard — and it lands on what was a dead no-op. It cannot be
+            # Shift+←: the `["*D glob two lines up eats every modified arrow into a bare
+            # one, and Terminal.app does not send the modified form at all, so the key
+            # would silently do nothing on the terminal this suite's floor is named after.
+            fewer_results
         fi ;;
     esac
 }
 
 # ── Initial fetch ───────────────────────────────────────────────────────────────────────
-# Where the rows on screen came from. Everything that RE-FETCHES a query (m / o / e) is
+# Where the rows on screen came from. Everything that RE-FETCHES a query (→ / o / e) is
 # search-only and tests this; everything that works on the rows themselves (arrows, Enter,
 # /, v, the playback keys) does not care and is left alone.
 LIST_SOURCE="search"
@@ -4067,7 +4347,6 @@ while true; do
         move_selection "$READ_NAV_KEY" ;;
     "" | $'\n' | $'\r') play_selected || true ;;  # Enter → start/switch track in background
     n | N) new_search ;;      # new search (non-blocking: music continues)
-    m | M) more_results ;;    # more results
     o | O) cycle_sort ;;      # rotate sort
     e | E) cycle_engine ;;    # switch source (engine), re-fetch the same query
     v | V) cycle_mode ;;      # rotate playback mode

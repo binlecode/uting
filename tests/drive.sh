@@ -63,6 +63,17 @@ UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-drive.XXXXXX") || exit 1
 export TMPDIR="$UT_TEST_TMP"
 STATE_DIR="$TMPDIR/uting-$(id -u)"
 
+# The config the pane reads is a COPY of the one a human reads, in this run's own temp dir —
+# the same trade as UT_HISTORY=0 above, one level further in. uting WRITES six preference keys
+# back to the user's config file now (a cycle key that has to be re-pressed every session is
+# not a preference), and `-k t`/`-k l` are exactly the keys that would rewrite the developer's
+# file as a side effect of driving a frame. Copied rather than left empty because the read
+# side is the whole point of not redirecting UT_STATE_DIR either: a frame captured here should
+# show the theme and the chrome language a human actually has.
+DRIVE_CFG="$UT_TEST_TMP/config"
+cp "${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}" "$DRIVE_CFG" 2>/dev/null ||
+    : >"$DRIVE_CFG"
+
 S="drive-$$"
 
 # The point of this script. A leaked player outlives the shell, the session, and the terminal,
@@ -99,9 +110,12 @@ trap 'exit 130' INT TERM
 # default. Verified by driving UT_STATE_DIR: the pane reported an empty store while the same
 # variable listed four playlists outside tmux.
 #
-# YT_SYNC=0 (tmux and DCS frame sync do not mix) and TMPDIR are placed AFTER the forwarded
-# block so the driver's own choice wins over an inherited one — TMPDIR because the isolation
-# above is not negotiable, and it is not a YT_*/UT_* name so it is never forwarded anyway.
+# YT_SYNC=0 (tmux and DCS frame sync do not mix), TMPDIR and UT_CONFIG are placed AFTER the
+# forwarded block so the driver's own choice wins over an inherited one — TMPDIR because the
+# isolation above is not negotiable, and it is not a YT_*/UT_* name so it is never forwarded
+# anyway; UT_CONFIG because a forwarded one would put the pane's writes back on the real file,
+# which is the one thing the copy above exists to prevent. An exported UT_CONFIG is still
+# honoured where it can do no harm: it picks WHICH file gets copied.
 # UT_HISTORY=0 goes BEFORE it: suppressing the log write is a default, not a rule, so
 # `UT_HISTORY=1 tests/drive.sh -k Enter` still drives the writing path.
 env_prefix=""
@@ -117,7 +131,7 @@ while IFS= read -r line; do
 done < <(env)
 
 tmux new-session -d -s "$S" -x "$COLS" -y "$ROWS" \
-    "cd '$PWD' && UT_HISTORY=0$env_prefix TMPDIR='$TMPDIR' YT_SYNC=0 shell/uting '$QUERY'"
+    "cd '$PWD' && UT_HISTORY=0$env_prefix TMPDIR='$TMPDIR' UT_CONFIG='$DRIVE_CFG' YT_SYNC=0 shell/uting '$QUERY'"
 
 # Wait on the ready MARKER, never on a sleep: a captured spinner frame is a picture of the
 # loading state, not of the layout. A cold yt-dlp search takes ~10s.

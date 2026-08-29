@@ -10,8 +10,8 @@ drifts from the code (invented labels, a rail that doesn't line up, a version th
 exists) and cannot reproduce the alignment that *is* the claim being made — the right-flush
 duration rail, the shared title column, the CJK title that occupies two cells per character.
 
-For session setup, keys, ready markers, and player cleanup, see the **run-uting** skill.
-This one is capture → clean → **prove** → splice.
+For session setup, keys, ready markers, and player cleanup, see `tests/drive.sh` — the driver
+that already gets all four right. This one is capture → clean → **prove** → splice.
 
 ## 1. Pick the view and geometry
 
@@ -34,16 +34,24 @@ visually, and put that width in the surrounding prose.
 
 ## 2. Capture — after the ready marker, never after a sleep
 
+`UT_CONFIG` is not optional here, and it points at a file of this capture's OWN. Two reasons,
+and the second is the one that bites: a frame taken against the developer's config is a
+picture of their theme and their chrome language rather than of the shipped defaults — and
+`uting` WRITES the six preference keys back to whatever `UT_CONFIG` names, so `t`, `l`, `v`,
+`o`, `e` and the count edges would edit that file as a side effect of photographing it.
+
 ```bash
 S=cap
+CAPCFG=$(mktemp "${TMPDIR:-/tmp}/uting-capture.XXXXXX")
 tmux kill-session -t $S 2>/dev/null
-tmux new-session -d -s $S -x 100 -y 30 "cd $PWD && YT_LANG=en shell/uting 'lofi hip hop'"
+tmux new-session -d -s $S -x 100 -y 30 "cd $PWD && YT_LANG=en UT_CONFIG=$CAPCFG shell/uting 'lofi hip hop'"
 timeout 30 bash -c "until tmux capture-pane -t $S -p | grep -q 'results='; do sleep 0.5; done"
 tmux capture-pane -t $S -p > tmp/raw-list.txt
 ```
 
 For a keypress-driven frame, send the key and wait for the state to settle before capturing —
-a re-fetch (`n`, `m`, `o`) needs the `results=` marker again, and a view switch needs ~1 s:
+a re-fetch (`n`, `o`, `→` past the last page) needs the `results=` marker again, and a view
+switch needs ~1 s:
 
 ```bash
 tmux send-keys -t $S Tab; sleep 1.2
@@ -51,10 +59,11 @@ tmux capture-pane -t $S -p > tmp/raw-card.txt
 tmux send-keys -t $S '/'; sleep 0.5; tmux send-keys -t $S -l 'radio'; sleep 1
 tmux capture-pane -t $S -p > tmp/raw-filter.txt
 tmux kill-session -t $S 2>/dev/null
+rm -f "$CAPCFG"
 ```
 
-If the frame will show playback, read the cleanup section of **run-uting** first — the player
-survives the session kill.
+If the frame will show playback, kill the player the way `tests/drive.sh`'s EXIT trap does —
+`shell/ut-play --stop --all` — the player survives the session kill.
 
 ## 3. Clean
 
