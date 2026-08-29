@@ -374,6 +374,15 @@ engine_search_bin() {
 
 # The same lookup for the other half. Two functions rather than one taking a suffix: the
 # call sites read as what they fetch, and neither is a table.
+#
+# `ut-play` has a function of the SAME NAME that DIES when the lookup fails; this one
+# returns non-zero and says nothing. Both are right for their own file: the player cannot
+# play without an engine, while this file asks for halves it can live without —
+# refresh_engine_auth below simply drops the auth field for an engine whose resolve half
+# has no --auth, which is how a third engine is never blocked on implementing it. The
+# argument is safe to paste into a path because every caller passes a name that already
+# passed engine_seen (membership in the discovered registry — stricter than the player's
+# name regex), never raw user input.
 engine_resolve_bin() {
     if [[ -x "$SCRIPT_DIR/$1-resolve" ]]; then
         printf '%s\n' "$SCRIPT_DIR/$1-resolve"

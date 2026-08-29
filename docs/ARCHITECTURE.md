@@ -148,7 +148,7 @@ V. 对齐的最佳实践。**
   D2  搜索是它自己的动词（`<engine>-search`），**不是**播放器的一种多态拼法：
       `ut-play` 拿到一个非句柄时会点名那个动词，而不是去猜。                  （§6）
   D3  一个没有东西可作用的动词 → 用法错误，且点名**正确的**那个动词；绝不提问。
-      `ut-play` 没有句柄也没有动作时，指向 yt-search/uting。                  （§6）
+      `ut-play` 没有句柄也没有动作时，指向 `<engine>-search`/uting。          （§6）
   D4  uting 画**自己的**菜单（不用 picker/TUI 框架）并把活委派出去：
       搜索 → `<engine>-search -j` · 播放 → `ut-play -d -j --engine` ·
       过滤 → 纯 bash。                                                        （§11）
@@ -303,9 +303,11 @@ V. 对齐的最佳实践。**
 **为什么每个动词自己把门（D7 的反面）。** 旧形状是一个内核加两层把门的包装，门是一个*层*。
 搜索与抽取搬出去之后，播放器只剩一个动词，于是也就不存在需要防守的绕过路径了 ——
 而原来住在包装层里的那些分支，如今变成了在调用方真正够得到的那一个地方给出好错误的分支：
-`ut-play` 里的 `-n`/`-m`/`-M`/`-s` 回答"那是搜索的 flag —— 请用 yt-search"，
+`ut-play` 里的 `-n`/`-m`/`-M`/`-s` 回答"那是搜索的 flag —— 请用 `<engine>-search`"，
 `--info`/`--transcript` 回答"那是引擎的动词"，`--get-url` 则回答那条取代了它的
-`yt-resolve` 调用。**一扇能说出正确动词的门，比一扇只会说不的门值钱。**
+`<engine>-resolve` 调用。**一扇能说出正确动词的门，比一扇只会说不的门值钱。**
+每条消息里的 `<engine>` 是**拼出来的**（`$ENGINE`，来自 `--engine` 或 `UT_DEFAULT_ENGINE`），
+不是写死的 `yt`：一扇给 bili 调用方指向 YouTube 命令的门，说的是正确动词的**错误名字**。
 
 **自定位的兄弟，而不是 PATH 查找。** 以 `~/bin/uting` 被调用时，脚本的 `$0` 是那条**符号链接**，
 不是代码本身 —— 所以每个脚本先解析自己的符号链接链，再拿真实文件所在的目录去找兄弟。
@@ -380,7 +382,7 @@ dotfiles 布局里成立；把套件抽成自己的仓库，才把它暴露出�
    │      --json→-j  --detach→-d  --list→-l  --help→-h --version→-V
    │      --color/--volume/--engine/--id → 变量
    │      --status/--stop/--set-volume   → set_action
-   │      --get-url / --info / --transcript → die，并点名 yt-resolve
+   │      --get-url / --info / --transcript → die，并点名 <engine>-resolve
    │      未知的 --flag → die，并**列出**播放类 flag
    │      `--` → 选项到此为止：其后原样复制（连 getopts 也一起停）
    │  (b) getopts  ":f:S:dljhV"  → MODE、FORMAT_SORT、OUTPUT_MODE
@@ -392,7 +394,7 @@ dotfiles 布局里成立；把套件抽成自己的仓库，才把它暴露出�
    │  (d) IS_HANDLE？非空**且**不含空白
    │      （整个判断就这么多 —— 见下）
    │  (e) **路由**（先匹配先赢）：
-   │        没句柄也没动作 → die，点名 yt-search / uting（D3）
+   │        没句柄也没动作 → die，点名 <engine>-search / uting（D3）
    │        ACTION=status     → do_status      （只要 jq；退 0）
    │        ACTION=stop       → do_stop        （只要 jq；退 0|4）
    │        ACTION=set-volume → do_set_volume  （jq+nc；退 0|4）
@@ -402,7 +404,7 @@ dotfiles 布局里成立；把套件抽成自己的仓库，才把它暴露出�
    │           OUTPUT=json → play_url_json    （结构化）
    │           否则        → play_url_directly（散文）
    │        否则 → die "'<x>' 不是一个视频 id 或 URL —— 用
-   │                    'yt-search -- <x>' 去搜它"
+   │                    '<engine>-search -- <x>' 去搜它"
    └───────────────────────────────────────────────────────────────────
 ```
 

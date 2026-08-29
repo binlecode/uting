@@ -362,6 +362,15 @@ normalize_playback_mode() {
 # instead of a name->command registry that the player and the TUI would each have to carry.
 # Sibling first so a bare checkout runs with nothing on PATH, then PATH so an installed
 # engine works from anywhere.
+#
+# `uting` carries a function of the SAME NAME with the OPPOSITE failure contract, and the
+# split is deliberate. This one takes no argument (it reads $ENGINE), memoizes into a
+# global, validates the name, and DIES: the player has exactly one job, so an engine it
+# cannot find means there is nothing left to play. The TUI's takes the name as an argument,
+# PRINTS the path, and returns non-zero silently — it asks for engine halves it can live
+# without (refresh_engine_auth drops the whole auth field when a resolve half has no
+# --auth), so a die there would kill a working menu over an optional field. Merging them
+# would cost one side or the other exactly that.
 ENGINE_RESOLVE=""
 engine_resolve_bin() {
     if [[ -n "$ENGINE_RESOLVE" ]]; then

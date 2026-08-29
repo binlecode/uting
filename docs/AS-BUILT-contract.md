@@ -46,8 +46,8 @@
    ut-play -d --queue - < items.json              以一个**队列**启动；第一条开始放
    ut-play --enqueue - [--id ID] < items.json     追加到一个在跑的播放器的队列
    ut-play --next [--id ID]                       丢掉这一条，开始下一条（4：没有下一条）
-   ut-play                      → 用法错误，点名 yt-search / uting（D3）
-   ut-play -- "some query"      → 用法错误，点名 yt-search（有空白 ⇒ 不是句柄）
+   ut-play                      → 用法错误，点名 <engine>-search / uting（D3）
+   ut-play -- "some query"      → 用法错误，点名 <engine>-search（有空白 ⇒ 不是句柄）
   ```
 - **它写收听日志。** 一个 **detached** 播放器通过 `ut-history --record`（§1.6）每条曲目记一行 ——
   在曲目结束时记，一次 `--stop` 或一次 `--next` 结束了它时同样记，
@@ -60,9 +60,14 @@
   而一个 agent 播放一个裸 URL 时会说出它是哪个引擎。嗅探（引擎声明自己的 URL 模式）推迟到
   第三个引擎让一份注册表变得值得为止。
 - **点名正确动词的门臂**（那个被删掉的 wrapper 的拒绝语变成了这些）：
-  `-n`/`-m`/`-M`/`-s` → "那是一个搜索标志 —— 用 yt-search"；`-J` → "那是一个引擎标志 ——
-  试试 `yt-resolve --info -J`"；`--info`/`--transcript`/`--sub-lang` → "那是一个引擎动词"；
-  `--get-url` → 取代了它的那个 `yt-resolve -j` 调用；其它任何不认识的长标志 → 播放标志的清单。
+  `-n`/`-m`/`-M`/`-s` → "那是一个搜索标志 —— 用 `<engine>-search`"；`-J` → "那是一个引擎标志
+  —— 试试 `<engine>-resolve --info -J`"；`--info`/`--transcript`/`--sub-lang` → "那是一个引擎
+  动词"；`--get-url` → 取代了它的那个 `<engine>-resolve -j` 调用；其它任何不认识的长标志 →
+  播放标志的清单。**每一句里的 `<engine>` 都是拼出来的**（`$ENGINE`：`--engine`，否则
+  `UT_DEFAULT_ENGINE`），所以在第二个引擎下这些门臂点的是那个引擎的命令，而不是 `yt-`。
+  **一处已知且接受的顺序依赖**：`--get-url` 与那三个抽取动词的 die 就在长选项归一化循环
+  **里面**，所以 `--engine` 只有排在它们**前面**时才已被吃掉 ——
+  `ut-play --transcript --engine bili` 仍会说 `yt-resolve`（§2 的门表同此）。
 
 ### 1.2 `<engine>-search` —— 一个引擎的第一半
 
@@ -478,7 +483,7 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
    --stop   : {status:"stopped", id, stopped:bool}   （单一目标）
             | {status:"stopped", scope:"all", stopped:bool}   （--all）
             | {status:"ambiguous", …}                （2 个以上播放器且没有 --id；退出 4）
-   （播放器**没有** --get-url：解析出一个流 URL 正是一次裸的 `yt-resolve` 调用**本身**，
+   （播放器**没有** --get-url：解析出一个流 URL 正是一次裸的 `<engine>-resolve` 调用**本身**，
     而播放器再发布一个它的拼法，就是一份契约有了两个名字。
     下面的 --info / --transcript 是 `yt-resolve` 的动词 —— 播放器不转发它们。）
    --info   : {status,engine,id,title,url,channel,uploader,upload_date,duration,duration_fmt,
