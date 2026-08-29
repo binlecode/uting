@@ -15,6 +15,21 @@
 理由在 `ARCHITECTURE.md`（全文各处指过去）；流程在 `CLAUDE.md`。
 一个事实一个地方：这里的 schema 别处一律不再陈述。
 
+**公共 API 的边界**（semver 的版本化对象，ROADMAP D13 由此选位数）：
+
+```
+  在里面：八个命令名本身 · 各自的 argv 与 flag 面 · 退出码表(0/1/2+/4) ·
+          单行 JSON envelope 的字段与形状 · player record · 生命周期语义 ·
+          引擎契约（<engine>-search / <engine>-resolve 两张 envelope） ·
+          YT_* / UT_* / BILI_* 环境变量 · 配置面（四层链、两个文件的位置、
+          键的前缀命名空间、缺出厂文件 = 2，§5）
+  不在里面：内部函数名 · 渲染细节与主题 · 注释 · docs/ · tests/ · .claude/skills/ ·
+          引擎背后用哪个原语（curl 还是 yt-dlp —— seam 是 envelope，ROADMAP D11）
+```
+
+判一次 bump：把一批变更按这张表过一遍 —— 命中一条"在里面"且是破坏性的就走 y（0.y.z 期间），
+否则加法与修复走 z；同批的加法项跟着走、不额外计。判据是表，不是感觉。
+
 ## 1. 命令规格
 
 八个平级，四种形状：播放器、一个引擎的两半、UI，以及两个存储。
