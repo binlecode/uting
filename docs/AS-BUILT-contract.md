@@ -183,7 +183,7 @@
    允许： -n -m -M -s -l -j -J               允许： -f -S -d -j -l --engine --volume
           --color -h -V                             --status --stop --set-volume
                                                     --id --all --color -h -V
-   拒绝（→ "use ut-play"）：                  拒绝（→ "use yt-search"）：
+   拒绝（→ "use ut-play"）：                  拒绝（→ "use <engine>-search"）：
           -f -d --detach --status                   -n -m -M -s
           --stop --set-volume --id --all      拒绝（→ "use <engine>-resolve"）：
    拒绝（→ "use <engine>-resolve"）：                --info --transcript --sub-lang
@@ -765,7 +765,10 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                       BILI_VIDEO_FORMAT (bv*+ba/b)  BILI_VIDEO_FORMAT_FAST
                         —— bili 引擎自己的那组，与上面 yt 组逐一对应（bili-resolve 读）。
                       BILI_UA  BILI_BUVID  —— bili-search 的 HTTP 传输旋钮
-                        （AS-BUILT-engine.md §7.1）。
+                        （AS-BUILT-engine.md §7.1）。`BILI_UA` 的**出厂值是一个真的
+                        浏览器 UA 串**，和别的默认值一样只声明在 `config` 里：空值不是
+                        "发一个空头"，curl 对空值的语义是**根本不发这个头**。
+                        `BILI_BUVID` 空是对的 —— 那一个是每进程现生成的。
                       BILI_RETRY_PAUSE (1) —— 412 突发之后那**一次**重试前等几秒。
                         刻意是引擎专属的：这个停顿是为**这台**主机的突发限流存在的，
                         而这个文件是套件里唯一一处手搭 HTTP 请求的地方；`yt-search`

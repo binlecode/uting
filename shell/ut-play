@@ -163,7 +163,11 @@ MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term
 # ==============================================================================
 
 usage() {
-    cat <<'EOF'
+    # UNQUOTED heredoc: the two `default:` lines below report the EFFECTIVE default engine,
+    # which comes from config (D16) and is not this file's to restate. Everything else in
+    # this block is literal, so a `$` or a backtick meant as prose must be BACKSLASHED —
+    # there are three of them today (the XDG path and two code spans).
+    cat <<EOF
 ut-play — the non-interactive PLAYER: play + detached-playback lifecycle. It is the
 source-agnostic half of the suite. It does not search, does not extract, and knows nothing
 about any one site: an ENGINE (a pair of executables, <engine>-search and <engine>-resolve)
@@ -194,8 +198,9 @@ Not here, by design: metadata, captions and stream URLs are extraction, so they 
 engine's verbs — yt-resolve --info / --transcript / (bare) resolve. Searching is yt-search.
 
 Options:
-  --engine N  Which engine resolves the handle (default: yt; set UT_DEFAULT_ENGINE).
-              The name is also the command prefix: --engine yt calls yt-resolve.
+  --engine N  Which engine resolves the handle (default: $UT_DEFAULT_ENGINE; set
+              UT_DEFAULT_ENGINE). The name is also the command prefix: --engine yt calls
+              yt-resolve.
   -S SORT     Engine format-sort override, forwarded verbatim (e.g. res:720,fps)
   -f MODE     Playback mode (default: audio)
               audio|ba  audio-only          video|bv  high-quality video+audio
@@ -211,7 +216,7 @@ Options:
   -l          Prose output (default)
   -j          JSON output: one-line status JSON for play/lifecycle
   --queue -   Start a detached player on a QUEUE read from stdin, which is any of: a JSON
-              array of items, a `ut-playlist --show -j` envelope, or a search envelope. An
+              array of items, a \`ut-playlist --show -j\` envelope, or a search envelope. An
               item is {engine, url, title?, duration?} — engine PER ITEM, so one queue can
               mix sources; --engine is only the fallback for an item without one. The first
               item starts playing and the rest wait. Each is resolved when it is reached,
@@ -249,7 +254,7 @@ Output contracts (full schemas: AS-BUILT-contract.md §3):
   --next    {status:"ok", id, queue:{pos,len,next}} | {status:"error", reason:"queue_empty"}
             queue is read back off the player's own queue file, never predicted. Every
             detached player has one (a lone handle is a queue of one), and --status carries
-            the same object per player; `next` is null on the last track.
+            the same object per player; \`next\` is null on the last track.
 
 Exit codes: 0 ok · 1 usage/validation · 2+ propagated engine/mpv failure · 4 lifecycle
             call did not take effect (no such player / ambiguous / IPC failure)
@@ -264,10 +269,10 @@ Dependencies: mpv (playback) + jq; nc (every socket verb: --set-volume, --pause,
 
 Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
-  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
+  suite. Override per user in \${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
   config > the shipped defaults. See AS-BUILT-contract.md §5.
-  UT_DEFAULT_ENGINE    Engine used when --engine is not given (default: yt)
+  UT_DEFAULT_ENGINE    Engine used when --engine is not given (default: $UT_DEFAULT_ENGINE)
   UT_HISTORY           0 stops a detached player writing to the listening log (default: on)
   YT_ASCII_VO          mpv terminal video output driver (default: tct)
   YT_MPV_INPUT_CONF    Path to an optional custom mpv input.conf
@@ -2259,16 +2264,24 @@ while (($#)); do
         shift
         ;;
     --get-url)
-        # Retired, not renamed: resolving a stream URL is what a bare `yt-resolve` call IS,
-        # so the player forwarding a verb of its own was a second spelling of one contract.
-        die "--get-url is gone — resolve a stream URL with 'yt-resolve -j -- <id|URL>'"
+        # Retired, not renamed: resolving a stream URL is what a bare `<engine>-resolve`
+        # call IS, so the player forwarding a verb of its own was a second spelling of one
+        # contract.
+        #
+        # ORDER-DEPENDENT, and accepted as such: this die and the extraction-verb one below
+        # both name $ENGINE, which --engine (above) only has had a chance to set when it was
+        # written FIRST. `ut-play --transcript --engine bili` therefore still says
+        # `yt-resolve`. Moving these dies past the parse would be holding a usage error to
+        # report it late — a worse trade than a stale engine name in one flag order. The
+        # getopts pass further down has no such dependency.
+        die "--get-url is gone — resolve a stream URL with '${ENGINE}-resolve -j -- <id|URL>'"
         ;;
     --info | --transcript | --subtitles | --sub-lang | --sub-langs \
         | --sub-lang=* | --sub-langs=*)
         # Extraction verbs, forwarded from here until the wrapper merge — and a forward is
         # the copy the split exists to remove. Name the engine rather than reporting an
         # unknown flag: the caller has the right suite, wrong half.
-        die "${1%%=*} is an engine verb — run 'yt-resolve ${1%%=*} -- <id|URL>' (metadata and captions are extraction)"
+        die "${1%%=*} is an engine verb — run '${ENGINE}-resolve ${1%%=*} -- <id|URL>' (metadata and captions are extraction)"
         ;;
     --set-volume)
         [[ $# -ge 2 ]] || die "--set-volume requires a value"
@@ -2391,8 +2404,8 @@ while getopts ":f:S:dljhV" opt; do
         # The gate the yt-play wrapper used to hold: a search flag here is a caller who
         # picked the wrong verb, and "invalid option: -n" does not say which verb is right.
         case "$OPTARG" in
-        n | m | M | s) die "-$OPTARG is a search flag — use yt-search for searching" ;;
-        J) die "-J (full raw record) is an engine flag — try 'yt-resolve --info -J'" ;;
+        n | m | M | s) die "-$OPTARG is a search flag — use ${ENGINE}-search for searching" ;;
+        J) die "-J (full raw record) is an engine flag — try '${ENGINE}-resolve --info -J'" ;;
         esac
         die "invalid option: -$OPTARG"
         ;;
@@ -2477,7 +2490,7 @@ fi
 # the heavier mpv dependency check so the message is about the missing input, not a missing
 # player. Searching lives in yt-search; interactive browsing in uting.
 if ((! IS_HANDLE)) && [[ "$QUERY" != *[![:space:]]* ]] && [[ -z "$ACTION" ]]; then
-    die "provide a video id or URL (to search, run yt-search; for interactive browsing, uting)"
+    die "provide a video id or URL (to search, run ${ENGINE}-search; for interactive browsing, uting)"
 fi
 
 # Lifecycle queries need only jq and take no handle — answer them before the heavier
@@ -2571,4 +2584,4 @@ fi
 # list) went with it. Anything reaching here is a caller holding the wrong tool.
 # docs/AS-BUILT-engine.md §7.
 # =-----------------------------------------------------------------------------
-die "'$QUERY' is not a video id or URL — run 'yt-search -- $QUERY' to search for it"
+die "'$QUERY' is not a video id or URL — run '${ENGINE}-search -- $QUERY' to search for it"
