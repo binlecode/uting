@@ -4,7 +4,7 @@ This file is the single source of truth for repository guidelines, used by Claud
 
 ## Project Overview
 
-**uting** (u-ting / 你听) — an agent-first media engine with a terminal face. An eight-script bash suite: search a source, play it through `mpv` detached from the terminal, keep controlling it, and save what you found — from a TUI if you are a human, from a single-line JSON contract if you are a program. Two sources ship today (YouTube, Bilibili); a third is a new pair of scripts and no change anywhere else. Durable user-level state lives in its own commands — `ut-playlist` for what a person saved, `ut-history` for what a player played — never in the player, never in the TUI.
+**uting** (u-ting / 你听) — an agent-first media engine with a terminal face. An eight-script bash suite: search a source, play it through `mpv` detached from the terminal, keep controlling it, and save what you found — from a TUI if you are a human, from a single-line JSON contract if you are a program. Two sources ship today (YouTube, Bilibili); a third is a new pair of scripts and no change anywhere else. Durable user-level state lives in its own commands — `ut-playlist` for what a person saved, `ut-history` for what a player played — not in the player, not in the TUI. The one deliberate exception is preferences: the TUI writes six keys back, in place, to the user's own `config` (`docs/ROADMAP.md` D18) — that file IS the agent surface for a preference, so no ninth command was made to hold it.
 
 The suite is exposed **directly** to shell-capable agents with no MCP wrapper, so the **CLI contract itself** (argv, exit codes, output shape, process lifecycle) *is* the product and the safety boundary. Every design choice follows from that. Full rationale: `docs/ARCHITECTURE.md`.
 
@@ -39,7 +39,7 @@ UT_HISTORY=0 shell/ut-play -d -- URL                          # …and the switc
 shell/uting --version                                        # answers before any dependency gate
 
 tests/contract.sh --offline                                   # the hermetic half: ~15s, no packet sent
-tests/contract.sh                                             # …and the live half too: ~82s, 217 checks
+tests/contract.sh                                             # …and the live half too: ~82s, 231 checks
 tests/playback.sh                                             # real detached players; silent, ~62s
 tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
 tests/drive.sh -k Enter -w Playing                            # …including a real detached play
@@ -142,7 +142,7 @@ Two files, one rule:
 
 | File | Drives | Gate |
 |---|---|---|
-| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux, and that it left no player behind when it went | none — `--offline` before every commit (~15s, 167 of 217 checks, hermetic), the whole thing before every push (~82s) |
+| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux, and that it left no player behind when it went | none — `--offline` before every commit (~15s, 168 of 231 checks, hermetic), the whole thing before every push (~82s) |
 | `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), that an engine's `http_headers` actually reach mpv, and the listening log's **wiring** — only here does a real track really end | none — it starts real players, but in a `TMPDIR` and a `UT_STATE_DIR` of its own; ~62s and needs the network, so run it when the player changed |
 
 `tests/drive.sh` is the only other file, and it is not a suite — it asserts nothing. It is a

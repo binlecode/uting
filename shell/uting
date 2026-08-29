@@ -189,9 +189,25 @@ mark_pref() {
 # not user data. A lock spin inside a key loop would be the worse trade.
 write_prefs() {
     local keys="$1" line lhs rhs key val pre gap comment trimmed lead bare tmp
-    local out="" seen="" k
-    if [[ -e "$UT_CONFIG" ]]; then
-        [[ -r "$UT_CONFIG" ]] || return 1
+    local out="" seen="" k dest link
+    # Resolve $UT_CONFIG along its symlink chain FIRST, and write to what it points at.
+    # temp+mv came from ut-playlist, but that store renames over files it created in its own
+    # directory; this renames over a file the USER owns — quite possibly a symlink out of a
+    # dotfiles repo. Renaming onto the link itself would leave a regular file here, orphan the
+    # real dotfile (every later hand-edit there silently stops taking effect) and say nothing.
+    # Same chain walk as this script's own self-resolution at the top — bash 3.2 has no
+    # `readlink -f`. A dangling link resolves too, so the create path below makes the file the
+    # link promises instead of replacing the link with one.
+    dest="$UT_CONFIG"
+    while [[ -L "$dest" ]]; do
+        link=$(readlink "$dest")
+        case "$link" in
+        /*) dest="$link" ;;
+        *)  dest="$(dirname "$dest")/$link" ;;
+        esac
+    done
+    if [[ -e "$dest" ]]; then
+        [[ -r "$dest" ]] || return 1
         while IFS= read -r line || [[ -n "$line" ]]; do
             if [[ "$line" == *=* ]]; then
                 lhs="${line%%=*}"
@@ -226,9 +242,9 @@ write_prefs() {
                 fi
             fi
             out="$out$line"$'\n'
-        done < "$UT_CONFIG"
+        done < "$dest"
     else
-        mkdir -p "$(dirname "$UT_CONFIG")" 2>/dev/null || return 1
+        mkdir -p "$(dirname "$dest")" 2>/dev/null || return 1
         out="# uting — your own settings, and the file uting writes a changed one back to."$'\n'
         out="$out# Hand-edit it freely: comments and layout are preserved, only values move."$'\n'
         out="$out# Precedence: flag > environment > THIS FILE > the shipped <checkout>/config."$'\n'
@@ -242,15 +258,15 @@ write_prefs() {
             if pref_value_ok "$val"; then out="$out$k=$val"$'\n'; fi
         fi
     done
-    tmp="$UT_CONFIG.tmp.$$"
+    tmp="$dest.tmp.$$"
     # cp -p FIRST, so a config the user chmod'ed 600 comes back 600: the redirect below
     # truncates the copy rather than creating a fresh file at whatever the umask says.
-    if [[ -f "$UT_CONFIG" ]]; then cp -p "$UT_CONFIG" "$tmp" 2>/dev/null || true; fi
+    if [[ -f "$dest" ]]; then cp -p "$dest" "$tmp" 2>/dev/null || true; fi
     if ! printf '%s' "$out" >"$tmp" 2>/dev/null; then
         rm -f "$tmp" 2>/dev/null || true
         return 1
     fi
-    if ! mv -f "$tmp" "$UT_CONFIG" 2>/dev/null; then
+    if ! mv -f "$tmp" "$dest" 2>/dev/null; then
         rm -f "$tmp" 2>/dev/null || true
         return 1
     fi
@@ -3789,7 +3805,12 @@ fewer_results() {
     ((target >= floor)) || target=$floor
     ((target < RESULT_N)) || return 0
     RESULT_N=$target
-    ALL_ROWS=$(printf '%s\n' "$ALL_ROWS" | head -n "$target")
+    # `|| true` for the reason ut-play:1985 already spells out: under `set -euo pipefail`
+    # head closing early SIGPIPEs printf, the pipeline goes non-zero, and the script dies AT
+    # the assignment. The unread tail here is exactly UT_FETCH_BATCH rows — a user-settable
+    # key — so a large enough batch really does reach it. The truncation is untouched: the
+    # guard rescues the pipeline's status, not its output.
+    ALL_ROWS=$(printf '%s\n' "$ALL_ROWS" | head -n "$target") || true
     load_rows "$ALL_ROWS"
     mark_pref UT_START_RESULTS
     # No action echo, unlike the other edge: that one prints because it is about to block on a

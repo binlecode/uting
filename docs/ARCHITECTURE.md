@@ -715,6 +715,12 @@ reflow、共享时钟与三个播放态。
      Row count  : more_results（`→` 越过末页：用当前查询重取，+1 批）,
                   fewer_results（`←` 在第 1 页：ALL_ROWS 就地截断，−1 批，零网络，
                   地板是一屏）—— 两条边，一个键都不占（tui §11）
+     Cycles     : cycle_mode（`v`：PLAY_MODE audio→video→fast，纯本地，下一次 Enter 才生效）,
+                  cycle_sort（`o`：轮换 SORT_FIELD 并**重取** —— 页与选中项在这里刻意重置，
+                  因为重排之后旧下标底下是另一个视频）—— 另外三个 cycle 键各自跟着它们的
+                  子系统列在别处：cycle_theme / cycle_ui_lang 在 i18n/theme，cycle_engine
+                  在 Engines。五个 cycle 键管六个偏好里的五个，第六个（UT_START_RESULTS）来自上面
+                  那两条边；置脏点全都在**成功路径之后**（tui §11）
      Prefs      : mark_pref（cycle 成功之后置脏位；被环境压住的键在这里被拒并说一次）,
                   flush_prefs（冲刷点是 nav_tick 与 cleanup_on_exit 两个现成的地方）,
                   write_prefs（就地改写用户配置：一遍扫描、一个临时文件、一次 mv；
@@ -722,11 +728,15 @@ reflow、共享时钟与三个播放态。
                   那张白名单）, pref_value_ok（round-trip 闸）, pref_listed
                   （3.2 没有关联数组，一个集合就是一个字符串）
                   —— 六个键，且只写**用户那份**（contract §5「写回」、ROADMAP D18）
-     Chrome     : layout_cols, print_hints（HINT_MEASURE）, wrap_print/wrap_emit
+     Chrome     : term_size（TERM_LINES/TERM_COLS —— 走这个 UI 本来就要求的那个 TTY 的真
+                  ioctl，不信 $LINES/$COLUMNS；reflow 与分页的输入，tui §11）, layout_cols,
+                  print_hints（HINT_MEASURE）, wrap_print/wrap_emit
                   （WRAP_MEASURE）, print_details（DETAIL_MEASURE）, card_divider,
                   repeat_glyph, render_prog_bar
      Input      : read_nav_input/read_esc_tail（ESC-[/O 解码器，拆出来是为了让 PENDING_ESC
                   的再入不成为它的第二份副本）/read_query_input,
+                  confirm_key（确认是**一个字节**不是一行文本：`read -rsn1`，默认否 ——
+                  今天只有 `d` 用它，tui §11）,
                   utf8_complete + init_lead_tables（一个**字符**一个键）,
                   tty_echo_off/tty_echo_restore, cursor_hide/cursor_show
      Queue      : enqueue_selected（`+`）, skip_next（`>`）, focused_payload（焦点行作为
@@ -742,7 +752,10 @@ reflow、共享时钟与三个播放态。
                   toggle_pause, seek_relative, adjust_volume, stop_current_playback,
                   check_player_alive, clear_play_state, elapsed_since_play,
                   cleanup_on_exit
-     i18n/theme : set_ui_lang/cycle_ui_lang（S_* 表）, init_theme/init_colors/
+     i18n/theme : init_ui_strings（启动时按 YT_LANG、否则按 locale 定一次语言）/
+                  set_ui_lang/cycle_ui_lang（S_* 表 —— 每个标签**一次性**解析进全局量，
+                  不在渲染路径上每帧再判一次语言）, init_theme/set_theme（配色家族 →
+                  强调色与灰阶，`t` 的实时轮换用的就是启动时这同一次重解析）/init_colors/
                   detect_bg/init_colorterm/cycle_theme, init_glyphs, init_sync
      Failures   : report_fetch_failure, play_failed_notice, press_any_key
      Formatters : fmt_sec（时钟）, short_dur（duration_fmt → 6:10:58）, commas
@@ -759,6 +772,8 @@ reflow、共享时钟与三个播放态。
                   playlist UI 一家（全部外壳调用 ut-playlist，自己不存也不改）：
                   list_playlists · show_playlist（两者都**通过全局量**回 JSON + COUNT）·
                   pick_playlist（`b` 挑一个来开、`a` 挑一个来加 —— **一个**选择器，两个键）·
+                  focused_index（焦点行 → 它在存储信封里的下标：拿 url **加上它的出现
+                  序号**去查，因为一个歌单允许同一个 url 出现多次）·
                   delete_from_playlist（`d`：唯一破坏性的存储键，先问且默认否）·
                   reload_playlist（删完重读；读失败就落回搜索，因为屏幕上那是过去的图像）·
                   playlist_only（`d` 的谓词，search_only 的镜像 —— 日志没有按行删除，

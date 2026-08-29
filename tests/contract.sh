@@ -22,7 +22,7 @@
 # decides on: ~83s in full, of which the live half is ~68s (roughly 21 engine round trips) and
 # the tmux section is ~16s of that — it was 4s until the write-back checks landed, and the 12
 # is two re-fetches its own keys ask for. `--offline` stops before the first of them: ~15s,
-# 168 of the 229 checks, no packet sent. That 15 is dominated by one deliberate 5.5s lock
+# 168 of the 231 checks, no packet sent. That 15 is dominated by one deliberate 5.5s lock
 # spin — a FRESH held lock has to be waited out, that being what the spin is for; the
 # stale-lock steal beside it costs 0.1s
 # because staleness is tested before the spin, not after (shell/ut-playlist:lock_playlist).
@@ -1157,8 +1157,14 @@ else
     # keys have to APPEND. UT_SORT_FIELD is absent too, and pinned in the pane's environment
     # below: "the file never grew that key" is how a refused write is asserted without
     # needing to know when the write would have happened.
+    # It is also a SYMLINK to the real file — the shape a config kept in a dotfiles repo
+    # has, and a second discriminator for free: a write that renamed onto the link would
+    # leave a regular file here, orphan the real dotfile, and still pass the value check
+    # below (the new regular file carries the new value). Only `-L` afterwards separates them.
     TUI_CFG="$UT_TEST_TMP/tui-config"
-    printf '%s\n' '# a config a human wrote' 'UT_PLAY_MODE=audio    # keep me' >"$TUI_CFG"
+    TUI_CFG_REAL="$UT_TEST_TMP/tui-config.real"
+    printf '%s\n' '# a config a human wrote' 'UT_PLAY_MODE=audio    # keep me' >"$TUI_CFG_REAL"
+    ln -s "$TUI_CFG_REAL" "$TUI_CFG"
     # UT_SORT_FIELD in the pane's ENVIRONMENT is the discriminating input for the refusal:
     # the environment beats the file at every startup, so a uting that wrote this key would
     # record view_count and then discard it on the next run. The value it would write
@@ -1240,6 +1246,9 @@ else
     done
     report "v writes the mode to your config" 1 "$wrote"
     report "the comment on that line survived" 1 "$(grep -c '# keep me' "$TUI_CFG")"
+    report "your config is still the symlink" 1 "$(test -L "$TUI_CFG" && echo 1 || echo 0)"
+    report "and the real file behind it moved" 1 \
+        "$(grep -c '^UT_PLAY_MODE=video' "$TUI_CFG_REAL")"
 
     # → past the last page fetches one more batch. Two presses is the geometry this pane has
     # (10 rows a page, 20 rows on screen), and the round repeats rather than assuming it: a
