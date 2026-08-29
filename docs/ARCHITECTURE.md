@@ -992,9 +992,12 @@ reflow、共享时钟与三个播放态。
   仍然**刻意**不在范围内的：
     - **前台**播放的实时音量 —— 它有一个真 tty，所以 mpv 自己的音量键本来就能用；不需要 IPC。
       （`uting` 已经不是前台了：它 detached 地播、经 socket 调音量，而 `--status` 会把它活读出来。）
-    - Linux 的 `nc -U` 可移植性 —— 这是一个 macOS 优先的工具；BSD 的 `nc -U` 是原生的，
-      而 GNU netcat 的各种变体不一样（`ncat -U` 可以；`netcat-traditional` 根本不支持 Unix socket）。
-      作为已知缺口**接受**，写在一条脚本注释里而不是现在去解决。
+    - ~~Linux 的 `nc -U` 可移植性~~ —— **已由变体探测关闭**（2026-08-29）：`ut-play` 与
+      `uting` 各带一份 `resolve_nc_unix`，按**能力**探测（`-h` 文本里有没有 `-U`），
+      `nc` 不认 `-U` 就落到 `ncat`（`-w` 只管连接，空闲兜底改拼 `-i 1`），两个都没有才拒。
+      于是 Debian/Ubuntu 的 `netcat-openbsd` 与 Fedora 系的 `ncat` 都直接通；
+      仍然不通的只剩 `netcat-traditional` / busybox-only 的环境 —— 装一个带 `-U` 的变体即可，
+      **socat 依旧被拒**（不加新依赖；netcat 的变体是同一个依赖的第二拼法，不是新依赖）。
 
 ## 27. 验证矩阵
 已移出 → `AS-BUILT-verification.md` §27 —— 上一次运行的测量、套件**刻意不覆盖**什么、

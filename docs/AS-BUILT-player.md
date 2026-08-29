@@ -401,14 +401,16 @@ bash 3.2 的数组（`RESOLVE_PLAYERS_JSON` 的候选）过不了 `$(...)` 捕�
 2 个以上 → `ambiguous`。每次调用都先跑 `reap_dead_players`，于是进程组已经没了的播放器
 在选择之前就被清掉。
 
-**用 `nc` 而不是 `socat`（不加新依赖）。** 已有的 mpv 包装器多用
+**用 netcat 而不是 `socat`（不加新依赖）。** 已有的 mpv 包装器多用
 `socat - UNIX-CONNECT:$sock`（干净的 EOF，没有 `-w` 的延迟地板），但 macOS 上没有 socat。
-我们留在原生 BSD 的 `nc -U -w1` 上，用 `request_id` 过滤买回健壮性 —— 比引入一个工具链其余部分
-都不需要的依赖便宜。延迟是地板不是天花板（约 ≤1s/次）：mpv 把 socket 一直开着，所以回复之后
-若没有后续事件，`nc` 可能一直坐到 `-w1` —— 对人驱动的调节没问题，对紧循环不行。
-Linux 的 `nc -U` 行为不同，属于已接受的已知缺口（ARCHITECTURE.md §26）。`nc` 是在分派处
-惰性把门的（`require_cmd nc`），绝不进全局 `require_deps`，于是一次光秃秃的搜索永远不必要求它
-（AS-BUILT-contract.md §4）。
+我们留在 netcat 上，用 `request_id` 过滤买回健壮性 —— 比引入一个工具链其余部分
+都不需要的依赖便宜。**具体用哪个 netcat 由 `resolve_nc_unix` 按能力探测**（`-h` 文本里
+有没有 `-U`）：BSD/openbsd 的 `nc -U -w1` 优先，没有就落 `ncat -U -w 1 -i 1`（ncat 的
+`-w` 只管连接超时，空闲兜底是 `-i`），两个都没有，socket 动词才拒。`ut-play` 与 `uting`
+各带一份探测（八个对等文件不共享库）。延迟是地板不是天花板（约 ≤1s/次）：mpv 把 socket
+一直开着，所以回复之后若没有后续事件，读端可能一直坐到超时 —— 对人驱动的调节没问题，
+对紧循环不行。探测在分派处惰性把门，绝不进全局 `require_deps`，于是一次光秃秃的搜索
+永远不必要求它（AS-BUILT-contract.md §4）。
 
 **参考（mpv IPC）。**
 

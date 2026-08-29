@@ -628,8 +628,9 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
           ut-history   ：只要 jq。同上，并且对播放器是**可选**的：PATH 上没有它，
                          什么也不记录、什么也不说（一项能力是靠"在那儿"来声明的）。
                          uting 的 h 键只在它在时才画出来。
-          BSD 的 `nc -U` 在 macOS 上是原装的；Linux netcat 的 `-U` 缺口是一个已知的、
-          有记录的限制（ARCHITECTURE.md §26 / 脚本注释）。
+          BSD 的 `nc -U` 在 macOS 上是原装的；Linux 上任何带 `-U` 的变体都被接受 ——
+          `netcat-openbsd` 的 nc，或 `ncat` —— 由 `resolve_nc_unix` 按能力探测
+          （ARCHITECTURE.md §26；两个都没有时只有 socket 动词拒，播放与队列不受影响）。
    -V   ：每一个入口点都在**任何**依赖门之前回答它，读 VERSION 并印出它自己的名字 ——
           为了知道你的版本号而需要装着 yt-dlp 是本末倒置的，
           而八个可执行文件不能有互相矛盾的余地（ARCHITECTURE.md §4）。

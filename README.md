@@ -89,11 +89,14 @@ a playlist with a fixed name. A downloader and channel subscriptions are unsched
 
 ## Requirements
 
-- **macOS first.** Linux is not currently usable: the stock netcat has no `-U`, which the mpv IPC
-  path needs.
-- `yt-dlp`, `jq`, `mpv`, `nc` (BSD netcat ships with macOS), `curl`.
-  They are not all needed by all of it: `yt-dlp` belongs to the engines, `mpv` and `nc` to the
-  player, `jq` to both. **`curl` is required by `bili-search`** — it IS that engine's transport —
+- **macOS first.** On Linux the mpv IPC path needs a `-U`-capable netcat: the suite probes for
+  one and accepts either `nc` with `-U` (Debian/Ubuntu's `netcat-openbsd`) or `ncat` (Fedora's
+  nmap netcat). Only `netcat-traditional`/busybox-only environments fall short — install a
+  capable variant; without one, playback and the queue still work and only the socket verbs
+  refuse.
+- `yt-dlp`, `jq`, `mpv`, a unix-socket netcat (BSD `nc` ships with macOS), `curl`.
+  They are not all needed by all of it: `yt-dlp` belongs to the engines, `mpv` and the netcat
+  to the player, `jq` to both. **`curl` is required by `bili-search`** — it IS that engine's transport —
   and optional everywhere else (the YouTube engine's play-time client probe).
 - bash 3.2 — the version macOS ships. The suite is written to that floor on purpose; see
   `docs/ARCHITECTURE.md` §28.

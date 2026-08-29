@@ -559,6 +559,22 @@ require_cmd() {
     done
 }
 
+# The unix-socket client, resolved once at startup (ut-play carries the same probe — eight
+# peers, no shared library). BSD/OpenBSD nc take -U; netcat-traditional and busybox nc do
+# not, and there nmap's ncat is the same primitive under its second name. Probed by
+# CAPABILITY (' -U' in the -h text), never by version string. ncat's -w bounds only the
+# connect, so the idle backstop nc spells -w1 is spelled -i 1 there.
+NC_UNIX=()
+resolve_nc_unix() {
+    if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q -- '-U'; then
+        NC_UNIX=(nc -U -w1)
+    elif command -v ncat >/dev/null 2>&1; then
+        NC_UNIX=(ncat -U -w 1 -i 1)
+    else
+        return 1
+    fi
+}
+
 is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
 
 # Parse: search-shaping flags forwarded to <engine>-search (and captured for status line);
@@ -711,10 +727,12 @@ if [[ -n "$PLAY_VOLUME" ]]; then
     is_uint "$PLAY_VOLUME" && ((PLAY_VOLUME <= 100)) || die "--volume must be an integer 0-100"
 fi
 
-# nc as well as jq: every transport key (pause, seek, volume) and every time readout goes
-# through `nc -U` on the player's socket, so a machine without it loses half the TUI at the
-# first keypress rather than at start-up.
-require_cmd jq nc
+# A unix-socket netcat as well as jq: every transport key (pause, seek, volume) and every
+# time readout goes through the player's socket, so a machine without one loses half the
+# TUI at the first keypress rather than at start-up. Any -U-capable variant passes —
+# BSD/openbsd nc, or ncat (resolve_nc_unix).
+require_cmd jq
+resolve_nc_unix || die "requires a unix-socket netcat: 'nc' with -U support, or 'ncat'" 
 # The self-rendered menu reads keys from stdin and draws to stdout, so BOTH must be a real
 # terminal; refuse cleanly rather than hang/garble when piped (e.g. an agent).
 { [[ -t 0 ]] && [[ -t 1 ]]; } || die "requires a terminal (interactive menu); use ${UT_DEFAULT_ENGINE}-search / ut-play headless"
@@ -1201,7 +1219,7 @@ send_mpv_ipc() {
         [[ "$rid" == "1" ]] && break
         ((seen >= 12)) && break
     done < <(printf '{"command":%s,"request_id":1}\n' "$body" |
-        nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null |
+        "${NC_UNIX[@]}" "$CURRENT_PLAY_SOCK" 2>/dev/null |
         jq -r --unbuffered 'select(.request_id != null) | .request_id' 2>/dev/null)
     return 0
 }
@@ -1217,7 +1235,7 @@ mpv_get_prop() {
         [[ "$rid" == "1" ]] && { out="$val"; break; }
         ((seen >= 12)) && break
     done < <(printf '{"command":["get_property","%s"],"request_id":1}\n' "$1" |
-        nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null |
+        "${NC_UNIX[@]}" "$CURRENT_PLAY_SOCK" 2>/dev/null |
         jq -r --unbuffered 'select(.request_id != null)
                             | "\(.request_id)\u001f\(.data)"' 2>/dev/null)
     [[ "$out" == "null" ]] && out=""
@@ -1678,7 +1696,7 @@ fetch_play_times() {
         esac
         ((got >= want || seen >= 12)) && break
     done < <(printf '%s\n' "${reqs[@]}" |
-        nc -U -w1 "$CURRENT_PLAY_SOCK" 2>/dev/null |
+        "${NC_UNIX[@]}" "$CURRENT_PLAY_SOCK" 2>/dev/null |
         jq -r --unbuffered 'select(.request_id != null)
                             | "\(.request_id)\u001f\(.data)"' 2>/dev/null)
     # "null" (the player did not answer, or answered null) leaves the local value alone —

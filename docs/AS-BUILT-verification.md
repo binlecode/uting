@@ -17,6 +17,7 @@
 | 风险 | 缓解 |
 |---|---|
 | 删掉 TUI 之后留下悬空引用 | 删任何符号之前先用 grep 把它闸住 |
+| `resolve_nc_unix` 的 ncat 分支在 macOS 上跑不到（本机 `nc -h` 有 `-U`，探测永远选 nc） | **如实记为无覆盖**：给 ncat 分支造覆盖要么 shim PATH（是 mock，规则禁止）、要么真上一台 Linux —— 后者才是补法。两个套件在 macOS 上验的是 nc 分支 + 探测函数本身的语法与惰性门（`playback.sh` 的活 socket 读走的就是它） |
 | 标题里带 tab/换行会撑破一行 | jq `@tsv` 转义；`load_rows` 里 `IFS=$'\t'` 切分（如今是 US，见 `AS-BUILT-tui.md` §11） |
 | 从渲染好的行里错误地还原 URL | url 与显示分开放在平行数组里（按下标取） |
 | 过滤过度匹配 / 注入一个 glob | 纯 bash：`nocasematch` + AND 词元 + 加引号的 `"$tok"` |

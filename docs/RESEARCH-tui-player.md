@@ -164,8 +164,10 @@
 ## 4. 这套东西要付的账（我自己付，朋友装的时候也付）
 
 - **bash 3.2 与 5 的行为差异**，可移植性契约已长篇记录（`ARCHITECTURE.md` §28）—— 那是持续的维护承诺。
-- **Linux 自带 netcat 没有 `-U`**（`ARCHITECTURE.md` §26）。我自己不碰，但**朋友里有人用 Linux
-  就是直接卡住** —— 这是这份清单上唯一会当场拦人的一条。
+- **Linux 的 netcat 变体**：`-U` 的有无因发行版而异（`netcat-openbsd` / `ncat` 有，
+  `netcat-traditional` / busybox 没有）。曾是这份清单上唯一当场拦人的一条；
+  **2026-08-29 起由 `resolve_nc_unix` 按能力探测关掉了大半**（`ARCHITECTURE.md` §26），
+  Linux 朋友装一个带 `-U` 的 netcat 变体即可，剩下的账只是 README 里那一句安装说明。
 - **终端动物园**：DCS 帧同步、Ambiguous 宽度、tmux 透传 —— 宽度层与 `YT_AMBIG_WIDE` 存在的全部理由。
   换一个终端、换一台机器就可能露头。
 - **五个运行时依赖**（yt-dlp、jq、mpv、nc、curl），全部由用户负责安装并保持可用；且**每加一个

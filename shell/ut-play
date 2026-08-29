@@ -262,8 +262,9 @@ Exit codes: 0 ok · 1 usage/validation · 2+ propagated engine/mpv failure · 4 
 Playback keys (mpv, during a blocking 'ut-play -- <handle>' playback):
   _  toggle video track on/off        q  stop playback and exit
 
-Dependencies: mpv (playback) + jq; nc (every socket verb: --set-volume, --pause, --resume,
-              --seek, --seek-to — the queue verbs need only jq); an <engine>-resolve on PATH or next
+Dependencies: mpv (playback) + jq; a unix-socket netcat — BSD/OpenBSD 'nc -U' or nmap's
+              'ncat' — for every socket verb: --set-volume, --pause, --resume,
+              --seek, --seek-to (the queue verbs need only jq); an <engine>-resolve on PATH or next
               to this file. yt-dlp / curl / cookies are the ENGINE's business, not the
               player's — see 'yt-resolve -h' for those.
 
@@ -332,6 +333,26 @@ require_deps() {
     for cmd in "$@"; do
         require_cmd "$cmd"
     done
+}
+
+# ── The unix-socket client, resolved once ──────────────────────────────────────────────
+# BSD/OpenBSD nc take -U; Debian's netcat-traditional and busybox nc do not, and on those
+# systems nmap's ncat is the same primitive under its second name. Probed by CAPABILITY
+# (' -U' in the -h text), never by version string — the flag either exists or it does not.
+# ncat's -w bounds only the connect, so the idle backstop nc spells -w1 is spelled -i 1
+# there; both ends of every read are still closed early by the callers' head/SIGPIPE.
+# Resolved lazily and cached: a plain play never runs the probe (same reason the nc gate
+# was lazy before this existed). Empty NC_UNIX after a failed resolve = no capable client.
+NC_UNIX=()
+resolve_nc_unix() {
+    ((${#NC_UNIX[@]})) && return 0
+    if command -v nc >/dev/null 2>&1 && nc -h 2>&1 | grep -q -- '-U'; then
+        NC_UNIX=(nc -U -w1)
+    elif command -v ncat >/dev/null 2>&1; then
+        NC_UNIX=(ncat -U -w 1 -i 1)
+    else
+        return 1
+    fi
 }
 
 mpv_supports_vo() {
@@ -904,8 +925,9 @@ ensure_state_dir() {
 # ONE connection carries every property asked for — that is why this is a property list and
 # not four calls: --status pays the same single round trip it always did (~10ms measured; a
 # healthy mpv closes as soon as the reader breaks, so the -w1 timeout is never reached).
-# Soft-gated on nc so --status keeps working with jq alone (AS-BUILT-contract.md §4): no nc, no socket, no
-# output, and the caller reports nulls.
+# Soft-gated on the socket client so --status keeps working with jq alone
+# (AS-BUILT-contract.md §4): no capable nc/ncat, no socket, no output, and the caller
+# reports nulls.
 #
 # Emits one "<request_id><US><value>" line per answer, in whatever order mpv sent them —
 # correlation is the CALLER's job and must be by request_id, never by line order: mpv
@@ -926,7 +948,7 @@ ensure_state_dir() {
 live_props() {
     local sock=$1
     shift
-    command -v nc >/dev/null 2>&1 || return 0
+    resolve_nc_unix || return 0
     [[ -S "$sock" ]] || return 0
     local prop i=0
     local reqs=()
@@ -936,7 +958,7 @@ live_props() {
     done
     ((${#reqs[@]})) || return 0
     printf '%s\n' "${reqs[@]}" |
-        nc -U -w1 "$sock" 2>/dev/null |
+        "${NC_UNIX[@]}" "$sock" 2>/dev/null |
         jq -r --unbuffered 'select(.request_id != null) | "\(.request_id)\u001f\(.data)"' 2>/dev/null |
         head -n "$i" || true
 }
@@ -1979,9 +2001,10 @@ IPC_DATA=""
 ipc_command() {
     local sock=$1 cmd=$2 reply
     IPC_DATA=""
+    resolve_nc_unix || return 1
     [[ -S "$sock" ]] || return 1
     reply=$(printf '%s\n' "$cmd" |
-        nc -U -w1 "$sock" 2>/dev/null |
+        "${NC_UNIX[@]}" "$sock" 2>/dev/null |
         jq -c 'select(.request_id==1)' 2>/dev/null | head -1) || true
     [[ "$(jq -r '.error // empty' <<<"$reply" 2>/dev/null)" == success ]] || return 1
     IPC_DATA=$(jq -r '.data' <<<"$reply" 2>/dev/null) || IPC_DATA=""
@@ -2512,13 +2535,13 @@ if [[ "$ACTION" == "stop" ]]; then
     require_cmd jq
     do_stop "${TARGET_ID:-}" "$STOP_ALL"
 fi
-# --set-volume drives a running player over its IPC socket: needs jq + nc, but NOT mpv,
-# and takes no handle. nc is gated lazily HERE (not in require_deps) so a plain play never
-# demands it. BSD `nc -U` is stock on macOS (first use in
-# this script); on Linux the -U flag varies by netcat variant (known gap, ARCHITECTURE.md).
+# --set-volume drives a running player over its IPC socket: needs jq + a unix-socket
+# netcat, but NOT mpv, and takes no handle. The client is gated lazily HERE (not in
+# require_deps) so a plain play never demands it. BSD `nc -U` is stock on macOS; on Linux
+# any -U-capable variant is accepted — netcat-openbsd's nc, or ncat (resolve_nc_unix).
 if [[ "$ACTION" == "set-volume" ]]; then
     require_cmd jq
-    require_cmd nc
+    resolve_nc_unix || die "required command not found: a unix-socket netcat (nc with -U, or ncat)"
     do_set_volume "$SET_VOLUME_ARG" "${TARGET_ID:-}"
 fi
 # The same socket, the same lazy nc gate, the same exit taxonomy. The value is validated
@@ -2534,7 +2557,7 @@ fi
 case "$ACTION" in
 pause | resume | seek | seek-to)
     require_cmd jq
-    require_cmd nc
+    resolve_nc_unix || die "required command not found: a unix-socket netcat (nc with -U, or ncat)"
     do_playback_verb "$ACTION" "$SEEK_ARG" "${TARGET_ID:-}"
     ;;
 esac
