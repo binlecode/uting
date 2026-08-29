@@ -1529,6 +1529,15 @@ else
     tmux send-keys -t "$TS" Space
     sleep 0.5
 
+    # `c` first, and it must do NOTHING here: it is the third key of that same row-source
+    # family, but it is gated on the engine having --parts, and yt does not (one id there is
+    # one file). The witness is the key AFTER it, which is why this rides on `h` instead of
+    # asserting on the hint block: an UNGATED c would call yt-resolve --parts, collect the
+    # unknown-flag refusal the offline half pins, and park the pane on a press-any-key notice
+    # — and a parked pane eats the next keystroke. So a c that misbehaved does not show up as
+    # its own red; it shows up as `h` never opening the log, which is the same measurement.
+    tmux send-keys -t "$TS" c
+    sleep 0.5
     tmux send-keys -t "$TS" h
     opened=0; i=0
     while [ $i -lt 40 ]; do
@@ -1536,6 +1545,7 @@ else
         sleep 0.25; i=$((i + 1))
     done
     report "h opens the log as the rows" 1 "$opened"
+    report "…so the c before it was inert" 1 "$opened"
     # Same witness the `q` check keeps, and for the same reason: the pane is the only place a
     # key that went somewhere else is legible. A reader that is not the menu loop
     # (press_any_key behind a notice, the `n` prompt) shows up here and nowhere else.

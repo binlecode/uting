@@ -15,7 +15,7 @@
 | # | 条目 | 状态 |
 |---|---|---|
 | P1 | `<engine>-resolve --parts` 动词 + 信封 | **已落**（2026-08-29；`bili-resolve` + `tests/contract.sh`，契约文档留给 P9） |
-| P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | **已落**（2026-08-29；`shell/uting`，`tests/contract.sh` 250 项全绿 + `tests/drive.sh` 往返实测） |
+| P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | **已落**（2026-08-29；`shell/uting` + `contract.sh` 的 tmux 面上一条 `c` 能力门见证，257 项全绿；五次 drive 实测记在 §13） |
 | P3 | `--quality TIER` 贯穿 `ut-play` → `<engine>-resolve` | **已落**（2026-08-29；`ut-play` + 两个 resolve 半边 + `config`；`contract.sh` 256 项 + `playback.sh` 44 项全绿；档位效果与 `-S` 压过 `--quality` 均实测） |
 | P4 | `uting` 的质量档键位（`f`）与写回 | 未开工 |
 | P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | 未开工，**P6 的前置** |
@@ -641,7 +641,31 @@ P6 落地时让给章节/队列选择（见 P6 内注）。
 | player record 的 `selected` | 真播一条后 `--status -j` 里 `.selected` 非 null（backfill 路径，同 title/format 既有检查旁） |
 | `--quality` 贯穿真播 | `ut-play -d --quality low -f audio` 起真播放器、正常 stop —— 证明 `-S` 叠加不碎流 |
 
+### contract.sh 的 tmux 面（P2 落地时加的一条，2026-08-29）
+
+`c` 的**能力门**在活的 TUI 上有一条断言，而且它**不看提示块**（画面不进套件）：那个面跑的是
+yt（`config` 的出厂默认，且它的 `UT_CONFIG` fixture 里没有这个键），所以 `c` 必须**什么都不做**。
+证人是**它后面那个键**：一个没有门的 `c` 会去调 `yt-resolve --parts`，收到 offline 半边已经钉住的
+`unknown flag` 拒绝，然后把面停在 press-any-key 上 —— 而停住的面会**吃掉下一个按键**。
+于是 `c` 之后紧跟既有的 `h`：`h` 打不开日志，就是 `c` 越了界。一次测量，两条断言
+（`…so the c before it was inert` 与 `h opens the log as the rows` 共用一个变量 ——
+套件里已有的那种形状）。
+
+**正向那半为什么不进套件**：`c` 真开出 parts 视图，要一条**搜索结果第一行恰好是多 P** 的
+bili 查询 —— 那是拿站方排序做回归，正是本节末尾自己列的反例（「不给 100 这个数做回归」）。
+正向路径由下面的 drive 驱动，**套件里没有它，这话是照实说的**。
+
 ### tests/drive.sh（TUI 改动的驱动，断言存活）
+
+**P2 落地时实跑的五次（2026-08-29，均 100x30）：**
+
+| 驱动 | 看到的 |
+|---|---|
+| `UT_DEFAULT_ENGINE=bili -q '钢琴教程' -k c -w 'parts='` | 表头 `parts='【全500集】…'`、`engine=bili  items=100  total=10h:32m:03s`；行是真分 P 标题与各自时长（第 1 行 12:07），details 块是 `?p=1`，提示块 `c 返回搜索列表` |
+| `… -k 'c c'` | 回到 `query='钢琴教程'`、`results=17`、`auth=chrome`，提示块回到 `c 分P` |
+| `UT_DEFAULT_ENGINE=bili -q '周杰伦 稻香' -k c` | `分P: 这个视频只有一 P` + 按任意键 —— 单 P 不开视图 |
+| `UT_DEFAULT_ENGINE=yt -q 'lofi hip hop' -k c` | 提示块里没有 `c`，按下去什么都不发生 |
+| `UT_DEFAULT_ENGINE=yt -q '周杰伦' -k 'e x'` | 换到 bili 后 `c 分P` 出现 —— `refresh_engine_caps` 在换引擎点也刷了（`x` 是拿来消掉 `mark_pref` 那条环境固定提示的） |
 
 - `-k c`（bili 行）→ 等 `parts=` 出现在帧里 → `-k c` 回 → reap；
 - `-k i` → 等 spinner 消失 → `-k i` 回；`-k '?'` 两次（core↔full 往返活着）；
