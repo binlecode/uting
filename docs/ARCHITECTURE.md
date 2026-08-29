@@ -679,14 +679,20 @@ reflow、共享时钟与三个播放态。
    引擎，解析半 (shell/yt-resolve · shell/bili-resolve)
      Shared shape: die, validate_enum, require_cmd/require_deps,
                   cleanup_scratch/ensure_scratch, normalize_playback_mode,
-                  format_for_mode（模式→格式表）, url_host, is_own_host,
+                  format_for_mode（模式→格式表）, quality_sort_for_tier
+                  （(mode, tier) → yt-dlp format-sort 串；--quality 的档位只有这张
+                  表译得动，yt-dlp sort 串在这里之外不存在 —— contract §1.3）,
+                  url_host, is_own_host,
                   normalize_target（句柄文法 + host 白名单，ROADMAP D5.3）,
                   dump_once, emit_stream, resolve_fail, resolve_stream, resolve_info,
                   resolve_auth（--auth：报告 cookie 决定本身，不承诺它买到了什么）,
                   classify_yt_dlp_error, print_usage
      yt-resolve only : have_probe_tools, probe_raw（PO-token 探测，engine §8.2）,
                   resolve_transcript / transcript_fail（engine §10.2）
-     bili-resolve    : 根本没有 transcript 那一半 —— 能力规矩（D13）
+     bili-resolve only : resolve_parts / parts_fail（--parts：列出多 P 视频的各 P，
+                  一次 HTTP 请求、没有 yt-dlp；parts[] 元素就是条目记录，
+                  直接管进 ut-playlist --add —— contract §3）
+                  （根本没有 transcript 那一半 —— 能力规矩，D13）
 
    存储之二：播放列表 (shell/ut-playlist) —— 无站点知识、无播放，只用 jq
      Setup/util : die, require_cmd, validate_enum, now_utc, print_usage, set_action,
@@ -761,7 +767,13 @@ reflow、共享时钟与三个播放态。
      Formatters : fmt_sec（时钟）, short_dur（duration_fmt → 6:10:58）, commas
      Engines    : scan_engines / engine_seen / engine_search_bin（按**对**发现，tui §11）,
                   cycle_engine（`e` 键：换源并重新取数）, refresh_engine_auth
-                  （每次换源重算 ENGINE_AUTH —— 不建映射表，bash 3.2 没有关联数组）
+                  （每次换源重算 ENGINE_AUTH —— 不建映射表，bash 3.2 没有关联数组）,
+                  refresh_engine_caps / refresh_engine_parts（**每个引擎有没有 `--parts`**
+                  是一次启动时问出来的能力探测，不是一张硬编码表 —— 与 auth 同一条
+                  "以有没有声明能力"的路，D13）, open_parts（`c` 键：把聚焦行的多 P
+                  部分开成一个列表 —— 一次 `<engine>-resolve --parts -j`，把信封 reshape
+                  成与存储同样的七字段行；`LIST_SOURCE="parts"` 是它自己的一个来源，
+                  再按 `c` 回到搜索）
      Stores     : build_playlist_rows（一个存储信封 → 与搜索建出来的同样的七字段行；
                   播放列表的 --show 与日志的 --ls 是一个形状，所以一个构造器服务两者）,
                   add_to_playlist（`a`）, browse_playlists / open_playlist（`b`）,

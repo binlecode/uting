@@ -316,10 +316,20 @@ format 表里），视频 format 表两边逐项相同，`1080P 高码率`（301
 它从不播放：没有 mpv、没有生命周期、没有 `players/`。
 
 ```
-   <engine>-resolve [-f MODE] [-S SORT] [-j|-J] -- <handle>   流 URL + 请求头
+   <engine>-resolve [-f MODE] [-S SORT] [--quality TIER] [-j|-J] -- <handle>
+                                                              流 URL + 请求头
    <engine>-resolve --info [-j|-J] -- <handle>                只要元数据
    yt-resolve --transcript [--sub-lang L] [-j|-J] -- <handle> 字幕，清洗成纯文本
+   bili-resolve --parts [-j|-J] -- <BV id | av id | URL>      列出多 P 视频的各 P
 ```
+
+**`--quality TIER` 是档位，不是一串格式。** 播放器或调用方**从不**自己把档位翻译成
+yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality_sort_for_tier`）
+住在这里，是这个引擎自己的表：`audio` 模式下档位映射成 `abr` 排序（`res:` 对纯音频轨
+毫无意义），`video` 模式下映射成 `res` 排序，`auto` 不发 sort（出厂行为），
+而一个显式的 `-S` **压过** `--quality`（一次具体的覆盖赢过一档抽象）。
+`--quality` 是流格式选择器，撞上 `--info` / `--parts` / `--transcript` 就退 1
+（门语直说它不适用于那些动词）。
 
 **句柄文法是每引擎自己的，host 白名单也是（ROADMAP D5.3）。** `normalize_target` 接受
 **本**引擎某个 host 上的 URL，或者本引擎自己的媒体 id 形状：
@@ -393,3 +403,23 @@ format 表里），视频 format 表两边逐项相同，`1080P 高码率`（301
 **Bilibili 不供字幕，所以 `bili-resolve` 根本没有 `--transcript`** —— 这个 flag 不被接受，
 帮助里也不列它。这是"能力规矩"的微观版：**一个引擎靠"没有那个动词"来说明自己做不到什么**，
 而不是发布一个永远答"没有"的动词 —— 后者让调用方分不清它与"今天不走运"或"被限流了"。
+
+### 10.3 多 P（`--parts`）—— 一个 `yt-resolve` 没有的动词（D13）
+
+`bili-resolve --parts` 列出多 P 视频的各 P（`?p=N`）—— **一次 HTTP 请求，没有 yt-dlp**
+（`fetch_view_once`，与 `--info` 共用那一次 view 抓取）。信封与
+`-j`/`-J` 的分工：AS-BUILT-contract.md §3。`parts[]` 的元素**就是条目记录**，
+所以 `--parts -j | jq '{items:.parts}'` 原样管进 `ut-playlist --add` 与 `ut-play --queue`。
+
+**YouTube 没有这个动词。** 一个 yt id 恰好就是一个文件；它"多条目"的形态（播放列表）
+是一份自有 URL 的集合，不是这一个动词。`yt-resolve` 因此不接受 `--parts` ——
+同一个能力规矩：调用方**探**这个动词的办法，是无句柄地调用它（退 1 且点名它要 id）。
+
+**动词的输入文法比流解析更窄：它要求一个 id。** `?p=N` 只能挂在 BV/av id 上，
+而一条 b23.tv 短链是重定向不是 id —— 拒绝（1），并告诉调用方先打开一次
+或直接传 `bili-search` 返回的 BV id。
+
+**失败分类与 `--info` 相反：取数失败退 2。** `--parts` 的失败来自它**发起**的那次请求
+（网络 / 一次 200 里没有 parts 记录）—— 一次工具失败，`parts_fail` 与抽取同类；
+而 `--info` 的"取数失败"是引擎对**已有**取数的再解释。单 P 视频不是错误：
+它列出 count 1，说这就是那一个 P。

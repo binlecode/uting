@@ -24,7 +24,11 @@
 `-f MODE` 是播放器的 flag，原样传给引擎；一个模式作为格式字符串**意味着什么**是站点知识，
 所以 `format_for_mode()` 住在每个 `<engine>-resolve` 里，绝不在 `ut-play` 里。播放器从头到尾
 没见过格式字符串，除了把它当作一个不透明的值记进播放器文件、且再也不读
-（AS-BUILT-contract.md §3）。
+（AS-BUILT-contract.md §3）。`--quality TIER` 是同一分界线的另一面：档位在**门口**校验
+（`auto|low|medium|high`，bogus 档退 1），然后**原样**转发给引擎 ——
+(mode, tier) → yt-dlp sort 的那张表是引擎自己的（`quality_sort_for_tier`），
+播放器只搬运档位、从不翻译它；`auto` 不发 sort，一个显式的 `-S` 压过 `--quality`
+（两条转发路径都原样过手，覆盖关系在引擎内部裁决，AS-BUILT-engine.md §10）。
 
 ```
   MODE（播放器 flag）  <engine>-resolve: format_for_mode()   ut-play: mpv 选项集

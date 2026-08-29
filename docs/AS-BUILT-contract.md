@@ -42,8 +42,11 @@
   **它不拥有任何站点知识：** 没有 yt-dlp 调用，没有 cookie 决定，没有格式字符串，没有 id 形状。
 - **标志：** `-f -S -d -j -l -h -V` 加上长标志 `--engine --volume --detach --json --list
   --status --stop --set-volume --pause --resume --seek --seek-to --queue --enqueue --next
-  --id --all --color --help --version`。颜色只有 `--color`（没有 `-c`）；
-  `-S` 是格式排序覆盖（没有 `-F`），原样转发给引擎。`--` 结束选项解析：它之后的一切都是句柄
+  --id --all --color --quality --help --version`。颜色只有 `--color`（没有 `-c`）；
+  `-S` 是格式排序覆盖（没有 `-F`），原样转发给引擎；`--quality` 同理（没有短旗），
+  `auto|low|medium|high` 四档在**门口**校验（bogus 档退出 1），档位原样转发给引擎 ——
+  （mode, tier）→ yt-dlp sort 的映射表住在引擎里（§1.3），不在播放器里。
+  `--` 结束选项解析：它之后的一切都是句柄
   （ARCHITECTURE.md §6）。一次调用至多一个动作；`--id` 属于每一个**寻址**某个在跑的播放器的动词
   （`--stop`、`--set-volume`、`--pause`、`--resume`、`--seek`、`--seek-to`、`--enqueue`、`--next`），
   而 `--all` 只属于 `--stop`；`-d` 既不与动作组合，也不与 `-f ascii|viz` 组合。
@@ -61,6 +64,7 @@
    ut-play -d --queue - < items.json              以一个**队列**启动；第一条开始放
    ut-play --enqueue - [--id ID] < items.json     追加到一个在跑的播放器的队列
    ut-play --next [--id ID]                       丢掉这一条，开始下一条（4：没有下一条）
+   ut-play --quality high -- <handle>             质量档：auto|low|medium|high（默认 auto）
    ut-play                      → 用法错误，点名 <engine>-search / uting（D3）
    ut-play -- "some query"      → 用法错误，点名 <engine>-search（有空白 ⇒ 不是句柄）
   ```
@@ -101,7 +105,16 @@
   yt-dlp 错误词汇表。**cookie 决定同时是可查询的** —— 它是这一半里唯一一件调用方
   在没有句柄的情况下也想知道的事（`--auth`，见下）。
 - **标志：** `-f -S -l -j -J --color -h -V`（`-l` = 散文，且是**默认**输出模式）加上它**有**的那些动词：`--info`（两个引擎都有）、
-  `--auth`（两个引擎都有）、`--transcript --sub-lang`（只有 `yt-resolve`，D13）。
+  `--auth`（两个引擎都有）、`--transcript --sub-lang`（只有 `yt-resolve`，D13）、
+  `--parts`（只有 `bili-resolve`，D13 同一条能力规矩）—— 以及流格式选择器 `--quality TIER`
+  （`auto|low|medium|high`，两个引擎都有）。
+- **`--quality` 是流格式选择器，只配 `resolve_stream` 用。** 它撞上 `--info` / `--parts` /
+  `--transcript` 就退出 1（门语直说"它选择流格式，不适用于那个动词"）；它也不配 `--auth`。
+  档位的含义在引擎内部解析：`quality_sort_for_tier(mode, tier)` 把 (mode, tier) 映射成
+  一段 yt-dlp `--format-sort` 串（`audio` 模式下是 `abr` 排序，`video` 下是 `res` 排序 ——
+  二维，因为 audio 档位对 `res:` 一无所知），那张表**只住在引擎里**；
+  `auto` 不发 sort（引擎出厂行为），`-S` 压过 `--quality`（一次显式的覆盖赢过一档抽象）。
+  一个解析信封**不**携带档位：它是被用掉的那个东西（`format` 已经如实报了）。
 - **`-f` 只收规范模式**（`audio video fast ascii viz`）—— 别名表（`ba`、`bv`、`fst`、
   `asc`、`waves`…）是 `ut-play` 的：播放器在自己的标志解析处归一化，送到引擎的永远是
   规范拼写。引擎接缝只运载规范模式，于是别名表只有一张，第三个引擎落地那天就继承它。
@@ -128,12 +141,15 @@
   `Esc` 回到列表（在卡片里）· `Space` 暂停 · `[`/`]` 快退/快进 ∓10s · `9`/`0` 音量 · `s` 停止 ·
   `v` 循环模式（audio→video→fast）· `e` 切换来源（只有一个引擎时隐藏）·
   `l` 切换界面语言（en↔zh，任一视图）· `t` 循环配色家族（任一视图）·
-  `n` 新搜索 · `o` 排序 · `/` 过滤 · `q` 退出 ·
+  `n` 新搜索 · `o` 排序 · `c` 多 P 部分（§1.3）· `/` 过滤 · `q` 退出 ·
   行数由两条**边**管，不由一个键管：`→` 越过最后一页**追加**一批（一次取数），
   `←` 在第 1 页**砍掉**一批（纯本地截断，不取数，地板是一屏）。
   这六个键改的设置会写回用户配置（§5「写回」）。
   `a` 把当前聚焦行加入一个播放列表 · `b` 把一个已存播放列表打开为行来源 ·
-  `h` 把收听日志打开为行来源。
+  `h` 把收听日志打开为行来源 · `c` 把聚焦行的多 P 部分打开为一个列表（§1.3 的 `--parts`；
+  引擎没有那个动词时按键沉默 —— 同一个"以有没有声明能力"的降级；再按一次 `c` 回到搜索）。
+  `c` 打开的部分列表是搜索行专用的：播放列表与历史的行上它走与 `o`/`e` 同一条拒绝路径
+  （返回栈只有一层，存储的行上不打开第二个来源）。
   `a`/`b` 只在 `ut-playlist` 装了时出现（§1.5），`h` 只在 `ut-history` 装了时出现（§1.6）——
   跟单引擎安装下隐藏 `e` 是同一条规则。两者都**替换**屏幕上的行，且两者都是 **toggle**：
   打开一个存储的那个键把它关掉（再按一次 `h`、再按一次 `b`），
@@ -526,6 +542,22 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
               `no_subtitles_available`，后者也涵盖一条解析出零条可用 cue 的轨
               （一份空的转录是一次落空，不是一次空的成功 —— 一个被递了 {"text":""} 的调用方
               会去总结一段沉默）。
+   --parts  : {status:"ok", engine, id, title, url, count, total_duration,
+              total_duration_fmt, parts:[{n, engine, url, title, duration, duration_fmt}…]}
+              列出多 P 视频的各 P（?p=N）—— 一次 HTTP 请求，没有 yt-dlp。**只有
+              bili-resolve 有它**（D13）：一个 YouTube id 恰好就是一个文件，
+              它"多条目"的形态是一份自有 URL 的播放列表，不是这个动词。
+              parts[] 的元素**就是条目记录** —— `--parts -j | jq '{items:.parts}'`
+              原样管进 `ut-playlist --add` 与 `ut-play --queue`，不需要字段映射，
+              与 `--show` / `--ls` 的信封遵守同一条可拼接规矩。
+              `total_duration` 与 `total_duration_fmt` 是**集合**的时长 ——
+              搜索结果行只报单行的时长（§1.4 的 `total=` 字段显示的就是这个数字），
+              两个数字不同不是错误，是"这一行代表什么"不同（P8）。
+              单 P 视频**不是错误**：它列出 count 1，不是失败。
+              它要求一个 id：b23.tv 短链是重定向不是 id，被拒（1）。
+              取数失败（网络 / 记录里没有 parts）→ {status:"error", engine, url, reason}，
+              退 **2**（一次工具失败，不是用法错误 —— 与抽取同类）。
+   --quality : 见 §1.3 —— 流格式选择器，不配 --info / --parts / --transcript / --auth。
 ```
 
 **队列的输入是 stdin，三种形状** —— 跟 `ut-playlist --add` 接受的那三种一样，理由也一样：
@@ -600,9 +632,14 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
         所以一份畸形的队列永远到不了一个播放器，
         `--queue` 而没有 `-d`、或配上一个动作、或 argv 上带了句柄、
         一个不认识的 --engine、一个 host 不是这个引擎的 URL（AS-BUILT-engine.md §10 / 本文 §3）、
-        --info / --transcript 取数失败（含 no_subtitles_available）
+        --info / --transcript 取数失败（含 no_subtitles_available）、
+        --quality 撞上 --info / --parts / --transcript / --auth（它是流格式选择器，§1.3）、
+        一个不认识的 --quality 档位、--parts 拿到一个它认不得的句柄形状（b23.tv 短链）
    2+   传播上来的 yt-dlp / mpv / HTTP 失败（播放、resolve -j、**搜索**失败 ——
         搜索即使 yt-dlp 退出 1 也报 2，好让一次工具失败永远不会与 1 混淆）。
+        --parts 的取数失败同样落在这里（网络 / 记录里没有 parts —— 一次工具失败，
+        与 --info 的"取数失败退 1"不同：--parts 的失败来自它**发起的那次请求**，
+        --info 的失败来自引擎对已有取数的再解释，见 §3）。
         一个引擎解析不了的句柄落在**这里**，不是落在 1：播放器判断不了一个 id 的形状，
         所以"坏 id"是一个抽取结果（ARCHITECTURE.md §6）。
    4    --set-volume / --pause / --resume / --seek / --seek-to / --enqueue / --next /
@@ -798,6 +835,11 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                       UT_SORT_FIELD       （默认 relevance；**uting 写回**）= `-s` 的默认值。
                       UT_PLAY_MODE        （默认 audio；**uting 写回**）= `-f` 的默认值，
                         播放器与两个 resolve 半边共用一个值。
+                      UT_PLAY_QUALITY     （默认 auto）= `--quality` 的默认值。
+                        auto|low|medium|high 四档；档位的含义只在引擎内部
+                        （quality_sort_for_tier，(mode, tier) → yt-dlp sort，§1.3），
+                        播放器只转发档位、从不翻译它。`uting` 在启动时校验它
+                        （bogus 档退 1；空值读作 auto）。
                       UT_VOLUME           （默认空 = 不动 mpv 自己的）= `--volume` 默认值。
                       UT_DEAD_KEEP        （默认 8）= 保留多少条已死播放器记录
                         （另有一小时的时间上限）。与站点无关：播放器不知道来源。
