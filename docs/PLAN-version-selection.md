@@ -15,13 +15,13 @@
 | # | 条目 | 状态 |
 |---|---|---|
 | P1 | `<engine>-resolve --parts` 动词 + 信封 | **已落**（2026-08-29；`bili-resolve` + `tests/contract.sh`，契约文档留给 P9） |
-| P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | 未开工 |
+| P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | **已落**（2026-08-29；`shell/uting`，`tests/contract.sh` 250 项全绿 + `tests/drive.sh` 往返实测） |
 | P3 | `--quality TIER` 贯穿 `ut-play` → `<engine>-resolve` | 未开工 |
 | P4 | `uting` 的质量档键位（`f`）与写回 | 未开工 |
 | P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | 未开工，**P6 的前置** |
 | P6 | 章节 → 条目视图里的 seek 目标 | 未开工，排最后 |
 | P7 | Enter 语义不变 | **无需改动**，记录在案以免日后当成疏漏 |
-| P8 | 时长不一致 → 在 parts 视图表头说清 | 随 P2 一起落 |
+| P8 | 时长不一致 → 在 parts 视图表头说清 | 已落（随 P2，2026-08-29） |
 | P9 | 文档重同步（六个 as-built + `config` + `CLAUDE.md`） | 未开工 |
 | P10 | 退役 `p`/`P` 的 Tab 别名（键位审计 §12） | 未开工，两行级 |
 | P11 | `j`/`k` = ↓/↑ 别名（键位审计 §12） | 未开工，两行级 |

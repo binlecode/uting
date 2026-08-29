@@ -440,6 +440,38 @@ refresh_engine_auth() {
     return 0
 }
 
+# Does this engine have `--parts`? Asked the way the suite says an engine declares a
+# capability — by whether the VERB exists (AS-BUILT-contract.md §1.3) — and asked without
+# spending a request: the probe is a HANDLE-LESS call, so an engine that HAS the verb dies in
+# its own argv gate ("a BV id … is required") while one that does not dies in the flag gate,
+# with the wording every gate in this suite shares. Both exit 1; the stderr is the answer.
+#
+# One I/O-free fork per source switch, cached, exactly like ENGINE_AUTH above: the hint block
+# is measured on every redraw and cannot afford to ask, and `c` must not probe on the
+# selection moving.
+ENGINE_PARTS_OK=0
+refresh_engine_parts() {
+    ENGINE_PARTS_OK=0
+    local bin err
+    bin=$(engine_resolve_bin "$ENGINE") || return 0
+    [[ -n "$bin" ]] || return 0
+    err=$("$bin" --parts 2>&1 >/dev/null) || true
+    case "$err" in
+    *"unknown flag"*) ;;
+    *) ENGINE_PARTS_OK=1 ;;
+    esac
+    return 0
+}
+
+# Both probes, one name for the callers. Two functions because they ask two questions about
+# two verbs; one caller-facing name because the two places that switch engines would
+# otherwise each list every probe — the shape that drifts the day a third one lands, the way
+# F11/F12 did (ARCHITECTURE.md).
+refresh_engine_caps() {
+    refresh_engine_auth
+    refresh_engine_parts
+}
+
 # Which engine this session starts on. The SAME variable ut-play reads, not a second one:
 # a user who set a default source once should not have to set it again per surface.
 ENGINE="$UT_DEFAULT_ENGINE"
@@ -714,7 +746,7 @@ case "$SORT_FIELD" in relevance | view_count | duration) ;; *) die "-s must be o
 engine_seen "$ENGINE" || die "--engine must be one of: ${ENGINES[*]}"
 ENGINE_SEARCH=$(engine_search_bin "$ENGINE") || ENGINE_SEARCH=""
 [[ -n "$ENGINE_SEARCH" ]] || die "engine '$ENGINE' has no '$ENGINE-search' beside this file or on PATH"
-refresh_engine_auth
+refresh_engine_caps
 # Playback is DETACHED here (ut-play -d), and a detached player has no terminal, so the
 # terminal-rendering modes (ascii/viz) cannot work — the core rejects them for -d. Validate
 # up front instead of letting an Enter fail silently. Same list the v key cycles.
@@ -946,6 +978,7 @@ set_ui_lang() {
         S_PL_RM_KEY="移出"; S_PL_RM_HEAD="移出列表"; S_PL_RM_CONFIRM="确认？(y/N)"; S_PL_REMOVED="已移出"
         S_HIST_KEY="历史"; S_HIST_ACT="收听历史"; S_HIST_LABEL="最近收听"
         S_HIST_EMPTY="还没有收听记录"; S_HIST_ABSENT="未安装 ut-history"
+        S_PARTS_KEY="分P"; S_PARTS_ACT="分P"; S_PARTS_ONE="这个视频只有一 P"
         S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_NEXT="下一首"; S_Q_ACT="队列"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
         S_PREF_ACT="配置"
@@ -977,6 +1010,7 @@ set_ui_lang() {
         S_PL_RM_KEY="remove"; S_PL_RM_HEAD="Remove from"; S_PL_RM_CONFIRM="Confirm? (y/N)"; S_PL_REMOVED="Removed from"
         S_HIST_KEY="history"; S_HIST_ACT="History"; S_HIST_LABEL="newest first"
         S_HIST_EMPTY="nothing listened to yet"; S_HIST_ABSENT="ut-history is not installed"
+        S_PARTS_KEY="parts"; S_PARTS_ACT="Parts"; S_PARTS_ONE="this video has only one part"
         S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_NEXT="next"; S_Q_ACT="Queue"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
         S_PREF_ACT="Config"
@@ -2415,6 +2449,13 @@ display_list_menu() {
     local st_items
     if stored_rows; then
         st_items=("engine=${PLAYLIST_ENGINES:-?}" "items=$NUM_ENTRIES")
+        # P8, and the only screen it can be said on: the search row a part list was opened
+        # from prints the COLLECTION's duration — the only number that endpoint returns —
+        # while Enter on that row plays part 1. Neither number is wrong, and nothing on the
+        # search screen says they are different numbers. Here they sit one line apart: total=
+        # against the per-part durations in the rows below, so the mismatch reads as the
+        # structure it is. NOT repeated as "part 1 is 12:06": that row is on screen underneath.
+        [[ "$LIST_SOURCE" == "parts" && -n "$PARTS_TOTAL_FMT" ]] && st_items+=("total=$PARTS_TOTAL_FMT")
     else
         st_items=("engine=$ENGINE" "results=$NUM_ENTRIES" "sort=$SORT_FIELD")
         # auth= sits next to engine= because it qualifies it: same source, different
@@ -2508,6 +2549,17 @@ display_list_menu() {
             nav_items+=("h	$S_BACK_SEARCH")
         else
             nav_items+=("h	$S_HIST_KEY")
+        fi
+    fi
+    # The same rule a fourth time, off a CAPABILITY rather than an install: `c` needs the
+    # session engine to have --parts. yt never will — one id there is one file — so on a
+    # YouTube search this key would spend a cell of a measured block to say no. The probe was
+    # paid at the last source switch, not here: this block runs on every redraw.
+    if ((ENGINE_PARTS_OK)); then
+        if [[ "$LIST_SOURCE" == "parts" ]]; then
+            nav_items+=("c	$S_BACK_SEARCH")
+        else
+            nav_items+=("c	$S_PARTS_KEY")
         fi
     fi
     # The queue keys are offered only while something is PLAYING: with no player they say
@@ -3506,8 +3558,11 @@ open_playlist() {
 # LABEL they are one case (same item record, same renderer, same one-item payload shape), and
 # one predicate is what stops that from becoming three copies of a two-way test that drift
 # apart the way F11/F12 did (ARCHITECTURE.md).
+# `parts` belongs here even though no store holds it: what this predicate actually asks is
+# "does `.items[]` read this envelope", and open_parts reshapes `--parts` to exactly that.
+# The name outlived its first meaning by one row source; the behaviour it selects did not.
 stored_rows() {
-    [[ "$LIST_SOURCE" == "playlist" || "$LIST_SOURCE" == "history" ]]
+    [[ "$LIST_SOURCE" == "playlist" || "$LIST_SOURCE" == "history" || "$LIST_SOURCE" == "parts" ]]
 }
 
 search_only() {
@@ -3720,6 +3775,94 @@ open_history() {
     return 0
 }
 
+# Open the focused row's parts (?p=N) as the row source (key: c). Third of the row-source
+# family — b, h and c all do one job, replace the rows — and built like the other two: no new
+# renderer, no new keys, no new item shape. `<engine>-resolve --parts` answers with elements
+# that ARE item records, so `{items: .parts}` is the whole adaptation; after it
+# build_playlist_rows walks the envelope unchanged, focused_payload cuts one item out of it
+# unchanged, and every key that already works on a stored row works here.
+#
+# SEARCH ROWS ONLY, through search_only — the guard o and e already use, not a new one.
+# stash_search has a single slot, so opening a part list from a playlist row would either
+# lose the way back to the search or need a stack, and a stack is its own change on its own
+# day (PLAN §9).
+#
+# ONE fork on the KEY, never on the selection moving. Whether the key is offered at all was
+# answered at the last source switch (refresh_engine_parts), so this costs nothing per redraw.
+PARTS_TOTAL_FMT=""
+open_parts() {
+    # The toggle, tested literally for the reason open_history gives: with a part list on
+    # screen `c` is the way back, and a part list is the only thing `c` closes.
+    if [[ "$LIST_SOURCE" == "parts" ]]; then
+        back_to_search
+        return 0
+    fi
+    # Typed blind on an engine without the verb: nothing, silently — the same answer `e`
+    # gives on a single-engine install, and for the same reason (the hints never offered it).
+    ((ENGINE_PARTS_OK)) || return 0
+    ((NUM_ENTRIES > 0)) || return 0
+    search_only || return 0
+
+    local url="${urls[$selected]}" row_engine bin out rc=0 errfile msg cnt title reshaped
+    # The ROW's engine, the way play_selected reads it. Under search_only every row carries
+    # the session engine, so the two agree today; reading the row is what keeps them agreeing
+    # if that ever stops being true.
+    row_engine="${R_ENGINE[$selected]:-}"
+    [[ -n "$row_engine" ]] || row_engine="$CURRENT_ENGINE"
+    bin=$(engine_resolve_bin "$row_engine") || bin=""
+    [[ -n "$bin" ]] || return 0
+
+    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-parts-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-parts-err.$$"
+    out=$("$bin" --parts -j -- "$url" 2>"$errfile") || rc=$?
+    msg=$(<"$errfile")
+    rm -f "$errfile"
+    if ((rc != 0)); then
+        msg=${msg##*$'\n'}
+        msg=${msg#"$row_engine"-resolve: }
+        store_notice "$S_PARTS_ACT:" "${msg:-$S_PL_FAILED}"
+        return 1
+    fi
+    cnt=$(printf '%s' "$out" | jq -r '.count // 0' 2>/dev/null || echo 0)
+    # One part is not an error — the engine says so by answering count 1 rather than failing —
+    # and it is not a view either: the row already on screen IS that one part, so opening a
+    # one-row list would cost a keypress and a redraw to say nothing. The notice answers the
+    # question the key actually asks, which is "is there more of this than the row shows?".
+    if [[ "$cnt" == "0" || "$cnt" == "1" ]]; then
+        store_notice "$S_PARTS_ACT:" "$S_PARTS_ONE"
+        return 1
+    fi
+    # The collection's own two facts, read off the envelope before it is reshaped: the title
+    # is this view's label, and the total is the number the search row was showing (P8).
+    title=$(printf '%s' "$out" | jq -r '.title // empty' 2>/dev/null) || title=""
+    PARTS_TOTAL_FMT=$(printf '%s' "$out" | jq -r '.total_duration_fmt // empty' 2>/dev/null) || PARTS_TOTAL_FMT=""
+    [[ -n "$title" ]] || title="${R_TITLE[$selected]}"
+    # The same one-liner the agent surface pipes through (`--parts -j | jq '{items:.parts}' |
+    # ut-playlist --add`), so a shell caller and the TUI adapt this envelope identically.
+    # Built BEFORE the stash: a reshape that failed after it would leave the search stashed
+    # behind rows that do not exist.
+    reshaped=$(printf '%s' "$out" | jq -c '{status: "ok", count: .count, items: .parts}' 2>/dev/null) || reshaped=""
+    if [[ -z "$reshaped" ]]; then
+        store_notice "$S_PARTS_ACT:" "$S_PL_FAILED"
+        return 1
+    fi
+
+    stash_search
+    json="$reshaped"
+    LIST_SOURCE="parts"
+    # One label for the list, the rule a mixed playlist follows. A part list is single-engine
+    # by construction; it is computed rather than assumed for the reason the other two compute
+    # it — the status line must read the rows, not the session.
+    PLAYLIST_ENGINES=$(printf '%s' "$json" | jq -r '[.items[].engine] | unique | join("+")' 2>/dev/null) || PLAYLIST_ENGINES=""
+    QUERY_LABEL="$title"
+    build_playlist_rows
+    FILTER_LABEL=""
+    FILTER_MODE=0
+    selected=0
+    page_index=1
+    load_rows "$ALL_ROWS"
+    return 0
+}
+
 # ── MODE action (key: v) ────────────────────────────────────────────────────────────────
 cycle_mode() {
     local i n=${#MODE_CYCLE[@]} cur=0
@@ -3877,7 +4020,7 @@ cycle_engine() {
     fi
     # After the revert window, not before it: a failed switch leaves ENGINE where it was,
     # and the token must describe the engine actually on screen.
-    refresh_engine_auth
+    refresh_engine_caps
     apply_search_results
     # After the revert window too, and for the same reason: the file must record the engine
     # that is on screen, never the one a failed fetch just rolled back.
@@ -4414,6 +4557,7 @@ while true; do
     b | B) browse_playlists ;;# open a stored playlist as the row source
     d | D) delete_from_playlist ;; # remove the focused row from the playlist on screen
     h | H) open_history ;;    # open the listening log as the row source
+    c | C) open_parts ;;      # open the focused row's parts (?p=N) as the row source
     "+") enqueue_selected ;;  # append the focused row to the running player's queue
     ">") skip_next ;;         # skip to the next queued track
     "/") filter_live ;;       # LIVE incremental filter
