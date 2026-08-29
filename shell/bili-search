@@ -107,7 +107,12 @@ SEARCH_ENDPOINT="https://api.bilibili.com/x/web-interface/search/type"
 # The Referer is REQUIRED and is the only thing that is: with it the endpoint answers
 # code:0, without it 412 (measured 2026-08-23). It is a public constant, not an
 # authentication mechanism — every Bilibili extractor in yt-dlp sends the same one.
-BILI_REFERER="https://www.bilibili.com/"
+#
+# UNPREFIXED, like SEARCH_ENDPOINT above and for the same reason: since D16 the prefix IS
+# config reachability — ut_read_config accepts every UT_/YT_/BILI_ name that is not in its
+# refusal list — so a BILI_ spelling would be taken off disk and then silently overwritten
+# by this line 16 lines later. A constant must not wear a settable name.
+SEARCH_REFERER="https://www.bilibili.com/"
 
 # A browser User-Agent. Overridable because the site is known to start refusing a UA that
 # has gone stale (yt-dlp carried a commit for exactly that), and a suite that cannot be
@@ -434,7 +439,7 @@ fetch_page_once() {
         --data-urlencode "keyword=$QUERY"
         --data-urlencode "page=$page"
         -H "User-Agent: $BILI_UA"
-        -H "Referer: $BILI_REFERER"
+        -H "Referer: $SEARCH_REFERER"
     )
     ((DURATION_BUCKET > 0)) && cmd+=(--data-urlencode "duration=$DURATION_BUCKET")
     [[ -n "$ORDER_PARAM" ]] && cmd+=(--data-urlencode "order=$ORDER_PARAM")

@@ -115,7 +115,11 @@ AS-BUILT-contract.md §3），并为 `-j`/`-J` 发出
 
 - **`Referer` 是必需的，而且是唯一必需的东西。** 带上它端点答 `code:0`，
   不带就是 412（2026-08-23 实测）。它是一个公开常量，不是一种认证机制 ——
-  yt-dlp 里每一个 Bilibili extractor 发的都是同一个。
+  yt-dlp 里每一个 Bilibili extractor 发的都是同一个。所以它在代码里叫
+  `SEARCH_REFERER` 而**不带** `BILI_` 前缀，与它旁边的 `SEARCH_ENDPOINT` 一组：
+  D16 之后前缀**就是** config 可达性（`ut_read_config` 收下每一个
+  `UT_`/`YT_`/`BILI_` 名字），而一个常量不该顶着一个可设置的名字 ——
+  否则用户在 config 里写的那个值会被静默覆盖掉。
 - **`buvid3` 是一个**设备**标识，不是凭据**：没有账号、没有 token、不从任何浏览器 profile 读东西
   —— 引擎自己生成一个随机的（`uuidgen` + `infoc`，正是 yt-dlp 用的那个形状），
   进程退出就扔掉。它是**正确性，不是优化**：匿名连搜六次的结果是
