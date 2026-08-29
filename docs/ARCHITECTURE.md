@@ -610,8 +610,13 @@ reflow、共享时钟与三个播放态。
 **列名与函数名保持英文**（它们是标识符与定宽列）；括注里的说明是中文。
 
 ```
+   跨全部八个脚本 : ut_read_config（KEY=value 当数据读、绝不 source；用户那份先读、
+                  先到者赢，然后是根上的 config —— 与读 VERSION 是同一条自解析路径，D16。
+                  八份逐字节相同，见本节末尾）
+
    播放器 (shell/ut-play) —— 无 yt-dlp，无站点知识
-     Setup/util : usage, die, is_non_negative_int, validate_enum,
+     Setup/util : usage, die, is_non_negative_int, is_signed_int（--seek 的符号**就是**
+                  契约，绝对跳转另有 --seek-to）, validate_enum,
                   require_cmd/require_deps, mpv_supports_vo, normalize_playback_mode,
                   set_action
      Engine call: engine_resolve_bin（名字 → 可执行文件，靠拼接），
@@ -629,7 +634,11 @@ reflow、共享时钟与三个播放态。
                   player_state/player_sock/player_log/player_lock_dir,
                   lock_player_state/unlock_player_state, new_player_id, detach_play,
                   reap_dead_players, resolve_target, do_status, do_stop, do_set_volume,
-                  do_playback_verb（四个 socket 动词，一个形状）, rm_player_files
+                  do_playback_verb（四个 socket 动词，一个形状）,
+                  ipc_command（socket 往返**唯一**的读者，填 IPC_DATA —— 走全局量是因为
+                  nc 超时/SIGPIPE 会在赋值处就把脚本掀了）, ipc_failed（"命令没生效"
+                  那个退出码 4，永远不是 1）, require_live_target（socket 动词共用的
+                  活目标门；--stop **故意**不用它，见 do_stop）, rm_player_files
                   （sock+log+queue+两个锁，**唯一**的清理，player §9.5）
      Queue      : player_queue/queue_lock_dir, lock_queue_state/unlock_queue_state
                   （**第二把**锁，绝不与第一把嵌套，player §9.5）, read_queue_items
@@ -661,7 +670,9 @@ reflow、共享时钟与三个播放态。
      yt-search  : classify_yt_dlp_error
      bili-search: classify_http_error, search_fail, ensure_buvid（本地生成的随机 cookie ——
                   是**正确性**要求而不是优化，AS-BUILT-contract.md §1）,
-                  fetch_page_once（全套件**唯一**手工拼的 HTTP 请求）, fetch_page
+                  duration_bucket（本地时长界 → 服务端的粗桶；桶不精确，
+                  本地界仍然照筛）, fetch_page_once（全套件**唯一**手工拼的
+                  HTTP 请求）, fetch_page
 
    引擎，解析半 (shell/yt-resolve · shell/bili-resolve)
      Shared shape: die, validate_enum, require_cmd/require_deps,
@@ -669,6 +680,7 @@ reflow、共享时钟与三个播放态。
                   format_for_mode（模式→格式表）, url_host, is_own_host,
                   normalize_target（句柄文法 + host 白名单，ROADMAP D12）,
                   dump_once, emit_stream, resolve_fail, resolve_stream, resolve_info,
+                  resolve_auth（--auth：报告 cookie 决定本身，不承诺它买到了什么）,
                   classify_yt_dlp_error, print_usage
      yt-resolve only : have_probe_tools, probe_raw（PO-token 探测，engine §8.2）,
                   resolve_transcript / transcript_fail（engine §10.2）
@@ -723,7 +735,8 @@ reflow、共享时钟与三个播放态。
      Failures   : report_fetch_failure, play_failed_notice, press_any_key
      Formatters : fmt_sec（时钟）, short_dur（duration_fmt → 6:10:58）, commas
      Engines    : scan_engines / engine_seen / engine_search_bin（按**对**发现，tui §11）,
-                  cycle_engine（`e` 键：换源并重新取数）
+                  cycle_engine（`e` 键：换源并重新取数）, refresh_engine_auth
+                  （每次换源重算 ENGINE_AUTH —— 不建映射表，bash 3.2 没有关联数组）
      Stores     : build_playlist_rows（一个存储信封 → 与搜索建出来的同样的七字段行；
                   播放列表的 --show 与日志的 --ls 是一个形状，所以一个构造器服务两者）,
                   add_to_playlist（`a`）, browse_playlists / open_playlist（`b`）,
@@ -731,12 +744,21 @@ reflow、共享时钟与三个播放态。
                   （`h`/`b` 再按一次：一个存储替换掉那些行，而它替换掉的是本地状态，
                   所以回去是**还原**而不是重新搜索 —— 规则见 AS-BUILT-tui.md §11）, stored_rows（谓词；search_only 是
                   "这些行来自一个存储"的另一半 —— 那个三处都要用、否则就会变成三份漂移副本的判断）,
+                  playlist UI 一家（全部外壳调用 ut-playlist，自己不存也不改）：
+                  list_playlists · show_playlist（两者都**通过全局量**回 JSON + COUNT）·
+                  pick_playlist（`b` 挑一个来开、`a` 挑一个来加 —— **一个**选择器，两个键）·
+                  delete_from_playlist（`d`：唯一破坏性的存储键，先问且默认否）·
+                  reload_playlist（删完重读；读失败就落回搜索，因为屏幕上那是过去的图像）·
+                  playlist_only（`d` 的谓词，search_only 的镜像 —— 日志没有按行删除，
+                  所以不是 stored_rows）,
                   prompt_name（`n` 提示的读取器，复用）, have_store / have_history /
                   store_notice —— 它们全都外壳调用 ut-playlist 或 ut-history，
                   自己什么也不存（player §9.4、§9.6）
 ```
 
-**四个引擎文件之间的重复是刻意的，不是漂移。** `die`、`require_deps`、`fmt_dur`、
+**八个脚本之间的重复是刻意的，不是漂移。** `ut_read_config` 在**八个入口点**里各出现一次，
+八份逐字节相同（函数体 sha 一致，2026-08-28 实测）—— 配置层是一个根上的数据文件
+加一份复制过去的读取器，不是第九个文件（D16）；同理，`die`、`require_deps`、`fmt_dur`、
 `ensure_scratch` 与那些信封发射器在每个引擎里各出现一次。一个共享库会是第七个文件，
 而每个引擎 —— 因而传递地，还有那个去找引擎的播放器 —— 都得知道它；
 而这次拆分的全部主张就是"**一个引擎是一对可以直接丢进来的自足文件**"。

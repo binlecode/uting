@@ -230,7 +230,7 @@ The orchestrator does this, so source-verification stays in one place.
 ## Report template
 
 ```markdown
-# TODO — conformance audit (uting) · <date>
+# PLAN — conformance audit (uting) · <date>
 
 Scope: <path>   ·   Functions graphed: N   ·   Prior report folded: <file|none>
 

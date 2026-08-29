@@ -173,16 +173,6 @@ Make one — `alias ut=uting`, or a symlink of your own. Nothing reads its own `
 name works. The suite ships no short form itself, because a second official spelling is a second
 thing to keep in sync (`docs/ROADMAP.md` D10).
 
-Replacing an older `~/bin/ut-tui` or `~/bin/ytt`: the TUI is `uting` now, so both dangle —
-`rm ~/bin/ut-tui ~/bin/ytt` and use the line above.
-
-Replacing an older `~/bin/yt-play`: that wrapper is gone, and `ut-play` is what it wrapped —
-`rm ~/bin/yt-play` and use the line above. Its `--info` / `--transcript` / `--get-url` verbs are
-the engine's now: `yt-resolve --info`, `yt-resolve --transcript`, and for a stream URL a bare
-`yt-resolve -j`.
-
-The older `yts` / `ytp` / `ytt` spellings are **deprecated**, and so is `ut-tui`.
-
 `uting --version` (or `-V`) answers before any dependency check, so it works on a machine that
 has not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. Every
 entry point reports the same number: it is declared once, in `VERSION`.
