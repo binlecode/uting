@@ -676,6 +676,16 @@ report "bili-search rejects -d" 1 "$(rc shell/bili-search -d -- 音乐)"
 # "the tool failed, retry later" and retry a name that will never exist.
 report "unknown engine is usage"  1 "$(rc shell/ut-play --engine nope -- "$MEDIA_ID")"
 report "engine name is validated" 1 "$(rc shell/ut-play --engine ../evil -- "$MEDIA_ID")"
+# The quality tier is validated at the door, before any dependency gate: a mistyped tier
+# is a usage error, and a legal one still falls into the gates the handle and the engine
+# own — the tier must not change what a wrong verb is worth (PLAN §5.3).
+report "ut-play rejects a bogus tier"     1 "$(rc shell/ut-play --quality ultra -- "$MEDIA_ID")"
+report "ut-play --quality needs a handle" 1 "$(rc shell/ut-play --quality low)"
+report "ut-play --quality keeps the engine gate" 1 \
+    "$(rc shell/ut-play --quality low --engine nope -- "$MEDIA_ID")"
+# A bogus tier in the user's config dies in uting the same way, naming the key (PLAN §13).
+report "UT_PLAY_QUALITY=bogus dies in uting" 1 \
+    "$(env UT_PLAY_QUALITY=bogus shell/uting </dev/null >/dev/null 2>&1; echo $?)"
 
 # One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
 # which supports 1700+ sites — so a Bilibili URL resolved fine and came back labelled
@@ -710,6 +720,15 @@ for n in $ENGINES; do
     [ "$(rc "shell/$n-search" -S abr -- q)" = 1 ] && _sdash=$((_sdash + 1))
 done
 report "every search half refuses -S" "$NENG" "$_sdash"
+# The tier abstraction is held to the same two shapes as -S: a flag that cannot act is
+# rejected (--parts resolves no stream), and a search half resolves no format at all.
+report "bili --parts refuses --quality" 1 \
+    "$(rc shell/bili-resolve --parts --quality high -- "$BILI_ID")"
+_qdash=0
+for n in $ENGINES; do
+    [ "$(rc "shell/$n-search" --quality high -- q)" = 1 ] && _qdash=$((_qdash + 1))
+done
+report "every search half refuses --quality" "$NENG" "$_qdash"
 
 # --auth: the cookie DECISION, stated over every discovered engine. It is the one resolve
 # verb that takes no handle, makes no request and runs no yt-dlp, so all four of those are

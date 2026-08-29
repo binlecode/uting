@@ -189,7 +189,8 @@ ACTION="stream"      # stream | info | parts | auth
 # The `-f` default, cross-engine: a user who listens rather than watches says so once.
 PLAYBACK_MODE="$UT_PLAY_MODE"
 FORMAT_SORT=""
-FORMAT_FLAG=""       # which of -f / -S was actually given (gate: stream resolution only)
+FORMAT_FLAG=""       # which of -f / -S / --quality was actually given (gate: stream resolution only)
+QUALITY="auto"       # auto | low | medium | high — the tier abstraction (--quality)
 COLOR_MODE="auto"
 OUTPUT_MODE="list"   # list (prose) | json | json_full
 TARGET=""            # the handle as the caller typed it
@@ -342,6 +343,31 @@ format_for_mode() {
     esac
 }
 
+# The yt-dlp format-sort a quality tier resolves to, for a given playback mode. Same rule
+# as format_for_mode: a caller sends a canonical TIER, and the yt-dlp sort string exists
+# only here. auto (or any pair this table maps to "") sends no --format-sort — the default
+# format table already picks the best. -S is the expert escape and EXPLICITLY wins: both
+# given, the caller's own sort replaces this table's (PLAN §4 P3).
+quality_sort_for_tier() {
+    local mode=$1 tier=$2
+    case "$mode" in
+    video | fast | ascii)
+        case "$tier" in
+        low) echo "res:360" ;;
+        medium) echo "res:720" ;;
+        high) echo "res:1080" ;;
+        esac
+        ;;
+    *) # audio, viz — or absent, format_for_mode's own default arm
+        case "$tier" in
+        low) echo "+abr" ;;       # smallest bitrate
+        medium) echo "abr:128" ;; # capped ~128k
+        # high: empty — the default format table already picks the best audio
+        esac
+        ;;
+    esac
+}
+
 # A handle is either a URL or one of this site's two id spellings. Knowing those shapes is
 # ENGINE knowledge — precisely what the player gave up when it stopped being a YouTube
 # tool — so the check lives here, and a bad handle is an EXTRACTION failure the player
@@ -460,7 +486,15 @@ target_id() {
 # URL (`?p=7`).
 dump_once() {
     local cmd=(yt-dlp --dump-single-json --no-playlist -f "$FMT")
-    [[ -n "$FORMAT_SORT" ]] && cmd+=(--format-sort "$FORMAT_SORT")
+    if [[ -n "$FORMAT_SORT" ]]; then
+        # -S is the expert escape and explicitly wins over the tier: both given, the
+        # caller's own sort replaces the table's (PLAN §4 P3).
+        cmd+=(--format-sort "$FORMAT_SORT")
+    else
+        local sort
+        sort=$(quality_sort_for_tier "$PLAYBACK_MODE" "$QUALITY")
+        [[ -n "$sort" ]] && cmd+=(--format-sort "$sort")
+    fi
     (($#)) && cmd+=("$@")
     cmd+=(--no-warnings --quiet "$TARGET_URL")
     "${cmd[@]}" 2>>"$ERR_FILE"
@@ -921,7 +955,7 @@ print_usage() {
 bili-resolve — the Bilibili resolve engine: a handle becomes bytes (non-interactive)
 
 Usage:
-  bili-resolve [-f MODE] [-S SORT] [-j|-J] -- <BV id | av id | URL>
+  bili-resolve [-f MODE] [-S SORT] [--quality TIER] [-j|-J] -- <BV id | av id | URL>
   bili-resolve --info [-j|-J] -- <BV id | av id | URL>
   bili-resolve --parts [-j|-J] -- <BV id | av id | URL>
   bili-resolve --auth [-j]
@@ -933,6 +967,8 @@ Options:
   -f MODE  Playback mode the format is chosen for: audio | video | fast | ascii | viz
            (default: audio). The MODE -> yt-dlp format table lives here, not in ut-play.
   -S SORT  yt-dlp format-sort override (--format-sort)
+  --quality TIER  Quality tier: auto | low | medium | high (default: auto). The
+           (mode, tier) -> format-sort table lives here, not in ut-play; -S overrides it
   -j       JSON envelope (see below)
   -J       Full raw yt-dlp record
   --info   Metadata only (title, channel, description) — nothing is resolved
@@ -1070,6 +1106,16 @@ while (($#)); do
         FORMAT_SORT="$2"
         shift 2
         ;;
+    --quality)
+        [[ $# -ge 2 ]] || { echo "bili-resolve: $1 requires a value" >&2; exit 1; }
+        FORMAT_FLAG="$1"
+        # Canonical tiers only — the alias table, if one ever grows one, is ut-play's
+        # (the same rule as -f: the engine seam carries canonical spellings).
+        validate_enum "$2" auto low medium high ||
+            die "--quality must be one of: auto, low, medium, high"
+        QUALITY="$2"
+        shift 2
+        ;;
     # The gate. Resolution neither plays nor tracks a player, and it does not search:
     # a caller holding the wrong verb is told which one it wants (AS-BUILT-contract.md §2).
     -d | --detach | --status | --stop | --set-volume | --id | --all | --volume)
@@ -1091,7 +1137,7 @@ while (($#)); do
         break
         ;;
     -*)
-        echo "bili-resolve: unknown flag '$1' (resolve flags: -f -S -j -J --info --parts --auth)" >&2
+        echo "bili-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --parts --auth)" >&2
         exit 1
         ;;
     *)

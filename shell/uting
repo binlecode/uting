@@ -758,6 +758,13 @@ case "$BG_MODE" in auto | light | dark) ;; *) die "YT_BG must be one of: auto, l
 if [[ -n "$PLAY_VOLUME" ]]; then
     is_uint "$PLAY_VOLUME" && ((PLAY_VOLUME <= 100)) || die "--volume must be an integer 0-100"
 fi
+# The quality tier rides the same door: a bogus value in the user's config would otherwise
+# surface as a play that silently defaults. Empty reads as auto (the engine sends no sort
+# for blank or auto alike — PLAN §5.3); anything else is a mistyped knob and fails loud.
+case "$UT_PLAY_QUALITY" in
+"" | auto | low | medium | high) ;;
+*) die "UT_PLAY_QUALITY must be one of: auto, low, medium, high" ;;
+esac
 
 # A unix-socket netcat as well as jq: every transport key (pause, seek, volume) and every
 # time readout goes through the player's socket, so a machine without one loses half the

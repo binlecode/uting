@@ -16,7 +16,7 @@
 |---|---|---|
 | P1 | `<engine>-resolve --parts` 动词 + 信封 | **已落**（2026-08-29；`bili-resolve` + `tests/contract.sh`，契约文档留给 P9） |
 | P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | **已落**（2026-08-29；`shell/uting`，`tests/contract.sh` 250 项全绿 + `tests/drive.sh` 往返实测） |
-| P3 | `--quality TIER` 贯穿 `ut-play` → `<engine>-resolve` | 未开工 |
+| P3 | `--quality TIER` 贯穿 `ut-play` → `<engine>-resolve` | **已落**（2026-08-29；`ut-play` + 两个 resolve 半边 + `config`；`contract.sh` 256 项 + `playback.sh` 44 项全绿；档位效果与 `-S` 压过 `--quality` 均实测） |
 | P4 | `uting` 的质量档键位（`f`）与写回 | 未开工 |
 | P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | 未开工，**P6 的前置** |
 | P6 | 章节 → 条目视图里的 seek 目标 | 未开工，排最后 |

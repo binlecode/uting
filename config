@@ -63,6 +63,9 @@ UT_PLAY_MODE=audio                  # the -f default. -f itself accepts audio | 
                                     # play from uting — rejects ascii/viz; only the first
                                     # three make sense as a default
 UT_VOLUME=                          # the --volume default; empty = leave mpv's own
+UT_PLAY_QUALITY=auto                # the --quality default: auto | low | medium | high.
+                                    # The (mode, tier) -> format-sort table lives in the
+                                    # engines (PLAN §4 P3); -S overrides it when both given
 
 # ── scope: player (ut-play) ─────────────────────────────────────────────────────────────
 UT_DEAD_KEEP=8                      # dead player records retained (also bounded to 1 hour)

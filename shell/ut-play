@@ -202,6 +202,8 @@ Options:
               UT_DEFAULT_ENGINE). The name is also the command prefix: --engine yt calls
               yt-resolve.
   -S SORT     Engine format-sort override, forwarded verbatim (e.g. res:720,fps)
+  --quality TIER  Quality tier: auto|low|medium|high (default: UT_PLAY_QUALITY / auto).
+              The (mode, tier) -> format-sort table lives in the engine; -S overrides it
   -f MODE     Playback mode (default: audio)
               audio|ba  audio-only          video|bv  high-quality video+audio
               fast|fst  progressive video   ascii|asc terminal video (mpv terminal VO)
@@ -442,10 +444,12 @@ resolve_media() {
     RESOLVED_RC=0
     PLAYBACK_RETRIED=0
 
-    # -S is forwarded because format-sort is the engine's concept and the caller may have
-    # overridden it; everything else the engine decides for itself.
+    # -S and --quality are forwarded because format-sort is the engine's concept and the
+    # caller may have overridden it; everything else the engine decides for itself. -S wins
+    # over --quality INSIDE the engine (PLAN §4 P3), so both are forwarded unchanged.
     local out rc=0
-    out=$("$ENGINE_RESOLVE" -j -f "$mode" ${FORMAT_SORT:+-S "$FORMAT_SORT"} -- "$handle" 2>/dev/null) || rc=$?
+    out=$("$ENGINE_RESOLVE" -j -f "$mode" ${FORMAT_SORT:+-S "$FORMAT_SORT"} \
+        ${PLAY_QUALITY:+--quality "$PLAY_QUALITY"} -- "$handle" 2>/dev/null) || rc=$?
 
     if ((rc != 0)) || [[ -z "$out" ]]; then
         # An engine that exits 0 with nothing usable still failed a tool call, which the
@@ -1594,12 +1598,14 @@ detach_play() {
     # YT_DETACHED tells the child's run_mpv there is no terminal to draw on (quiet mpv,
     # no stderr filter); YT_DETACHED_LOG hands it the path its own stdout goes to, which is
     # all detached_epitaph needs to read back what mpv said before classifying its own death.
-    # -S is forwarded like --volume so a format-sort override isn't silently lost on the
-    # detached path; `--` guards a URL that begins with a dash.
+    # -S and --quality are forwarded like --volume so a format-sort override or a quality
+    # tier isn't silently lost on the detached path; `--` guards a URL that begins with a
+    # dash. -S wins over --quality inside the engine (PLAN §4 P3).
     set -m
     YT_IPC_SOCK="$sock" YT_DETACHED=1 YT_DETACHED_LOG="$log" YT_PLAYER_ID="$id" \
         nohup bash "$SELF" --engine "$ENGINE" -f "$PLAYBACK_MODE" \
-        ${VOLUME:+--volume "$VOLUME"} ${FORMAT_SORT:+-S "$FORMAT_SORT"} -- "$url" >"$log" 2>&1 &
+        ${VOLUME:+--volume "$VOLUME"} ${FORMAT_SORT:+-S "$FORMAT_SORT"} \
+        ${PLAY_QUALITY:+--quality "$PLAY_QUALITY"} -- "$url" >"$log" 2>&1 &
     pid=$!
     set +m
     disown "$pid" 2>/dev/null || true
@@ -2189,6 +2195,7 @@ do_next() {
 # listens, not about where the bytes came from. AS-BUILT-contract.md §5.
 PLAYBACK_MODE="$UT_PLAY_MODE"
 FORMAT_SORT=""
+PLAY_QUALITY="$UT_PLAY_QUALITY" # --quality flag overrides; the engine maps (mode, tier)
 VOLUME="$UT_VOLUME"
 COLOR_MODE="auto"
 # Default output is prose; -j/-J select a machine envelope.
@@ -2389,6 +2396,19 @@ while (($#)); do
         TARGET_ID="${1#*=}"
         shift
         ;;
+    --quality)
+        [[ $# -ge 2 ]] || die "--quality requires a value"
+        validate_enum "$2" auto low medium high ||
+            die "--quality must be one of: auto, low, medium, high"
+        PLAY_QUALITY="$2"
+        shift 2
+        ;;
+    --quality=*)
+        validate_enum "${1#*=}" auto low medium high ||
+            die "--quality must be one of: auto, low, medium, high"
+        PLAY_QUALITY="${1#*=}"
+        shift
+        ;;
     --all)
         STOP_ALL=1
         shift
@@ -2398,7 +2418,7 @@ while (($#)); do
         # an unmatched one can never be valid — and left to fall through it reached getopts
         # as `-`, which reported the useless "invalid option: --". The wrapper used to hold
         # this arm; naming the real flags is the half of a gate that helps a caller recover.
-        die "unknown flag '$1' (play flags: -f -S -d -j -l --engine --volume --status --stop --set-volume --pause --resume --seek --seek-to --queue --enqueue --next --id --all --color)"
+        die "unknown flag '$1' (play flags: -f -S --quality -d -j -l --engine --volume --status --stop --set-volume --pause --resume --seek --seek-to --queue --enqueue --next --id --all --color)"
         ;;
     *)
         normalized_args+=("$1")

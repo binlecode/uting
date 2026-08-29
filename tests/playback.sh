@@ -285,6 +285,25 @@ else
     bad "the bili player's IPC socket never appeared — the header claim is untested"
 fi
 
+echo "── the quality tier rides the same path as -f ────────────────────"
+# PLAN §13: --quality low must stack with -f and reach the engine without breaking
+# format selection — a detached player that comes up and reports position proves the
+# tier did not break the stream. auto (the default) sends no sort at all.
+o4=$(shell/ut-play -d -j --volume 0 --quality low -f audio -- "$U1" 2>/dev/null)
+report "quality detach envelope" 0 \
+    "$(printf '%s' "$o4" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
+id4=$(printf '%s' "$o4" | jq -r '.id // empty')
+sock4=$(printf '%s' "$o4" | jq -r '.sock // empty')
+if wait_for_sock "$sock4"; then
+    if pos=$(wait_live "$id4" position); then
+        ok "quality audio flowed (position ${pos}s) — the tier reached the engine"
+    else
+        bad "quality player position never left 0 — did --quality reach the engine?"
+    fi
+else
+    bad "the quality player's IPC socket never appeared"
+fi
+
 echo "── stop is targeted, then idempotent, and leaks nothing ───────────"
 report "--stop --id"       0 "$(shell/ut-play --stop --id "$id1" -j >/dev/null 2>&1; echo $?)"
 report "--stop --all"      0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; echo $?)"
