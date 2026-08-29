@@ -285,9 +285,13 @@ surface.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — the decisions and their reopen conditions, what is not
   built yet, and the conditions under which the core would move to Go. No changelog, no survey
   data, and no positioning — that is §1 of the architecture doc.
-- [`docs/RESEARCH-oss-landscape.md`](docs/RESEARCH-oss-landscape.md) — the measured survey those
-  decisions rest on, kept separate so the roadmap holds decisions rather than data: the six-way
-  name screening, what comparable projects do, and what publishing this shell version costs.
+- [`docs/RESEARCH-tui-player.md`](docs/RESEARCH-tui-player.md) — the survey those decisions rest
+  on, kept separate so the roadmap holds decisions rather than data. Two halves, and §1 says
+  which is which: **§2–§5 are measured** — the name screening, what comparable projects do by
+  GitHub API, what publishing this shell version costs, and how ready it is. **§6–§11 are read,
+  not run** — how other terminal players are built along five orthogonal design axes, the five
+  playback architectures they pick from, and the four routes to a playable URL on the Chinese
+  side. It labels its own gaps in §12.
 
 ## License
 

@@ -10,9 +10,10 @@
 > **三样东西不住在这里**，它们各有正主，本文只引用不复述：
 > **定位与非目标** → `ARCHITECTURE.md` §1（判断一个新功能进不进来先问那一节）·
 > **驱动决定的分析** → `ARCHITECTURE.md` §1.1 ·
-> **一切调研数据** → [`RESEARCH-oss-landscape.md`](RESEARCH-oss-landscape.md)
-> （名字筛查 §2、领域现状 §3、发布要付的账 §4、就绪度 §5 —— 每个数字都带日期，
-> 重开它定过的任何一条之前先按它的方法重跑，别照抄结论）。
+> **一切调研数据** → [`RESEARCH-tui-player.md`](RESEARCH-tui-player.md)
+> （名字筛查 §2、领域现状 §3、要付的账 §4、自用够不够 §5 —— **量出来的**，每个数字都带日期，
+> 重开它定过的任何一条之前先按它的方法重跑；§6–§11 是**读来的**播放设计调研 ——
+> 播放架构 §6–§8、国内音源四条路 §9、agent 面 §10 —— 可信度低一档，当依据前先补 §12 的问号）。
 
 ---
 
@@ -39,7 +40,7 @@
 ## 3–7
 
 已移出。定位与非目标 → `ARCHITECTURE.md` §1；驱动决定的六条发现 → `ARCHITECTURE.md` §1.1；
-名字 / 领域现状 / 发布要付的账 / 就绪度这四轮调研 → `RESEARCH-oss-landscape.md` §2/§3/§4/§5。
+名字 / 领域现状 / 要付的账 / 自用够不够这四轮调研 → `RESEARCH-tui-player.md` §2/§3/§4/§5。
 
 ---
 
@@ -48,7 +49,7 @@
 - **D0 —— 定位冻结为 `ARCHITECTURE.md` §1**：agent 优先的媒体引擎（播放器 + 可插拔引擎对）+ 一张人脸；
   不做通用 TUI 播放器。音源数量不是定位的一部分。功能边界含 D14 那三条收听功能；
   差异化那三件不受任何功能变更影响。
-- **D1 —— 不为分发打包 shell 套件。** 支持面（`RESEARCH-oss-landscape.md` §4）大于差异化（`ARCHITECTURE.md` §1.1 第 1 条）。
+- **D1 —— 不为分发打包 shell 套件。** 支持面（`RESEARCH-tui-player.md` §4）大于差异化（`ARCHITECTURE.md` §1.1 第 1 条）。
 - **D2 —— 但照样公开仓库，定位为参考实现，不承诺打包。** README 写明这是"一个可用的 shell 实现 +
   一份与代码同步的设计文档"。文档是更可传播的产物。
   **公开不改 D1**：不打包、无 installer、无 `v*` tag（D13）。
@@ -64,10 +65,10 @@
   Go TUI 要复刻的只剩"扫 `*-search` 建注册表 + 切源"，它不需要认识任何站（D9）。
 - **D5 —— "播放器是否也去 Go" 是独立的、条件触发的决定**（§9）。触发前 `ut-play` 保持 shell。
   **引擎不在这个问题里**：它们随外部网站变，shell 的原地可改性在那半边是净收益（`ARCHITECTURE.md` §1.1 第 6 条）。
-- **D6 —— 发布名 `uting`（§3）**；一个命令一个名字，不留第二种拼法。
+- **D6 —— 项目名 `uting`（`RESEARCH-tui-player.md` §2）**；一个命令一个名字，不留第二种拼法。
   挪威语里 `uting` 是真词（"陋习"）—— **当彩蛋接受**，备选 `tingyu` / `qingyin` 作废
   （瑕疵本身记在
-  [`RESEARCH-oss-landscape.md`](RESEARCH-oss-landscape.md) §2.4）。**命令名由 D9/D10 定死**：
+  [`RESEARCH-tui-player.md`](RESEARCH-tui-player.md) §2）。**命令名由 D9/D10 定死**：
   `uting` / `ut-play` / `yt-search` / `yt-resolve` / `bili-search` / `bili-resolve` /
   `ut-playlist` / `ut-history`（后两个由 D10 的第三条规则命名）。
 - **D7 —— Go 版只发一个二进制加子命令，绝不发三个通用名的可执行文件。**
@@ -120,7 +121,7 @@
 
   **不发任何短名。** 六项筛查的结果是**长前缀名可用、短名这块地已经没了**
   （`ut-play` / `ut-search` 全空，光杆 `ut` 与 `utt` 全被占，`ytt` 撞 carvel）——
-  逐项数据在 [`RESEARCH-oss-landscape.md`](RESEARCH-oss-landscape.md) §2.4，这里不复述。想短由用户自建 alias —— 随包发第二个
+  逐项数据在 [`RESEARCH-tui-player.md`](RESEARCH-tui-player.md) §2，这里不复述。想短由用户自建 alias —— 随包发第二个
   拼法，就是给每一份文档、每一条 allowlist、每一个习惯多一个要同步的东西，正是 D6 那条
   "一个命令一个名字"存在的理由。人机面因此不叫 `ut-tui`：那会是 `uting` 的第二种拼法，
   而且是在最显眼的那个命令上破例。
@@ -354,6 +355,9 @@
   补参数（八种组合）、先取首页 cookie、补 `xm-sign`、真登录后重导 jar、搜索页取 SSR。
   **候选是网易云**：搜索端点明文、公开、**零凭据**，形状与 B 站完全一致，零新机制，
   且 `fee` 就在搜索响应里 —— `access:"preview"` 的判据现成（§11 第一条）。
+  **这个候选只验了搜索半边**；resolve 半边（yt-dlp 对网易云的解流成色）没量过，而
+  2026-08 的调研给的气候是坏的 —— 逆向 API 生态在碎片化、多源回退在退化
+  （`RESEARCH-tui-player.md` §9）—— 所以真开工时第一步是量 resolve，不是写 search。
   代价：它证明不了 D19 —— 那条要另找展示件，或接受它暂时只是一条写下来的原则。
   **重开条件**：喜马拉雅 `m` 侧不再答 `webtk缺失`（上次实测 2026-08-28）。
 
@@ -379,8 +383,14 @@
    只绑 loopback + token、写给 protocol revision `2026-07-28` 且**双时代兼容**（仍应答
    `initialize`，否则在跑的客户端直接失败）、**stdout 只跑协议**（启动提示走 stderr）、
    应用内 DJ 与 MCP **复用同一张 tool table 而非拷贝**（两个入口永不漂移）。
-   证据在，触发条件仍未成立 —— 这不构成"必须做"。附带情报：字幕这一格在 MCP 生态里
-   已有 `kevinwatt/yt-dlp-mcp`（273★）与 `--transcript` 正面重叠，真做 MCP 时要说清为什么用本仓的。
+   证据在，触发条件仍未成立 —— 这不构成"必须做"。2026-08 的续篇加重了两头
+   （`RESEARCH-tui-player.md` §10）：一方面 agent 面在这个领域已是标配（`Meting-Agent`
+   同时出 MCP 和 Skill，B 站有 22 工具的 `bilibili-mcp-server`，`spotuify` 41 工具）；
+   另一方面**它们全部只做"查"** —— 唯一把播放生命周期也交给 agent 的 `spotuify` 靠的是
+   守护进程，而本仓用 detached 进程 + JSON 契约回答的正是同一个问题，**所以"agent 直接调
+   CLI"这条路没有被谁证伪，MCP 依旧只是包装层**。附带情报：字幕这一格在 MCP 生态里
+   已有 `kevinwatt/yt-dlp-mcp`（273★）与 `--transcript` 正面重叠，B 站侧的 MCP 服务器
+   （字幕/评论/弹幕）与 `bili-resolve --info` 同理 —— 真做 MCP 时要说清为什么用本仓的。
 2. **真的要单文件分发**（推翻 D1）。
 3. **真的要支持 Linux**（`nc -U` 缺失与 bash 3.2/5 分裂只在这里一起消失）。
 
@@ -463,7 +473,8 @@
 ## 12. 开放问题
 
 - **MCP 那张脸到底属不属于这个产品** —— 还是 agent 通过通用 shell 工具调 `uting search -j` 就够了？
-  它只挡着 §9 的第 1 条触发条件，别的什么都不挡。
+  它只挡着 §9 的第 1 条触发条件，别的什么都不挡。（2026-08 的领域证据两头都有，
+  见 `RESEARCH-tui-player.md` §10 与本文件 §9 第 1 条。）
 - **引擎边界** —— 第三方音源的引擎对进本仓，还是各自成仓、只靠 `AS-BUILT-contract.md` 对齐？
   能照着写引擎的那份文档在了（`AS-BUILT-contract.md` §3 的引擎 envelope + §6 的加引擎清单），
   所以这个问题只剩**要不要收**，而不是**能不能靠文档对齐**。
