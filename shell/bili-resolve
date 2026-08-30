@@ -195,6 +195,7 @@ COLOR_MODE="auto"
 OUTPUT_MODE="list"   # list (prose) | json | json_full
 TARGET=""            # the handle as the caller typed it
 TARGET_URL=""        # the watch URL it normalises to
+TARGET_START=""      # ?t= seconds carried by the handle, or "" — see parse_start_seconds
 FMT=""               # the yt-dlp format string the mode resolves to
 
 # Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII).
@@ -261,6 +262,12 @@ require_deps() {
 # shared fact is the FORMAT, stated once in docs/AS-BUILT-engine.md §7.
 JQ_PRELUDE='
 def p2: tostring | if length < 2 then "0" + . else . end;
+def strip_t:
+  if type != "string" then .
+  else gsub("&t=[^&#]*"; "")
+     | gsub("\\?t=[^&#]*&"; "?")
+     | gsub("\\?t=[^&#]*(?<e>#|$)"; "\(.e)")
+  end;
 def fmt_dur:
   if type != "number" then null
   else (. | floor) as $t
@@ -431,6 +438,44 @@ normalize_target() {
         die "'$t' is neither a Bilibili URL nor a BV/av id (to search, run bili-search)"
         ;;
     esac
+    parse_start_seconds "$TARGET_URL"
+}
+
+# The ?t= seconds a handle carries, floored to a whole second, or "" when it carries none.
+#
+# This engine parses the timestamp ITSELF, and that asymmetry with yt-resolve is measured,
+# not stylistic: yt-dlp's YouTube extractor publishes .start_time for every writing that
+# site has, and its Bilibili extractor publishes the key in NO form at all (measured
+# 2026-08-30 against yt-dlp 2026.08.19: ?t=601, ?t=601.5 and ?p=2&t=60 all come back with
+# no start_time). One key, two sources — which is the house seam: the envelope, not the
+# tool behind it. Only `?t=` is read, because only `?t=` was measured to exist here; a
+# writing nobody could produce is not implemented on the strength of a guess.
+#
+# Split by hand rather than `for p in $q` — an unquoted expansion would glob, and a query
+# value really can hold a `*`. Every expansion below is ANCHORED (`%%`/`#`), never the
+# ${var//pat/} substitution form, which is O(n2) on bash 3.2 (CLAUDE.md).
+parse_start_seconds() {
+    local url=$1 q p v=""
+    case "$url" in
+    *\?*) q=${url#*\?} ;;
+    *) return 0 ;;
+    esac
+    q=${q%%#*}
+    while [[ -n "$q" ]]; do
+        p=${q%%&*}
+        case "$q" in
+        *\&*) q=${q#*&} ;;
+        *) q="" ;;
+        esac
+        case "$p" in
+        t=*) v=${p#t=} ;;
+        esac
+    done
+    # An unreadable value is NOT an error: it did not answer a question that had to be
+    # answered, so the envelope says null and the resolve carries on. Fractions floor for
+    # the reason yt-resolve's start_secs floors — the key counts seconds already gone by.
+    [[ "$v" =~ ^[0-9]+(\.[0-9]+)?$ ]] || return 0
+    TARGET_START=${v%%.*}
 }
 
 # The BV/av id inside a normalised watch URL, or empty when it carries none.
@@ -545,11 +590,13 @@ emit_stream() {
     if [[ "$OUTPUT_MODE" == "json" ]]; then
         printf '%s\n' "$raw" | jq -c \
             --arg engine "$ENGINE_NAME" --arg mode "$PLAYBACK_MODE" --arg format "$FMT" \
-            --argjson retried "$retried_json" \
-            "($JQ_STREAMS) as \$s
+            --argjson retried "$retried_json" --argjson start "${TARGET_START:-null}" \
+            "$JQ_PRELUDE
+             ($JQ_STREAMS) as \$s
              | {status: \"ok\", engine: \$engine,
-                id: (.id // null), url: (.webpage_url // null),
+                id: (.id // null), url: ((.webpage_url // null) | strip_t),
                 title: (.title // null), duration: (.duration // null),
+                start_seconds: \$start,
                 mode: \$mode, format: \$format,
                 selected: (.format // null),
                 selected_resolution: (.resolution // null),
@@ -667,15 +714,18 @@ resolve_info() {
         # `channel` falls back to `uploader`: this extractor fills the uploader field and
         # leaves channel null on some records, and the envelope's shape must not depend on
         # which. live_status is passed through as whatever the record says, or null.
-        printf '%s\n' "$raw" | jq -c --arg engine "$ENGINE_NAME" --arg df "$duration_fmt" '{
+        printf '%s\n' "$raw" | jq -c --arg engine "$ENGINE_NAME" --arg df "$duration_fmt" \
+            --argjson start "${TARGET_START:-null}" \
+            "$JQ_PRELUDE"'{
             status: "ok",
             engine: $engine,
             id, title,
-            url: .webpage_url,
+            url: (.webpage_url | strip_t),
             channel: (.channel // .uploader // null),
             uploader: (.uploader // null),
             upload_date: (.upload_date // null),
             duration, duration_fmt: (if $df == "" then null else $df end),
+            start_seconds: $start,
             view_count: (.view_count // null),
             like_count: (.like_count // null),
             live_status: (.live_status // null),

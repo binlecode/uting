@@ -16,7 +16,7 @@ ROADMAP 开篇自己写着「在飞的是什么，这里不答 —— `docs/PLAN
 | # | 条目 | 状态 |
 |---|---|---|
 | S0 | **实测提交**：逐个跑真解析，把 §2 第 5 条从「读来的」改成「量出来的」 | **已完成**（2026-08-30）|
-| S1 | `<engine>-resolve` 填 `start_seconds`（yt 读 yt-dlp 的 `.start_time`，bili 自己解），并**剥掉 bili 信封 `url` 里的 `t=`** | 未开工，**设计已被 S0 改写** |
+| S1 | `<engine>-resolve` 填 `start_seconds`（yt 读 yt-dlp 的 `.start_time`，bili 自己解），并**剥掉 bili 信封 `url` 里的 `t=`** | **已完成**（2026-08-30）|
 | S2 | `ut-play` 消费 `start_seconds`，透传 mpv `--start=` | 未开工 |
 | S3 | `ut-play --start SEC` 覆盖（flag > 引擎值） | 未开工 |
 | S4 | 队列作用域：`--start` 只作用于第一条 | 未开工 |

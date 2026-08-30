@@ -252,8 +252,23 @@ require_deps() {
 # prelude, not a bash function, so a caller already shaping JSON pays one fork instead of
 # one per row. An unknown duration yields NULL rather than a fake "00h:00m:00s", so each
 # caller decides how to render it (a live stream has no duration). AS-BUILT-engine.md §7.
+#
+# start_secs is the second one, and it exists because THIS ENGINE DOES NO TIMESTAMP
+# PARSING AT ALL: yt-dlp's own extractor already reads every writing YouTube has — t=601,
+# t=601s, t=10m1s, t=1h2m3s, youtu.be/ID?t=, embed/ID?start=, and the #t= anchor — and
+# hands the answer over as .start_time. Re-parsing the query here would be writing a
+# second, worse copy of a dependency's extractor. So the whole job is normalising what it
+# gives us into the envelope's declared shape (null | non-negative integer seconds):
+#   absent (no timestamp in the handle)  -> null      · null (t=banana)      -> null
+#   0 (t=0)                              -> 0         · 601.5 (t=601.5)      -> 601
+# The floor is not tidiness: yt-dlp really does hand back a float for a fractional t, and
+# "start_seconds" is how many seconds have already gone by — rounding UP would put the
+# playhead past the moment the caller pointed at. A negative is refused rather than
+# clamped: nothing on this site produces one, so it means we misread, and a null says so.
 JQ_PRELUDE='
 def p2: tostring | if length < 2 then "0" + . else . end;
+def start_secs:
+  if type == "number" and . >= 0 then floor else null end;
 def fmt_dur:
   if type != "number" then null
   else (. | floor) as $t
@@ -528,10 +543,12 @@ emit_stream() {
         printf '%s\n' "$raw" | jq -c \
             --arg engine "$ENGINE_NAME" --arg mode "$PLAYBACK_MODE" --arg format "$FMT" \
             --argjson retried "$retried_json" \
-            "($JQ_STREAMS) as \$s
+            "$JQ_PRELUDE
+             ($JQ_STREAMS) as \$s
              | {status: \"ok\", engine: \$engine,
                 id: (.id // null), url: (.webpage_url // null),
                 title: (.title // null), duration: (.duration // null),
+                start_seconds: (.start_time | start_secs),
                 mode: \$mode, format: \$format,
                 selected: (.format // null),
                 selected_resolution: (.resolution // null),
@@ -647,13 +664,15 @@ resolve_info() {
         printf '%s\n' "$raw" | jq -c '.'
         ;;
     json)
-        printf '%s\n' "$raw" | jq -c --arg engine "$ENGINE_NAME" --arg df "$duration_fmt" '{
+        printf '%s\n' "$raw" | jq -c --arg engine "$ENGINE_NAME" --arg df "$duration_fmt" \
+            "$JQ_PRELUDE"'{
             status: "ok",
             engine: $engine,
             id, title,
             url: .webpage_url,
             channel, uploader, upload_date,
             duration, duration_fmt: (if $df == "" then null else $df end),
+            start_seconds: (.start_time | start_secs),
             view_count, like_count, live_status,
             description,
             chapters: (if (.chapters | type) == "array"
