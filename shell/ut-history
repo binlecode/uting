@@ -74,7 +74,7 @@ ut_read_config() {
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
         [[ "$key" =~ ^(UT|YT|BILI)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
-        UT_CONFIG | UT_DEFAULTS | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        UT_CONFIG | UT_DEFAULTS | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
         if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
             val="${val#?}"
@@ -182,8 +182,11 @@ ensure_store() {
     chmod 700 "$UT_STATE_DIR" "$HISTORY_DIR" 2>/dev/null || true
 }
 
-# The ONE duration formatter, as a jq prelude — the third copy of six lines the suite carries
-# because it has no library (ARCHITECTURE.md §4). A bash version would fork jq per row.
+# The ONE duration formatter, as a jq prelude — one of the identical copies of these six
+# lines the suite carries because it has no library. ARCHITECTURE.md §4 is where that
+# duplication is decided AND counted, so this comment carries no number of its own: an
+# ordinal here goes stale the next time an engine pair lands, silently. A bash version would
+# fork jq per row.
 JQ_PRELUDE='
 def p2: tostring | if length < 2 then "0" + . else . end;
 def fmt_dur:

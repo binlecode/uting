@@ -68,7 +68,11 @@ fi
 # `eval` assigns from a variable, never from the line, so `UT_X=$(cmd)` stores those nine
 # characters. Only UT_/YT_/BILI_ keys are read, so no file can reach PATH, TMPDIR or
 # LD_PRELOAD; and the four the player sets for its own detached child are refused inside
-# those namespaces — a file-level YT_IPC_SOCK would aim every player at one socket.
+# those namespaces — a file-level YT_IPC_SOCK would aim every player at one socket. So are
+# the three names in there that are not knobs at all: the two config paths (a file cannot
+# move itself) and UT_VERSION, which is the VERSION line read in above — what `--version`
+# answers is not a setting. Seven names, and the refusal is what makes the prefix safe to
+# wear: a constant is only reachable from a config file because it is spelled UT_.
 #
 # Three defaults stay inline and are named in `config`'s own header: UT_STATE_DIR (its
 # default chains through XDG_STATE_HOME, which a flat file cannot express), YT_LANG (unset
@@ -94,7 +98,7 @@ ut_read_config() {
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
         [[ "$key" =~ ^(UT|YT|BILI)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
-        UT_CONFIG | UT_DEFAULTS | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        UT_CONFIG | UT_DEFAULTS | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
         if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
             val="${val#?}"

@@ -62,7 +62,7 @@ ut_read_config() {
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
         [[ "$key" =~ ^(UT|YT|BILI)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
-        UT_CONFIG | UT_DEFAULTS | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        UT_CONFIG | UT_DEFAULTS | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
         if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
             val="${val#?}"
@@ -291,8 +291,10 @@ read_playlist() {
 
 # The ONE duration formatter, as a jq prelude rather than a bash function — same reason the
 # engines carry theirs: every consumer here is already shaping JSON, and a bash version
-# would fork jq once per row to read a field back out. It is a third copy of six lines
-# because the suite has no library, which is the trade ARCHITECTURE.md §4 already made.
+# would fork jq once per row to read a field back out. It is one of the identical copies of
+# these six lines the suite carries because it has no library, which is the trade
+# ARCHITECTURE.md §4 already made — and §4 is where the count lives, so this comment does not
+# restate one that the next engine pair would make stale.
 JQ_PRELUDE='
 def p2: tostring | if length < 2 then "0" + . else . end;
 def fmt_dur:
