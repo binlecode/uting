@@ -1143,6 +1143,21 @@ init_glyphs
 # apply_filter split: ASCII US (0x1f), deliberately NOT tab. See build_all_rows.
 US=$'\x1f'
 
+# The one title cleaner, and the only copy of it. TWO ingest points reach a title — the row
+# builders below (a search or an item envelope) and apply_player_record (a live player
+# record) — and the focus card puts both spellings of the SAME subject on one screen, so a
+# title that changed writing as the selection moved onto the playing row would read as two
+# different tracks. Prepended to every jq program that takes a title by adjacent quoting:
+# the program itself stays single-quoted, so nothing inside it is exposed to the shell.
+# `clean` strips the emoji/dingbat blocks a title carries as decoration; `oneline` only
+# folds whitespace, for a field (a channel) where a symbol is part of the name.
+JQ_TEXT_DEFS='
+  def clean:
+    gsub("[\\x{1F000}-\\x{1FAFF}\\x{2190}-\\x{21FF}\\x{2300}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{2122}\\x{2139}]"; "")
+    | gsub("\\s+"; " ") | gsub("^ | $"; "");
+  def oneline: gsub("\\s+"; " ") | gsub("^ | $"; "");
+'
+
 # ── Playback & View State Model ─────────────────────────────────────────────────────────
 TUI_VIEW_MODE="list"       # "list" (Search List) | "card" (Now Playing Focus Card)
 
@@ -2014,14 +2029,15 @@ refresh_player_record() {
 apply_player_record() {
     local rec=$1 t d q
     IFS="$US" read -r t d < <(printf '%s' "$rec" |
-        jq -r '[(.title // ""), (.duration // "" | tostring)] | join("\u001f")' 2>/dev/null) || return 0
+        jq -r "$JQ_TEXT_DEFS"'[(.title // "" | clean), (.duration // "" | tostring)]
+                              | join("\u001f")' 2>/dev/null) || return 0
     [[ -n "$t" ]] && CURRENT_PLAY_TITLE="$t"
     [[ -n "$d" && "$d" != "null" ]] && CURRENT_PLAY_DURATION=$(fmt_sec "$d")
     q=$(printf '%s' "$rec" | jq -c '.queue // empty' 2>/dev/null) || q=""
     if [[ -n "$q" ]]; then
         IFS="$US" read -r CURRENT_QUEUE_POS CURRENT_QUEUE_LEN CURRENT_QUEUE_NEXT < <(
-            printf '%s' "$q" | jq -r '[(.pos // 0 | tostring), (.len // 0 | tostring),
-                                       (.next.title // .next.url // "")] | join("\u001f")' 2>/dev/null
+            printf '%s' "$q" | jq -r "$JQ_TEXT_DEFS"'[(.pos // 0 | tostring), (.len // 0 | tostring),
+                                       (.next.title // .next.url // "" | clean)] | join("\u001f")' 2>/dev/null
         ) || true
     fi
     return 0
@@ -2350,11 +2366,7 @@ fetch_json() {
 # `oneline` on the channel for the same reason `clean` collapses the title: a newline in a
 # field would split one record into two.
 build_all_rows() {
-    ALL_ROWS=$(printf '%s' "$json" | jq -r '
-      def clean:
-        gsub("[\\x{1F000}-\\x{1FAFF}\\x{2190}-\\x{21FF}\\x{2300}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{2122}\\x{2139}]"; "")
-        | gsub("\\s+"; " ") | gsub("^ | $"; "");
-      def oneline: gsub("\\s+"; " ") | gsub("^ | $"; "");
+    ALL_ROWS=$(printf '%s' "$json" | jq -r "$JQ_TEXT_DEFS"'
       .engine as $e
       | .results[]
       | [ .url,
@@ -2375,10 +2387,7 @@ build_all_rows() {
 # empty field renders as absent rather than as a guess. ut-playlist derives duration_fmt on
 # read, so nothing here formats a duration.
 build_playlist_rows() {
-    ALL_ROWS=$(printf '%s' "$json" | jq -r '
-      def clean:
-        gsub("[\\x{1F000}-\\x{1FAFF}\\x{2190}-\\x{21FF}\\x{2300}-\\x{27BF}\\x{2B00}-\\x{2BFF}\\x{FE00}-\\x{FE0F}\\x{200D}\\x{2122}\\x{2139}]"; "")
-        | gsub("\\s+"; " ") | gsub("^ | $"; "");
+    ALL_ROWS=$(printf '%s' "$json" | jq -r "$JQ_TEXT_DEFS"'
       .items[]
       | [ .url,
           # An item stored without a title (an agent that had only a URL) falls back to the

@@ -18,7 +18,7 @@
 | P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | **已落**（2026-08-29；`shell/uting` + `contract.sh` 的 tmux 面上一条 `c` 能力门见证，257 项全绿；五次 drive 实测记在 §13） |
 | P3 | `--quality TIER` 贯穿 `ut-play` → `<engine>-resolve` | **已落**（2026-08-29；`ut-play` + 两个 resolve 半边 + `config`；`contract.sh` 256 项 + `playback.sh` 44 项全绿；档位效果与 `-S` 压过 `--quality` 均实测） |
 | P4 | `uting` 的质量档键位（`f`）与写回 | **已落**（2026-08-29；`shell/uting` + `config` 的 `UT_QUALITY_CYCLE`；`contract.sh` 263 项全绿，其中三条新检查在 tmux pane 上：`quality=` 在 auto 上不印、`f` 追加写回 `UT_PLAY_QUALITY=medium`、状态行跟上；四个 cycle 键的「不认识的成员退 1」由一条加固过的循环统一陈述） |
-| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | 未开工，**P6 的前置** |
+| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | **在建**，**P6 的前置**。前置 F04（标题清洗统一到两个摄入点）**已落**（2026-08-29；`JQ_TEXT_DEFS` 一份定义，两个 row builder 与 `apply_player_record`（含 `queue.next.title`）共用；实测见 §13 末）。余下：卡片长出「subject 不在播」分支（A）、`i` 接入（B） |
 | P6 | 章节 → 条目视图里的 seek 目标 | 未开工，排最后 |
 | P7 | Enter 语义不变 | **无需改动**，记录在案以免日后当成疏漏 |
 | P8 | 时长不一致 → 在 parts 视图表头说清 | 已落（随 P2，2026-08-29） |
@@ -465,7 +465,7 @@ E  headed（tmux）+ headless 全扫
 **P5（条目视图）—— 第二轮修订后 Tab 不动了，这一支随之变小：**
 
 ```
-A  前置先落：标题清洗统一到两个摄入点（F04）；卡片长出「subject 不在播」的渲染分支，
+A  前置先落：标题清洗统一到两个摄入点（F04，已落）；卡片长出「subject 不在播」的渲染分支，
    暂无入口 —— 屏幕上看不出任何变化（tests/drive.sh -k Tab 验既有卡没崩）
 B  i 键接入：列表/分P视图里对选中行开条目视图（取数 + spinner + 按 id 缓存），卡内对在播曲目叠 info；
    nav_tick 那条 `TUI_VIEW_MODE == "card"` 早返回改成「subject 在播才早返回」，
@@ -682,3 +682,11 @@ bili 查询 —— 那是拿站方排序做回归，正是本节末尾自己列�
 - **不 mock `view`**：curl 打不到就不测 —— 「真依赖造不出的覆盖就是没有的覆盖」（CLAUDE.md 测试规矩）。
 - **不断言 parts 视图的画面形状**（列对齐、表头字序）—— 套件断存活，capture-pane 管画面。
 - **不给 100 这个数做回归**（站方数据会变），断言的是 `>= 2` 与形状。
+- **F04（标题清洗统一）不进套件，实测记在这里。** 它的可观测面要求**同一个进程里同时有真播放器和 TUI** ——
+  `contract.sh` 的 tmux 面在 offline 半边（无播放器），`playback.sh` 驱动 `ut-play` 而不渲染卡片：
+  两个套件谁都到不了那一帧。造得出那一帧的唯一办法是给 TUI 喂一个假 pid 的状态文件，而那是
+  CLAUDE.md 明令拒的 stand-in。所以照实说：**这条覆盖套件没有**，用 driver 实测并把结果记下 ——
+  `tests/drive.sh -k 'Enter Tab' -w Playing`（2026-08-29，`lofi hip hop` 首条标题带 📚）：
+  卡片读作 `lofi hip hop radio beats to relax/study to 2026-08-29 22:04` —— 📚 已去，
+  而末尾的日期证明这一行来自**播放器记录**（行标题没有日期），即走的正是 `apply_player_record` 那条路。
+  改前同一帧会带着 📚。
