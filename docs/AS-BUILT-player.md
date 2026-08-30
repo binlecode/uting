@@ -172,9 +172,10 @@ mpv 都包含在内。mpv 那个 flag 也保留：它在"读得到 mpv"的地方
         nohup bash SELF -f MODE --engine NAME [--volume N] [-S SORT] -- HANDLE \
             </dev/null >mpv-<id>.log 2>&1 &     # pgid == pid（$!）；stdin 见上文
       set +m ; disown
-      players/<id>.json ← {id,pid,url,mode,format:null,started_at,log,sock,title:null,volume}
+      players/<id>.json ← {id,pid,url,mode,format:null,selected:null,
+                           selected_resolution:null,started_at,log,sock,title:null,volume}
       rm PLAYERS_DIR/<id>            # 丢掉光秃秃的 mktemp token；状态住在 <id>.json 里
-                                     # title/format 由子进程回填（见下）
+                                     # title/format/selected 由子进程回填（见下）
 
    ┌─ 进程组  pgid = 57678（播放器 <id>）───────────────────────┐
    │  57678  bash ut-play -f audio --engine yt HANDLE（组长）    │

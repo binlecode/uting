@@ -331,6 +331,7 @@ D8 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md §9.3），
 { "status":"ok", "engine":"yt", "id":"dQw4w9WgXcQ",
   "url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
   "title":"…", "duration":213, "mode":"audio", "format":"ba/b",
+  "selected":"251 - audio only (medium)", "selected_resolution":"audio only",
   "stream_urls":["https://rr2---sn-….googlevideo.com/videoplayback?…"],
   "http_headers":{"User-Agent":"…","Accept-Language":"…"},
   "retried":false }
@@ -344,8 +345,14 @@ D8 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md §9.3），
   在一个检查 `Referer` 或钉死 `User-Agent` 的 host 上，一个光秃秃的流 URL 不足以取到东西，
   而播放器无从把它们发明出来。一个引擎**不得**在这里返回凭据头 ——
   播放器把这些放在 mpv 的 argv 上，那是 `ps` 读得到的地方。
-- **`format`** 是引擎实际用掉的那个格式字符串。播放器把它原样记进播放器状态文件，从不去读它：
+- **`format`** 是引擎**发出去**的那个格式选择串。播放器把它原样记进播放器状态文件，从不去读它：
   `bv*+ba/b` 是一句 yt-dlp 表达式，而播放器不懂那门语言。
+- **`selected` / `selected_resolution`** 是同一件事的**回答**那一半：yt-dlp 自己报的
+  「我最后挑了哪个」（`251 - audio only (medium)`）以及它的分辨率（无视频时是 `audio only`）。
+  与 `format` 成对读 —— 请求 vs 答案，这也正是 `tests/contract.sh` 断言两者**不相等**的原因：
+  一个把请求回声进 `selected` 的引擎能过掉其余每一条检查。
+  **零额外网络**：这两个值本来就在那份已经取回的原始记录里（`.format` / `.resolution`），
+  从前被丢掉。取不到时是 `null`，与 `title`/`duration` 同一套可空约定。
 - **`retried`** = 引擎回落到了一个匿名 client（AS-BUILT-engine.md §8.2）。
   播放器把它转手进播放信封的 `retried`；它不再自己观察这件事。
   **它不是一个登录裁决**：`retried:false` 只说明带 cookie 那次调用没有出错，
@@ -464,13 +471,16 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
    -d       : {status:"started", id, pid, url, mode, started_at, title:null, sock, log}
               sock/log 是交出去的，好让一个客户端永远不必自己重建状态目录的布局
    --status : {status:"players",
-               players:[{id,pid,url,mode,volume,paused,position,duration,title,started_at,
-                         queue:{pos,len,next}}…],
+               players:[{id,pid,url,mode,volume,paused,position,duration,title,
+                         selected,selected_resolution,started_at,queue:{pos,len,next}}…],
                failed:[{id,url,mode,started_at,ended_at,exit_code,reason}…]}
               没有在放 / 没有失败时是空数组（仍然退出 0）
               detach 之后的头一两秒 title 是 null：解析是那个 detached 的**子进程**做的
-              （父进程必须在毫秒级返回），它一拿到解析信封就把 `title` 与 `format`
-              补进它自己的那条记录
+              （父进程必须在毫秒级返回），它一拿到解析信封就把 `title`、`format` 与
+              `selected`/`selected_resolution` 补进它自己的那条记录
+              selected 是**引擎挑中**的那个格式（解析信封的同名键），回填之前是 null。
+              请求那一半（`format`）**不在这个投影里**：它是一句 yt-dlp 表达式，
+              而 --status 回答的是"现在在放什么"，不是"当初怎么问的"
               volume、paused、position 与 duration 是**一次往返**里从播放器的 socket 上
               实时读来的（AS-BUILT-player.md §9.3）。volume 回落到记录下来的启动值 /
               --set-volume 值；另外三个在 socket 问不到、或播放器答了 null 时是 null ——
@@ -971,7 +981,8 @@ Cookie 处理：`YT_COOKIE_BROWSER` 是按平台做存在性检查的（那个�
 2. **`foo-resolve`** —— §1.3 那个面：标志 `-f -S -l -j -J --color -h -V`
    加上**仅仅**这个站点支持的那些动词（§1.3：以"有没有"声明能力）；`-f` 只收那五个
    规范模式 —— 别名是 `ut-play` 的（§1.3）；§3 那个解析信封
-   （`stream_urls[]` 视频在前、`http_headers{}` 必需且不含凭据、`format` 不透明、`retried`）；
+   （`stream_urls[]` 视频在前、`http_headers{}` 必需且不含凭据、`format` 不透明、
+   `selected`/`selected_resolution` 是提取器**挑中**的那一个而不是请求的回声、`retried`）；
    一份显式的本站 host 白名单 —— 一个非本站的 URL 或一个畸形的 id 是用法错误，退出 1（§3）。
 3. **`foo-resolve --auth`** —— cookie 决定读自 `FOO_COOKIE_BROWSER`（引擎名大写，
    §5），信封按 §3，且 `auth=="cookie"` 与 `cookie_browser != "none" and profile_found`

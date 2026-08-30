@@ -1196,6 +1196,23 @@ done
 report "resolve envelopes agree" \
     "$(printf '%s' "$YT_R" | jq -Sc 'keys' 2>/dev/null)" \
     "$(printf '%s' "$BILI_R" | jq -Sc 'keys' 2>/dev/null)"
+
+# `selected` is the ANSWER to the request `format` states, and the whole reason both keys
+# exist is that they differ: `format` is the selection string this engine SENT ("ba/b"),
+# `selected` is what yt-dlp came back having picked ("251 - audio only (medium)"). So the
+# inequality is the check — an engine that echoes the request into `selected`, which is the
+# cheapest wrong implementation and the one a reader of the field names would write first,
+# satisfies every other assertion here and fails only this one. Presence alone would pass it.
+#
+# Read off the two envelopes already in hand: this claim costs no round trip, and a second
+# resolve could not answer a shape question differently anyway (see the note above the
+# config-on-a-real-fetch block). What generalises it to engine #3 is the parity check
+# immediately above — a third engine that omits either key fails there against both.
+SELECTED_IS_AN_ANSWER='(.selected|type)=="string" and (.selected|length)>0
+      and .selected != .format
+      and (.selected_resolution|type)=="string" and (.selected_resolution|length)>0'
+report "yt resolve selected is an answer"   0 "$(jqv "$SELECTED_IS_AN_ANSWER" "$YT_R")"
+report "bili resolve selected is an answer" 0 "$(jqv "$SELECTED_IS_AN_ANSWER" "$BILI_R")"
 # --info gets the same parity treatment: it is the third envelope both engines publish
 # (AS-BUILT-contract.md §3), and nothing else here would notice a field renamed on one
 # side. The ok/engine assertion is what keeps the key comparison from passing vacuously —

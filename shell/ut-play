@@ -242,9 +242,11 @@ Output contracts (full schemas: AS-BUILT-contract.md §3):
                     unknown|null(ok)   (network also covers HTTP 429 rate limiting)
   -d -j     {status:"started", id, pid, url, mode, started_at, title, sock, log}
   --status  {status:"players", players:[{id,pid,url,mode,volume,paused,position,
-            duration,title,started_at}], failed:[{id,url,mode,started_at,ended_at,
-            exit_code,reason}]}   volume/paused/position/duration are read live off the
-            player (null = could not ask); failed lists players that died on their own
+            duration,title,selected,selected_resolution,started_at}],
+            failed:[{id,url,mode,started_at,ended_at,exit_code,reason}]}
+            volume/paused/position/duration are read live off the player (null = could
+            not ask); selected is the format the ENGINE picked, backfilled after the
+            resolve (null until then); failed lists players that died on their own
   --stop    {status:"stopped", id, stopped} | {status:"stopped", scope:"all", stopped}
   --set-vol {status:"ok", id, volume} | {status:"not_playing"} | {status:"ambiguous", …}
             | {status:"error", reason:"ipc_failed"}
@@ -415,13 +417,15 @@ engine_resolve_bin() {
 
 # Out-params of resolve_media. Globals rather than a return value because bash 3.2 arrays do
 # not survive command substitution — the same discipline reap_dead_players already uses.
-# These four are the ENTIRE vocabulary the playback path has for "what am I playing".
+# Together they are the ENTIRE vocabulary the playback path has for "what am I playing".
 RESOLVED_URLS=()          # [0] = what mpv opens; [1] = its separate audio track, if any
 RESOLVED_HEADER_ARGS=()   # ready-made --http-header-fields-append=... mpv flags
 RESOLVED_TITLE=""
 RESOLVED_DURATION=""      # seconds, or "" for a live stream: read for the listening row only
 RESOLVED_HANDLE=""        # what was asked for: the queue moves, so the record must follow
 RESOLVED_FORMAT=""        # the engine's format string: recorded verbatim, never read
+RESOLVED_SELECTED=""      # …and what the engine says it PICKED, recorded the same way
+RESOLVED_SELECTED_RES=""  # its resolution ("audio only" when there is no video)
 RESOLVED_REASON=""        # on failure, the engine's own reason enum member
 RESOLVED_RC=0
 
@@ -440,6 +444,8 @@ resolve_media() {
     RESOLVED_TITLE=""
     RESOLVED_DURATION=""
     RESOLVED_FORMAT=""
+    RESOLVED_SELECTED=""
+    RESOLVED_SELECTED_RES=""
     RESOLVED_REASON=""
     RESOLVED_RC=0
     PLAYBACK_RETRIED=0
@@ -481,6 +487,11 @@ resolve_media() {
     # from one abandoned at the third minute. Empty for a live stream, which has no length.
     RESOLVED_DURATION=$(printf '%s' "$out" | jq -r 'if (.duration | type) == "number" then (.duration | tostring) else "" end' 2>/dev/null) || RESOLVED_DURATION=""
     RESOLVED_FORMAT=$(printf '%s' "$out" | jq -r '.format // ""' 2>/dev/null) || RESOLVED_FORMAT=""
+    # The answer beside the request. Read for the same reason `format` is — so --status can
+    # say what is playing rather than what was asked for — and read here rather than probed
+    # later because the engine already spent the round trip that knows it.
+    RESOLVED_SELECTED=$(printf '%s' "$out" | jq -r '.selected // ""' 2>/dev/null) || RESOLVED_SELECTED=""
+    RESOLVED_SELECTED_RES=$(printf '%s' "$out" | jq -r '.selected_resolution // ""' 2>/dev/null) || RESOLVED_SELECTED_RES=""
     # The anonymous-client fallback is now the ENGINE's decision, so `retried` is relayed
     # rather than observed — but it is still the playback envelope's field (AS-BUILT-contract.md §3).
     if printf '%s' "$out" | jq -e '.retried == true' >/dev/null 2>&1; then
@@ -491,7 +502,7 @@ resolve_media() {
     return 0
 }
 
-# Backfill the two player-record fields detach_play could not know at launch. This is what
+# Backfill the player-record fields detach_play could not know at launch. This is what
 # retired the old background title updater: that was a whole extra `yt-dlp --print title`
 # round trip whose only job was to answer a question the resolve envelope already answers,
 # held open in a detached background job whose fds had to be redirected so a capturing
@@ -524,9 +535,12 @@ patch_player_meta() {
     # to track, and a record still naming the first one would make --status describe
     # something that stopped playing ten minutes ago.
     if jq --arg t "$RESOLVED_TITLE" --arg f "$RESOLVED_FORMAT" --arg u "$RESOLVED_HANDLE" --arg p "$$" \
+        --arg sel "$RESOLVED_SELECTED" --arg selres "$RESOLVED_SELECTED_RES" \
         'if ((.pid | tostring) == $p)
          then .title = (if $t == "" then null else $t end)
               | .format = (if $f == "" then null else $f end)
+              | .selected = (if $sel == "" then null else $sel end)
+              | .selected_resolution = (if $selres == "" then null else $selres end)
               | .url = (if $u == "" then .url else $u end)
          else empty end' \
         "$sf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
@@ -1628,7 +1642,7 @@ detach_play() {
         --arg log "$log" \
         --arg sock "$sock" \
         --argjson volume "$volume_json" \
-        '{id: $id, pid: $pid, url: $url, mode: $mode, format: null, started_at: $started_at, log: $log, sock: $sock, title: null, volume: $volume}' >"$sf.tmp.$pid"; then
+        '{id: $id, pid: $pid, url: $url, mode: $mode, format: null, selected: null, selected_resolution: null, started_at: $started_at, log: $log, sock: $sock, title: null, volume: $volume}' >"$sf.tmp.$pid"; then
         rm -f "$sf.tmp.$pid" "$PLAYERS_DIR/$id" 2>/dev/null || true
         rm_player_files "$id"
         stop_group "$pid"
@@ -1845,7 +1859,7 @@ do_status() {
                     --argjson queue "$QUEUE_JSON" \
                     '{id, pid, url, mode, volume: ($live // .volume),
                       paused: $paused, position: $position, duration: $duration,
-                      title, started_at, queue: $queue}' \
+                      title, selected, selected_resolution, started_at, queue: $queue}' \
                     "${LIVE_PLAYER_FILES[$i]}")")
             done
             # -sc: one line, like the empty branch below and every other envelope. The

@@ -527,8 +527,10 @@ def safe_headers:
 
 # The resolve envelope (AS-BUILT-contract.md §3) — the same one yt-resolve emits, key for
 # key, because the player must not be able to tell which engine answered. `format` is the
-# format STRING this engine actually used; the player records it verbatim and never reads
-# it. `http_headers` is a REQUIRED key, empty object when none — and on this site it is
+# format STRING this engine SENT; the player records it verbatim and never reads it, and
+# `selected` is what yt-dlp answered with ("1080P 高清+30280 - audio only"). Same two
+# spellings as the sibling engine: `$format` is the argument, a bare `.format` is the raw
+# record's own field. `http_headers` is a REQUIRED key, empty object when none — and on this site it is
 # never empty in practice: the CDN checks Referer, and a bare URL 403s where the same URL
 # with a Referer answers 206. That is the contract hole this key exists to close.
 emit_stream() {
@@ -549,6 +551,8 @@ emit_stream() {
                 id: (.id // null), url: (.webpage_url // null),
                 title: (.title // null), duration: (.duration // null),
                 mode: \$mode, format: \$format,
+                selected: (.format // null),
+                selected_resolution: (.resolution // null),
                 stream_urls: [\$s[].url],
                 http_headers: (\$s[0].http_headers // {}),
                 retried: \$retried}"
@@ -983,7 +987,10 @@ Options:
   -V       Print the suite version
 
 Resolve JSON (-j): {"status","engine","id","url","title","duration","mode","format",
+                    "selected","selected_resolution",
                     "stream_urls":[...],"http_headers":{...},"retried"}
+  format is the selection string SENT; selected is the format yt-dlp actually PICKED, and
+  selected_resolution its resolution ("audio only" when there is no video).
   Identical to yt-resolve's envelope, key for key.
   http_headers is REQUIRED and on this site it MATTERS: the CDN checks Referer, and a bare
   stream URL answers 403 where the same URL with these headers answers 206.

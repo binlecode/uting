@@ -198,6 +198,14 @@ report "live paused is false, not null" 0 \
 report "live duration is a number" 0 \
     "$(shell/ut-play --status -j | jq -e --arg i "$id1" \
         '.players[]|select(.id==$i)|.duration|type=="number"' >/dev/null 2>&1; echo $?)"
+# The backfill's third field. `title` and `format` were already patched in from the resolve
+# envelope; `selected` joins them, and it is the one of the three that no OFFLINE check can
+# reach — the record is born with selected:null at launch, and only a real resolve of a real
+# handle ever replaces it. A player record still reporting null here is a backfill that
+# dropped the key, which is exactly what the launch-time default looks like.
+report "the record carries selected" 0 \
+    "$(shell/ut-play --status -j | jq -e --arg i "$id1" \
+        '.players[]|select(.id==$i)|.selected|type=="string"' >/dev/null 2>&1; echo $?)"
 echo "── the playback verbs: the envelope reports what mpv answered ───"
 # --pause / --resume / --seek / --seek-to over the same one-shot socket as --set-volume.
 # contract.sh owns the idle half (no player → 4, an unsigned --seek → 1); what only a real

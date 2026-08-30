@@ -356,14 +356,18 @@ yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality
              [--format-sort SORT] [--cookies-from-browser B]
       → 探测（仅 yt，§8.2 是它完整的形状）可能匿名重解一次并把 retried 置上
       prose: 打印流 URL
-      -j:    {status,engine,id,url,title,duration,mode,format,stream_urls[],http_headers{},retried}
+      -j:    {status,engine,id,url,title,duration,mode,format,
+              selected,selected_resolution,stream_urls[],http_headers{},retried}
       -J:    yt-dlp 的完整原始记录
       error: {status:"error",engine,url,mode,reason}，退 2+
 ```
 
 `stream_urls` 是**视频在前**：元素 0 是播放器要打开的那个，元素 1 —— 只有当选中的格式合并了
 两条流时才有 —— 是它单独的音轨。`http_headers` 是**必需的，但可以是 `{}`**。
-完整 schema 与这两条的理由：AS-BUILT-contract.md §3。
+`format` 是**发出去**的那个选择串（`format_for_mode()` 的产物），
+`selected`/`selected_resolution` 是同一次调用**回答**的那一半 —— 直接取自那份原始记录的
+`.format` / `.resolution`，所以**不多花一次网络**：这两个值一直都在，从前被丢掉。
+完整 schema 与这几条的理由：AS-BUILT-contract.md §3。
 
 ### 10.1 只要元数据（`--info`）
 

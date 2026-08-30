@@ -507,7 +507,12 @@ probe_raw() {
 }
 
 # The resolve envelope (AS-BUILT-contract.md §3). `format` is the format STRING this
-# engine actually used — the player records it verbatim and never reads it. `http_headers`
+# engine SENT — the player records it verbatim and never reads it — and `selected` is what
+# yt-dlp came back having PICKED, so the pair is request and answer: "ba/b" against
+# "251 - audio only (medium)". Both come free with the record we already fetched, which is
+# why asking what actually played costs no second round trip. Mind the two spellings in the
+# filter below: `$format` is the argument (the request), while a bare `.format` reads the
+# raw yt-dlp record still in `.` (the answer). `http_headers`
 # is a REQUIRED key, empty object when none: it closes the hole where --get-url handed
 # back a bare URL that a Referer-checking host would 403.
 emit_stream() {
@@ -528,6 +533,8 @@ emit_stream() {
                 id: (.id // null), url: (.webpage_url // null),
                 title: (.title // null), duration: (.duration // null),
                 mode: \$mode, format: \$format,
+                selected: (.format // null),
+                selected_resolution: (.resolution // null),
                 stream_urls: [\$s[].url],
                 http_headers: (\$s[0].http_headers // {}),
                 retried: \$retried}"
@@ -953,7 +960,10 @@ Options:
   -V       Print the suite version
 
 Resolve JSON (-j): {"status","engine","id","url","title","duration","mode","format",
+                    "selected","selected_resolution",
                     "stream_urls":[...],"http_headers":{...},"retried"}
+  format is the selection string SENT; selected is the format yt-dlp actually PICKED, and
+  selected_resolution its resolution ("audio only" when there is no video).
   stream_urls is VIDEO FIRST: element 0 is what a player opens, element 1 (present only
   when the format merged two streams) is its separate audio track.
   http_headers is a REQUIRED key (possibly {}) — the headers the URLs must be fetched with.

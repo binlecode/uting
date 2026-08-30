@@ -558,8 +558,8 @@ AS-BUILT-contract.md §3）。`bili-resolve` 根本没有 `--transcript` 那一�
                         │
                         ▼
    进程 2 ：ut-play（YT_DETACHED=1、YT_IPC_SOCK=<sock>）→ 走上面的 B，
-            并在锁下、且 pid 仍匹配时，从解析信封把 `title` 与 `format`
-            补进**它自己的**记录。
+            并在锁下、且 pid 仍匹配时，从解析信封把 `title`、`format` 与
+            `selected`/`selected_resolution` 补进**它自己的**记录。
 ```
 
 **那个后台标题更新器没有了。** 它存在的唯一理由是"被播放的东西是一个 URL、而上游没人知道标题"；
