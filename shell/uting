@@ -576,13 +576,18 @@ Keys (List View):
   in the environment is left alone, and says so once.
 
 Keys (focus card):
-  ←/→      seek backward / forward 5s   ↑/↓  volume down / up
-  Tab      back to List View            Esc  back to List View
-  Space    pause / resume               s    stop playback     q  quit
+  ←/→      seek backward / forward 5s   Tab  back to List View
+  Space    pause / resume               Esc  back to List View
+  s        stop playback                q    quit
+  ↑/↓      select a chapter, and Enter seeks to it — only on the playing
+           subject, after `i` has fetched a table that has chapters
   Enter    (on an `i` subject) play it
 
   The card has one renderer and two subjects: Tab is always the track that is
   playing, `i` is the row you asked about. There is no third view.
+  A chapter is an offset inside the track already open, so it is a seek and never
+  a re-resolve. On the item subject the same chapters are a table of contents:
+  that card has no playhead, so there is nothing there to seek.
 
 Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
@@ -1038,6 +1043,7 @@ set_ui_lang() {
         S_CARD_HEAD_ITEM="条目卡片"; S_UPLOADED="发布"; S_LIKES="点赞"
         S_INFO_KEY="详情"; S_INFO_ACT="详情"
         S_CHAPTERS="章"; S_VIEWS="次播放"
+        S_CHAP_HEAD="章节"; S_CHAP_GO="前往"
         S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_NEXT="下一首"; S_Q_ACT="队列"
         S_Q_UPCOMING="接下来"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
@@ -1074,6 +1080,7 @@ set_ui_lang() {
         S_CARD_HEAD_ITEM="ITEM FOCUS"; S_UPLOADED="uploaded"; S_LIKES="likes"
         S_INFO_KEY="info"; S_INFO_ACT="Info"
         S_CHAPTERS="chapters"; S_VIEWS="views"
+        S_CHAP_HEAD="chapters"; S_CHAP_GO="go"
         S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_NEXT="next"; S_Q_ACT="Queue"
         S_Q_UPCOMING="up next"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
@@ -1279,6 +1286,19 @@ ITEM_UPLOADED=""
 ITEM_LIKES=""
 ITEM_CHAP_N=0
 ITEM_DESC=""
+# The chapter table, three parallel arrays because bash 3.2 has no associative one: start
+# second (arithmetic, for the playhead scan and for --seek-to), the same second already
+# formatted (fmt_sec is a subshell, and this card redraws once a second — 50 chapters would
+# be 50 forks a frame), and the title. Filled once per `--info`, not per frame.
+# CHAP_SEL is the cursor into them, reset by apply_item_info because a new subject's
+# chapter 7 is not this subject's chapter 7.
+ITEM_CHAP_SEC=()
+ITEM_CHAP_TIME=()
+ITEM_CHAP_TITLE=()
+# The widest formatted start time in the table — the block's time column, measured once so
+# the column cannot move as the window scrolls past a chapter that crosses an hour.
+ITEM_CHAP_TW=0
+CHAP_SEL=0
 # One slot, not a map: bash 3.2 has no associative arrays, and parallel arrays are a cache's
 # complexity without a cache's behaviour — the rhythm this exists for is going back into the
 # item you just looked at. Keyed `engine:url`, session-only, never written to disk.
@@ -1815,10 +1835,16 @@ elapsed_since_play() {
 PT_CUR=""
 PT_TOTAL=""
 PT_PCT=""
+# The playhead in SECONDS, beside the same reading formatted. PT_CUR is a string built for a
+# row; the chapter block needs the number, and re-parsing a "MM:SS" back into seconds to get
+# it would be the second spelling this file spends its width layer avoiding. Empty means no
+# reading (a live stream, a socket that answered nothing) — never 0, which is a real position.
+PT_POS_SEC=""
 fetch_play_times() {
     PT_CUR="--:--"
     PT_TOTAL="$CURRENT_PLAY_DURATION"
     PT_PCT=""
+    PT_POS_SEC=""
     local live=0
     if ((CURRENT_PLAY_IS_LIVE)); then
         live=1
@@ -1875,7 +1901,11 @@ fetch_play_times() {
     fi
     # if-form, not an AND-list: house rule for an arithmetic test (see player_check_ready).
     if ((live)); then return 0; fi
-    [[ -n "$raw_pos" && "$raw_pos" != "null" ]] && PT_CUR=$(fmt_sec "$raw_pos")
+    if [[ -n "$raw_pos" && "$raw_pos" != "null" ]]; then
+        PT_CUR=$(fmt_sec "$raw_pos")
+        PT_POS_SEC=${raw_pos%.*}
+        [[ "$PT_POS_SEC" =~ ^[0-9]+$ ]] || PT_POS_SEC=""
+    fi
     [[ -n "$raw_dur" && "$raw_dur" != "null" ]] && PT_TOTAL=$(fmt_sec "$raw_dur")
     [[ -n "$raw_pct" && "$raw_pct" != "null" ]] && PT_PCT=${raw_pct%.*}
     return 0
@@ -2243,6 +2273,39 @@ seek_relative() {
     return 0
 }
 
+# The chapter cursor. It moves only while the block is on screen, which is also the only
+# time the hint block offers the keys — one condition, read from the render, so a card with
+# no chapters cannot silently hold a cursor into a table that is not there.
+#
+# Clamped, not wrapped: this is a table of contents with a beginning and an end, and a list
+# that jumps from the last chapter to the first is answering a question nobody asked. The
+# window in card_chapter_block follows this index; nothing else moves.
+move_chapter() {
+    local delta=$1 n
+    ((CARD_CHAP_ACTIVE)) || return 0
+    n=${#ITEM_CHAP_SEC[@]}
+    ((n > 0)) || return 0
+    CHAP_SEL=$((CHAP_SEL + delta))
+    ((CHAP_SEL < 0)) && CHAP_SEL=0
+    ((CHAP_SEL >= n)) && CHAP_SEL=$((n - 1))
+    return 0
+}
+
+# Enter on the playing card: seek to the selected chapter's start. `--seek-to` is the
+# ABSOLUTE spelling of the verb the arrows already use relatively (ut-play requires the sign
+# on the relative one precisely so these two can never be confused), and nothing is
+# re-resolved — a chapter is an offset inside the file already open, which is what separates
+# this axis from parts and from quality (PLAN §3).
+seek_chapter() {
+    local n
+    ((CARD_CHAP_ACTIVE)) || return 0
+    [[ -n "$CURRENT_PLAY_ID" ]] || return 0
+    n=${#ITEM_CHAP_SEC[@]}
+    ((CHAP_SEL >= 0 && CHAP_SEL < n)) || return 0
+    play_verb --seek-to "${ITEM_CHAP_SEC[$CHAP_SEL]}" >/dev/null
+    return 0
+}
+
 adjust_volume() {
     local delta="$1" cur target
     [[ -n "$CURRENT_PLAY_ID" ]] || return 0
@@ -2298,6 +2361,7 @@ clear_play_state() {
     PT_CUR=""
     PT_TOTAL=""
     PT_PCT=""
+    PT_POS_SEC=""
 }
 
 # The detached player owns its own lifecycle, so uting only learns of its death by asking.
@@ -3269,6 +3333,7 @@ card_info_row() {
 # both for the reasons the list's rows state at length: our width rule over-counts by design,
 # so computed padding lands the column raggedly, and a jump leaves the cells it skipped
 # holding the previous frame.
+CARD_QUEUE_LINES=0
 card_queue_block() {
     local cols=$1 budget=$2
     local head n i rail rail_w row_w
@@ -3296,6 +3361,91 @@ card_queue_block() {
         ((rail_w > 0)) && printf '\033[%dG%s' $((cols - rail_w + 1)) "$rail"
         printf '%s\n' "$C_RESET"
     done
+    # What it actually drew, for the caller that has to fit a block under it. Counted rather
+    # than predicted: `n` is already clamped to the budget above, and a second copy of that
+    # clamp in the caller is the arithmetic that drifts.
+    CARD_QUEUE_LINES=$((1 + n))
+    return 0
+}
+
+# The chapters, and the third axis of this plan's three (PLAN §3): not a row and not a launch
+# parameter but an OFFSET INSIDE THE FILE PLAYING. That is the whole reason it is a block on
+# this card instead of a list source like parts — a chapter has no url of its own, so making
+# it a row would grow the item record a start-offset field and spread that field through
+# playlist, queue and history for the sake of dressing a seek up as a launch.
+#
+# `live` is the caller's answer to one question: does this card have a PLAYHEAD? On the
+# playing subject it does, so the cursor and Enter are offered and the chapter the playhead
+# is inside is drawn at full weight. On the item subject there is no playhead, no bar and no
+# elapsed time, so the same rows are a table of contents: no cursor, nothing to seek. A card
+# about a track that happens to be playing is one Tab from the card that can seek it.
+#
+# Three weights, no new glyph (the inventory stays closed, so YT_ASCII and the mono theme
+# read the same): the chapter under the playhead is bold, the cursor's row is plain, every
+# other row is dim — and the cursor also takes the list's own 2-cell `> ` marker in the
+# accent, because a weight alone is not a cursor.
+#
+# Budgeted in rows like the queue block above it and for the same reason: this card renders
+# in place and ends on \033[J, so a block that overran would scroll the frame off its own top.
+CARD_CHAP_MAX=6
+CARD_CHAP_LINES=0
+# Whether the chapter keys can act, and it is the RENDER that answers: the block is on screen
+# with a playhead behind it, or it is not. Deriving it in the key handler instead would mean a
+# second copy of the guard the info row already carries (right url, right track, non-empty
+# table) — and the two copies disagree exactly when the track changed under a held key.
+CARD_CHAP_ACTIVE=0
+card_chapter_block() {
+    local cols=$1 budget=$2 live=$3
+    local n win start i head cur=-1 mark weight row_w
+    CARD_CHAP_LINES=0
+    n=${#ITEM_CHAP_SEC[@]}
+    ((n > 0)) || return 0
+    # A header with no row under it is chrome that says what the info row already said.
+    ((budget >= 2)) || return 0
+    win=$((budget - 1))
+    ((win > CARD_CHAP_MAX)) && win=$CARD_CHAP_MAX
+    ((win > n)) && win=$n
+    # Where the playhead is. A linear scan of integers, per frame, on a list this card has
+    # already paid a network fetch for — cheaper than any structure that would avoid it, and
+    # the only reason the chapters can say "you are here" at all.
+    if ((live)) && [[ -n "$PT_POS_SEC" ]]; then
+        for ((i = 0; i < n; i++)); do
+            if ((ITEM_CHAP_SEC[i] <= PT_POS_SEC)); then cur=$i; fi
+        done
+    fi
+    # The window follows the cursor and then stops at the end of the list, so the last page
+    # is full rather than ragged. Without a cursor it is simply the head of the table.
+    start=0
+    if ((live)); then
+        if ((CHAP_SEL >= win)); then start=$((CHAP_SEL - win + 1)); fi
+        if ((start + win > n)); then start=$((n - win)); fi
+        if ((start < 0)); then start=0; fi
+    fi
+    # Same header grammar as the queue block: position first when there is a cursor to have
+    # a position, a bare count when the block is a table of contents.
+    if ((live)); then
+        head="$((CHAP_SEL + 1))/$n $GL_SEP $S_CHAP_HEAD"
+    else
+        head="$n $GL_SEP $S_CHAP_HEAD"
+    fi
+    truncate_disp "$head" "$CARD_TEXT_W"
+    printf '    %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+    for ((i = start; i < start + win && i < n; i++)); do
+        mark="  "
+        if ((live && i == CHAP_SEL)); then mark="$C_MARK> $C_RESET"; fi
+        if ((i == cur)); then weight="$C_BOLD"
+        elif ((live && i == CHAP_SEL)); then weight=""
+        else weight="$C_DIM"; fi
+        # 4 = the body indent, 2 = the marker slot, ITEM_CHAP_TW = the widest start time in
+        # THIS table (measured once at fetch, so the column does not move as the window
+        # scrolls), 2 more separate the time from the title.
+        row_w=$((cols - 4 - 2 - ITEM_CHAP_TW - 2))
+        ((row_w < 12)) && row_w=12
+        truncate_disp "${ITEM_CHAP_TITLE[$i]}" "$row_w"
+        printf '\033[K    %s%s%*s  %s%s\n' \
+            "$mark" "$weight" "$ITEM_CHAP_TW" "${ITEM_CHAP_TIME[$i]}" "$TRUNC_TEXT" "$C_RESET"
+    done
+    CARD_CHAP_LINES=$((1 + win))
     return 0
 }
 
@@ -3352,6 +3502,21 @@ card_item_body() {
     used=$((2 + CARD_HEAD_LINES + 1 + 2 + HINT_LINES))
     [[ -n "$info_row" ]] && used=$((used + 1))
     budget=$((TERM_LINES - used - 2))
+    # The chapters and the description share the rows left, chapters first — the same order
+    # the playing card gives the queue, for the same reason one step down: a table of contents
+    # is structure and a description is prose, and prose is what shaves gracefully (it has a
+    # loop that does exactly that; a chapter list can only be shorter).
+    #
+    # Half the pool, never more: this card's signature payload is the description, and a
+    # 40-chapter video would otherwise take every row and leave the reader nothing to read.
+    # Below two rows the block cannot draw a header AND a chapter, so it declines and the
+    # frame is exactly today's.
+    #
+    # live=0 — this card has no playhead. The chapters here are a table of contents, not seek
+    # targets: nothing is playing FROM this card, so there is nothing to seek. One Tab reaches
+    # the card that has a playhead (PLAN §4 P6).
+    card_chapter_block "$cols" $((budget / 2)) 0
+    budget=$((budget - CARD_CHAP_LINES))
     ((budget > CARD_DESC_MAX)) && budget=$CARD_DESC_MAX
     txt=""
     if ((budget > 0)) && [[ -n "$ITEM_DESC" ]]; then
@@ -3382,6 +3547,7 @@ card_item_body() {
 
 # Now Playing Focus Card (in-place render, like the list above — see display_list_menu)
 display_now_playing_card() {
+    CARD_CHAP_ACTIVE=0
     cursor_hide
     # Reposition cursor to top-left without blanking the screen (eliminates flicker)
     printf '\033[H'
@@ -3489,10 +3655,16 @@ display_now_playing_card() {
         # be taking the rows the queue block exists to fill (the reader is the item subject,
         # one Tab and one `i` away). The url is checked, not just the flag: a track can change
         # between the fetch and this frame.
-        local info_shown=0
+        local info_shown=0 chap_ok=0
         if ((CARD_PLAY_INFO)) && [[ -n "$ITEM_URL" && "$ITEM_URL" == "$CURRENT_PLAY_URL" ]]; then
             card_info_row
             [[ -n "$CARD_INFO_ROW" ]] && info_shown=1
+            # The chapters ride the SAME guard as the row above them, and for the same
+            # reason: the fetch is about one url and the track can change under it between
+            # the fetch and this frame. This is also the one flag that says the chapter keys
+            # can act — the hint block below and the key dispatch both read it through what
+            # is on screen, never through what was fetched.
+            ((ITEM_CHAP_N > 0)) && chap_ok=1
         fi
         # The hints are built and MEASURED here, above the block that has to fit around them:
         # the queue block's budget is counted in rows, and the hint block is the one thing
@@ -3514,21 +3686,55 @@ display_now_playing_card() {
         # is not already showing what that fetch found. Same rule as every other cell in the
         # suite — a key that would answer "you are looking at it" does not spend a cell.
         ((ENGINE_INFO_OK)) && ((! info_shown)) && card_hints+=("i	$S_INFO_KEY")
+        # The chapter keys are a SEPARATE array because they are the only cells on this card
+        # whose right to exist is decided AFTER the measurement that budgets the blocks: a
+        # short pane can leave the table of contents undrawn, and two cells offering a cursor
+        # into a block that is not there is exactly the dead key every other hint block in
+        # this file refuses to spend a cell on. So they are measured PESSIMISTICALLY (in, if
+        # the table could appear) and printed HONESTLY (in, only if it did). Measuring the
+        # taller of the two shapes is the safe direction — the frame can end up one row short
+        # of its budget, never one row over it, and only an in-place renderer's own top is at
+        # stake. Predicting the block from the budget instead would be a second copy of the
+        # arithmetic below, which is the drift these blocks were rewritten to remove.
+        #
+        # There is no volume cell here to take out: 9/0 keeps its own, and what the arrows
+        # gave up was a SECOND spelling of it (PLAN §12 handed that to P6).
+        local chap_hints=()
+        ((chap_ok)) && chap_hints=("$GL_AV	$S_CHAP_HEAD" "$GL_ENTER	$S_CHAP_GO")
         HINT_MEASURE=1
-        print_hints "$cols" "  " "  " "${card_hints[@]}"
+        print_hints "$cols" "  " "  " "${card_hints[@]}" ${chap_hints[@]+"${chap_hints[@]}"}
         HINT_MEASURE=0
+        # The rows the two blocks share out. `base` is the frame with NEITHER of them — the
+        # header row and its blank, the spine, the meta row and the hints, plus the bar and
+        # its spacer when there is one and the info row when `i` has been pressed. The -1
+        # keeps the last hint row off the pane's final line, the margin card_item_body keeps
+        # for the same reason. It used to be counted per block, with the block's own header
+        # folded into the constant; two blocks made that one clamp too many, so each block is
+        # now handed a budget and REPORTS what it drew.
+        local base=$((2 + CARD_HEAD_LINES + 1 + HINT_LINES)) free
+        [[ -n "$bar_str" ]] && base=$((base + 2))
+        ((info_shown)) && base=$((base + 1))
+        free=$((TERM_LINES - base - 1))
         # The queue block, ONLY when there is more than one track: every detached player has a
         # queue now (a lone handle is a queue of one), so a block that headed itself "1/1"
-        # would be chrome that never says anything. `used` is the frame without it — the
-        # header row and its blank, the spine, the meta row, the block's own header row and
-        # the hints, plus the bar and its spacer when there is one. The -1 keeps the last hint
-        # row off the pane's final line, the margin card_item_body keeps for the same reason.
+        # would be chrome that never says anything.
+        #
+        # It is served FIRST and the chapters take what is left (PLAN §4 P6): the queue is the
+        # one thing on this screen that changes without a keypress, and a card that is watched
+        # sheds a static table of contents before it sheds a live readout. Measured at 80x24
+        # both fit with ~8 rows to spare, so this is an order, not a choice between them.
         if ((CURRENT_QUEUE_LEN > 1)); then
-            local q_used=$((2 + CARD_HEAD_LINES + 1 + 1 + HINT_LINES))
-            [[ -n "$bar_str" ]] && q_used=$((q_used + 2))
-            ((info_shown)) && q_used=$((q_used + 1))
-            card_queue_block "$cols" $((TERM_LINES - q_used - 1))
+            card_queue_block "$cols" $((free - 1))
+            free=$((free - CARD_QUEUE_LINES))
         fi
+        # live=1: this branch is the card WITH a playhead, so the cursor, the Enter seek and
+        # the "you are here" weight are all on.
+        if ((chap_ok)); then
+            card_chapter_block "$cols" "$free" 1
+            ((CARD_CHAP_LINES > 0)) && CARD_CHAP_ACTIVE=1
+        fi
+        # What the block did NOT draw, the hint block does not advertise.
+        ((CARD_CHAP_ACTIVE)) || chap_hints=()
         if [[ -n "$bar_str" ]]; then
             # \033[K on the spacer row too: the card grows by two rows the moment the
             # bar appears (mpv has no time-pos for the first second or so), so an
@@ -3539,7 +3745,7 @@ display_now_playing_card() {
         # labels, and the hints flow straight after it, bare-indented like the empty state.
         # Nothing closes the card below them — see the rail note above. The block itself was
         # built and measured above, where the queue block needed its height.
-        print_hints "$cols" "  " "  " "${card_hints[@]}"
+        print_hints "$cols" "  " "  " "${card_hints[@]}" ${chap_hints[@]+"${chap_hints[@]}"}
         HINT_SEP=""
     fi
     # Clean up any leftover lines below
@@ -4403,9 +4609,9 @@ fetch_item_info() {
 # already has exactly one spelling of a duration. A live item has no meaningful one, so it
 # gets the badge print_details gives a live row instead of a number.
 apply_item_info() {
-    local eng=$1 url=$2 dur live
+    local eng=$1 url=$2 dur live csec ctitle
     IFS="$US" read -r ITEM_TITLE ITEM_CHANNEL dur live ITEM_VIEWS ITEM_LIKES \
-                      ITEM_UPLOADED ITEM_CHAP_N ITEM_DESC < <(
+                      ITEM_UPLOADED ITEM_DESC < <(
         printf '%s' "$INFO_CACHE_JSON" | jq -r "$JQ_TEXT_DEFS"'[
             (.title // "" | clean),
             (.channel // .uploader // "" | oneline),
@@ -4414,7 +4620,6 @@ apply_item_info() {
             (.view_count // "" | tostring),
             (.like_count // "" | tostring),
             (.upload_date // "" | if length == 8 then .[0:4] + "-" + .[4:6] + "-" + .[6:8] else . end),
-            (.chapters // [] | length | tostring),
             (.description // "" | clean)
           ] | join("\u001f")' 2>/dev/null
     ) || return 1
@@ -4430,6 +4635,36 @@ apply_item_info() {
     else
         ITEM_DUR_FMT=""
     fi
+    # The chapter table, read on its own because it is a LIST and the US-joined read above is
+    # a record. The count is no longer asked for: it is the array's length, so the info row's
+    # "4 chapters" and a block that draws three rows can never disagree.
+    #
+    # The start second is FLOORED here rather than at the seek: `--seek-to 726.855` is a
+    # legal call, but the same number is also this row's printed time and the playhead
+    # comparison, and one chapter having three spellings is how a row comes to disagree with
+    # the bar under it. A whole second is under the granularity of every one of the three.
+    ITEM_CHAP_SEC=()
+    ITEM_CHAP_TIME=()
+    ITEM_CHAP_TITLE=()
+    while IFS="$US" read -r csec ctitle; do
+        [[ "$csec" =~ ^[0-9]+$ ]] || continue
+        ITEM_CHAP_SEC+=("$csec")
+        ITEM_CHAP_TIME+=("$(fmt_sec "$csec")")
+        ITEM_CHAP_TITLE+=("$ctitle")
+    done < <(
+        printf '%s' "$INFO_CACHE_JSON" | jq -r "$JQ_TEXT_DEFS"'(.chapters // [])[]
+            | "\((.start_time // 0) | floor)\u001f\(.title // "" | oneline)"' 2>/dev/null
+    )
+    ITEM_CHAP_N=${#ITEM_CHAP_SEC[@]}
+    ITEM_CHAP_TW=0
+    # if-form, not `((test)) && assign`: a for loop returns its last command's status, and an
+    # && list whose test came out false returns 1 — which under set -e aborts the redraw the
+    # moment the widest time is not the last one. Same trap as toggle_pause's note.
+    for csec in ${ITEM_CHAP_TIME[@]+"${ITEM_CHAP_TIME[@]}"}; do
+        if ((${#csec} > ITEM_CHAP_TW)); then ITEM_CHAP_TW=${#csec}; fi
+    done
+    # A new subject's chapter 7 is not the old subject's chapter 7.
+    CHAP_SEL=0
     return 0
 }
 
@@ -5127,15 +5362,23 @@ while true; do
         # row promises. The row is still the selected one — `i` changed no rows — so this is
         # play_selected and not a second launch path. The subject then becomes the playing
         # track: you asked for it to play, so the card is about the playing track now.
+        # Enter on the ITEM subject plays; on the PLAYING subject it is the chapter seek,
+        # and it was an unbound key there until this line. The two never overlap: the item
+        # card has no playhead, so seek_chapter's own guard is false there anyway.
         "" | $'\n' | $'\r')
             if [[ "$CARD_SUBJECT" == "item" ]]; then
                 play_selected || true
                 CARD_SUBJECT="playing"
+            else
+                seek_chapter
             fi ;;
         "[C" | "OC" | "["*C | "O"*C) seek_relative 5 ;;    # right arrow → seek +5s
         "[D" | "OD" | "["*D | "O"*D) seek_relative -5 ;;   # left arrow → seek -5s
-        "[A" | "OA" | "["*A | "O"*A) adjust_volume 5 ;;    # up arrow → volume +5
-        "[B" | "OB" | "["*B | "O"*B) adjust_volume -5 ;;   # down arrow → volume -5
+        # Up/down USED to be volume ±5 — the direction mpv itself spends on seeking, and a
+        # second spelling of 9/0 either way. They are the chapter cursor now and nothing else;
+        # volume is 9/0's alone, in every view (PLAN §12 handed this to P6).
+        "[A" | "OA" | "["*A | "O"*A) move_chapter -1 ;;    # up arrow → previous chapter
+        "[B" | "OB" | "["*B | "O"*B) move_chapter 1 ;;     # down arrow → next chapter
         l | L) cycle_ui_lang ;;
         t | T) cycle_theme ;;   # cycle palette family live
         # `i` here does NOT change the subject: it fetches what the list's `i` fetches and
