@@ -18,7 +18,7 @@
 | P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | **已落**（2026-08-29；`shell/uting` + `contract.sh` 的 tmux 面上一条 `c` 能力门见证，257 项全绿；五次 drive 实测记在 §13） |
 | P3 | `--quality TIER` 贯穿 `ut-play` → `<engine>-resolve` | **已落**（2026-08-29；`ut-play` + 两个 resolve 半边 + `config`；`contract.sh` 256 项 + `playback.sh` 44 项全绿；档位效果与 `-S` 压过 `--quality` 均实测） |
 | P4 | `uting` 的质量档键位（`f`）与写回 | **已落**（2026-08-29；`shell/uting` + `config` 的 `UT_QUALITY_CYCLE`；`contract.sh` 263 项全绿，其中三条新检查在 tmux pane 上：`quality=` 在 auto 上不印、`f` 追加写回 `UT_PLAY_QUALITY=medium`、状态行跟上；四个 cycle 键的「不认识的成员退 1」由一条加固过的循环统一陈述） |
-| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | **在建**，**P6 的前置**。前置 F04 **已落**（2026-08-29；`JQ_TEXT_DEFS` 一份定义，两个 row builder 与 `apply_player_record`（含 `queue.next.title`）共用；实测见 §13 末）。**A 步已落**（`CARD_SUBJECT` + `card_subject_head` / `card_meta_row` 抽出 + `card_item_body`，屏幕零变化，旧新双树逐帧对照）。**B 步的门已落**（`i` 键 + `ENGINE_INFO_OK` 探测 + `apply_item_info` + 单槽缓存 + `nav_tick` 按 subject 早返回 + Tab 进门即复位 subject；`contract.sh` 268 项全绿，其中三条新检查在 tmux 面上，并把面里的 `YT_LANG` 钉成 en 才能断言 chrome 字串）。**前方队列块的契约前置已落**（§5.4 的 `upcoming`，2026-08-29；`ut-play` 的 `queue_snapshot` + `usage()`，`playback.sh` 46 项全绿 —— 动工前实读源码，发现 §11 修订一「数据已在 `queue` 键里」是错的）。**余下：在播分支的前方队列块渲染、`selected` 格式行、卡内 `i` 对在播曲目叠 info、F05 提示格按视图态把门、文档重同步** |
+| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | **在建**，**P6 的前置**。前置 F04 **已落**（2026-08-29；`JQ_TEXT_DEFS` 一份定义，两个 row builder 与 `apply_player_record`（含 `queue.next.title`）共用；实测见 §13 末）。**A 步已落**（`CARD_SUBJECT` + `card_subject_head` / `card_meta_row` 抽出 + `card_item_body`，屏幕零变化，旧新双树逐帧对照）。**B 步的门已落**（`i` 键 + `ENGINE_INFO_OK` 探测 + `apply_item_info` + 单槽缓存 + `nav_tick` 按 subject 早返回 + Tab 进门即复位 subject；`contract.sh` 268 项全绿，其中三条新检查在 tmux 面上，并把面里的 `YT_LANG` 钉成 en 才能断言 chrome 字串）。**前方队列块的契约前置已落**（§5.4 的 `upcoming`，2026-08-29；`ut-play` 的 `queue_snapshot` + `usage()`，`playback.sh` 46 项全绿 —— 动工前实读源码，发现 §11 修订一「数据已在 `queue` 键里」是错的）。**在播分支的两处已落**（2026-08-29；`card_queue_block` 前方队列块 + meta 行的 `selected` 字段；`contract.sh` 268 项 + `playback.sh` 46 项全绿，五次 drive 实测记在 §13 末）。**余下：卡内 `i` 对在播曲目叠 info、F05 提示格按视图态把门、文档重同步** |
 | P6 | 章节 → 条目视图里的 seek 目标 | 未开工，排最后 |
 | P7 | Enter 语义不变 | **无需改动**，记录在案以免日后当成疏漏 |
 | P8 | 时长不一致 → 在 parts 视图表头说清 | 已落（随 P2，2026-08-29） |
@@ -512,7 +512,8 @@ B  i 键接入：列表/分P视图里对选中行开条目视图（取数 + spin
    nav_tick 那条 `TUI_VIEW_MODE == "card"` 早返回改成「subject 在播才早返回」，
    否则从条目视图 Tab 回列表那一刻横幅的读数是陈的
 C  无可删的旧路径 —— Tab、S_NOTHING、既有卡全部原样，C 步为空（照实记）
-D  AS-BUILT-tui.md §11：新增 i 与条目视图一段；mini player 那段原样不动（它否的仍被否着）
+D  AS-BUILT-tui.md §11：新增 i 与条目视图一段；**在播分支新增前方队列块与 selected 字段两处**；
+   mini player 那段原样不动（它否的仍被否着）
 E  headed + headless 全扫
 ```
 
@@ -727,6 +728,26 @@ bili 查询 —— 那是拿站方排序做回归，正是本节末尾自己列�
 都会在一台主机上绿、换一台就红。`i` 的三条检查必须点名两个字串（条目卡片的表头，以及列表放不下的
 那个字段的标签），所以 `TUI_CMD` 里加了 `YT_LANG=en` —— 把语言从**意外**变成**输入**。
 本节没有别的检查读 chrome 字串，所以别的什么都没变。
+
+### 前方队列块与 `selected` 字段的实测（2026-08-29，P5 的在播分支）
+
+**为什么记在这里而不是进套件**：这两处都是**画面**，而画面不进套件（本节末尾自己列的反例，
+CLAUDE.md 的测试规矩同款）。信封那一层已经有检查——`upcoming` 的形状与封顶在 `playback.sh`
+（§5.4），`selected` 进 player record 在同一份文件里——所以这里剩下的只有「它长成什么样」，
+由 driver 实测并记下。每次都是 `-k 'Enter Down + Down + Tab'`（真播一条、入队两条、进卡）：
+
+| 驱动 | 看到的 |
+|---|---|
+| `YT_LANG=en -x 100 -y 30 -q 'chopin nocturne' -w '● Playing'` | meta 行 `00:00 / 01:54:27 (0%) · audio · 18 - 640x360 (360p) · ● Playing`——**问的是 audio、拿到的是 360p 渐进流**，正是 §1.1 那条「行在说一件播不出来的事」的另一面；块头 `1/3 · up next` + 两行标题与右对齐时长 |
+| 同上，`-k` 里连按七次 `+` | `1/8 · up next` + **恰好 5 行**——播放器那侧的封顶（`QUEUE_UPCOMING_MAX`）在屏上成立 |
+| `-x 62 -y 14` | 13 行的帧落进 14 行的面，留一行余量；`selected` 被 `card_meta_row` 从右边丢掉（62 列不够），队列块两行还在——**降级顺序对：先丢格式，后丢队列** |
+| `-x 62 -y 12` | 预算归零，块退回旧的一行式 `1/3 · next: Chopin Nocturnes`——**短面丢的是块，从来不是位置** |
+| `-x 100 -y 30 -q '周杰伦'`（zh chrome） | `1/3 · 接下来` + 两行 CJK 标题，时长列对齐（CHA 放列，不是算 padding——宽度层按设计多算，算出来的 padding 会歪） |
+
+**顺带看见、不归本次改动的一处**：`-x 40 -y 10` 上卡片会溢出面顶。在播分支从来没有给自己做过
+预算（`card_item_body` 有，这一支没有），而队列块在那个尺寸下只占它的表头一行——与改动前的
+`next:` 那一行**一模一样**，所以这不是本次引入的。要修是「在播分支按行预算丢进度条/提示块」，
+自成一件事。
 
 ### 反例（不做的检查，免得再被提案）
 

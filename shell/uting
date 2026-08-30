@@ -1039,6 +1039,7 @@ set_ui_lang() {
         S_INFO_KEY="详情"; S_INFO_ACT="详情"
         S_CHAPTERS="章"; S_VIEWS="次播放"
         S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_NEXT="下一首"; S_Q_ACT="队列"
+        S_Q_UPCOMING="接下来"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
         S_PREF_ACT="配置"
         S_PREF_PINNED="由环境变量固定，没有写入配置文件"
@@ -1074,6 +1075,7 @@ set_ui_lang() {
         S_INFO_KEY="info"; S_INFO_ACT="Info"
         S_CHAPTERS="chapters"; S_VIEWS="views"
         S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_NEXT="next"; S_Q_ACT="Queue"
+        S_Q_UPCOMING="up next"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
         S_PREF_ACT="Config"
         S_PREF_PINNED="is fixed by the environment — not written to your config"
@@ -1217,6 +1219,17 @@ CURRENT_PLAY_MPV_TITLE=""
 CURRENT_QUEUE_POS=0
 CURRENT_QUEUE_LEN=0
 CURRENT_QUEUE_NEXT=""
+# The tail of the queue, as two parallel arrays (bash 3.2 has no array of records, and the
+# alternative — re-running jq over a cached envelope at render time — would be a fork per
+# frame on the once-a-second redraw path). Durations are formatted ONCE, here, for the same
+# reason: the renderer below does no forks. The player caps the list it projects, so these
+# are never longer than a card can hold (ut-play's QUEUE_UPCOMING_MAX).
+Q_UP_TITLE=()
+Q_UP_DUR=()
+# What the ENGINE actually picked, as opposed to CURRENT_PLAY_MODE, which is what we ASKED
+# for. Verbatim from the record: it is a yt-dlp format spelling, and a TUI that parsed it
+# into pieces would be learning an engine's grammar one level too far up.
+CURRENT_PLAY_SELECTED=""
 # Third state, between "launched" and "playing": the -d envelope comes back as soon as the player
 # has forked, but the detached child still has to ask the engine to resolve the stream and let
 # mpv fill its cache, and that window is seconds long on a cold URL. (The extraction moved into
@@ -2093,18 +2106,43 @@ refresh_player_record() {
 # LEFT ALONE rather than blanked: an envelope that carries only `queue` must not erase the
 # title.
 apply_player_record() {
-    local rec=$1 t d q
-    IFS="$US" read -r t d < <(printf '%s' "$rec" |
-        jq -r "$JQ_TEXT_DEFS"'[(.title // "" | clean), (.duration // "" | tostring)]
+    local rec=$1 t d s q ut ud
+    IFS="$US" read -r t d s < <(printf '%s' "$rec" |
+        jq -r "$JQ_TEXT_DEFS"'[(.title // "" | clean), (.duration // "" | tostring),
+                               (.selected // "" | oneline)]
                               | join("\u001f")' 2>/dev/null) || return 0
     [[ -n "$t" ]] && CURRENT_PLAY_TITLE="$t"
     [[ -n "$d" && "$d" != "null" ]] && CURRENT_PLAY_DURATION=$(fmt_sec "$d")
+    # `selected` is null in the record until the resolve backfills it, and the tripwire that
+    # brings us here fires on mpv's media-title — which mpv has only once that resolve is
+    # done. So an empty value here is a queue verb's envelope (which carries no record fields
+    # at all), not a track whose format is still being decided: left alone, like the title.
+    [[ -n "$s" ]] && CURRENT_PLAY_SELECTED="$s"
     q=$(printf '%s' "$rec" | jq -c '.queue // empty' 2>/dev/null) || q=""
     if [[ -n "$q" ]]; then
         IFS="$US" read -r CURRENT_QUEUE_POS CURRENT_QUEUE_LEN CURRENT_QUEUE_NEXT < <(
             printf '%s' "$q" | jq -r "$JQ_TEXT_DEFS"'[(.pos // 0 | tostring), (.len // 0 | tostring),
                                        (.next.title // .next.url // "" | clean)] | join("\u001f")' 2>/dev/null
         ) || true
+        # The tail, rebuilt WHOLE rather than field by field: unlike the scalars above there
+        # is no "absent" case to preserve — an envelope that carries `queue` carries its
+        # `upcoming`, so anything left from the previous queue is stale by construction (a
+        # track ended, `+` appended, `>` skipped). The title falls back to the url the way a
+        # stored row does: an item queued by an agent that had only a handle still has to be
+        # readable in a list.
+        Q_UP_TITLE=()
+        Q_UP_DUR=()
+        while IFS="$US" read -r ut ud; do
+            [[ -n "$ut" ]] || continue
+            Q_UP_TITLE+=("$ut")
+            if [[ -n "$ud" && "$ud" != "null" ]]; then
+                Q_UP_DUR+=("$(fmt_sec "$ud")")
+            else
+                Q_UP_DUR+=("")
+            fi
+        done < <(printf '%s' "$q" | jq -r "$JQ_TEXT_DEFS"'.upcoming // [] | .[]
+                    | [(.title // .url // "" | clean), (.duration // "" | tostring)]
+                    | join("\u001f")' 2>/dev/null)
     fi
     return 0
 }
@@ -2214,6 +2252,9 @@ clear_play_state() {
     CURRENT_QUEUE_POS=0
     CURRENT_QUEUE_LEN=0
     CURRENT_QUEUE_NEXT=""
+    Q_UP_TITLE=()
+    Q_UP_DUR=()
+    CURRENT_PLAY_SELECTED=""
     CURRENT_PLAY_MPV_TITLE=""
     CURRENT_PLAY_ID=""
     CURRENT_PLAY_PID=""
@@ -3146,6 +3187,56 @@ card_meta_row() {
     return 0
 }
 
+# The forward queue, and the only place in this suite where a queue is READ: `+` and `>` write
+# one, `--status` answers with one, and until `upcoming` landed the card could show a single
+# title with no length. A player consuming a queue is the one thing on this screen that moves
+# without a keypress, so what is coming is the fact the card is watched for.
+#
+# It is a BLOCK rather than a field in the meta row above for the reason that row states about
+# itself: it degrades by dropping fields from the right, and the title of the next track is
+# exactly what would go first. The header row keeps the n/N count, and when there is no room
+# for a single title row it falls back to the one-line `next:` form the card had before — a
+# short pane loses the block, never the position.
+#
+# Budgeted like the item body's description, and for the same reason: this card renders in
+# place and ends on \033[J, so a block that overran the pane would scroll the frame off its own
+# top. `budget` is rows, counted by the caller, which is the only place that knows how tall the
+# spine came out and whether there is a progress bar.
+#
+# The duration column is placed with CHA (\033[<n>G) and the row is erased BEFORE it is drawn,
+# both for the reasons the list's rows state at length: our width rule over-counts by design,
+# so computed padding lands the column raggedly, and a jump leaves the cells it skipped
+# holding the previous frame.
+card_queue_block() {
+    local cols=$1 budget=$2
+    local head n i rail rail_w row_w
+    n=${#Q_UP_TITLE[@]}
+    ((budget < 0)) && budget=0
+    ((n > budget)) && n=$budget
+    head="$((CURRENT_QUEUE_POS + 1))/$CURRENT_QUEUE_LEN"
+    if ((n > 0)); then
+        head="$head $GL_SEP $S_Q_UPCOMING"
+    elif [[ -n "$CURRENT_QUEUE_NEXT" ]]; then
+        head="$head $GL_SEP $S_Q_NEXT: $CURRENT_QUEUE_NEXT"
+    fi
+    truncate_disp "$head" "$CARD_TEXT_W"
+    printf '    %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+    for ((i = 0; i < n; i++)); do
+        rail="${Q_UP_DUR[$i]}"
+        disp_w "$rail"
+        rail_w=$DISP_W
+        # 6 = this block's own indent (one step deeper than the body, so the rows read as
+        # belonging to the header above them); 2 more keep the longest title off the rail.
+        row_w=$((cols - 6 - 2 - rail_w))
+        ((row_w < 12)) && row_w=12
+        truncate_disp "${Q_UP_TITLE[$i]}" "$row_w"
+        printf '\033[K      %s%s' "$C_DIM" "$TRUNC_TEXT"
+        ((rail_w > 0)) && printf '\033[%dG%s' $((cols - rail_w + 1)) "$rail"
+        printf '%s\n' "$C_RESET"
+    done
+    return 0
+}
+
 # The ITEM subject's body — same spine, same meta row, then the rows the one --info fetch paid
 # for: upload date, likes, chapter count, the description. Last comes what Enter WOULD play
 # (mode, and the quality tier when it is not auto) — the only fact on this card about the
@@ -3158,6 +3249,10 @@ card_meta_row() {
 # capped at 6 because a card is a card and not a reader. Pre-cut to budget x width cells, then
 # measured through wrap_print itself and shaved half a line at a time; a description that
 # still will not fit is dropped whole rather than drawn over the edge.
+# A format selection is free text from the engine, so the card gives it a fixed ceiling
+# rather than a share of the row: 24 cells is a full audio selection ("251 - audio only
+# (medium)") and the identifying head of a video one.
+CARD_SELECTED_MAX=24
 CARD_DESC_MAX=6
 card_item_body() {
     local cols=$1 div=$2
@@ -3312,7 +3407,6 @@ display_now_playing_card() {
         # they describe A SUBJECT, not the playing track, and the item subject renders through
         # the same two calls. CARD_TEXT_W is the body width card_subject_head measured.
         card_subject_head "$cols" "$div" "$CURRENT_PLAY_TITLE" "$CURRENT_PLAY_CHANNEL"
-        local text_w=$CARD_TEXT_W
         # One meta row, fields joined by the suite's separator: "3:21 / 9:27 (37%) · audio ·
         # ● Playing" (live: elapsed · ● LIVE · …, no percent). The labelled version needed a
         # one-line/two-line branch because 4 labels and their gaps cost ~30 cells; without
@@ -3325,18 +3419,50 @@ display_now_playing_card() {
         else
             seg_time="$cur_time / $total_time$pct_str"
         fi
-        card_meta_row "$cols" "$p_status" "$p_color" "$seg_time" "$CURRENT_PLAY_MODE"
-        # The queue, on its own row and ONLY when there is more than one track: every
-        # detached player has a queue now (a lone handle is a queue of one), so a row that
-        # printed "1/1" would be chrome that never says anything. It is a row of its own
-        # rather than a field in the meta row above because that row already degrades in
-        # three steps by dropping fields, and the thing a queue watcher wants to read is the
-        # title of what is coming — which is exactly the field that would be dropped first.
+        # `mode` is what we ASKED for and is known from the keypress; `selected` is what the
+        # engine PICKED and arrives with the record, seconds later — two facts, so two fields,
+        # and the second is last because a row that must shed a field should shed the one that
+        # was not there a moment ago anyway. Verbatim: the string is yt-dlp's own spelling of a
+        # format, and a TUI that split it into pieces would be learning an engine's grammar one
+        # level too far up. Capped, though — a video selection names two formats ("137 -
+        # 1920x1080 (1080p)+251 - audio only (medium)") and at 80 columns the whole thing is
+        # the field card_meta_row drops first, so the card would show a format only on a wide
+        # terminal. Cut, it always says what is playing; dropped, it says nothing.
+        local sel_field=""
+        if [[ -n "$CURRENT_PLAY_SELECTED" ]]; then
+            truncate_disp "$CURRENT_PLAY_SELECTED" "$CARD_SELECTED_MAX"
+            sel_field="$TRUNC_TEXT"
+        fi
+        card_meta_row "$cols" "$p_status" "$p_color" "$seg_time" "$CURRENT_PLAY_MODE" "$sel_field"
+        # The hints are built and MEASURED here, above the block that has to fit around them:
+        # the queue block's budget is counted in rows, and the hint block is the one thing
+        # below it whose height is not known without measuring (print_hints reflows).
+        HINT_SEP=" $GL_SEP "
+        # Six keys on ONE line at 80 cols: no brackets, joined by GL_SEP. The bracket pair
+        # was doing the job the bold/dim weight split already does, at 2 cells per key, and
+        # the labels are one word each — 110 cells of hints became 63, so the block stops
+        # being two lines (and stops stealing a row from the body at short heights).
+        local card_hints=(
+            "Tab	$S_BACK_LIST" "Space	$S_PAUSE_RESUME" "$GL_AH	$S_SEEK"
+            "9/0	$S_VOL_ADJUST" "s	$S_STOP_PLAY" "q	$S_QUIT"
+        )
+        # Same rule as the list view's queue keys: offered only when there is a queue to skip
+        # within, so a measured line never spends a cell on a key that would answer "nothing
+        # queued after this track".
+        ((CURRENT_QUEUE_LEN > 1)) && card_hints+=(">	$S_Q_SKIP")
+        HINT_MEASURE=1
+        print_hints "$cols" "  " "  " "${card_hints[@]}"
+        HINT_MEASURE=0
+        # The queue block, ONLY when there is more than one track: every detached player has a
+        # queue now (a lone handle is a queue of one), so a block that headed itself "1/1"
+        # would be chrome that never says anything. `used` is the frame without it — the
+        # header row and its blank, the spine, the meta row, the block's own header row and
+        # the hints, plus the bar and its spacer when there is one. The -1 keeps the last hint
+        # row off the pane's final line, the margin card_item_body keeps for the same reason.
         if ((CURRENT_QUEUE_LEN > 1)); then
-            local q_line="$((CURRENT_QUEUE_POS + 1))/$CURRENT_QUEUE_LEN"
-            [[ -n "$CURRENT_QUEUE_NEXT" ]] && q_line="$q_line $GL_SEP $S_Q_NEXT: $CURRENT_QUEUE_NEXT"
-            truncate_disp "$q_line" "$text_w"
-            printf '    %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+            local q_used=$((2 + CARD_HEAD_LINES + 1 + 1 + HINT_LINES))
+            [[ -n "$bar_str" ]] && q_used=$((q_used + 2))
+            card_queue_block "$cols" $((TERM_LINES - q_used - 1))
         fi
         if [[ -n "$bar_str" ]]; then
             # \033[K on the spacer row too: the card grows by two rows the moment the
@@ -3346,20 +3472,8 @@ display_now_playing_card() {
         fi
         # No rail between the bar and the hints: the readout sits directly above the bar it
         # labels, and the hints flow straight after it, bare-indented like the empty state.
-        # Nothing closes the card below them — see the rail note above.
-        # Six keys on ONE line at 80 cols: no brackets, joined by GL_SEP. The bracket pair
-        # was doing the job the bold/dim weight split already does, at 2 cells per key, and
-        # the labels are one word each — 110 cells of hints became 63, so the block stops
-        # being two lines (and stops stealing a row from the body at short heights).
-        HINT_SEP=" $GL_SEP "
-        local card_hints=(
-            "Tab	$S_BACK_LIST" "Space	$S_PAUSE_RESUME" "$GL_AH	$S_SEEK"
-            "9/0	$S_VOL_ADJUST" "s	$S_STOP_PLAY" "q	$S_QUIT"
-        )
-        # Same rule as the list view's queue keys: offered only when there is a queue to skip
-        # within, so a measured line never spends a cell on a key that would answer "nothing
-        # queued after this track".
-        ((CURRENT_QUEUE_LEN > 1)) && card_hints+=(">	$S_Q_SKIP")
+        # Nothing closes the card below them — see the rail note above. The block itself was
+        # built and measured above, where the queue block needed its height.
         print_hints "$cols" "  " "  " "${card_hints[@]}"
         HINT_SEP=""
     fi
