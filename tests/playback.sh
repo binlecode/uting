@@ -281,6 +281,12 @@ report "bili detach envelope" 0 \
     "$(printf '%s' "$o3" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
 id3=$(printf '%s' "$o3" | jq -r '.id // empty')
 sock3=$(printf '%s' "$o3" | jq -r '.sock // empty')
+# A record is a CALL: {engine, url} is the argv that produced it, so a caller reading --status
+# can re-issue what is playing instead of guessing which engine owns the handle. This player is
+# the discriminating input — the only one in the file launched under --engine, against a suite
+# default of yt — so a field filled from the default, or missing, answers `yt` here.
+report "the record names the engine that resolved it" "bili" \
+    "$(shell/ut-play --status -j | jq -r --arg i "$id3" '.players[] | select(.id == $i) | .engine // "null"')"
 if wait_for_sock "$sock3"; then
     # `position` is read live off the socket, not from the record, and time-to-first-byte is
     # network-bound — so it is the same bounded poll as player 1's (wait_live).

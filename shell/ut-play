@@ -164,7 +164,7 @@ MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term
 
 usage() {
     # UNQUOTED heredoc: the two `default:` lines below report the EFFECTIVE default engine,
-    # which comes from config (D16) and is not this file's to restate. Everything else in
+    # which comes from config (ARCHITECTURE.md §3.6) and is not this file's to restate. Everything else in
     # this block is literal, so a `$` or a backtick meant as prose must be BACKSLASHED —
     # there are three of them today (the XDG path and two code spans).
     cat <<EOF
@@ -241,12 +241,14 @@ Output contracts (full schemas: AS-BUILT-contract.md §3):
             reason: forbidden|unavailable|format_unavailable|network|stopped_by_user|
                     unknown|null(ok)   (network also covers HTTP 429 rate limiting)
   -d -j     {status:"started", id, pid, url, mode, started_at, title, sock, log}
-  --status  {status:"players", players:[{id,pid,url,mode,volume,paused,position,
-            duration,title,selected,selected_resolution,started_at}],
-            failed:[{id,url,mode,started_at,ended_at,exit_code,reason}]}
+  --status  {status:"players", players:[{id,pid,url,engine,mode,volume,paused,position,
+            duration,title,selected,selected_resolution,started_at,queue}],
+            failed:[{id,url,engine,mode,started_at,ended_at,exit_code,reason}]}
             volume/paused/position/duration are read live off the player (null = could
             not ask); selected is the format the ENGINE picked, backfilled after the
-            resolve (null until then); failed lists players that died on their own
+            resolve (null until then); engine and url together are the CALL that is
+            playing (\`ut-play --engine E -- URL\`), and both follow the queue from track
+            to track; failed lists players that died on their own
   --stop    {status:"stopped", id, stopped} | {status:"stopped", scope:"all", stopped}
   --set-vol {status:"ok", id, volume} | {status:"not_playing"} | {status:"ambiguous", …}
             | {status:"error", reason:"ipc_failed"}
@@ -538,13 +540,14 @@ patch_player_meta() {
     # to track, and a record still naming the first one would make --status describe
     # something that stopped playing ten minutes ago.
     if jq --arg t "$RESOLVED_TITLE" --arg f "$RESOLVED_FORMAT" --arg u "$RESOLVED_HANDLE" --arg p "$$" \
-        --arg sel "$RESOLVED_SELECTED" --arg selres "$RESOLVED_SELECTED_RES" \
+        --arg sel "$RESOLVED_SELECTED" --arg selres "$RESOLVED_SELECTED_RES" --arg eng "$ENGINE" \
         'if ((.pid | tostring) == $p)
          then .title = (if $t == "" then null else $t end)
               | .format = (if $f == "" then null else $f end)
               | .selected = (if $sel == "" then null else $sel end)
               | .selected_resolution = (if $selres == "" then null else $selres end)
               | .url = (if $u == "" then .url else $u end)
+              | .engine = (if $eng == "" then .engine else $eng end)
          else empty end' \
         "$sf" >"$tmp" 2>/dev/null && [[ -s "$tmp" ]]; then
         mv -f "$tmp" "$sf"
@@ -1563,8 +1566,8 @@ queue_note_failure() {
     reason=$(classify_playback_error "$(tail -c 4000 "${YT_DETACHED_LOG:-/dev/null}" 2>/dev/null)" "$rc")
     ended_at=$(date -u +%FT%TZ 2>/dev/null || echo unknown)
     rec="$dead/$id-q$pos.json"
-    jq -nc --arg id "$id-q$pos" --arg url "$url" --arg mode "$PLAYBACK_MODE"         --arg started_at "$ended_at" --arg ended_at "$ended_at"         --argjson exit_code "$rc" --arg reason "$reason"         '{id: $id, url: $url, mode: $mode, started_at: $started_at, ended_at: $ended_at,
-          exit_code: $exit_code, reason: $reason}' >"$rec.tmp.$$" 2>/dev/null &&
+    jq -nc --arg id "$id-q$pos" --arg url "$url" --arg engine "$ENGINE" --arg mode "$PLAYBACK_MODE"         --arg started_at "$ended_at" --arg ended_at "$ended_at"         --argjson exit_code "$rc" --arg reason "$reason"         '{id: $id, url: $url, engine: $engine, mode: $mode, started_at: $started_at,
+          ended_at: $ended_at, exit_code: $exit_code, reason: $reason}' >"$rec.tmp.$$" 2>/dev/null &&
         mv -f "$rec.tmp.$$" "$rec" 2>/dev/null ||
         rm -f "$rec.tmp.$$" 2>/dev/null || true
     prune_dead_players
@@ -1655,12 +1658,13 @@ detach_play() {
         --arg id "$id" \
         --argjson pid "$pid" \
         --arg url "$url" \
+        --arg engine "$ENGINE" \
         --arg mode "$PLAYBACK_MODE" \
         --arg started_at "$started_at" \
         --arg log "$log" \
         --arg sock "$sock" \
         --argjson volume "$volume_json" \
-        '{id: $id, pid: $pid, url: $url, mode: $mode, format: null, selected: null, selected_resolution: null, started_at: $started_at, log: $log, sock: $sock, title: null, volume: $volume}' >"$sf.tmp.$pid"; then
+        '{id: $id, pid: $pid, url: $url, engine: $engine, mode: $mode, format: null, selected: null, selected_resolution: null, started_at: $started_at, log: $log, sock: $sock, title: null, volume: $volume}' >"$sf.tmp.$pid"; then
         rm -f "$sf.tmp.$pid" "$PLAYERS_DIR/$id" 2>/dev/null || true
         rm_player_files "$id"
         stop_group "$pid"
@@ -1794,9 +1798,11 @@ record_player_death() {
     dead="$PLAYERS_DIR/dead"
     [[ -d "$dead" ]] || mkdir -m 700 "$dead" 2>/dev/null || return 0
     # Only the fields that answer "which launch was this, and what happened to it" — the
-    # socket, log and format paths described a process that no longer exists.
+    # socket, log and format paths described a process that no longer exists. `engine` is part
+    # of WHICH LAUNCH: with the url it is the call that died, so a caller reading failed[] can
+    # re-issue it instead of guessing which engine owned the handle.
     jq -c --argjson exit_code "$rc" --arg reason "$reason" --arg ended_at "$ended_at" \
-        '{id, url, mode, started_at, ended_at: $ended_at, exit_code: $exit_code, reason: $reason}' \
+        '{id, url, engine, mode, started_at, ended_at: $ended_at, exit_code: $exit_code, reason: $reason}' \
         "$f" >"$dead/$id.json.tmp" 2>/dev/null &&
         mv -f "$dead/$id.json.tmp" "$dead/$id.json" 2>/dev/null ||
         rm -f "$dead/$id.json.tmp" 2>/dev/null || true
@@ -1875,7 +1881,7 @@ do_status() {
                     --argjson position "${LP_POSITION:-null}" \
                     --argjson duration "${LP_DURATION:-null}" \
                     --argjson queue "$QUEUE_JSON" \
-                    '{id, pid, url, mode, volume: ($live // .volume),
+                    '{id, pid, url, engine, mode, volume: ($live // .volume),
                       paused: $paused, position: $position, duration: $duration,
                       title, selected, selected_resolution, started_at, queue: $queue}' \
                     "${LIVE_PLAYER_FILES[$i]}")")
@@ -2570,7 +2576,7 @@ if ((DETACH)) && ((! IS_HANDLE)); then
     die "--detach requires a video id or URL"
 fi
 
-# A bare invocation (no handle, no lifecycle action) is a usage error (D3). Report it before
+# A bare invocation (no handle, no lifecycle action) is a usage error (ARCHITECTURE.md §3.2). Report it before
 # the heavier mpv dependency check so the message is about the missing input, not a missing
 # player. Searching lives in yt-search; interactive browsing in uting.
 if ((! IS_HANDLE)) && [[ "$QUERY" != *[![:space:]]* ]] && [[ -z "$ACTION" ]]; then
@@ -2664,7 +2670,7 @@ fi
 
 # =-----------------------------------------------------------------------------
 # Not a handle: nothing left to route. Search moved out to the engine (yt-search) when the
-# suite split into player + engines, and the core's old D2 contract (bare `yt "query"` ->
+# suite split into player + engines, and the core's old bare-query contract (`yt "query"` ->
 # list) went with it. Anything reaching here is a caller holding the wrong tool.
 # docs/AS-BUILT-engine.md §7.
 # =-----------------------------------------------------------------------------
