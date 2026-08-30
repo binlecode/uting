@@ -292,7 +292,9 @@ soft ref：`shell/ut-play` 的 `detach_play()` / `stop_group()` / `group_alive()
 
 `--volume N` 只设 mpv 的*起始*音量；五个运行时动词改的是一个**正在跑**的 detached 播放器，
 不需要 kill+重启。它们跨**多个并发**播放器工作，每个独立寻址，并共享同一套形状：解析目标
-（或退 4）→ 经该播放器的 socket 发一条命令 → 再一次往返，**读回**信封要报的那个属性
+（或退 4）→ 经该播放器的 socket 发一条命令 → 再一次往返，**读回**信封要报的那个属性 ——
+绝不复述被要求的值，因为 mpv 会把 seek 钳在文件两端，而那两个数字恰恰在调用方最需要
+真相时才不同
 （`ipc_command` → `do_set_volume` / `do_playback_verb`；信封在 AS-BUILT-contract.md §3，
 哪些读刻意留在 socket 上、以及决定它的那个数字在 ARCHITECTURE.md §26）。
 
