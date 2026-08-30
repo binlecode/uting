@@ -188,12 +188,21 @@ addition bumps `z`; `1.0.0` is a promise this reference implementation does not 
 
 ## Keys
 
-`↑/↓` select · `←/→` page · `Enter` play · `Tab` focus card · `/` filter · `n` new search ·
+`↑/↓` (or `j`/`k`) select · `←/→` page · `Enter` play · `Tab` focus card · `/` filter ·
+`?` more / fewer keys · `n` new search ·
 `o` sort · `v` playback mode · `f` quality tier · `e` switch source · `a` add to playlist ·
 `b` open a playlist · `d` remove from the playlist on screen · `h` listening history ·
 `c` the focused row's parts · `i` info on the focused row · `+` add to the queue · `>` next track ·
 `Space` pause · `9/0` volume ·
 `[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
+
+**The hint block has two tiers and `?` is the door.** `core` — the shipped default — prints
+this view's own job (move, act on the row, get back out, quit, and `?` itself) and fits one
+line at 80 columns; `full` prints every key above. It hides HINTS, never keys: everything in
+`full` is still pressable under `core`. The tier is a preference like the other seven, written
+back to your own config as `UT_KEYS=core|full`, and `？` is bound with it — a zh input method's
+shift-/ is a full-width question mark. `j`/`k` are list-view only: with `/` open they are text
+you are typing.
 
 In the focus card, once `i` has fetched a track that has chapters, `↑/↓` move a chapter cursor
 and `Enter` seeks to the one selected — a chapter is an offset inside the track already open,
@@ -241,7 +250,7 @@ one runs, or it is not claimed. Each file's header says what it proves; run eith
 |---|---|
 | `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the idle lifecycle verbs (including the queue verbs, where a
 payload this process cannot use is a usage error and a well-formed one with nothing playing is
-"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. ~93s and 268 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 191 of those checks in ~16s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
+"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. ~100s and 278 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 193 of those checks in ~18s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
 | `tests/playback.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, and zero orphan mpv at the end. It also owns the **live read** — the `--status` fields off a real mpv socket, `paused:false` distinguished from `paused:null`, and a really-running player whose socket is really removed degrading to nulls with volume off the record — because the peer has no stand-in and never will. It drives a **queue** end to end for the same reason — a mock engine would skip the
 resolve between two tracks, which is the thing most likely to break: `--queue` launches,
 `--enqueue` appends (six concurrent writers, no lost update), `--next` moves the position and

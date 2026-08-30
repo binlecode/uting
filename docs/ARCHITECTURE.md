@@ -223,7 +223,7 @@ ROADMAP D10（不做 Go 版）的全部账**：收益只剩"删渲染负债"，�
 ### 3.6 配置 —— 两个根数据文件（接口：`KEY=value` 数据文件 + 四级链；§4）
 
 - **默认值声明一次**：根上的 `config`，**当数据读、绝不 source**；链是
-  标志 > 环境 > 用户配置 > 出厂。出厂那份没有命令会写；用户那份由 `uting` 写回七个偏好键。
+  标志 > 环境 > 用户配置 > 出厂。出厂那份没有命令会写；用户那份由 `uting` 写回八个偏好键。
   （§4；键表与写回：AS-BUILT-contract.md §5）
 
 ### 3.7 人机面 —— `uting`（接口：键位 + 自绘渲染，对下只调那些动词；§11 → AS-BUILT-tui.md）
@@ -775,15 +775,16 @@ reflow、共享时钟与三个播放态。
                   cycle_sort（`o`：轮换 SORT_FIELD 并**重取** —— 页与选中项在这里刻意重置，
                   因为重排之后旧下标底下是另一个视频）—— 另外三个 cycle 键各自跟着它们的
                   子系统列在别处：cycle_theme / cycle_ui_lang 在 i18n/theme，cycle_engine
-                  在 Engines。六个 cycle 键管七个偏好里的六个，第七个（UT_START_RESULTS）来自上面
-                  那两条边；置脏点全都在**成功路径之后**（tui §11）
+                  在 Engines。六个 cycle 键管八个偏好里的六个，另外两个来自别处：
+                  UT_START_RESULTS 来自上面那两条边，UT_KEYS 来自 cycle_keys（`?`）；
+                  置脏点全都在**成功路径之后**（tui §11）
      Prefs      : mark_pref（cycle 成功之后置脏位；被环境压住的键在这里被拒并说一次）,
                   flush_prefs（冲刷点是 nav_tick 与 cleanup_on_exit 两个现成的地方）,
                   write_prefs（就地改写用户配置：一遍扫描、一个临时文件、一次 mv；
                   注释与空白逐字节搬过去）, pref_value（键→变量的映射，同时**就是**
                   那张白名单）, pref_value_ok（round-trip 闸）, pref_listed
                   （3.2 没有关联数组，一个集合就是一个字符串）
-                  —— 七个键，且只写**用户那份**（contract §5「写回」、§3.6）
+                  —— 八个键，且只写**用户那份**（contract §5「写回」、§3.6）
      Chrome     : term_size（TERM_LINES/TERM_COLS —— 走这个 UI 本来就要求的那个 TTY 的真
                   ioctl，不信 $LINES/$COLUMNS；reflow 与分页的输入，tui §11）, layout_cols,
                   print_hints（HINT_MEASURE）, wrap_print/wrap_emit
@@ -817,6 +818,10 @@ reflow、共享时钟与三个播放态。
                   player_check_ready（core-idle → 清掉 Starting 态，20 秒上限）,
                   play_state_marks（playing/paused/starting → 字形+标签+颜色，两个视图共用）,
                   toggle_pause, seek_relative, adjust_volume, stop_current_playback,
+                  keys_full（提示块印哪一档的**状态函数**，不 fork —— 每个只属于 full
+                  的格子在它自己的位置上带一句 `keys_full &&`，于是 full 档的顺序与它一直
+                  以来的顺序逐字节相同）, cycle_keys（`?`：KEYS_TIER core↔full，走
+                  mark_pref 的第八个键），
                   move_chapter / seek_chapter（卡内 ↑/↓ 与 Enter —— 游标本地移动，
                   跳转走 ut-play --seek-to，不重新 resolve）,
                   check_player_alive, clear_play_state, elapsed_since_play,
@@ -893,7 +898,7 @@ reflow、共享时钟与三个播放态。
 
 ```
    $ uting "lofi hip hop" -n 40 [-f video] [-p 15] [--theme nord] [--engine bili]
-     → 自绘菜单，两个视图用 Tab/p 切换：
+     → 自绘菜单，两个视图用 Tab 切换：
        列表  ：浏览 / 翻页 / 实时过滤 / 新搜索；Enter 播放是 **detached、非阻塞**的 ——
                菜单保住它的终端，音乐在后续每一步操作之间继续放。
                轮换键改源 / 排序 / 模式 / 质量档 / 语言 / 主题（改的设置写回用户
@@ -901,7 +906,7 @@ reflow、共享时钟与三个播放态。
                收听历史（h）或聚焦行的多 P 列表（c，能力探测决定画不画）；
                聚焦行可以入队（+）、加进播放列表（a），或开成卡片的 item 主语（i）
        卡片  ：播放头 + 前方队列块；seek / 音量 / 跳下一首 / 对在播曲目叠 info
-       两者  ：Space 暂停 · s 停止 · q 退出（回收它的播放器）
+       两者  ：Space 暂停 · s 停止 · ? 键位提示换档（core↔full）· q 退出（回收它的播放器）
      完整键位面：AS-BUILT-contract.md §1.4（命令面与按键清单）、AS-BUILT-tui.md §11（行为）
 ```
 
