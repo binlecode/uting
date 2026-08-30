@@ -756,7 +756,10 @@ reflow、共享时钟与三个播放态。
                   **通过全局量**返回，因为命令替换会把它的错误信封吞进一个子 shell）
      Verbs      : do_ls, do_show, do_add, do_rm, do_del（幂等）, do_rename
 
-   交互式     : uting （fetch_json → build_all_rows → load_rows → 菜单循环：
+   交互式     : uting （fetch_json → apply_search_results（LIST_SOURCE=search、
+                  build_all_rows、清筛选、页与选中归 1、load_rows —— 一份**搜索**结果装进
+                  行状态的唯一入口，五条路都走它：启动、new_search、cycle_sort、
+                  more_results、fewer_results）→ 菜单循环：
                   display_menu · read_nav_input · move_selection · play_selected ·
                   new_search [read_query_input，Esc 取消] · filter_live → apply_filter）
                   启动提示：同一个 read_query_input，在第一次取数前以 echo 关闭的状态跑 ——
@@ -777,7 +780,10 @@ reflow、共享时钟与三个播放态。
                   子系统列在别处：cycle_theme / cycle_ui_lang 在 i18n/theme，cycle_engine
                   在 Engines。六个 cycle 键管八个偏好里的六个，另外两个来自别处：
                   UT_START_RESULTS 来自上面那两条边，UT_KEYS 来自 cycle_keys（`?`）；
-                  置脏点全都在**成功路径之后**（tui §11）
+                  置脏点全都在**成功路径之后**（tui §11）。四条 cycle 列表在**启动时**各过
+                  一次 validate_cycle：空列表与不认识的成员当场退 1 并点名用户写的那个键 ——
+                  否则一个打错的 cycle 要到第一次按键才炸，而 3.2 上一个空数组在 set -u 下
+                  展开就是中止。标量旋钮各是各的 `case`（AS-BUILT-verification.md §27）
      Prefs      : mark_pref（cycle 成功之后置脏位；被环境压住的键在这里被拒并说一次）,
                   flush_prefs（冲刷点是 nav_tick 与 cleanup_on_exit 两个现成的地方）,
                   write_prefs（就地改写用户配置：一遍扫描、一个临时文件、一次 mv；
@@ -868,10 +874,15 @@ reflow、共享时钟与三个播放态。
                   自己什么也不存（player §9.4、§9.6）
 ```
 
-**八个脚本之间的重复是刻意的，不是漂移。** `ut_read_config` 在**八个入口点**里各出现一次，
-八份逐字节相同（函数体 sha 一致，2026-08-28 实测）—— 配置层是一个根上的数据文件
-加一份复制过去的读取器，不是第九个文件（§3.6）；同理，`die`、`require_deps`、`fmt_dur`、
-`ensure_scratch` 与那些信封发射器在每个引擎里各出现一次。一个共享库会是第七个文件，
+**八个脚本之间的重复是刻意的，不是漂移，而这里就是它被数的地方。** `ut_read_config` 在
+**八个入口点**里各出现一次，八份逐字节相同（函数体 sha 一致，2026-08-30 复测）—— 配置层是
+一个根上的数据文件加一份复制过去的读取器，不是第九个文件（§3.6）；同理 `die` 在**八个**里
+各一份，`fmt_dur` 在**六个**里 —— 四个引擎，加上 `ut-playlist` 与 `ut-history` 两个存储：
+它们同样在整形 JSON，所以一个 bash 版本存在的唯一意义就是每行 fork 一次 jq；`require_deps`
+在**五个**里（两个存储与 `uting` 不跑 yt-dlp/curl），`ensure_scratch` 与那些信封发射器在四个
+引擎里各一份。**副本自己不数自己**：两个存储的 `fmt_dur` 注释指回这里，四个引擎的指回
+AS-BUILT-engine.md §7（一个引擎自己的时长规矩住在那儿）—— 因为一个写在副本里的序数，
+会在下一对引擎落地时**无声地**过期。一个共享库会是第九个文件，
 而每个引擎 —— 因而传递地，还有那个去找引擎的播放器 —— 都得知道它；
 而这次拆分的全部主张就是"**一个引擎是一对可以直接丢进来的自足文件**"。
 **不得**分歧的是**信封**，而钉住它的是 AS-BUILT-contract.md §3，
