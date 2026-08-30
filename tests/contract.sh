@@ -313,6 +313,22 @@ report "--seek non-numeric is 1"  1 "$(rc shell/ut-play --seek abc -j)"
 report "--seek-to negative is 1"  1 "$(rc shell/ut-play --seek-to -5 -j)"
 # --seek -15 is a VALUE, not an unknown flag: the parser must take $2 verbatim.
 report "--seek accepts -15"       4 "$(rc shell/ut-play --seek -15 -j)"
+# --start is the LAUNCH-time offset, and its whole gate is the value one. Whole seconds and
+# nothing else: mpv's own --start grammar (-60 counts from the end, 50% is a fraction) is
+# deliberately not published on this surface, so every spelling of it that a caller might
+# reach for has to come back 1 rather than start somewhere surprising. --start -60 is also
+# the mirror of the --seek case above — there a leading dash is a legal VALUE, here it is a
+# legal value that this flag refuses, and both go through $2 verbatim.
+report "--start negative is 1"    1 "$(rc shell/ut-play --start -60 -- URL)"
+report "--start hh:mm:ss is 1"    1 "$(rc shell/ut-play --start 10:00 -- URL)"
+report "--start non-numeric is 1" 1 "$(rc shell/ut-play --start abc -- URL)"
+report "--start fractional is 1"  1 "$(rc shell/ut-play --start 1.5 -- URL)"
+report "--start needs a value"    1 "$(rc shell/ut-play --start)"
+# …and it is refused BESIDE a lifecycle verb rather than silently ignored. Both verbs below
+# answer 4 when idle and this call has no player either, so a 1 can only have come from the
+# combination gate — the check cannot pass by accident on the idle path.
+report "--start with --status is 1" 1 "$(rc shell/ut-play --start 60 --status -j)"
+report "--start with --seek is 1"   1 "$(rc shell/ut-play --start 60 --seek +5 -j)"
 # --id now names the playback verbs too, so it has to be ACCEPTED by one of them; the arms
 # that reject it elsewhere are already covered by "ut-play selector alone" and
 # "ut-play -d + action" above, which exercise the same case statement.
@@ -1211,6 +1227,70 @@ done
 report "resolve envelopes agree" \
     "$(printf '%s' "$YT_R" | jq -Sc 'keys' 2>/dev/null)" \
     "$(printf '%s' "$BILI_R" | jq -Sc 'keys' 2>/dev/null)"
+
+# THE START OFFSET, over every discovered engine. Only a real resolve can observe it: an
+# engine's reading of a timestamp has no dry-run face. Stated as an invariant rather than
+# against yt because the two engines fill this key from OPPOSITE SIDES — yt-dlp publishes
+# .start_time for YouTube and nothing at all for Bilibili, so yt-resolve normalises what it
+# is handed and bili-resolve parses the query itself. A check driving one of them proves
+# nothing about the other, and engine #3 is covered the day it lands.
+#
+# The handle comes from the engine's OWN search rather than a table of ids, so the only
+# site-specific thing left is the separator — and even that is DERIVED, not tabled: a url
+# already carrying a query takes &, one that does not takes ?.
+#
+# The row is FILTERED, and the filter is the whole reason this block is not flaky. "lofi"
+# returns broadcasts: a 24/7 radio stream (live_status "is_live", no duration) and twelve-hour
+# recordings of one ("was_live", a fragmented manifest). Resolving either for a fixed format
+# runs for MINUTES — this file went from under two minutes to over nine the first time the
+# top row happened to be one, and the first cut of this block excluded only `is_live` and so
+# still picked a `was_live` twelve-hour row. So the filter demands live_status null — never
+# broadcast, in either tense — and then takes the SHORTEST such row, which needs no duration
+# threshold to argue about and is by construction the cheapest handle in the page to resolve
+# (measured 4s for yt, 3s for bili). The fixture itself is asserted, so a query that stops
+# returning one is a red with a name rather than four mysteries under it.
+for n in $ENGINES; do
+    SU=$(shell/"$n"-search -j -n 10 -- lofi 2>/dev/null \
+         | jq -r '[.results[] | select(.live_status == null and (.duration|type) == "number")]
+                  | sort_by(.duration)[0].url // empty')
+    report "$n-search offers a non-live row to resolve" "yes" \
+        "$([ -n "$SU" ] && echo yes || echo no)"
+    case "$SU" in
+    *\?*) SEP='&' ;;
+    *) SEP='?' ;;
+    esac
+    SR=$(shell/"$n"-resolve -j -- "${SU}${SEP}t=601" 2>/dev/null)
+    report "$n-resolve reads a t= offset" 0 "$(jqv '.start_seconds == 601' "$SR")"
+    # The url answers WHICH MEDIA, never where to start — ut-playlist --add stores exactly
+    # this string, so an offset riding along in it would make a saved track replay from
+    # 10:01 for ever. Not a property inherited from the extractor: bili's webpage_url keeps
+    # the whole query, because ?p=N lives in it, so for that engine this is a real strip.
+    report "$n-resolve keeps the offset out of url" "false" \
+        "$(printf '%s' "$SR" | jq -r '.url | test("[?&]t=")' 2>/dev/null)"
+    # …and it strips ONLY the offset. Both engines carry their id in the url — in the query
+    # for yt (v=…), in the path for bili — so an implementation that answers the check above
+    # by throwing the query away, or the whole url, fails here.
+    report "$n-resolve strips only the offset" "true" \
+        "$(printf '%s' "$SR" | jq -r '.id as $i | .url | contains($i)' 2>/dev/null)"
+    # THE DISCRIMINATING INPUT. ?t=0 says "start at the top", which is a different answer
+    # from "this handle carried no offset" — and every shortcut that folds the two together
+    # (jq's `// null` over a falsy 0, a bash `[[ -n ]]` over an empty string) prints null
+    # here. Both must print 0, and the null half is asserted on the no-offset envelopes the
+    # two engines already fetched, so this costs one resolve rather than two.
+    report "$n-resolve tells t=0 from no t" "0" \
+        "$(shell/"$n"-resolve -j -- "${SU}${SEP}t=0" 2>/dev/null | jq -r '.start_seconds')"
+done
+report "yt-resolve has no offset to report"   "null" "$(printf '%s' "$YT_R"   | jq -r '.start_seconds')"
+report "bili-resolve has no offset to report" "null" "$(printf '%s' "$BILI_R" | jq -r '.start_seconds')"
+
+# Bilibili's own fact, so it lives beside the engine that has it rather than inside the loop
+# above: one video number is many playable files here, and ?p=N is the only thing that says
+# which. Stripping the offset must not take the part with it — that would silently repoint a
+# stored record at part one.
+BILI_P=$(shell/bili-resolve -j -- "https://www.bilibili.com/video/$BILI_PARTS_ID?p=2&t=601" 2>/dev/null)
+report "bili keeps ?p= while dropping t=" "true" \
+    "$(printf '%s' "$BILI_P" | jq -r '.start_seconds == 601
+        and (.url | test("[?&]t=") | not) and (.url | test("[?&]p=2"))' 2>/dev/null)"
 
 # `selected` is the ANSWER to the request `format` states, and the whole reason both keys
 # exist is that they differ: `format` is the selection string this engine SENT ("ba/b"),

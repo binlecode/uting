@@ -319,6 +319,42 @@ else
     bad "the quality player's IPC socket never appeared"
 fi
 
+echo "── the start offset really moves the playhead ────────────────────"
+# The one claim in this feature that only a real mpv can settle: contract.sh proves the
+# engine READS a timestamp and the gate refuses a bad one, and neither says the number ever
+# reached a decoder. Read back off the same live socket everything else here uses.
+#
+# N is 600, not 42, and that is the whole design of this check. An implementation that drops
+# --start reports a single-digit position — two orders of magnitude away — so the window can
+# be generous without ever going green on the failure it exists to catch. At 42 the honest
+# window would be a couple of seconds wide (a cold, unwarmed decoder reports its first
+# position anywhere in that range), and a window that wide DOES admit "started from zero" on
+# a small N. Widening a tolerance until the check passes is how a check stops being able to
+# fail; moving N is how the same tolerance stops mattering.
+#
+# The lower bound is 595 rather than 600 because mpv lands on the keyframe at or before the
+# target — measured 599 for this stream. Asserting 600 exactly would be asserting the
+# keyframe interval of whatever U1 resolves to today.
+o5=$(shell/ut-play -d -j --volume 0 --start 600 -- "$U1" 2>/dev/null)
+report "start-offset detach envelope" 0 \
+    "$(printf '%s' "$o5" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
+id5=$(printf '%s' "$o5" | jq -r '.id // empty')
+sock5=$(printf '%s' "$o5" | jq -r '.sock // empty')
+if wait_for_sock "$sock5"; then
+    if pos=$(wait_live "$id5" position); then
+        if [ "$pos" -ge 595 ] && [ "$pos" -le 605 ]; then
+            ok "--start 600 opened at ${pos}s — mpv got the offset"
+        else
+            bad "--start 600 opened at ${pos}s, which is not where it was told to"
+        fi
+    else
+        bad "the start-offset player never reported a position — the claim is untested"
+    fi
+else
+    bad "the start-offset player's IPC socket never appeared"
+fi
+shell/ut-play --stop --id "$id5" -j >/dev/null 2>&1
+
 echo "── stop is targeted, then idempotent, and leaks nothing ───────────"
 report "--stop --id"       0 "$(shell/ut-play --stop --id "$id1" -j >/dev/null 2>&1; echo $?)"
 report "--stop --all"      0 "$(shell/ut-play --stop --all -j >/dev/null 2>&1; echo $?)"
