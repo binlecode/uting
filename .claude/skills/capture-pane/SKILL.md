@@ -37,7 +37,7 @@ visually, and put that width in the surrounding prose.
 `UT_CONFIG` is not optional here, and it points at a file of this capture's OWN. Two reasons,
 and the second is the one that bites: a frame taken against the developer's config is a
 picture of their theme and their chrome language rather than of the shipped defaults — and
-`uting` WRITES the six preference keys back to whatever `UT_CONFIG` names, so `t`, `l`, `v`,
+`uting` WRITES its preference keys back to whatever `UT_CONFIG` names (the live set is `PREF_KEYS` in `shell/uting` — grep it, don't trust a remembered count), so `t`, `l`, `v`,
 `o`, `e` and the count edges would edit that file as a side effect of photographing it.
 
 ```bash

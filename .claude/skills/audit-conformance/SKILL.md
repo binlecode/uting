@@ -2,6 +2,7 @@
 name: audit-conformance
 description: Periodic whole-suite audit of uting against the coding rules baked into this skill — surface layering (no YouTube logic in the TUI), DRY across the eight scripts, bash 3.2 portability, dead functions and one-sided variables, swallowed errors, stale prose defending retired mechanisms, contract drift in the JSON envelope / exit codes, and doc drift against docs/ARCHITECTURE.md. Inventories every violation with file:line + rule citation, then writes a scoped cleanup report. The whole-tree counterpart to reviewing a single diff. Never proposes structural or guard tests.
 argument-hint: "[file-or-surface scope, default all of shell/]"
+disable-model-invocation: true
 ---
 
 # audit-conformance
@@ -57,7 +58,7 @@ mandate — and both are restated inline where they matter.
 | R5 | **bash 3.2 violation** | `declare -A`, `mapfile`/`readarray`, `${var,,}`/`${var^^}`, `${arr[-1]}`, `&>>`, `\|&`, `${!prefix@}`; an unguarded `"${arr[@]}"` on a possibly-empty array under `set -u`; a bare `((n += w))` **as a statement** under `set -e`; treating `read -rsn1` as one character rather than one byte; `LC_ALL=C [[ … ]]` (not valid bash at all). | the forbidden-idiom greps below, then **read** each array expansion and each `((…))` to classify statement vs test. The pre-commit hook blocks these on *added* lines; this rule sweeps what predates the hook. |
 | R6 | **Swallowed error** | `\|\| true`, `2>/dev/null`, or an empty branch on a path where the user must see the failure — a real fault rendered as an empty list, a `0`, or a blank field. A *deliberate* best-effort degrade is fine **if** it degrades visibly (`--:--`, `n/a`, `LIVE`) and never as a fake value. | `grep -n '|| true\|2>/dev/null' shell/*` then read every hit and ask what the user sees when it fires. The sweep returns ~150 hits and nearly all are three sanctioned shapes — `rm -f`/`rmdir` cleanup, `chmod` best-effort hardening, `kill` in teardown — so triage those on sight and spend the reading on the residue: a swallowed error on a **jq parse**, a **state write**, or a **lock** is where this rule's real findings live. |
 | R7 | **Optimistic state** | State written before the operation it asserts has committed: a player record or a "playing" flag persisted before mpv is confirmed launched, a lock recorded before it is held, `TTY_ECHO_OFF=1` set before `stty` succeeded. A failure mid-op then leaves a lying record. | read the order of the write vs the op, in `detach_play`, the lock helpers, and the echo/cursor traps. |
-| R8 | **Contract drift** | The frozen surface (`CLAUDE.md`): `-j` emits **one line**; the envelope's field names; the exit-code taxonomy (0 ok · 1 usage/validation · 2+ propagated tool failure · 4 didn't take effect); lifecycle semantics (idempotent stop, ambiguity → 4). Any deviation, in either direction — code that violates the doc, or a doc that overstates the code. | **run the command.** `shell/yt-search -j -n 2 -- lofi \| wc -l` must be 1. Check each documented rejection actually rejects, including via `--`. Compare against `docs/AS-BUILT-contract.md` §3/§4. |
+| R8 | **Contract drift** | The frozen surface (`CLAUDE.md`): `-j` emits **one line**; the envelope's field names; the exit-code taxonomy (0 ok · 1 usage/validation · 2+ propagated tool failure · 4 didn't take effect); lifecycle semantics (idempotent stop, ambiguity → 4). Any deviation, in either direction — code that violates the doc, or a doc that overstates the code. | **run the command, never read the emitter** — Pass 0 §5: `tests/contract.sh --offline` first, one-off invocations only for what it doesn't cover. Compare against `docs/AS-BUILT-contract.md` §3/§4. |
 | R9 | **Naming drift** | Env knobs outside the prefix convention (suite-wide knobs are `UT_*` — plus the frozen legacy `YT_*` suite-wide names — and an engine's own tuning wears its own prefix, `YT_*` / `BILI_*`; a bare-name knob, or an internal variable wearing a knob prefix it does not honor, is drift); a unit-less numeric where the codebase suffixes (`_s`, `_ms`, `_pct`); a deprecated short alias (`yts`/`ytp`) used anywhere at all, or a retired TUI name (`ytt`, `yt-tui`, `ut-tui`) used where the canonical `uting` belongs (one name per command — `CLAUDE.md`); a new envelope field whose name doesn't match its siblings' style. | grep the env-read sites against AS-BUILT-contract.md §5's documented list; scan user-visible strings for the wrong name form. |
 | R10 | **Dead code** | A function with zero call sites (across every script in `shell/`, the two suites, and tests/drive.sh); a `case` arm for a flag no usage text mentions and nothing emits; an env knob read nowhere; a code path reachable only through a removed flag. | the function graph (Pass 0): defs minus call sites. Confirm by reading — a function called only from a heredoc or a `trap` string looks dead to a grep. |
 | R11 | **Doc drift** | Each fact lives in exactly one section of the as-built family, and the family is the *spec*: AS-BUILT-contract.md §4 exit codes, AS-BUILT-contract.md §5 config surface, ARCHITECTURE.md §17 function map, AS-BUILT-contract.md §3 data contracts, AS-BUILT-verification.md §27 verification matrix (**a moved section keeps its number and ARCHITECTURE keeps a tombstone — sweep the section where it LIVES, not the tombstone**). A function map missing a function, a config table missing a knob, a §27 entry citing a **scratch** check by path (a `tmp/` path is a promise the checkout can't keep; the three committed `tests/` files — two suites and the TUI driver — are the stated exception and SHOULD be named), or a fact restated in the README *and* the spec so the two can disagree. | diff the function graph against §17; diff the env-knob read sites (**all prefixes** — `YT_*`, `UT_*`, and each engine's own, e.g. `BILI_*`) against AS-BUILT-contract.md §5; diff observed exit codes against AS-BUILT-contract.md §4; grep AS-BUILT-verification.md §27 for `tmp/` paths (a `tests/` path there is correct, not a finding). |
@@ -144,28 +145,19 @@ of eight files.
    sed -n '/^## 27/,/^## 28/p' docs/AS-BUILT-verification.md | grep -n 'tmp/\|tests/'
    ```
 
-5. **Run the contract, don't read it** (R8). These are seconds each and settle the class:
+5. **Run the contract, don't read it** (R8). The fixed command sequence for this class already
+   lives where fixed sequences belong — `tests/contract.sh` — so run it, don't restate it:
 
    ```bash
-   shell/yt-search -j -n 2 -- lofi | wc -l          # the -j single-line guarantee: must be 1
-   shell/ut-play --status -j; echo "exit=$?"        # 0 + {"status":"players",...}
-   shell/ut-play --stop --all -j; echo "exit=$?"    # 0, idempotent
-   shell/yt-search --detach -- x; echo "exit=$?"    # 1 (gating)
-   shell/bili-search --detach -- x; echo "exit=$?"  # 1 — the gate is per ENGINE, drive both
-   shell/ut-play "a query"; echo "exit=$?"          # 1 (a query is not a handle)
-   shell/ut-play -- "a query"; echo "exit=$?"       # ALSO must be 1 — check the -- path too
-   shell/ut-play --info -- ID; echo "exit=$?"       # 1 (an engine verb, named as such)
-   shell/ut-play >/dev/null; echo "exit=$?"              # 1 (no handle, no action)
-   shell/uting </dev/null >/dev/null; echo "exit=$?"  # 1 (non-TTY refusal)
-
-   # the stores, under a DISPOSABLE state dir — never the user's real one
-   export UT_STATE_DIR=$(mktemp -d)
-   shell/ut-playlist --ls -j; echo "exit=$?"        # 0 + one line
-   shell/ut-playlist --show nope -j 2>/dev/null | wc -l; echo "exit=$?"   # 1 line, exit 4 (not_found)
-   shell/ut-history --ls -j; echo "exit=$?"         # 0 + one line
-   shell/ut-history --ls -n 0 -j; echo "exit=$?"    # 1 (validation)
-   rm -rf "$UT_STATE_DIR"; unset UT_STATE_DIR
+   tests/contract.sh --offline        # gates, exit codes, envelopes, both stores; ~16s, hermetic
    ```
+
+   Its PASS/FAIL lines are the R8 evidence for everything it drives. A contract claim the suite
+   does **not** cover (read its docstring and the checks it prints) is settled by one-off
+   invocation of the real command — exit code and stdout captured as the finding's evidence —
+   and if the gap is real, the *fix* is a check landed in `contract.sh`, per CLAUDE.md's
+   harden-before-you-extend rule; this skill only names the gap. Store commands always run
+   under a disposable `UT_STATE_DIR=$(mktemp -d)`, never the user's real one.
 
    Do not start a detached player as part of an audit — that is audible playback on someone's
    machine. Playback claims belong to `tests/playback.sh`, which runs its
