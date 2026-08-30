@@ -107,7 +107,7 @@ ut_read_config "$UT_DEFAULTS"
 # ── PREFERENCE WRITE-BACK ───────────────────────────────────────────────────────────────
 # The seven keys above are the ones this TUI changes at runtime, and they are written back to
 # the USER's config file in place. A preference that has to be re-pressed every session is not
-# a preference; the reasoning is ARCHITECTURE.md D16 (reopen triggers: ROADMAP), the key table is
+# a preference; the reasoning is ARCHITECTURE.md §3.6 (reopen triggers: ROADMAP), the key table is
 # AS-BUILT-contract.md §5. What the code below is:
 #
 #   WHICH FILE  the user's own ($UT_CONFIG). The shipped `config` is NEVER written — it is
@@ -1230,6 +1230,16 @@ Q_UP_DUR=()
 # for. Verbatim from the record: it is a yt-dlp format spelling, and a TUI that parsed it
 # into pieces would be learning an engine's grammar one level too far up.
 CURRENT_PLAY_SELECTED=""
+# The CALL that is playing — `ut-play --engine E -- URL`, the same pair a stored row holds.
+# Seeded by the launch and then re-read from the record, because a queue moves to a track this
+# screen never launched, and it may move to another SOURCE: only the record knows which engine
+# resolved what is playing now. This is what `i` on the card asks --info with.
+CURRENT_PLAY_URL=""
+CURRENT_PLAY_ENGINE=""
+# Whether the playing card is showing the row that one `--info` paid for. Set by `i` in the
+# card, dropped the moment the track changes: an upload date belongs to a track, not to a
+# player, and a stale one is worse than an absent one.
+CARD_PLAY_INFO=0
 # Third state, between "launched" and "playing": the -d envelope comes back as soon as the player
 # has forked, but the detached child still has to ask the engine to resolve the stream and let
 # mpv fill its cache, and that window is seconds long on a cold URL. (The extraction moved into
@@ -2106,10 +2116,10 @@ refresh_player_record() {
 # LEFT ALONE rather than blanked: an envelope that carries only `queue` must not erase the
 # title.
 apply_player_record() {
-    local rec=$1 t d s q ut ud
-    IFS="$US" read -r t d s < <(printf '%s' "$rec" |
+    local rec=$1 t d s u eng q ut ud
+    IFS="$US" read -r t d s u eng < <(printf '%s' "$rec" |
         jq -r "$JQ_TEXT_DEFS"'[(.title // "" | clean), (.duration // "" | tostring),
-                               (.selected // "" | oneline)]
+                               (.selected // "" | oneline), (.url // ""), (.engine // "")]
                               | join("\u001f")' 2>/dev/null) || return 0
     [[ -n "$t" ]] && CURRENT_PLAY_TITLE="$t"
     [[ -n "$d" && "$d" != "null" ]] && CURRENT_PLAY_DURATION=$(fmt_sec "$d")
@@ -2118,6 +2128,14 @@ apply_player_record() {
     # done. So an empty value here is a queue verb's envelope (which carries no record fields
     # at all), not a track whose format is still being decided: left alone, like the title.
     [[ -n "$s" ]] && CURRENT_PLAY_SELECTED="$s"
+    # The url is what MOVED when a queue advanced, so it is also the tripwire for anything
+    # that described the old track: the info overlay is dropped here rather than at the key,
+    # which is the one place that learns a track changed.
+    if [[ -n "$u" && "$u" != "$CURRENT_PLAY_URL" ]]; then
+        CURRENT_PLAY_URL="$u"
+        CARD_PLAY_INFO=0
+    fi
+    [[ -n "$eng" ]] && CURRENT_PLAY_ENGINE="$eng"
     q=$(printf '%s' "$rec" | jq -c '.queue // empty' 2>/dev/null) || q=""
     if [[ -n "$q" ]]; then
         IFS="$US" read -r CURRENT_QUEUE_POS CURRENT_QUEUE_LEN CURRENT_QUEUE_NEXT < <(
@@ -2255,6 +2273,9 @@ clear_play_state() {
     Q_UP_TITLE=()
     Q_UP_DUR=()
     CURRENT_PLAY_SELECTED=""
+    CURRENT_PLAY_URL=""
+    CURRENT_PLAY_ENGINE=""
+    CARD_PLAY_INFO=0
     CURRENT_PLAY_MPV_TITLE=""
     CURRENT_PLAY_ID=""
     CURRENT_PLAY_PID=""
@@ -3200,6 +3221,34 @@ card_meta_row() {
     return 0
 }
 
+# The row the one `--info` fetch paid for: upload date, like count, chapter count. It is a
+# FRAGMENT rather than part of either body because both subjects draw it — the item card, and
+# the playing card once `i` has been pressed on the track — and one row rendered in two places
+# is the drift AS-BUILT-tui.md §11 refuses on principle.
+#
+# Each field is dropped when the site did not publish it: an absent like count is not zero
+# likes, the rule print_details states for view counts. CARD_INFO_ROW reports whether anything
+# was drawn, because the callers budget rows around it.
+CARD_INFO_ROW=""
+card_info_row() {
+    CARD_INFO_ROW=""
+    [[ -n "$ITEM_UPLOADED" ]] && CARD_INFO_ROW="$S_UPLOADED $ITEM_UPLOADED"
+    if [[ -n "$ITEM_LIKES" ]]; then
+        commas "$ITEM_LIKES"
+        [[ -n "$CARD_INFO_ROW" ]] && CARD_INFO_ROW="$CARD_INFO_ROW $GL_SEP "
+        CARD_INFO_ROW="$CARD_INFO_ROW$COMMAS $S_LIKES"
+    fi
+    if ((ITEM_CHAP_N > 0)); then
+        [[ -n "$CARD_INFO_ROW" ]] && CARD_INFO_ROW="$CARD_INFO_ROW $GL_SEP "
+        CARD_INFO_ROW="$CARD_INFO_ROW$ITEM_CHAP_N $S_CHAPTERS"
+    fi
+    if [[ -n "$CARD_INFO_ROW" ]]; then
+        truncate_disp "$CARD_INFO_ROW" "$CARD_TEXT_W"
+        printf '    %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+    fi
+    return 0
+}
+
 # The forward queue, and the only place in this suite where a queue is READ: `+` and `>` write
 # one, `--status` answers with one, and until `upcoming` landed the card could show a single
 # title with no length. A player consuming a queue is the one thing on this screen that moves
@@ -3281,22 +3330,9 @@ card_item_body() {
     # mixed playlist it is the fact the row itself cannot state (F07), and on a single-engine
     # list it is the least surprising thing on the card.
     card_meta_row "$cols" "" "" "$ITEM_DUR_FMT" "$meta_views" "$ITEM_ENGINE"
-    # The paid tier. Each field is dropped when the site did not publish it — an absent like
-    # count is not zero likes, the rule print_details states for view counts.
-    [[ -n "$ITEM_UPLOADED" ]] && info_row="$S_UPLOADED $ITEM_UPLOADED"
-    if [[ -n "$ITEM_LIKES" ]]; then
-        commas "$ITEM_LIKES"
-        [[ -n "$info_row" ]] && info_row="$info_row $GL_SEP "
-        info_row="$info_row$COMMAS $S_LIKES"
-    fi
-    if ((ITEM_CHAP_N > 0)); then
-        [[ -n "$info_row" ]] && info_row="$info_row $GL_SEP "
-        info_row="$info_row$ITEM_CHAP_N $S_CHAPTERS"
-    fi
-    if [[ -n "$info_row" ]]; then
-        truncate_disp "$info_row" "$CARD_TEXT_W"
-        printf '    %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
-    fi
+    # The paid tier, one row, drawn by the fragment both subjects share.
+    card_info_row
+    info_row="$CARD_INFO_ROW"
     # What Enter would play. `quality=` is absent at auto for the same reason the status line
     # leaves it out there: auto is the engine choosing, which is not a tier to report.
     plan_row="$PLAY_MODE"
@@ -3447,6 +3483,17 @@ display_now_playing_card() {
             sel_field="$TRUNC_TEXT"
         fi
         card_meta_row "$cols" "$p_status" "$p_color" "$seg_time" "$CURRENT_PLAY_MODE" "$sel_field"
+        # The row `i` paid for, on the track that is playing — the same fragment the item card
+        # draws, so an upload date is spelled once. Only what one fetch found, never the
+        # description: this card is a live readout with a queue under it, and a paragraph would
+        # be taking the rows the queue block exists to fill (the reader is the item subject,
+        # one Tab and one `i` away). The url is checked, not just the flag: a track can change
+        # between the fetch and this frame.
+        local info_shown=0
+        if ((CARD_PLAY_INFO)) && [[ -n "$ITEM_URL" && "$ITEM_URL" == "$CURRENT_PLAY_URL" ]]; then
+            card_info_row
+            [[ -n "$CARD_INFO_ROW" ]] && info_shown=1
+        fi
         # The hints are built and MEASURED here, above the block that has to fit around them:
         # the queue block's budget is counted in rows, and the hint block is the one thing
         # below it whose height is not known without measuring (print_hints reflows).
@@ -3463,6 +3510,10 @@ display_now_playing_card() {
         # within, so a measured line never spends a cell on a key that would answer "nothing
         # queued after this track".
         ((CURRENT_QUEUE_LEN > 1)) && card_hints+=(">	$S_Q_SKIP")
+        # `i` is offered while it can still add something: the engine has --info and this card
+        # is not already showing what that fetch found. Same rule as every other cell in the
+        # suite — a key that would answer "you are looking at it" does not spend a cell.
+        ((ENGINE_INFO_OK)) && ((! info_shown)) && card_hints+=("i	$S_INFO_KEY")
         HINT_MEASURE=1
         print_hints "$cols" "  " "  " "${card_hints[@]}"
         HINT_MEASURE=0
@@ -3475,6 +3526,7 @@ display_now_playing_card() {
         if ((CURRENT_QUEUE_LEN > 1)); then
             local q_used=$((2 + CARD_HEAD_LINES + 1 + 1 + HINT_LINES))
             [[ -n "$bar_str" ]] && q_used=$((q_used + 2))
+            ((info_shown)) && q_used=$((q_used + 1))
             card_queue_block "$cols" $((TERM_LINES - q_used - 1))
         fi
         if [[ -n "$bar_str" ]]; then
@@ -3578,10 +3630,10 @@ play_selected() {
     errfile=$(mktemp "${TMPDIR:-/tmp}/uting-play-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-play-err.$$"
     # --engine is passed EXPLICITLY and comes from the envelope: ut-play defaults to its own
     # UT_DEFAULT_ENGINE, and letting that default decide would send a second engine's URL to
-    # the first engine's resolver — which since ARCHITECTURE.md D20 is a hard usage error rather
+    # the first engine's resolver — which since ARCHITECTURE.md §3.4 is a hard usage error rather
     # than the silent mislabel it used to be.
     # The ROW's engine, not the session's: a playlist can mix sources, and passing the
-    # session engine would hand a bili URL to yt-resolve — a hard usage error since ARCHITECTURE.md D20.
+    # session engine would hand a bili URL to yt-resolve — a hard usage error since ARCHITECTURE.md §3.4.
     # Falls back to the session engine for a row that predates the field (an empty string
     # never reaches ut-play, which would reject it).
     local row_engine="${R_ENGINE[$selected]:-}"
@@ -3626,6 +3678,13 @@ play_selected() {
     CURRENT_PLAY_MODE="$PLAY_MODE"
     CURRENT_PLAY_SOCK="$sock"
     CURRENT_PLAY_PAUSED=0
+    # The call we just made, seeded from the argv rather than waited for: the record answers
+    # the same pair, but not until mpv has a media-title to trip the re-read on, and `i` in
+    # the card must work in that window too. From the first track boundary on, the record
+    # wins — it is the one that knows a queue moved.
+    CURRENT_PLAY_URL="$url"
+    CURRENT_PLAY_ENGINE="$row_engine"
+    CARD_PLAY_INFO=0
     # Launched, not yet audible. player_check_ready clears this when mpv says it is producing
     # output, and read_nav_input runs on a 1 s tick until it does, so the banner flips on its
     # own rather than waiting for the user to press something.
@@ -4269,14 +4328,44 @@ open_item() {
     # Typed blind on an engine without the verb: nothing, silently — the answer `e` gives on a
     # single-engine install, and for the same reason (the hints never offered it).
     ((ENGINE_INFO_OK)) || return 0
-    local url="${urls[$selected]}" row_engine bin key out rc=0 errfile msg
+    local url="${urls[$selected]}" row_engine
     # The ROW's engine, the way play_selected and open_parts read it: a mixed playlist plays
     # either source correctly, so it must describe either source correctly too.
     row_engine="${R_ENGINE[$selected]:-}"
     [[ -n "$row_engine" ]] || row_engine="$CURRENT_ENGINE"
-    bin=$(engine_resolve_bin "$row_engine") || bin=""
-    [[ -n "$bin" ]] || return 0
-    key="$row_engine:$url"
+    fetch_item_info "$row_engine" "$url" || return 1
+    CARD_SUBJECT="item"
+    TUI_VIEW_MODE="card"
+    return 0
+}
+
+# `i` again, pressed INSIDE the card on the playing track. Same fetch, same cache, same fields
+# — what differs is only the subject it lands on: the card stays about the playing track and
+# grows the row the fetch paid for, rather than switching to the item subject and losing the
+# playhead, the queue and the state that made this card worth looking at.
+#
+# The engine comes from the RECORD, not from the row that launched it: a queue may mix sources
+# and the track playing three items later is not the one this screen started. That field is
+# `--status`'s answer to "what call is playing", which is why it had to exist before this key
+# could.
+open_playing_info() {
+    [[ -n "$CURRENT_PLAY_ID" ]] || return 0
+    ((ENGINE_INFO_OK)) || return 0
+    [[ -n "$CURRENT_PLAY_URL" && -n "$CURRENT_PLAY_ENGINE" ]] || return 0
+    fetch_item_info "$CURRENT_PLAY_ENGINE" "$CURRENT_PLAY_URL" || return 1
+    CARD_PLAY_INFO=1
+    return 0
+}
+
+# The fetch behind both doors: one `--info`, one single-slot cache, one set of ITEM_* fields.
+# Extracted rather than copied when the card grew its own `i` — two callers of one fetch is the
+# shape this file already uses for a store verb, and two copies of a spinner, an error
+# vocabulary and a cache key is the drift AS-BUILT-tui.md §11 refuses on the render side.
+fetch_item_info() {
+    local eng=$1 url=$2 bin key out rc=0 errfile msg
+    bin=$(engine_resolve_bin "$eng") || bin=""
+    [[ -n "$bin" ]] || return 1
+    key="$eng:$url"
     if [[ "$key" != "$INFO_CACHE_KEY" || -z "$INFO_CACHE_JSON" ]]; then
         errfile=$(mktemp "${TMPDIR:-/tmp}/uting-info-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-info-err.$$"
         # The search spinner, not a still line: this is the other moment the TUI has nothing to
@@ -4290,19 +4379,17 @@ open_item() {
         rm -f "$errfile"
         if ((rc != 0)) || [[ -z "$out" ]]; then
             msg=${msg##*$'\n'}
-            msg=${msg#"$row_engine"-resolve: }
+            msg=${msg#"$eng"-resolve: }
             store_notice "$S_INFO_ACT:" "${msg:-$S_PL_FAILED}"
             return 1
         fi
         INFO_CACHE_KEY="$key"
         INFO_CACHE_JSON="$out"
     fi
-    apply_item_info "$row_engine" "$url" || {
+    apply_item_info "$eng" "$url" || {
         store_notice "$S_INFO_ACT:" "$S_PL_FAILED"
         return 1
     }
-    CARD_SUBJECT="item"
-    TUI_VIEW_MODE="card"
     return 0
 }
 
@@ -5051,6 +5138,10 @@ while true; do
         "[B" | "OB" | "["*B | "O"*B) adjust_volume -5 ;;   # down arrow → volume -5
         l | L) cycle_ui_lang ;;
         t | T) cycle_theme ;;   # cycle palette family live
+        # `i` here does NOT change the subject: it fetches what the list's `i` fetches and
+        # leaves the card about the playing track, which is the only reason the key is worth
+        # having in this view (the item subject would drop the playhead and the queue).
+        i | I) if [[ "$CARD_SUBJECT" == "playing" ]]; then open_playing_info || true; fi ;;
         ">") skip_next ;;       # the card is where a queue is watched, so it skips too
         q | Q) printf '%s%s\n' "$S_QUITTING" "$GL_ELL"; exit 0 ;;
         *) ;;

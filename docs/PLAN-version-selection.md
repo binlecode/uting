@@ -18,7 +18,7 @@
 | P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | **已落**（2026-08-29；`shell/uting` + `contract.sh` 的 tmux 面上一条 `c` 能力门见证，257 项全绿；五次 drive 实测记在 §13） |
 | P3 | `--quality TIER` 贯穿 `ut-play` → `<engine>-resolve` | **已落**（2026-08-29；`ut-play` + 两个 resolve 半边 + `config`；`contract.sh` 256 项 + `playback.sh` 44 项全绿；档位效果与 `-S` 压过 `--quality` 均实测） |
 | P4 | `uting` 的质量档键位（`f`）与写回 | **已落**（2026-08-29；`shell/uting` + `config` 的 `UT_QUALITY_CYCLE`；`contract.sh` 263 项全绿，其中三条新检查在 tmux pane 上：`quality=` 在 auto 上不印、`f` 追加写回 `UT_PLAY_QUALITY=medium`、状态行跟上；四个 cycle 键的「不认识的成员退 1」由一条加固过的循环统一陈述） |
-| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | **在建**，**P6 的前置**。前置 F04 **已落**（2026-08-29；`JQ_TEXT_DEFS` 一份定义，两个 row builder 与 `apply_player_record`（含 `queue.next.title`）共用；实测见 §13 末）。**A 步已落**（`CARD_SUBJECT` + `card_subject_head` / `card_meta_row` 抽出 + `card_item_body`，屏幕零变化，旧新双树逐帧对照）。**B 步的门已落**（`i` 键 + `ENGINE_INFO_OK` 探测 + `apply_item_info` + 单槽缓存 + `nav_tick` 按 subject 早返回 + Tab 进门即复位 subject；`contract.sh` 268 项全绿，其中三条新检查在 tmux 面上，并把面里的 `YT_LANG` 钉成 en 才能断言 chrome 字串）。**前方队列块的契约前置已落**（§5.4 的 `upcoming`，2026-08-29；`ut-play` 的 `queue_snapshot` + `usage()`，`playback.sh` 46 项全绿 —— 动工前实读源码，发现 §11 修订一「数据已在 `queue` 键里」是错的）。**在播分支的两处已落**（2026-08-29；`card_queue_block` 前方队列块 + meta 行的 `selected` 字段；`contract.sh` 268 项 + `playback.sh` 46 项全绿，五次 drive 实测记在 §13 末）。**F05 已落**（2026-08-29；`o`/`e`/`c` 的提示格按视图态把门 —— 三者都是 `search_only`，在 store/parts 视图里唯一的效果是一句「只对搜索结果生效」的提示；顺手退掉 `e` 那个按下标 splice 的写法，整块改成按顺序构建。审议里点名的第三个死格 `m` 在 0.3.10 就没了（§12 已证伪），所以是两个键加一个 `c`。`contract.sh` 268 项全绿，history / playlist / parts 三个视图各 drive 实测一次）。**余下：卡内 `i` 对在播曲目叠 info、文档重同步** |
+| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | **在建**，**P6 的前置**。前置 F04 **已落**（2026-08-29；`JQ_TEXT_DEFS` 一份定义，两个 row builder 与 `apply_player_record`（含 `queue.next.title`）共用；实测见 §13 末）。**A 步已落**（`CARD_SUBJECT` + `card_subject_head` / `card_meta_row` 抽出 + `card_item_body`，屏幕零变化，旧新双树逐帧对照）。**B 步的门已落**（`i` 键 + `ENGINE_INFO_OK` 探测 + `apply_item_info` + 单槽缓存 + `nav_tick` 按 subject 早返回 + Tab 进门即复位 subject；`contract.sh` 268 项全绿，其中三条新检查在 tmux 面上，并把面里的 `YT_LANG` 钉成 en 才能断言 chrome 字串）。**前方队列块的契约前置已落**（§5.4 的 `upcoming`，2026-08-29；`ut-play` 的 `queue_snapshot` + `usage()`，`playback.sh` 46 项全绿 —— 动工前实读源码，发现 §11 修订一「数据已在 `queue` 键里」是错的）。**在播分支的两处已落**（2026-08-29；`card_queue_block` 前方队列块 + meta 行的 `selected` 字段；`contract.sh` 268 项 + `playback.sh` 46 项全绿，五次 drive 实测记在 §13 末）。**F05 已落**（2026-08-29；`o`/`e`/`c` 的提示格按视图态把门 —— 三者都是 `search_only`，在 store/parts 视图里唯一的效果是一句「只对搜索结果生效」的提示；顺手退掉 `e` 那个按下标 splice 的写法，整块改成按顺序构建。审议里点名的第三个死格 `m` 在 0.3.10 就没了（§12 已证伪），所以是两个键加一个 `c`。`contract.sh` 268 项全绿，history / playlist / parts 三个视图各 drive 实测一次）。**卡内 `i` 已落**（2026-08-30；`open_playing_info` + 共用的 `fetch_item_info` / `card_info_row` 两个片段，卡片仍是在播主语——播头、队列、状态全在，只多一行取数买来的东西；靠 §5.5 的 `engine` 字段才知道该问哪个引擎）。**余下：文档重同步**（等另一条 session 把 `docs/` 那几个文件落完） |
 | P6 | 章节 → 条目视图里的 seek 目标 | 未开工，排最后 |
 | P7 | Enter 语义不变 | **无需改动**，记录在案以免日后当成疏漏 |
 | P8 | 时长不一致 → 在 parts 视图表头说清 | 已落（随 P2，2026-08-29） |
@@ -26,7 +26,7 @@
 | P10 | 退役 `p`/`P` 的 Tab 别名（键位审计 §12） | 未开工，两行级 |
 | P11 | `j`/`k` = ↓/↑ 别名（键位审计 §12） | 未开工，两行级 |
 | P12 | `?` 随时呼出/收起 keymap（用户新增，2026-08-29） | 未开工 |
-| P13 | resolve 信封加 `selected` / `selected_resolution`（**§5.2**，本计划三项契约动作里的第二项） | **已落**（2026-08-29；两个 resolve 半边 + `ut-play` 的记录/回填/`--status` 投影；`contract.sh` 265 项 + `playback.sh` 45 项全绿）。落地时比 §5.2 多做了一处：`--status -j` 的**投影是一份写死的键集**，不是记录的透传，所以 `selected` 不加进那份键集就永远到不了调用方 —— §13 里 player record 那条检查本身就够不着。请求那一半（`format`）**没有**跟着进投影：它是一句 yt-dlp 表达式，而 `--status` 回答的是「现在在放什么」 |
+| P13 | resolve 信封加 `selected` / `selected_resolution`（**§5.2**，本计划四项契约动作里的第二项） | **已落**（2026-08-29；两个 resolve 半边 + `ut-play` 的记录/回填/`--status` 投影；`contract.sh` 265 项 + `playback.sh` 45 项全绿）。落地时比 §5.2 多做了一处：`--status -j` 的**投影是一份写死的键集**，不是记录的透传，所以 `selected` 不加进那份键集就永远到不了调用方 —— §13 里 player record 那条检查本身就够不着。请求那一半（`format`）**没有**跟着进投影：它是一句 yt-dlp 表达式，而 `--status` 回答的是「现在在放什么」 |
 
 §4 的编号 = 阅读顺序 = 上表的编号，**一套号，不是两套**。P9 与 P13 是表上仅有的两行
 没有 §4 小节的条目：前者是文档重同步，后者的正文就是 §5.2 —— 都不是设计决定，所以不占 §4 的号。
@@ -42,9 +42,9 @@
 **注意**：这三个文件里 `CLAUDE.md` 当时正被另一个 session 改着（未提交），所以它那一处要单独确认再动，
 别把别人的半成品一起提交。
 
-**同一笔账，`playback.sh` 那半（2026-08-29，§5.4 之后）：** 条数从 **45 变成 46**
-（队尾封顶那条）。`docs/AS-BUILT-verification.md` 第 58 行写着 45，同样等 land 再改。
-§5.4 自己的信封文档债记在那一节末尾。
+**同一笔账，`playback.sh` 那半：** 条数从 **45 变成 47** —— 队尾封顶一条（§5.4）、
+记录里的 engine 一条（§5.5）。`docs/AS-BUILT-verification.md` 第 58 行写着 45，同样等 land 再改。
+§5.4 与 §5.5 各自的信封文档债记在那两节末尾。
 
 ---
 
@@ -113,7 +113,7 @@ bili-resolve --info ?p=7   BV1vKEn6eE6Q   00h:06m:22s   ← 第 7 P
    0.38s / 一次请求 / 100 条，每条带真标题（`part`）与整数秒时长**（P1=727、P7=383，与
    `--info` 实测的 726.855/382.572 吻合）。`yt-dlp --flat-playlist`（带 bili-resolve 同款
    浏览器 cookie）→ 2.3s 能通，**但每条只有 `{ie_key,_type,url}` —— 无标题无时长**，
-   正是 ARCHITECTURE D19 记过的「flat 无元数据」；匿名则 412。**机制只能是手搓 HTTP，不能是 yt-dlp** ——
+   正是 ARCHITECTURE §3.4 记过的「flat 无元数据」；匿名则 412。**机制只能是手搓 HTTP，不能是 yt-dlp** ——
    打哪个端点由 §5.1 定（那里改成了 `view`，理由与实测同样记在那）。
 
 9. **「全500集」是标题营销：pagelist 实报 100 P。** 搜索行的聚合时长（37923s ≈ 100 P × 平均 379s）
@@ -138,13 +138,13 @@ bili-resolve --info ?p=7   BV1vKEn6eE6Q   00h:06m:22s   ← 第 7 P
 
 ### P1 —— `--parts` 归 resolve 半边，不归 search 半边
 
-**照 ARCHITECTURE D15 的原样。** 它否掉「往搜索信封里加 `auth` 字段」的两条理由，这里逐条对上：
+**照 ARCHITECTURE §3.4 的原样。** 它否掉「往搜索信封里加 `auth` 字段」的两条理由，这里逐条对上：
 
 - **两个引擎不对称**：B 站有分 P，YouTube 没有。让 `yt-search` 报一个恒为 `null` 的字段，
   描述的是「这个站没有这个概念」，不是这条结果的事实。
 - **搜索半边算不出来**：§2 第 4 条实测，搜索响应里根本没有 P 数。要让 `bili-search` 报它，
   得**对每条结果多打一次 `/x/web-interface/view`** —— 而 `bili-search` 的稀缺资源恰恰是请求数
-  （ARCHITECTURE D19 量过：非 flat 的 yt-dlp 搜索 10 条要 >120s）。
+  （ARCHITECTURE §3.4 量过：非 flat 的 yt-dlp 搜索 10 条要 >120s）。
 
 而 resolve 半边**一次调用就知道**。引擎用动词的有无声明能力（`AS-BUILT-contract.md` §1.3 末条）：
 `bili-resolve` 长出 `--parts`，`yt-resolve` 永远不长。第三个引擎当天自愿加入。
@@ -310,7 +310,7 @@ subject 正在播时章节可跳，不在播时章节只是一份目录。
 `p` 在 **mpv、ncmpcpp、cmus 三家全是「暂停」**，而这里它是一个**不在任何提示里**的视图切换别名
 （`shell/uting:4344`）：一个播放器用户按 `p` 想暂停，得到的是换屏。未公开 + 三家反义，
 两条单独都够退役；顺带把一个字母还给本已砍半的键空间（大小写同绑，26 个可用位）。
-TUI 键位不属于冻结面（ARCHITECTURE D17 只冻 CLI），零契约成本。落地是删一个 `||` 条件 + grep 门。
+TUI 键位不属于冻结面（ARCHITECTURE §3.8 只冻 CLI），零契约成本。落地是删一个 `||` 条件 + grep 门。
 
 ### P11 —— `j`/`k` = ↓/↑ 别名（键位审计 §12 的第二条）
 
@@ -332,7 +332,7 @@ cmus 的 j/k 本来就是导航，零反义。**只取 j/k，不取 hjkl 全套*
 - **`？`（全角）与 `?` 同绑** —— 这是一个双语（你听）TUI，zh 输入法下的 shift-/ 出的是全角问号，
   utf8_complete 本来就会把它组装成一个键。
 - **`?` 加入写回家族**：`UT_KEYS=core|full` 进 `config`，`?` 现场切换并写回用户文件 ——
-  与 v/o/e/l/t/f 同一条 ARCHITECTURE D16 机制，没有新形状。PREF_KEYS 再 +1（P9 清点时一并改）。
+  与 v/o/e/l/t/f 同一条 ARCHITECTURE §3.6 机制，没有新形状。PREF_KEYS 再 +1（P9 清点时一并改）。
 - **业界对照**：`?` 是 lazygit / k9s / tig / less / ranger 的通用 help 键，此处空闲、零反义。
   被否的替代：一个独立的全键 overlay（第二个键文档面 ——「相邻两行 chrome 不得都记键」
   那条关切的放大版）；三态循环 core→full→hidden（第三态省一行、丢全部提示，不成交易）。
@@ -357,7 +357,7 @@ cmus 的 j/k 本来就是导航，零反义。**只取 j/k，不取 hjkl 全套*
 
 - **机制：`curl GET /x/web-interface/view?bvid=<id>`**，UA/Referer 与 bili-search 同款，零凭据。
   这给 `bili-resolve` 添了第二个传输原语，先例与理由都是现成的：`yt-resolve` 的 `probe_raw`
-  已经在 resolve 半边用 curl，ARCHITECTURE D19 的分界本来就按「操作选传输」。新 seam 名 `fetch_view_once`，
+  已经在 resolve 半边用 curl，ARCHITECTURE §3.4 的分界本来就按「操作选传输」。新 seam 名 `fetch_view_once`，
   与 `fetch_page_once` 同族 —— **本套件第二处手搓 HTTP 请求，只许这两处**。curl 是本动词的门：
   缺失 → `require_cmd` 同款 `die`（用法层 1，同 bili-search 对 curl 的既有姿态）。
 - **端点改过一次，理由记在这里（2026-08-29，本节初版写的是 `/x/player/pagelist`）。**
@@ -408,7 +408,7 @@ cmus 的 j/k 本来就是导航，零反义。**只取 j/k，不取 hjkl 全套*
 本来就取最优，`max` 与 `auto` 无从区分）。**别名表归 `ut-play`**（照 §1.3 对 `-f` 的规定：
 引擎接缝只运载规范拼写）。
 
-**`quality_sort_for_tier(mode, tier)` 的出厂表**（两个引擎各持一份同值副本，ARCHITECTURE D21 允许的引擎间复制）：
+**`quality_sort_for_tier(mode, tier)` 的出厂表**（两个引擎各持一份同值副本，ARCHITECTURE §3.4 允许的引擎间复制）：
 
 | mode \ tier | low | medium | high |
 |---|---|---|---|
@@ -448,6 +448,28 @@ cmus 的 j/k 本来就是导航，零反义。**只取 j/k，不取 hjkl 全套*
 **留给 land 的文档债（本节自己的）：** `AS-BUILT-contract.md` §3 的 `--status`/`--enqueue`/`--next`
 信封三处、`AS-BUILT-player.md` §9.5 的队列一节，都要补 `upcoming` 与它的封顶。
 
+### 5.5 player record 加 `engine`（第四项契约动作；卡内 `i` 要它）——**已落**（2026-08-30）
+
+又是动工前实读源码发现的：`--status` 说得出**在放什么**（url、title、selected），却说不出
+**该找谁再放一遍**。记录里没有 `engine` —— 子进程每换一条队列轨道就 `ENGINE=$QUEUE_ENGINE`
+（`ut-play`），但从来没写下来。于是卡内按 `i` 时，TUI 拿不到该问哪个 `<engine>-resolve --info`；
+拿发起那一行的 engine 去猜，**恰好在混源队列上是错的**，而混源队列正是本套件宣传的能力。
+
+```
+  players[]:  {id, pid, url, engine, mode, …, queue}      # engine 新增
+  failed[]:   {id, url, engine, mode, started_at, …}      # 同一笔，两处死亡记录一起加
+```
+
+理由不止 TUI：**一条记录本来就该是一次调用**（`{engine, url}` = `ut-play --engine E -- URL`，
+`ut-playlist` 的记录早就是这个形状）。写在三处：launch 时写下、`patch_player_meta` 每条轨道
+backfill 时跟着换、`--status` 投影带上；两处死亡记录（播放器的 `record_player_death` 与
+队列轨道的 `queue_note_failure`）一并加，否则 `failed[]` 里的调用同样重发不了。
+
+**判别输入**：`playback.sh` 里那个 `--engine bili` 起的播放器 —— 全文件唯一一个显式指定引擎的，
+而套件默认是 yt，所以「字段填的是默认值」或「字段压根没写」都会答 `yt` 而红。47 项全绿。
+**没有单独检查的一条**（照实说）：`engine` 跟着队列换轨道 —— 那要一条混源队列真的走到第二首，
+成本是一次真实的轨道结束；它由构造保证（backfill 与 `ENGINE` 在同一个循环体里，url 也走同一条路径）。
+
 ---
 
 ## 6. 配置键（`config`，出厂默认；`AS-BUILT-contract.md` §5 在 land 时补表）
@@ -459,7 +481,7 @@ UT_KEYS=core                                # keymap 档位：core | full（? �
 ```
 
 **`PREF_KEYS` 从六个变成七个**（P4 落地：+`UT_PLAY_QUALITY`），P12 落地时再 +`UT_KEYS` 成八个。
-「六个键」那句散文分布在 `CLAUDE.md`（两处）、`config` 抬头、ARCHITECTURE D16、
+「六个键」那句散文分布在 `CLAUDE.md`（两处）、`config` 抬头、ARCHITECTURE §3.6、
 `AS-BUILT-contract.md` §5（七处）、`ARCHITECTURE.md`（三处）、`AS-BUILT-tui.md`、
 `AS-BUILT-verification.md`（两处）、`README.md` —— **P4 已把它们全改成「七个」**；
 P12 落地时同一批地方再改一遍成「八个」。（`AS-BUILT-tui.md` §591 的「六个键」是
@@ -750,6 +772,20 @@ CLAUDE.md 的测试规矩同款）。信封那一层已经有检查——`upcomi
 预算（`card_item_body` 有，这一支没有），而队列块在那个尺寸下只占它的表头一行——与改动前的
 `next:` 那一行**一模一样**，所以这不是本次引入的。要修是「在播分支按行预算丢进度条/提示块」，
 自成一件事。
+
+### 卡内 `i` 的实测（2026-08-30）
+
+同样是画面，同样不进套件（信封那层的 `engine` 在 `playback.sh` 有判别输入）。
+`-k 'Enter Down + Tab i'`，100x30，`YT_LANG=en`：
+
+| 看的是 | 看到的 |
+|---|---|
+| 按 `i` 之前 | 卡片提示块末尾多一格 `i info` —— 引擎有 `--info` 且这张卡还没显示它买来的东西 |
+| 按 `i` 之后 | meta 行下多一行 `uploaded 2014-11-16 · 277,659 likes`，播头/队列块/状态**全部还在**（主语没变），`i info` 那一格随即消失 |
+| 列表里的 `i`（回归） | 条目卡片一字未变 —— 同一个 `card_info_row` 片段，抽出来之后两处都走它 |
+
+**没有单独驱动的一条**：换轨道时 info 行消失（`apply_player_record` 里 url 一变就落 `CARD_PLAY_INFO=0`）——
+要驱动它得等一首真的放完，与 §5.5 那条「engine 跟着队列换」是同一笔成本。
 
 ### 反例（不做的检查，免得再被提案）
 
