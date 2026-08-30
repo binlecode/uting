@@ -464,13 +464,34 @@ refresh_engine_parts() {
     return 0
 }
 
-# Both probes, one name for the callers. Two functions because they ask two questions about
-# two verbs; one caller-facing name because the two places that switch engines would
-# otherwise each list every probe — the shape that drifts the day a third one lands, the way
+# Does this engine have `--info`? Asked exactly as --parts is asked, and for the same reason
+# the hint block cannot pay for it per redraw: a handle-less call, the argv gate answering for
+# an engine that has the verb and the flag gate for one that does not. Both of today's engines
+# have it — the probe is here because a capability is read off the VERB in this suite, never
+# assumed from the engine list, and `i` must not offer itself to an engine that would answer
+# "unknown flag".
+ENGINE_INFO_OK=0
+refresh_engine_info() {
+    ENGINE_INFO_OK=0
+    local bin err
+    bin=$(engine_resolve_bin "$ENGINE") || return 0
+    [[ -n "$bin" ]] || return 0
+    err=$("$bin" --info 2>&1 >/dev/null) || true
+    case "$err" in
+    *"unknown flag"*) ;;
+    *) ENGINE_INFO_OK=1 ;;
+    esac
+    return 0
+}
+
+# Every probe, one name for the callers. Three functions because they ask three questions about
+# three verbs; one caller-facing name because the two places that switch engines would
+# otherwise each list every probe — the shape that drifts the day a fourth one lands, the way
 # F11/F12 did (ARCHITECTURE.md).
 refresh_engine_caps() {
     refresh_engine_auth
     refresh_engine_parts
+    refresh_engine_info
 }
 
 # Which engine this session starts on. The SAME variable ut-play reads, not a second one:
@@ -540,6 +561,11 @@ Keys (List View):
            confirmation; playlist rows only                 (needs ut-playlist)
   h        open the listening log as the row source; h again
            returns to the search results                    (needs ut-history)
+  c        open the focused row's parts as the row source; c again returns to the
+           search results          (only when the engine has --parts; Bilibili does)
+  i        open the focused row as the focus card's subject, with one metadata
+           fetch — upload date, likes, chapters, description
+                                    (only when the engine has --info; both do)
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
   q        quit (stops background playback on exit)
 
@@ -549,10 +575,14 @@ Keys (List View):
   only the value moves. The shipped defaults file is never written. A key you have pinned
   in the environment is left alone, and says so once.
 
-Keys (Now Playing card):
+Keys (focus card):
   ←/→      seek backward / forward 5s   ↑/↓  volume down / up
   Tab      back to List View            Esc  back to List View
   Space    pause / resume               s    stop playback     q  quit
+  Enter    (on an `i` subject) play it
+
+  The card has one renderer and two subjects: Tab is always the track that is
+  playing, `i` is the row you asked about. There is no third view.
 
 Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
@@ -1006,6 +1036,7 @@ set_ui_lang() {
         S_HIST_EMPTY="还没有收听记录"; S_HIST_ABSENT="未安装 ut-history"
         S_PARTS_KEY="分P"; S_PARTS_ACT="分P"; S_PARTS_ONE="这个视频只有一 P"
         S_CARD_HEAD_ITEM="条目卡片"; S_UPLOADED="发布"; S_LIKES="点赞"
+        S_INFO_KEY="详情"; S_INFO_ACT="详情"
         S_CHAPTERS="章"; S_VIEWS="次播放"
         S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_NEXT="下一首"; S_Q_ACT="队列"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
@@ -1040,6 +1071,7 @@ set_ui_lang() {
         S_HIST_EMPTY="nothing listened to yet"; S_HIST_ABSENT="ut-history is not installed"
         S_PARTS_KEY="parts"; S_PARTS_ACT="Parts"; S_PARTS_ONE="this video has only one part"
         S_CARD_HEAD_ITEM="ITEM FOCUS"; S_UPLOADED="uploaded"; S_LIKES="likes"
+        S_INFO_KEY="info"; S_INFO_ACT="Info"
         S_CHAPTERS="chapters"; S_VIEWS="views"
         S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_NEXT="next"; S_Q_ACT="Queue"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
@@ -2639,6 +2671,12 @@ display_list_menu() {
             nav_items+=("c	$S_PARTS_KEY")
         fi
     fi
+    # And a fifth time, off the other capability: `i` needs `--info`. It does NOT relabel by
+    # LIST_SOURCE the way c/b/h do — it is not a row-source toggle, it opens a card, and Tab is
+    # the way back from every card there has ever been.
+    if ((ENGINE_INFO_OK)); then
+        nav_items+=("i	$S_INFO_KEY")
+    fi
     # The queue keys are offered only while something is PLAYING: with no player they say
     # "nothing is playing" and nothing else, and a measured block must not spend cells on a
     # key that cannot act (the rule `e` and `a`/`b` already follow).
@@ -3131,7 +3169,10 @@ card_item_body() {
         commas "$ITEM_VIEWS"
         meta_views="$COMMAS $S_VIEWS"
     fi
-    card_meta_row "$cols" "" "" "$ITEM_DUR_FMT" "$meta_views"
+    # The engine is LAST, so it is the first field dropped when the row will not fit: on a
+    # mixed playlist it is the fact the row itself cannot state (F07), and on a single-engine
+    # list it is the least surprising thing on the card.
+    card_meta_row "$cols" "" "" "$ITEM_DUR_FMT" "$meta_views" "$ITEM_ENGINE"
     # The paid tier. Each field is dropped when the site did not publish it — an absent like
     # count is not zero likes, the rule print_details states for view counts.
     [[ -n "$ITEM_UPLOADED" ]] && info_row="$S_UPLOADED $ITEM_UPLOADED"
@@ -4087,6 +4128,97 @@ open_parts() {
     return 0
 }
 
+# ── The item subject's door (key: i) ────────────────────────────────────────────────────
+# One fetch, on the KEY — never on the selection moving, the constraint `c` and the ←/→ edge
+# fetch already respect. `i` is the ONLY way into the item subject, and that is what stops the
+# item card from being a full-screen repeat of the details block: entering costs a fetch, so
+# every item frame carries something the fetch found and the list cannot hold.
+#
+# ANY row source, unlike `c`: the item card replaces no rows, so there is nothing to stash and
+# no second slot to want. A playlist row and a history row are each a {engine, url} pair, which
+# is all `--info` is asked for.
+open_item() {
+    ((NUM_ENTRIES > 0)) || return 0
+    # Typed blind on an engine without the verb: nothing, silently — the answer `e` gives on a
+    # single-engine install, and for the same reason (the hints never offered it).
+    ((ENGINE_INFO_OK)) || return 0
+    local url="${urls[$selected]}" row_engine bin key out rc=0 errfile msg
+    # The ROW's engine, the way play_selected and open_parts read it: a mixed playlist plays
+    # either source correctly, so it must describe either source correctly too.
+    row_engine="${R_ENGINE[$selected]:-}"
+    [[ -n "$row_engine" ]] || row_engine="$CURRENT_ENGINE"
+    bin=$(engine_resolve_bin "$row_engine") || bin=""
+    [[ -n "$bin" ]] || return 0
+    key="$row_engine:$url"
+    if [[ "$key" != "$INFO_CACHE_KEY" || -z "$INFO_CACHE_JSON" ]]; then
+        errfile=$(mktemp "${TMPDIR:-/tmp}/uting-info-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-info-err.$$"
+        # The search spinner, not a still line: this is the other moment the TUI has nothing to
+        # draw, and the label is printed by the caller exactly as fetch_json's callers print
+        # theirs. The frame after this is a full in-place repaint, so the line needs no cleanup.
+        printf '\n  %s%s%s' "$C_DIM" "$S_INFO_ACT$GL_ELL" "$C_RESET"
+        spin_start
+        out=$("$bin" --info -j -- "$url" 2>"$errfile") || rc=$?
+        spin_stop
+        msg=$(<"$errfile")
+        rm -f "$errfile"
+        if ((rc != 0)) || [[ -z "$out" ]]; then
+            msg=${msg##*$'\n'}
+            msg=${msg#"$row_engine"-resolve: }
+            store_notice "$S_INFO_ACT:" "${msg:-$S_PL_FAILED}"
+            return 1
+        fi
+        INFO_CACHE_KEY="$key"
+        INFO_CACHE_JSON="$out"
+    fi
+    apply_item_info "$row_engine" "$url" || {
+        store_notice "$S_INFO_ACT:" "$S_PL_FAILED"
+        return 1
+    }
+    CARD_SUBJECT="item"
+    TUI_VIEW_MODE="card"
+    return 0
+}
+
+# The `--info` envelope into the card's item fields. ONE jq call, US-joined, the way every
+# other envelope read in this file works — and the DESCRIPTION LAST because it is the one
+# free-text field: with IFS=US the final `read` variable takes the whole remainder, separators
+# and all, so a stray 0x1f inside a description can only pollute the description.
+#
+# The duration is formatted HERE by fmt_sec rather than taken from the envelope's
+# duration_fmt: that field is the engine's wire spelling (`00h:03m:36s`) and this screen
+# already has exactly one spelling of a duration. A live item has no meaningful one, so it
+# gets the badge print_details gives a live row instead of a number.
+apply_item_info() {
+    local eng=$1 url=$2 dur live
+    IFS="$US" read -r ITEM_TITLE ITEM_CHANNEL dur live ITEM_VIEWS ITEM_LIKES \
+                      ITEM_UPLOADED ITEM_CHAP_N ITEM_DESC < <(
+        printf '%s' "$INFO_CACHE_JSON" | jq -r "$JQ_TEXT_DEFS"'[
+            (.title // "" | clean),
+            (.channel // .uploader // "" | oneline),
+            (.duration // "" | tostring),
+            (.live_status // ""),
+            (.view_count // "" | tostring),
+            (.like_count // "" | tostring),
+            (.upload_date // "" | if length == 8 then .[0:4] + "-" + .[4:6] + "-" + .[6:8] else . end),
+            (.chapters // [] | length | tostring),
+            (.description // "" | clean)
+          ] | join("\u001f")' 2>/dev/null
+    ) || return 1
+    # A record with no title is not a record: the envelope was not what it claimed, and the
+    # card would open onto an empty subject.
+    [[ -n "$ITEM_TITLE" ]] || return 1
+    ITEM_ENGINE="$eng"
+    ITEM_URL="$url"
+    if [[ "$live" == "is_live" ]]; then
+        ITEM_DUR_FMT="$GL_LIVE"
+    elif [[ -n "$dur" && "$dur" != "null" ]]; then
+        ITEM_DUR_FMT=$(fmt_sec "$dur")
+    else
+        ITEM_DUR_FMT=""
+    fi
+    return 0
+}
+
 # ── MODE action (key: v) ────────────────────────────────────────────────────────────────
 cycle_mode() {
     local i n=${#MODE_CYCLE[@]} cur=0
@@ -4445,7 +4577,12 @@ nav_tick() {
     # or with nothing playing must land too. What ARMS the timeout that gets us here when
     # nothing is playing is the PREF_DIRTY test in read_nav_input.
     flush_prefs
-    if [[ "$TUI_VIEW_MODE" == "card" ]]; then return 0; fi
+    # Only the PLAYING subject fetches its own times — it does that inside its own render,
+    # which is why this returned early for the whole card view. The item subject makes no IPC
+    # call at all, so under it this tick is the only thing advancing the shared clock: without
+    # this test the banner's readout was as stale as the moment `i` was pressed the instant you
+    # pressed Tab back to the list.
+    if [[ "$TUI_VIEW_MODE" == "card" && "$CARD_SUBJECT" == "playing" ]]; then return 0; fi
     if [[ -z "$CURRENT_PLAY_ID" ]]; then return 0; fi
     fetch_play_times
     return 0
@@ -4748,7 +4885,11 @@ while true; do
         # whatever was longer. The clear was the last blank frame left in the app — on a switch
         # it flashed the whole screen for the sake of rows the next render was about to cover.
         case "$TUI_VIEW_MODE" in
-        list) TUI_VIEW_MODE="card" ;;
+        # Tab's semantics are unchanged BY THIS LINE: the subject is reset on the way in, so
+        # Tab still means "the track that is playing" and never lands on the item you last
+        # pressed `i` on. Resetting here rather than on the way out keeps the one place that
+        # decides what Tab is about in the arm that Tab takes.
+        list) CARD_SUBJECT="playing"; TUI_VIEW_MODE="card" ;;
         *) TUI_VIEW_MODE="list" ;;
         esac
         continue
@@ -4768,6 +4909,15 @@ while true; do
     if [[ "$TUI_VIEW_MODE" == "card" ]]; then
         case "$READ_NAV_KEY" in
         ESC) TUI_VIEW_MODE="list" ;;                       # in-place, as with Tab above
+        # Enter on the ITEM subject plays what the card is about, which is what its own hint
+        # row promises. The row is still the selected one — `i` changed no rows — so this is
+        # play_selected and not a second launch path. The subject then becomes the playing
+        # track: you asked for it to play, so the card is about the playing track now.
+        "" | $'\n' | $'\r')
+            if [[ "$CARD_SUBJECT" == "item" ]]; then
+                play_selected || true
+                CARD_SUBJECT="playing"
+            fi ;;
         "[C" | "OC" | "["*C | "O"*C) seek_relative 5 ;;    # right arrow → seek +5s
         "[D" | "OD" | "["*D | "O"*D) seek_relative -5 ;;   # left arrow → seek -5s
         "[A" | "OA" | "["*A | "O"*A) adjust_volume 5 ;;    # up arrow → volume +5
@@ -4799,6 +4949,7 @@ while true; do
     d | D) delete_from_playlist ;; # remove the focused row from the playlist on screen
     h | H) open_history ;;    # open the listening log as the row source
     c | C) open_parts ;;      # open the focused row's parts (?p=N) as the row source
+    i | I) open_item ;;       # open the focused row as the card's subject (one --info)
     "+") enqueue_selected ;;  # append the focused row to the running player's queue
     ">") skip_next ;;         # skip to the next queued track
     "/") filter_live ;;       # LIVE incremental filter

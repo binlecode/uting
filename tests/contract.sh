@@ -1385,7 +1385,14 @@ else
     # record view_count and then discard it on the next run. The value it would write
     # (view_count) differs from the pinned one (relevance), so the check cannot pass by
     # accident — which is exactly what a fixture that agreed with the environment would do.
-    TUI_CMD="cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance shell/uting 'lofi hip hop'"
+    # YT_LANG=en pins the pane's CHROME LANGUAGE. Every assertion in this section used to be
+    # language-neutral by necessity — the default is "zh under a zh* locale, English
+    # otherwise", so the pane spoke whichever language the machine did, and a check that named
+    # a chrome string would have been green on one host and red on the next. The `i` checks
+    # below need to name one (the item card's head, and the label on a field the list cannot
+    # hold), so the language becomes an input rather than an accident. Nothing else in the
+    # section reads a chrome string, so nothing else changes.
+    TUI_CMD="cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance YT_LANG=en shell/uting 'lofi hip hop'"
     TUI_CMD="$TUI_CMD"'; printf "RC=%s\n" $?'
     TUI_CMD="$TUI_CMD"'; stty -a </dev/tty | tr " " "\n" | grep -E "^-?(echo|icanon)$" | tr "\n" " " | sed "s/^/FLAGS= /"; echo; sleep 20'
     tmux new-session -d -s "$TS" -x 100 -y 30 "$TUI_CMD"
@@ -1661,6 +1668,52 @@ else
         sleep 0.25; i=$((i + 1))
     done
     report "b again leaves it for search" 1 "$backed"
+
+    # `i` — the focus card's second SUBJECT, and the only door to it. Three claims in one
+    # sequence, and the middle one is the whole point: a card that opened carrying only the
+    # fields the LIST already shows (title, channel, duration, views, id, mode, quality) would
+    # be the degenerate full-screen frame P5 rejected, and it would sail through a "the card
+    # opened" check. So the witness is a field the list CANNOT hold — the upload date the
+    # fetch went and got. Down first, onto row 2: row 1 of this query is a 24/7 live radio,
+    # and an item's upload date is only reliably published for an ordinary video.
+    tmux send-keys -t "$TS" Down
+    sleep 0.4
+    tmux send-keys -t "$TS" i
+    shown=0; i=0
+    while [ $i -lt 80 ]; do
+        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'ITEM FOCUS' && { shown=1; break; }
+        sleep 0.3; i=$((i + 1))
+    done
+    report "i opens the item subject" 1 "$shown"
+    paid=0
+    tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'uploaded 2' && paid=1
+    report "…and it carries what the fetch got" 1 "$paid"
+    if [ "$shown" != 1 ] || [ "$paid" != 1 ]; then
+        echo "  ---- pane at the moment i did not open an item card ----" >&2
+        tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
+        echo "  ---- end of pane ----" >&2
+    fi
+    # Tab's semantics are unchanged, and this is the line that says so rather than the commit
+    # message: out of the item card is the list, and Tab back in is the card about the PLAYING
+    # track. Nothing is playing in this pane, so that card is the empty state — whose head is
+    # the playing subject's, not the item's. A subject that was never reset would show the
+    # item head here and the two heads differ, so the check cannot pass by accident.
+    tmux send-keys -t "$TS" Tab
+    sleep 0.5
+    tmux send-keys -t "$TS" Tab
+    reset=0; i=0
+    while [ $i -lt 40 ]; do
+        pane=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null)
+        case "$pane" in
+        *"ITEM FOCUS"*) ;;
+        *"NOW PLAYING FOCUS"*) reset=1; break ;;
+        esac
+        sleep 0.25; i=$((i + 1))
+    done
+    report "Tab still means the playing track" 1 "$reset"
+    # Back to the list, so `q` below is pressed where it has always been pressed.
+    tmux send-keys -t "$TS" Tab
+    sleep 0.5
 
     # `q` used to be asserted by waiting for tmux to tear the session down, which proves the
     # pty is not wedged but says nothing about the status or about what was handed back. The
