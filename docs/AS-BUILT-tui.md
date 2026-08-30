@@ -561,7 +561,7 @@
     它们仍然进 `CW_NARROW`，哪怕没有任何东西去量 spinner 那一行 ——
     这样"每个字形都有已知宽度"这条不变量是**由构造成立**的，而不是取决于字形碰巧打在哪儿。
 
-    **Ambiguous EAW —— 默认一格，只有在 `YT_AMBIG_WIDE=1` 下才是两格（13 个）**
+    **Ambiguous EAW —— 默认一格，只有在 `YT_AMBIG_WIDE=1` 下才是两格（15 个）**
 
     | 字形 | 码位 | 声明为 | 名称 |
     |---|---|---|---|
@@ -575,19 +575,21 @@
     | `↓` | U+2193 | `GL_AV` | Downwards Arrow |
     | `─` | U+2500 | 进度条轨道、卡片分隔线 | Box Drawings Light Horizontal |
     | `━` | U+2501 | 进度条填充 | Box Drawings Heavy Horizontal |
+    | `▣` | U+25A3 | `GL_CPU`（资源读数的 cpu 标签） | White Square Containing Black Small Square |
+    | `▤` | U+25A4 | `GL_RAM`（资源读数的内存标签） | White Square With Horizontal Fill |
     | `▶` | U+25B6 | `GL_PLAY` | Black Right-Pointing Triangle |
     | `○` | U+25CB | `GL_DOT_OFF` | White Circle |
     | `●` | U+25CF | `GL_DOT`、`GL_LIVE`、进度条头 | Black Circle |
 
-    这 13 个 Ambiguous 就是**全部**依赖配置的表面：唯一一批格数会被某个终端设置挪动的字符，
+    这 15 个 Ambiguous 就是**全部**依赖配置的表面：唯一一批格数会被某个终端设置挪动的字符，
     也是 `YT_AMBIG_WIDE` 唯一碰得到的一批。那 8 个 Neutral 按其分类的定义就是一格，
     任何设置都够不到它们。`♫` U+266B 属于后者而不是与箭头同列 —— 它是 Neutral，
     所以哪怕在 `YT_AMBIG_WIDE` 下也仍是一格。
 
-    因此 TUI 画出来的一切都落在四个桶之一：ASCII（1 格）、这 21 个（入表）、
+    因此 TUI 画出来的一切都落在四个桶之一：ASCII（1 格）、这 23 个（入表）、
     CJK 标签文本（2 格，精确），或者未入表因而被保守多算 —— 最后这个桶里
     `🎧` 是个特例：它同样不入表，但默认的 2 对它不是多算而是**精确**。`YT_ASCII=1`
-    （非 UTF-8 locale 下自动开）把这 21 个全部换成 ASCII 等价物，
+    （非 UTF-8 locale 下自动开）把这 23 个全部换成 ASCII 等价物，
     于是这份库存恰好只有两个状态、没有依赖字体的中间地带 ——
     这也是为什么每一个画出来的字形都必须有一个 `GL_*` 名字。分页圆点是最后一批硬编码字面量
     （行内的 `●` / `○`，而 `○` 连名字都没有）；它们如今走 `GL_DOT` / `GL_DOT_OFF`。
@@ -795,6 +797,16 @@
     而 `play_selected` 是在启动下一首**之前**经 `stop_current_playback` 够到它的 ——
     于是横幅会一直显示**上一首**的已播时间，直到第一次滴答把它覆盖掉。
     如今三个一起清，而"空"也恰好就是兜底所读的那个"还没有读数"的信号。
+  - **横幅与卡片各带一个播放器足迹字段（`▣ N% ▤ NM`，UT_RESOURCE）。**
+    标签是 `GL_CPU`/`GL_RAM`（▣ U+25A3 / ▤ U+25A4，Ambiguous，入 `CW_AMBIG` 表；
+    `YT_ASCII=1` 下回退成 `cpu`/`ram` 文字）。
+    读的是同一对缓存（`RES_CPU`/`RES_MEM`，`fetch_play_res` 在共享时钟上每
+    UT_RESOURCE_TICKS 拍采一次），所以两个视图不可能在"播放器吃多少"上互相矛盾，
+    渲染也不为它花任何 fork。口径、读法与两个键的语义在 `AS-BUILT-contract.md` §5
+    （一个事实一个地方）。丢弃顺序里它排在键尾之后、位置读数之前 ——
+    足迹说的是播放器的开销，不是曲目；卡片那边它是元信息行最右的字段，最先被甩。
+    与 PT_ 三元组一起在 `clear_play_state` 清空，计数器同时归零，
+    于是下一个播放器的第一拍就采样，而不是接着上一个播放器的步幅走。
   - **时长轨是用绝对列跳定位的，不是算出来的补白。** 靠补白右对齐会发出 `room - DISP_W`
     个空格，那会把这一列放在**我们的测量**说的地方 —— 而宽度规矩是**按设计多算**的。
     一个由数学粗体字母组成的标题（`𝗖𝗛𝗜𝗟𝗟`：量出 2 格、画出 1 格）会把它的时长停在

@@ -840,6 +840,10 @@ case "$KEYS_TIER" in
 core | full) ;;
 *) die "UT_KEYS must be one of: core, full" ;;
 esac
+# The resource readout's two knobs ride the same door. Config-only, no flag: whether the
+# chrome shows the player's cpu/ram is set-once tuning, not a per-request choice.
+case "$UT_RESOURCE" in 0 | 1) ;; *) die "UT_RESOURCE must be 0 or 1" ;; esac
+is_uint "$UT_RESOURCE_TICKS" && ((UT_RESOURCE_TICKS > 0)) || die "UT_RESOURCE_TICKS must be a positive integer"
 
 # A unix-socket netcat as well as jq: every transport key (pause, seek, volume) and every
 # time readout goes through the player's socket, so a machine without one loses half the
@@ -1172,6 +1176,10 @@ GL_NOTE="♫ "; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
 # ▶ / ❚❚ / ● and the arrow hints as tofu on a font that can't draw them.
 GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_DOT="●"; GL_DOT_OFF="○"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="↵"
 GL_BULLET="•"; GL_ELL="…"; GL_ARROW="→"; GL_DASH="—"
+# The resource readout's two labels (UT_RESOURCE): geometric squares from the same family as
+# the rails' stroke language — ▣ an abstract chip, ▤ a filled "storage cell". Both are
+# East-Asian Ambiguous, so they are tabled in CW_AMBIG below, not hardcoded as one cell.
+GL_CPU="▣"; GL_RAM="▤"
 # Spinner frames: ONE quadrant block orbiting the corners of a cell — a rotating box drawn by
 # a single glyph, so it animates without ever widening the line. Quadrants are the minimal
 # choice on purpose: they are drawn from the same box-drawing block the rails use, they are
@@ -1193,6 +1201,7 @@ init_glyphs() {
         GL_NOTE=""; GL_LIVE="LIVE"; GL_SEP="|"; GL_CARET=">"
         GL_PLAY=">"; GL_PAUSE="||"; GL_DOT="*"; GL_DOT_OFF="o"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
         GL_BULLET="-"; GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
+        GL_CPU="cpu"; GL_RAM="ram"
         GL_SPIN=("|" "/" "-" "\\")
     fi
     # The header icon is a two-cell SLOT, not a character, and which glyph fills it is a
@@ -1632,7 +1641,7 @@ card_divider() {
 CW_ZWJ=$'\xe2\x80\x8d'
 CW_ZERO=""      # characters that add no cells
 CW_NARROW=""    # non-ASCII characters that still take only one, in any terminal
-CW_AMBIG='·—•…←↑→↓─━○●▶'    # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
+CW_AMBIG='·—•…←↑→↓─━○●▶▣▤'    # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
 CW_AMBIG_W=1
 CW_RANGE=""
 cw_range() {
@@ -1878,7 +1887,43 @@ PT_PCT=""
 # it would be the second spelling this file spends its width layer avoiding. Empty means no
 # reading (a live stream, a socket that answered nothing) — never 0, which is a real position.
 PT_POS_SEC=""
+# The player's own footprint — CPU percent and resident MB — summed over its PROCESS GROUP,
+# not its pid: the recorded pid is the detached wrapper (a bash that costs nothing), and
+# `set -m` at launch made it the group leader (pgid == pid), so the group is the wrapper,
+# mpv, and any fallback mpv in one number. One `ps -A | awk` pass because it is the reading
+# with ONE portable spelling: `ps -g` selects by pgid on macOS but by session/group name
+# under procps, and rss is KB on both. Measured at 24ms — cheap, but not once-a-second
+# cheap, so it rides every UT_RESOURCE_TICKS-th call of the shared clock (fetch_play_times,
+# the one beat both views pass through) and the renderers read the cached pair. %cpu is
+# ps's own semantics on each platform (a decaying/lifetime average, not an instant) — the
+# approximation is the price of the one-command reader. Empty means no reading: disabled,
+# nothing playing, or the group already gone.
+RES_CPU=""
+RES_MEM=""
+RES_TICK=0
+fetch_play_res() {
+    [[ "$UT_RESOURCE" != 0 ]] || return 0
+    [[ -n "$CURRENT_PLAY_PID" ]] || { RES_CPU=""; RES_MEM=""; return 0; }
+    RES_TICK=$((RES_TICK + 1))
+    # -1 so the FIRST call samples: clear_play_state zeroes the counter, and a readout that
+    # waited a full stride after Enter would sit empty exactly when the user looks for it.
+    if (((RES_TICK - 1) % UT_RESOURCE_TICKS != 0)); then return 0; fi
+    local out=""
+    out=$(ps -A -o pgid=,%cpu=,rss= 2>/dev/null |
+        awk -v g="$CURRENT_PLAY_PID" '
+            $1 == g { c += $2; r += $3; n += 1 }
+            END { if (n) printf "%.0f %.0f", c, r / 1024 }') || out=""
+    if [[ -n "$out" ]]; then
+        RES_CPU="${out%% *}"
+        RES_MEM="${out##* }"
+    else
+        RES_CPU=""
+        RES_MEM=""
+    fi
+    return 0
+}
 fetch_play_times() {
+    fetch_play_res
     PT_CUR="--:--"
     PT_TOTAL="$CURRENT_PLAY_DURATION"
     PT_PCT=""
@@ -2400,6 +2445,12 @@ clear_play_state() {
     PT_TOTAL=""
     PT_PCT=""
     PT_POS_SEC=""
+    # The resource pair clears with them and for the same reason: a footprint drawn for a
+    # player that no longer exists. The counter resets so the NEXT player's first tick
+    # samples instead of finishing the old player's stride.
+    RES_CPU=""
+    RES_MEM=""
+    RES_TICK=0
 }
 
 # The detached player owns its own lifecycle, so uting only learns of its death by asking.
@@ -2939,6 +2990,11 @@ display_list_menu() {
                 b_tail=" $GL_SEP $PT_CUR / ${PT_TOTAL:-$CURRENT_PLAY_DURATION}"
             fi
         fi
+        # The player's footprint (UT_RESOURCE): the pair fetch_play_res cached on the same
+        # clock the position rode in on, so the field costs the banner no fork of its own.
+        # Empty (disabled, or no reading yet) draws nothing rather than a bare label.
+        local b_res=""
+        [[ -n "$RES_CPU" ]] && b_res=" $GL_SEP $GL_CPU ${RES_CPU}% $GL_RAM ${RES_MEM}M"
         local b_hint=""
         if ((!nav_ok)); then
             b_hint="  [Tab $S_FOCUS | Space $S_PAUSE | s $S_STOP | 9/0 $S_VOL]"
@@ -2947,6 +3003,7 @@ display_list_menu() {
         # returns status 1, which `set -e` would take as a failure (see char_w).
         disp_w "$b_head"; local head_w=$DISP_W
         disp_w "$b_tail"; local tail_w=$DISP_W
+        disp_w "$b_res"; local res_w=$DISP_W
         disp_w "$b_hint"; local hint_w=$DISP_W
         # The three fields are dropped in VALUE ORDER when the width cannot pay for them
         # all, the way the footer below reclaims its lines — and for the same reason: a
@@ -2957,13 +3014,19 @@ display_list_menu() {
         # with a track playing).
         #
         # Key tail first: it only exists because the navigation block was dropped, and it is
-        # a copy of that block. Then the POSITION readout — the rail under the chrome band
-        # already carries the same percent, so the row loses a duplicate, not a fact. The
-        # title is last because it is the only field that names what is playing; below that
-        # there is nothing left to give and it takes the pane minus its own label.
-        local title_room=$((nav_cols - head_w - tail_w - hint_w))
+        # a copy of that block. The FOOTPRINT next — it describes the player's cost, not the
+        # track, and nothing else on screen depends on it. Then the POSITION readout — the
+        # rail under the chrome band already carries the same percent, so the row loses a
+        # duplicate, not a fact. The title is last because it is the only field that names
+        # what is playing; below that there is nothing left to give and it takes the pane
+        # minus its own label.
+        local title_room=$((nav_cols - head_w - tail_w - res_w - hint_w))
         if ((title_room < 12)); then
             b_hint=""; hint_w=0
+            title_room=$((nav_cols - head_w - tail_w - res_w))
+        fi
+        if ((title_room < 12)); then
+            b_res=""; res_w=0
             title_room=$((nav_cols - head_w - tail_w))
         fi
         if ((title_room < 8)); then
@@ -2973,10 +3036,11 @@ display_list_menu() {
         # No clamp below zero: truncate_disp's contract already covers a budget that
         # cannot hold anything, and clamping UP to 1 would spend a cell the row has not got.
         truncate_disp "$CURRENT_PLAY_TITLE" "$title_room"
-        printf '%s%s %s:%s %s%s%s%s%s%s%s%s%s\033[K\n' \
+        printf '%s%s %s:%s %s%s%s%s%s%s%s%s%s%s%s%s\033[K\n' \
             "$p_color" "$p_icon" "$p_label" "$C_RESET" \
             "$C_CYAN" "$TRUNC_TEXT" "$C_RESET" \
             "$C_DIM" "$b_tail" "$C_RESET" \
+            "$C_DIM" "$b_res" "$C_RESET" \
             "$C_DIM" "$b_hint" "$C_RESET"
     else
         printf '\033[K\n'
@@ -3716,7 +3780,12 @@ display_now_playing_card() {
             truncate_disp "$CURRENT_PLAY_SELECTED" "$CARD_SELECTED_MAX"
             sel_field="$TRUNC_TEXT"
         fi
-        card_meta_row "$cols" "$p_status" "$p_color" "$seg_time" "$CURRENT_PLAY_MODE" "$sel_field"
+        # The player's footprint (UT_RESOURCE), cached by fetch_play_res on the call above —
+        # the same pair the list banner shows, so the two views agree. Rightmost, so
+        # card_meta_row sheds it first: it describes the player's cost, never the track.
+        local res_field=""
+        [[ -n "$RES_CPU" ]] && res_field="$GL_CPU ${RES_CPU}% $GL_RAM ${RES_MEM}M"
+        card_meta_row "$cols" "$p_status" "$p_color" "$seg_time" "$CURRENT_PLAY_MODE" "$sel_field" "$res_field"
         # The row `i` paid for, on the track that is playing — the same fragment the item card
         # draws, so an upload date is spelled once. Only what one fetch found, never the
         # description: this card is a live readout with a queue under it, and a paragraph would

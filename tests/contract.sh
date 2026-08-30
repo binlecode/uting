@@ -709,7 +709,7 @@ report "ut-play --quality keeps the engine gate" 1 \
 # And the claim is the MESSAGE, not the exit code: every one of these exits 1 and so does the
 # TTY gate a few lines further down the same file, so an exit code alone cannot separate
 # "refused the value" from "refused the pipe" and the check could not fail.
-for spec in UT_PLAY_QUALITY=bogus UT_KEYS=bogus YT_BG=sideways; do
+for spec in UT_PLAY_QUALITY=bogus UT_KEYS=bogus YT_BG=sideways UT_RESOURCE=maybe UT_RESOURCE_TICKS=fast; do
     KNOB_OUT=$(env "$spec" shell/uting </dev/null 2>&1 || true)
     case "$KNOB_OUT" in
     *"${spec%%=*}"*) KNOB_HIT=yes ;;

@@ -88,6 +88,13 @@ UT_QUALITY_CYCLE=auto medium high   # order the f key steps through. Not the ful
                                     # low is a deliberate choice, not a step you want to land
                                     # on while rotating past it — add it here if you want it
 UT_THEME_CYCLE=minimal catppuccin tokyonight nord gruvbox onedark mono   # the t key
+UT_RESOURCE=1                       # 0 = no cpu/ram readout for the playing player. The
+                                    # readout is the player's own PROCESS GROUP (wrapper +
+                                    # mpv), not the whole machine, and draws only while
+                                    # something plays
+UT_RESOURCE_TICKS=3                 # seconds between resource samples: the reader (one
+                                    # ps -A pass, ~24ms) rides every Nth tick of the TUI's
+                                    # shared 1 s clock
 UT_KEYS=core                        # how much of the keymap the hint block prints:
                                     # core = this view's own job, one line; full = every
                                     # key it has. The ? key toggles it live and writes it
