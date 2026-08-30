@@ -416,7 +416,7 @@ dotfiles 布局里成立；把套件抽成自己的仓库，才把它暴露出�
    │ ut-play
    │  (a) 长选项**归一化**循环
    │      --json→-j  --detach→-d  --list→-l  --help→-h --version→-V
-   │      --color/--volume/--engine/--quality/--id → 变量；--queue → QUEUE_INPUT
+   │      --color/--volume/--start/--engine/--quality/--id → 变量；--queue → QUEUE_INPUT
    │      --status/--stop/--set-volume/--pause/--resume/
    │        --seek/--seek-to/--enqueue/--next → set_action
    │      --get-url / --info / --transcript → die，并点名 <engine>-resolve
@@ -425,7 +425,8 @@ dotfiles 布局里成立；把套件抽成自己的仓库，才把它暴露出�
    │  (b) getopts  ":f:S:dljhV"  → MODE、FORMAT_SORT、OUTPUT_MODE
    │      未知的 -n/-m/-M/-s → die "那是搜索的 flag"
    │      未知的 -J          → die "那是引擎的 flag"
-   │  (c) **校验**  值域（--color 枚举、--volume 0-100）与组合规矩：只许一个动作，
+   │  (c) **校验**  值域（--color 枚举、--volume 0-100、--start 非负整数秒）与组合规矩：
+   │      只许一个动作，--start 是播放路径的 flag 所以与任何动作互斥（player §9.7），
    │      --id/--all/-d/--queue 各自能配什么（完整清单是契约面，
    │      AS-BUILT-contract.md §1.1）。--queue 的条目在**父进程**里从 stdin 读好，
    │      于是坏队列是调用方 shell 里的用法错误 1，不是 detached 日志里的一行
@@ -1049,7 +1050,11 @@ AS-BUILT-contract.md §1.1）与 `-j`（结构化结果），
 - **对一个 detached 播放器的运行时控制是一组动词**（`--set-volume N`、`--pause`、
   `--resume`、`--seek ±N`、`--seek-to N`，每个都可带 `[--id ID]` ——
   player §9.3 / AS-BUILT-contract.md §1.1、§3）：机制 —— 每实例 socket、`ipc_command`、
-  惰性的 `nc` 门 —— 全在 player §9.3；`--volume N` 仍然是启动时的**起始**音量。
+  惰性的 `nc` 门 —— 全在 player §9.3；`--volume N` 仍然是启动时的**起始**音量，
+  `--start N` 同理是启动时的**起始位置** —— 它刻意**不是**一个动词：移动一个已经在跑的
+  播放头是 `--seek-to` 的活，而链接里带的那个 `t=` 在引擎那一侧就被读成了信封的
+  `start_seconds`（AS-BUILT-engine.md §10.4、player §9.7）。这是 §3.4 的一次直接应用，
+  不是一条新决定：认得写法是站点知识，执行偏移是播放动作，缝还是信封。
   **这套套件不按那条听起来很有道理的判据走 —— "只有当调用方真的没法直接跟 socket
   说话时，才加一个动词"。** 它写在这里，是因为一条这么像规矩的规矩会被反复重提。
   四件事否掉它：

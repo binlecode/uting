@@ -11,6 +11,7 @@ uting                                  # interactive: search, browse, play, cont
 yt-search -j -n 25 -- "lofi hip hop"   # machine: one line of JSON out
 bili-search -j -n 25 -- "周杰伦"        # machine: the second source, the same envelope
 ut-play -d -j -- "<url>"               # machine: launch detached, get {id, pid, sock}
+ut-play -d --start 601 -- "<url>"      # machine: open at 601s (a link's own &t= does this too)
 yt-resolve --transcript -j -- "<url>"  # machine: captions as clean text + timed segments
 ut-play --status -j                    # machine: what is playing, where, how loud
 ut-play --pause --id <id> -j           # machine: also --resume, --seek ±N, --seek-to N
@@ -37,14 +38,17 @@ sets for you.
 - **`ut-play`** — the player. Source-agnostic: it drives mpv, owns the detached player lifecycle
   (id / pid / socket / lock / state dir / reap) and the **queue** a player consumes — a lone
   handle is a queue of one, each item resolved when it is reached because a stream URL expires —
-  and defines the contract. It never searches and
+  and defines the contract. It EXECUTES a start offset (`--start SEC`, or the one a link carried)
+  without knowing any site's spelling for it: `?t=601s` is YouTube grammar, and reading it is the
+  engine's job — the player only ever sees a number. It never searches and
   never extracts, so it knows nothing about YouTube. Deliberately single-purpose, with mutually
   exclusive flags rejected up front and a flag that moved to an engine answered by naming that
   engine — because that is what makes it safe for a small model to call.
 - **`yt-search` + `yt-resolve`** — the YouTube *engine*, a pair. Search turns a query into results;
   resolve turns a result id (or a URL) into a direct stream URL plus the HTTP headers it must be
   fetched with, and also answers `--info` and `--transcript`. Everything site-specific lives here:
-  the yt-dlp calls, the cookie decision, the format-per-mode table. Adding a source is adding a pair.
+  the yt-dlp calls, the cookie decision, the format-per-mode table, and the ten spellings of a
+  timestamp that all become one `start_seconds`. Adding a source is adding a pair.
 - **`bili-search` + `bili-resolve`** — the Bilibili *engine*, the second pair, and the proof that
   the sentence above is true: neither the player nor the TUI changed a line to admit it. Its two
   halves use **different primitives** — search talks HTTP through `curl` because yt-dlp's Bilibili

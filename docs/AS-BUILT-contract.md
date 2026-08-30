@@ -40,12 +40,19 @@
 
 - **它拥有：** 播放、detached 生命周期、播放信封、退出码分类学、`players/`。
   **它不拥有任何站点知识：** 没有 yt-dlp 调用，没有 cookie 决定，没有格式字符串，没有 id 形状。
-- **标志：** `-f -S -d -j -l -h -V` 加上长标志 `--engine --volume --detach --json --list
+- **标志：** `-f -S -d -j -l -h -V` 加上长标志 `--engine --volume --start --detach --json --list
   --status --stop --set-volume --pause --resume --seek --seek-to --queue --enqueue --next
   --id --all --color --quality --help --version`。颜色只有 `--color`（没有 `-c`）；
   `-S` 是格式排序覆盖（没有 `-F`），原样转发给引擎；`--quality` 同理（没有短旗），
   `auto|low|medium|high` 四档在**门口**校验（bogus 档退出 1），档位原样转发给引擎 ——
   （mode, tier）→ yt-dlp sort 的映射表住在引擎里（§1.3），不在播放器里。
+  `--start SEC` 是**启动时**的播放位置，只收非负整数秒（负数、`hh:mm:ss`、小数、非数字
+  一律在门口退出 1）：**刻意不透传 mpv 自己的 `--start` 语法**（`-60` 从末尾算、`50%` 是分数），
+  那会把 mpv 的语法发布到冻结面上，从此换不掉播放器；套件里的时间一律是秒
+  （`duration`、`position`、`--seek-to`、收听行的 `seconds`）。它属于**播放路径**，
+  与任何生命周期动词互斥 —— 移动一个已经在跑的播放头是 `--seek-to` 的活。
+  它压过句柄自己带的偏移（§1.3 的 `start_seconds`），
+  在一个队列里**只作用于第一条**（AS-BUILT-player.md §9.5）。
   `--` 结束选项解析：它之后的一切都是句柄
   （ARCHITECTURE.md §6）。一次调用至多一个动作；`--id` 属于每一个**寻址**某个在跑的播放器的动词
   （`--stop`、`--set-volume`、`--pause`、`--resume`、`--seek`、`--seek-to`、`--enqueue`、`--next`），
@@ -64,6 +71,7 @@
    ut-play -d --queue - < items.json              以一个**队列**启动；第一条开始放
    ut-play --enqueue - [--id ID] < items.json     追加到一个在跑的播放器的队列
    ut-play --next [--id ID]                       丢掉这一条，开始下一条（4：没有下一条）
+   ut-play --start 601 -- <handle>                从第 601 秒开始；压过句柄自带的偏移
    ut-play --quality high -- <handle>             质量档：auto|low|medium|high（默认 auto）
    ut-play                      → 用法错误，点名 <engine>-search / uting（ARCHITECTURE.md §3.2）
    ut-play -- "some query"      → 用法错误，点名 <engine>-search（有空白 ⇒ 不是句柄）
@@ -237,7 +245,7 @@
    <engine>-search                            ut-play
    ─────────────────────────────────         ─────────────────────────────────
    允许： -n -m -M -s -l -j -J               允许： -f -S -d -j -l --engine --volume
-          --color -h -V                             --status --stop --set-volume
+          --color -h -V                             --start --status --stop --set-volume
                                                     --id --all --color -h -V
    拒绝（→ "use ut-play"）：                  拒绝（→ "use <engine>-search"）：
           -f -d --detach --status                   -n -m -M -s
@@ -344,7 +352,7 @@ ARCHITECTURE.md §3.7 唯一被批准的例外是那个 mpv socket（AS-BUILT-pl
 ```json
 { "status":"ok", "engine":"yt", "id":"dQw4w9WgXcQ",
   "url":"https://www.youtube.com/watch?v=dQw4w9WgXcQ",
-  "title":"…", "duration":213, "mode":"audio", "format":"ba/b",
+  "title":"…", "duration":213, "start_seconds":601, "mode":"audio", "format":"ba/b",
   "selected":"251 - audio only (medium)", "selected_resolution":"audio only",
   "stream_urls":["https://rr2---sn-….googlevideo.com/videoplayback?…"],
   "http_headers":{"User-Agent":"…","Accept-Language":"…"},
@@ -359,6 +367,20 @@ ARCHITECTURE.md §3.7 唯一被批准的例外是那个 mpv socket（AS-BUILT-pl
   在一个检查 `Referer` 或钉死 `User-Agent` 的 host 上，一个光秃秃的流 URL 不足以取到东西，
   而播放器无从把它们发明出来。一个引擎**不得**在这里返回凭据头 ——
   播放器把这些放在 mpv 的 argv 上，那是 `ps` 读得到的地方。
+- **`start_seconds` 是必需键**，取值 `null` 或一个**非负整数秒**：句柄要求从哪里开始，
+  没要求就是 `null`。它与 `http_headers`（必需、可为 `{}`）、`kind`/`access` 同一套家法 ——
+  第三个引擎作者不会"忘了实现"，而漏键与一次被截断的读也才分得开。
+  **`url` 里不带这个偏移**，两个键各回答一个问题：`url` 说这是哪个媒体，`start_seconds` 说从哪开始。
+  这不是洁癖 —— `ut-playlist --add` 存下来的正是这个 `url` 字符串，
+  偏移搭在里面就意味着一首收藏的曲子从此每次都从 10:01 开始放。
+  yt 那边是白拿的（`webpage_url` 本来就不带 `t`），
+  bili 那边必须动手剥，因为那个站的 `webpage_url` 保留整个 query —— `?p=N` 就在里面
+  （AS-BUILT-engine.md §10.4）。解析不出来的值（`?t=banana`）是 `null`，**不是错误**：
+  它没有回答一个必须被回答的问题。小数向下取整（`601.5` → `601`）：这个键数的是
+  "已经过去了多少秒"，四舍五入会把播放头推过调用方指的那一刻。
+  `--info` 信封带同一个键，两个信封说同一件事。
+  **`?t=0` 与"没带偏移"是两个不同的答案**（`0` vs `null`），
+  而每一种把两者折进同一个值的写法都会在这里印错 —— `tests/contract.sh` 拿它当判别性输入。
 - **`format`** 是引擎**发出去**的那个格式选择串。播放器把它原样记进播放器状态文件，从不去读它：
   `bv*+ba/b` 是一句 yt-dlp 表达式，而播放器不懂那门语言。
 - **`selected` / `selected_resolution`** 是同一件事的**回答**那一半：yt-dlp 自己报的
@@ -1020,21 +1042,29 @@ Cookie 处理：`YT_COOKIE_BROWSER` 是按平台做存在性检查的（那个�
    加上**仅仅**这个站点支持的那些动词（§1.3：以"有没有"声明能力）；`-f` 只收那五个
    规范模式 —— 别名是 `ut-play` 的（§1.3）；§3 那个解析信封
    （`stream_urls[]` 视频在前、`http_headers{}` 必需且不含凭据、`format` 不透明、
-   `selected`/`selected_resolution` 是提取器**挑中**的那一个而不是请求的回声、`retried`）；
+   `selected`/`selected_resolution` 是提取器**挑中**的那一个而不是请求的回声、`retried`、
+   **`start_seconds`**）；
    一份显式的本站 host 白名单 —— 一个非本站的 URL 或一个畸形的 id 是用法错误，退出 1（§3）。
-3. **`foo-resolve --auth`** —— cookie 决定读自 `FOO_COOKIE_BROWSER`（引擎名大写，
+3. **`start_seconds`（§3）—— 先量，再决定写不写解析代码。** 第一步是跑一次
+   `yt-dlp -J '<一个带时间戳的本站 URL>' | jq .start_time`。**有值就白拿**：读它，
+   归一成 `null` / 非负整数秒即可（`yt-resolve` 就是这样，YouTube 的十种写法一行解析代码都没写）。
+   **没有就自己解**，在 `normalize_target` 里、任何网络请求之前，只认这个站**实测存在**的写法
+   （`bili-resolve` 就是这样，yt-dlp 对 B 站任何形态都不给这个键）。
+   本站根本没有时间戳语法就恒填 `null` —— 那是合法状态，不是缺口。
+   同时检查这个站的 `webpage_url` 会不会把偏移带进 `url`；会的话就剥掉它，且**只剥它**。
+4. **`foo-resolve --auth`** —— cookie 决定读自 `FOO_COOKIE_BROWSER`（引擎名大写，
    §5），信封按 §3，且 `auth=="cookie"` 与 `cookie_browser != "none" and profile_found`
    等价。不吃位置参数，拒 `-f`/`-S`/`-J`，在依赖门之前作答。
    `tests/contract.sh` 把这几条当作对**每一个被发现的**引擎的不变量来断言，
    所以第三个引擎落地那天它就被覆盖了 —— 不是等谁想起来去加一行。
-4. **旋钮前缀：** 引擎自己的调校一律读 `FOO_*`（引擎名大写 —— cookie、格式、传输，
+5. **旋钮前缀：** 引擎自己的调校一律读 `FOO_*`（引擎名大写 —— cookie、格式、传输，
    同一条规矩；§5 里 `BILI_*` 那族就是样子）。`UT_*` 是套件级的（`UT_STATE_DIR`、
    `UT_DEFAULT_ENGINE`、`UT_HISTORY`），引擎不得新增；`YT_*` 是 yt 引擎自己的前缀，
    外加那批冻结的遗留套件级名字（§5 结尾）—— 它不是模板。
-5. **两半都要：** `ENGINE_NAME` 从一个常量印出来；每一个信封（包括错误）里都有 `status` 与
+6. **两半都要：** `ENGINE_NAME` 从一个常量印出来；每一个信封（包括错误）里都有 `status` 与
    `engine`；一个信封一行（§3）；`-V` 在任何依赖门之前回答（§4）；
    门把跨界标志指向正确的动词（§2）。
-6. **别的什么也没有：** 没有播放，没有生命周期，不写 `players/` —— 播放器靠名字找到
+7. **别的什么也没有：** 没有播放，没有生命周期，不写 `players/` —— 播放器靠名字找到
    `foo-resolve`（§1.1），而 `uting` 靠在 PATH 上和自己旁边扫描 `foo-search` + `foo-resolve`
    这一对来发现它（AS-BUILT-tui.md §11）。
 
