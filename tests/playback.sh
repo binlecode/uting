@@ -333,10 +333,17 @@ qout=$(jq -nc --arg a "$U1" --arg b "$U2" \
     '[{engine:"yt",url:$a},{engine:"yt",url:$b}]' | shell/ut-play -d --queue - -j --volume 0 2>/dev/null)
 report "--queue - launches" 0 "$(printf '%s' "$qout" | jq -e '.status=="started" and .id' >/dev/null 2>&1; echo $?)"
 # The queue is visible from the moment the player exists, not once the first track decodes:
-# a caller that asks what is queued must not have to wait for mpv.
+# a caller that asks what is queued must not have to wait for mpv. `upcoming` is asserted
+# beside `next` because it is the READ half of the queue (uting's card draws it): the two
+# describe the same tail, so a projection that let them disagree about what comes next is
+# the failure this check exists to catch. `duration` is the field `next` does not carry —
+# the whole reason the list exists — so it is asserted as PRESENT rather than as a number
+# (these items were queued from urls alone, and an absent duration is null, not zero).
 report "--status carries the queue" 0 \
     "$(shell/ut-play --status -j | jq -e '.players[0].queue
-        | .pos==0 and .len==2 and (.next.url|type=="string")' >/dev/null 2>&1; echo $?)"
+        | .pos==0 and .len==2 and (.next.url|type=="string")
+          and (.upcoming|length)==1 and .upcoming[0].url==.next.url
+          and (.upcoming[0]|has("duration"))' >/dev/null 2>&1; echo $?)"
 qsock=$(printf '%s' "$qout" | jq -r '.sock // empty')
 wait_for_sock "$qsock" || bad "the queued player's socket never appeared — the checks below are moot"
 
@@ -353,6 +360,11 @@ done
 wait
 report "6 concurrent --enqueue all land (3+6)" 9 \
     "$(shell/ut-play --status -j | jq -r '.players[0].queue.len')"
+# Nine queued items is the discriminating input for the CAP: a projection that dumped the
+# whole tail would answer 8 here and grow with every --enqueue, which is the thing --status
+# --all must not do. `len` above already proved the total is still told honestly.
+report "upcoming is capped, len is not" 5 \
+    "$(shell/ut-play --status -j | jq -r '.players[0].queue.upcoming | length')"
 
 # --next: the POSITION moves in the parent, so the envelope reports a queue it read. Then the
 # player follows — a bounded poll, because what is being proved is that it DID follow, not

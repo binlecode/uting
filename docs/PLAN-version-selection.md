@@ -18,7 +18,7 @@
 | P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | **已落**（2026-08-29；`shell/uting` + `contract.sh` 的 tmux 面上一条 `c` 能力门见证，257 项全绿；五次 drive 实测记在 §13） |
 | P3 | `--quality TIER` 贯穿 `ut-play` → `<engine>-resolve` | **已落**（2026-08-29；`ut-play` + 两个 resolve 半边 + `config`；`contract.sh` 256 项 + `playback.sh` 44 项全绿；档位效果与 `-S` 压过 `--quality` 均实测） |
 | P4 | `uting` 的质量档键位（`f`）与写回 | **已落**（2026-08-29；`shell/uting` + `config` 的 `UT_QUALITY_CYCLE`；`contract.sh` 263 项全绿，其中三条新检查在 tmux pane 上：`quality=` 在 auto 上不印、`f` 追加写回 `UT_PLAY_QUALITY=medium`、状态行跟上；四个 cycle 键的「不认识的成员退 1」由一条加固过的循环统一陈述） |
-| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | **在建**，**P6 的前置**。前置 F04 **已落**（2026-08-29；`JQ_TEXT_DEFS` 一份定义，两个 row builder 与 `apply_player_record`（含 `queue.next.title`）共用；实测见 §13 末）。**A 步已落**（`CARD_SUBJECT` + `card_subject_head` / `card_meta_row` 抽出 + `card_item_body`，屏幕零变化，旧新双树逐帧对照）。**B 步的门已落**（`i` 键 + `ENGINE_INFO_OK` 探测 + `apply_item_info` + 单槽缓存 + `nav_tick` 按 subject 早返回 + Tab 进门即复位 subject；`contract.sh` 268 项全绿，其中三条新检查在 tmux 面上，并把面里的 `YT_LANG` 钉成 en 才能断言 chrome 字串）。**余下：在播分支的前方队列块（§11 修订一）、`selected` 格式行、卡内 `i` 对在播曲目叠 info、F05 提示格按视图态把门、文档重同步** |
+| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | **在建**，**P6 的前置**。前置 F04 **已落**（2026-08-29；`JQ_TEXT_DEFS` 一份定义，两个 row builder 与 `apply_player_record`（含 `queue.next.title`）共用；实测见 §13 末）。**A 步已落**（`CARD_SUBJECT` + `card_subject_head` / `card_meta_row` 抽出 + `card_item_body`，屏幕零变化，旧新双树逐帧对照）。**B 步的门已落**（`i` 键 + `ENGINE_INFO_OK` 探测 + `apply_item_info` + 单槽缓存 + `nav_tick` 按 subject 早返回 + Tab 进门即复位 subject；`contract.sh` 268 项全绿，其中三条新检查在 tmux 面上，并把面里的 `YT_LANG` 钉成 en 才能断言 chrome 字串）。**前方队列块的契约前置已落**（§5.4 的 `upcoming`，2026-08-29；`ut-play` 的 `queue_snapshot` + `usage()`，`playback.sh` 46 项全绿 —— 动工前实读源码，发现 §11 修订一「数据已在 `queue` 键里」是错的）。**余下：在播分支的前方队列块渲染、`selected` 格式行、卡内 `i` 对在播曲目叠 info、F05 提示格按视图态把门、文档重同步** |
 | P6 | 章节 → 条目视图里的 seek 目标 | 未开工，排最后 |
 | P7 | Enter 语义不变 | **无需改动**，记录在案以免日后当成疏漏 |
 | P8 | 时长不一致 → 在 parts 视图表头说清 | 已落（随 P2，2026-08-29） |
@@ -26,7 +26,7 @@
 | P10 | 退役 `p`/`P` 的 Tab 别名（键位审计 §12） | 未开工，两行级 |
 | P11 | `j`/`k` = ↓/↑ 别名（键位审计 §12） | 未开工，两行级 |
 | P12 | `?` 随时呼出/收起 keymap（用户新增，2026-08-29） | 未开工 |
-| P13 | resolve 信封加 `selected` / `selected_resolution`（**§5.2**，本计划两项契约动作里的第二项） | **已落**（2026-08-29；两个 resolve 半边 + `ut-play` 的记录/回填/`--status` 投影；`contract.sh` 265 项 + `playback.sh` 45 项全绿）。落地时比 §5.2 多做了一处：`--status -j` 的**投影是一份写死的键集**，不是记录的透传，所以 `selected` 不加进那份键集就永远到不了调用方 —— §13 里 player record 那条检查本身就够不着。请求那一半（`format`）**没有**跟着进投影：它是一句 yt-dlp 表达式，而 `--status` 回答的是「现在在放什么」 |
+| P13 | resolve 信封加 `selected` / `selected_resolution`（**§5.2**，本计划三项契约动作里的第二项） | **已落**（2026-08-29；两个 resolve 半边 + `ut-play` 的记录/回填/`--status` 投影；`contract.sh` 265 项 + `playback.sh` 45 项全绿）。落地时比 §5.2 多做了一处：`--status -j` 的**投影是一份写死的键集**，不是记录的透传，所以 `selected` 不加进那份键集就永远到不了调用方 —— §13 里 player record 那条检查本身就够不着。请求那一半（`format`）**没有**跟着进投影：它是一句 yt-dlp 表达式，而 `--status` 回答的是「现在在放什么」 |
 
 §4 的编号 = 阅读顺序 = 上表的编号，**一套号，不是两套**。P9 与 P13 是表上仅有的两行
 没有 §4 小节的条目：前者是文档重同步，后者的正文就是 §5.2 —— 都不是设计决定，所以不占 §4 的号。
@@ -41,6 +41,10 @@
 `docs/AS-BUILT-verification.md`（§第 57 行与 §27 的 250 行附近）。
 **注意**：这三个文件里 `CLAUDE.md` 当时正被另一个 session 改着（未提交），所以它那一处要单独确认再动，
 别把别人的半成品一起提交。
+
+**同一笔账，`playback.sh` 那半（2026-08-29，§5.4 之后）：** 条数从 **45 变成 46**
+（队尾封顶那条）。`docs/AS-BUILT-verification.md` 第 58 行写着 45，同样等 land 再改。
+§5.4 自己的信封文档债记在那一节末尾。
 
 ---
 
@@ -382,7 +386,7 @@ cmus 的 j/k 本来就是导航，零反义。**只取 j/k，不取 hjkl 全套*
   stderr 带套件稳定的 `unknown flag` 词形（AS-BUILT-contract §2 的门模型保证这个词形）。
   一次 fork、零网络，结果缓存在 `ENGINE_PARTS_OK`，与 `ENGINE_AUTH` 同刷新点。
 
-### 5.2 resolve 信封加两个字段（`--parts` 之外的**唯一**契约动作）
+### 5.2 resolve 信封加两个字段（第二项契约动作）
 
 ```
   今天： {…, "mode":"audio", "format":"ba/b", …}
@@ -415,6 +419,34 @@ cmus 的 j/k 本来就是导航，零反义。**只取 j/k，不取 hjkl 全套*
 （`YT_AUDIO_FORMAT` 等）刻意不对称：档位抽象的全部意义就是用户不写 yt-dlp 串，
 要自定串的用户用 `-S`（逃生口，两个都给时 `-S` 赢）。表值是 land 时可调的出厂细节，
 形状（二维、空=不发）是决定。
+
+### 5.4 队列信封加 `upcoming`（第三项契约动作；P5 的前方队列块要它）——**已落**（2026-08-29）
+
+§11 修订一写的「数据已在 `--status -j` 的 `queue` 键里」**不成立**，动工前实读源码才发现：
+`queue_snapshot`（`ut-play`，`--status` / `--enqueue` / `--next` 三处信封的**唯一**生产者）
+投出的是 `{pos, len, next}` —— 只有**一条** `next`，且 `{title,url,engine}` **不带时长**。
+队列文件里每一项本来就有 `duration`（`read_queue_items` 归一化时就留了），只是没人投出来。
+所以「列出接下来几条的标题与时长」不是一次渲染改动，是本计划的**第三项契约动作**。
+
+```
+  今天： queue: {pos, len, next: {title,url,engine}}
+  之后： queue: {pos, len, next: {title,url,engine},
+                 upcoming: [{title,url,engine,duration}, …]}   # 至多 5 条
+```
+
+`next` **原样留着** —— 它是三处信封已经承诺的形状；`upcoming[0]` 就是 `next` 多一个时长，
+重叠是故意的。**封顶 5**：队列无上界（`--enqueue` 一直追加），而 `--status --all` 每个活播放器
+印一条记录 —— 投出整条队尾等于把调用方的信封大小交给「别人排了多少首」决定。`len` 仍是诚实的
+总数，所以「队尾被截断」与「队列到底了」永远分得清（空数组 = 最后一首）。数字声明在
+`QUEUE_UPCOMING_MAX` 一处，`usage()` 直接插值它，不写第二遍。
+
+**纯新增，版本仍是 z 位。** 检查落在 `playback.sh`（队列的活检查全在那儿，contract.sh 起不了真播放器，
+而「假一个活 pid」是套件明令不收的替身）：既有的 `--status carries the queue` **加固**成同时断言
+`upcoming` 与 `next` 说的是同一条、且 `duration` 键在；九条队列那处**新增一条**
+`upcoming is capped, len is not` = 5 —— 九条正是能把「投出整条队尾」判红的那个输入。46 项全绿。
+
+**留给 land 的文档债（本节自己的）：** `AS-BUILT-contract.md` §3 的 `--status`/`--enqueue`/`--next`
+信封三处、`AS-BUILT-player.md` §9.5 的队列一节，都要补 `upcoming` 与它的封顶。
 
 ---
 
@@ -539,7 +571,9 @@ critique 自己列的填充候选（前方队列、transcript、本曲目的收�
 **采纳进计划的三条修订：**
 
 1. **前方队列块（F02 + F03）。** 在播分支不止一行 `n/N · next`，而是列出接下来几条的标题与时长 ——
-   TUI 里唯一能**读**队列的地方，补上「可写不可读」那半边。数据已在 `--status -j` 的 `queue` 键里。
+   TUI 里唯一能**读**队列的地方，补上「可写不可读」那半边。~~数据已在 `--status -j` 的 `queue` 键里。~~
+   **这句话当时是错的**：`queue` 只有一条 `next` 且不含时长，读队列这半边今天在契约里根本不存在。
+   修法是 §5.4 的 `upcoming`（已落），本条的渲染改动建在它上面。
 2. **标题清洗统一（F04），P5 的前置。** `build_all_rows` 的 jq clean 与 `apply_player_record` 的
    raw title 在合并后的视图里成了**同一个主语的两种拼法**（方向键移到在播行上，标题会换写法）。
    一个清洗器，两个摄入点都过它。

@@ -254,11 +254,14 @@ Output contracts (full schemas: AS-BUILT-contract.md §3):
   --resume  as --pause
   --seek    {status:"ok", id, position:<seconds>}  position is READ BACK from mpv after the
   --seek-to seek, never computed — it is clamped at the ends and refused on a live stream
-  --enqueue {status:"ok", id, added:<n>, queue:{pos,len,next}}
-  --next    {status:"ok", id, queue:{pos,len,next}} | {status:"error", reason:"queue_empty"}
+  --enqueue {status:"ok", id, added:<n>, queue:{pos,len,next,upcoming}}
+  --next    {status:"ok", id, queue:{pos,len,next,upcoming}}
+            | {status:"error", reason:"queue_empty"}
             queue is read back off the player's own queue file, never predicted. Every
             detached player has one (a lone handle is a queue of one), and --status carries
-            the same object per player; \`next\` is null on the last track.
+            the same object per player; \`next\` is null on the last track. \`upcoming\` is the
+            same tail as a LIST — [{title,url,engine,duration}], at most $QUEUE_UPCOMING_MAX
+            entries (\`len\` stays the honest total); upcoming[0] is \`next\` plus its duration.
 
 Exit codes: 0 ok · 1 usage/validation · 2+ propagated engine/mpv failure · 4 lifecycle
             call did not take effect (no such player / ambiguous / IPC failure)
@@ -1515,19 +1518,34 @@ queue_current() {
     return 0
 }
 
-# {pos, len, next} — the queue as the --status record and the queue verbs' envelopes report
-# it. `next` is the item AFTER pos, or null at the end: a caller asking what is coming gets
-# an answer or an honest null, never a guess. Read without the lock on purpose: a reader
-# sees either the file before an mv or the file after it, never a half-written one.
+# {pos, len, next, upcoming} — the queue as the --status record and the queue verbs' envelopes
+# report it. `next` is the item AFTER pos, or null at the end: a caller asking what is coming
+# gets an answer or an honest null, never a guess. `upcoming` is that same tail as a LIST, and
+# it carries each item's DURATION, which `next` never did — it is the read half of a thing a
+# caller could until now only write. The overlap is deliberate: `upcoming[0]` is `next` with a
+# duration, and `next` stays because it is the shape three envelopes already promise.
+#
+# The tail is CAPPED, because a queue is unbounded (--enqueue appends) and --status --all
+# prints one record per live player: projecting the whole remainder would put a caller's
+# envelope size at the mercy of how many tracks someone queued. `len` is still the honest
+# total, so a caller can always tell a capped tail from the end of the queue.
+#
+# Read without the lock on purpose: a reader sees either the file before an mv or the file
+# after it, never a half-written one.
+QUEUE_UPCOMING_MAX=5
 QUEUE_JSON=null
 queue_snapshot() {
     local id=$1 qf
     QUEUE_JSON=null
     qf=$(player_queue "$id")
     [[ -f "$qf" ]] || return 0
-    QUEUE_JSON=$(jq -c '(.items[(.pos + 1)] // null) as $n
+    QUEUE_JSON=$(jq -c --argjson cap "$QUEUE_UPCOMING_MAX" '(.pos + 1) as $s
+                        | (.items[$s] // null) as $n
                         | {pos: .pos, len: (.items | length),
-                           next: (if $n == null then null else {title: $n.title, url: $n.url, engine: $n.engine} end)}'         "$qf" 2>/dev/null) || QUEUE_JSON=null
+                           next: (if $n == null then null else {title: $n.title, url: $n.url, engine: $n.engine} end),
+                           upcoming: [.items[$s:($s + $cap)][]
+                                      | {title: .title, url: .url, engine: .engine, duration: .duration}]}' \
+        "$qf" 2>/dev/null) || QUEUE_JSON=null
     [[ -n "$QUEUE_JSON" ]] || QUEUE_JSON=null
     return 0
 }
