@@ -107,7 +107,7 @@ ut_read_config "$UT_DEFAULTS"
 # ── PREFERENCE WRITE-BACK ───────────────────────────────────────────────────────────────
 # The seven keys above are the ones this TUI changes at runtime, and they are written back to
 # the USER's config file in place. A preference that has to be re-pressed every session is not
-# a preference; the reasoning and the reopen condition are ROADMAP.md D8, the key table is
+# a preference; the reasoning is ARCHITECTURE.md D16 (reopen triggers: ROADMAP), the key table is
 # AS-BUILT-contract.md §5. What the code below is:
 #
 #   WHICH FILE  the user's own ($UT_CONFIG). The shipped `config` is NEVER written — it is
@@ -3224,10 +3224,10 @@ play_selected() {
     errfile=$(mktemp "${TMPDIR:-/tmp}/uting-play-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-play-err.$$"
     # --engine is passed EXPLICITLY and comes from the envelope: ut-play defaults to its own
     # UT_DEFAULT_ENGINE, and letting that default decide would send a second engine's URL to
-    # the first engine's resolver — which since ROADMAP D5.3 is a hard usage error rather
+    # the first engine's resolver — which since ARCHITECTURE.md D20 is a hard usage error rather
     # than the silent mislabel it used to be.
     # The ROW's engine, not the session's: a playlist can mix sources, and passing the
-    # session engine would hand a bili URL to yt-resolve — a hard usage error since ROADMAP D5.3.
+    # session engine would hand a bili URL to yt-resolve — a hard usage error since ARCHITECTURE.md D20.
     # Falls back to the session engine for a row that predates the field (an empty string
     # never reaches ut-play, which would reject it).
     local row_engine="${R_ENGINE[$selected]:-}"

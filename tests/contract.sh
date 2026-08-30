@@ -1426,7 +1426,7 @@ else
     # All of it on the pane that is ALREADY up: no second cold start, no second cold search.
     # The rows on screen are the fixture these keys need, and the keys are the only way to
     # reach the write path — there is no verb for it, deliberately (the agent surface for a
-    # preference IS the config file, ROADMAP.md D8).
+    # preference IS the config file, ARCHITECTURE.md D16).
     #
     # The write is DEFERRED — a cycle sets a dirty bit and the flush happens on the reader's
     # idle tick — so every assertion below POLLS the file instead of reading it once. That is

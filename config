@@ -11,7 +11,7 @@
 #
 # THIS FILE IS NEVER WRITTEN BY ANY COMMAND. Your file is: `uting` writes seven keys back to
 # it when you change one at runtime (engine, sort, mode, quality, theme, language, result
-# count) — in place, comments and layout kept. AS-BUILT-contract.md §5 (write-back), ROADMAP.md D18.
+# count) — in place, comments and layout kept. AS-BUILT-contract.md §5 (write-back), ARCHITECTURE.md D16.
 #
 #   Precedence:  flag  >  environment  >  your config  >  this file
 #
@@ -43,8 +43,9 @@
 #                       stays inline in ut-playlist and ut-history.
 #     UT_START_RESULTS  unset = follow UT_FETCH_BATCH below. How many rows a query STARTS
 #                       from, as opposed to the step each edge moves by. It stays inline in
-#                       uting, and it is the one key of the four that uting WRITES into your
-#                       own file — pressing → or ← is what first puts it there.
+#                       uting, and it is one of the two of these four keys that uting WRITES
+#                       into your own file (YT_LANG, via the l key, is the other) —
+#                       pressing → or ← is what first puts it there.
 #   Set either in your own config or the environment to override.
 
 # ── scope: suite ────────────────────────────────────────────────────────────────────────

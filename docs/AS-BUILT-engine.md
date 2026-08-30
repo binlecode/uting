@@ -57,7 +57,7 @@ AS-BUILT-contract.md §1。下面的一切 —— 那**一个** jq 程序、内�
 
 `engine` 之所以在信封里，是因为一个拿着结果的调用方必须能把它**路由回**懂它的那个 resolver ——
 `ut-play --engine <那个值>`（AS-BUILT-contract.md §3、D12）。它正是 host 白名单
-（ROADMAP D5.3）存在要保其诚实的那个字段。
+（D20）存在要保其诚实的那个字段。
 
 `print_list()` 读的是 **`FILTERED_JSON` 这个变量**，不是发出去的 `-j` 流。
 投影只发生在发射点，所以 JSON 契约可以改而不必碰那个消费者。（schema → AS-BUILT-contract.md §3。）
@@ -90,7 +90,7 @@ AS-BUILT-contract.md §3），并为 `-j`/`-J` 发出
 ### 7.1 Bilibili 的传输 —— 同一个信封，架在一个手工拼出来的请求上（D11）
 
 `bili-search` 用 `curl` + `jq` 而不是 yt-dlp 实现了上面的一切。这个拆法不是偏好，
-它是**唯一**行得通的组合（实测，ROADMAP D5.2）：yt-dlp 的 `--flat-playlist` 用 0.9s 作答，
+它是**唯一**行得通的组合（实测，D19）：yt-dlp 的 `--flat-playlist` 用 0.9s 作答，
 却**一个元数据都没有**（`BiliBiliSearchIE` 产出 `url_result(arcurl, aid)`，
 把它刚刚解析出来的响应里的 标题/作者/时长/播放量 全丢掉了），而一次完整抽取会递归进
 **每一个合集的每一个分 P** —— 这个站点的音乐结果压倒性地是多 P 的 ——
@@ -308,7 +308,7 @@ format 表里），视频 format 表两边逐项相同，`1080P 高码率`（301
 
 这条测量的用处正在这里：**音质永远不能用来反推这个字段，这个字段也永远不能用来预测音质。**
 第一个问号（过期会话）是真实的设计关切，但**上面这组数字没有量到它** ——
-量到它需要一次鉴权往返，这个套件刻意不做（ROADMAP D7）。
+量到它需要一次鉴权往返，这个套件刻意不做（D15）。
 
 ## 10. 解析 —— 引擎的第二半
 
@@ -331,7 +331,7 @@ yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality
 `--quality` 是流格式选择器，撞上 `--info` / `--parts` / `--transcript` 就退 1
 （门语直说它不适用于那些动词）。
 
-**句柄文法是每引擎自己的，host 白名单也是（ROADMAP D5.3）。** `normalize_target` 接受
+**句柄文法是每引擎自己的，host 白名单也是（D20）。** `normalize_target` 接受
 **本**引擎某个 host 上的 URL，或者本引擎自己的媒体 id 形状：
 
 | 引擎 | 接受的 host | 裸 id 形状 |

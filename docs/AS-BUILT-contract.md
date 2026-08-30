@@ -1,7 +1,7 @@
 # AS-BUILT-contract —— uting 的 CLI 契约
 
-那个**冻结面**（ROADMAP D3）：任何一次重写之后仍然活着的东西，也是一次移植的验收规格。
-这里写的全都是 as-built —— 对着八个脚本核过 —— 并按 ROADMAP D3 的 semver 规则由 `VERSION` 定版。
+那个**冻结面**（ARCHITECTURE.md D17）：任何一次重写之后仍然活着的东西，也是一次移植的验收规格。
+这里写的全都是 as-built —— 对着八个脚本核过 —— 并按 D17 的 semver 规则由 `VERSION` 定版。
 **改动这份文件里的任何一条，都是一次刻意的、有记录的行为**（CLAUDE.md 硬规则 4），
 从来不是某个功能的副作用。
 
@@ -15,7 +15,7 @@
 理由在 `ARCHITECTURE.md`（全文各处指过去）；流程在 `CLAUDE.md`。
 一个事实一个地方：这里的 schema 别处一律不再陈述。
 
-**公共 API 的边界**（semver 的版本化对象，ROADMAP D3 由此选位数）：
+**公共 API 的边界**（semver 的版本化对象，D17 由此选位数）：
 
 ```
   在里面：八个命令名本身 · 各自的 argv 与 flag 面 · 退出码表(0/1/2+/4) ·
@@ -24,7 +24,7 @@
           YT_* / UT_* / BILI_* 环境变量 · 配置面（四层链、两个文件的位置、
           键的前缀命名空间、缺出厂文件 = 2，§5）
   不在里面：内部函数名 · 渲染细节与主题 · 注释 · docs/ · tests/ · .claude/skills/ ·
-          引擎背后用哪个原语（curl 还是 yt-dlp —— seam 是 envelope，ROADMAP D5.2）
+          引擎背后用哪个原语（curl 还是 yt-dlp —— seam 是 envelope，D19）
 ```
 
 判一次 bump：把一批变更按这张表过一遍 —— 命中一条"在里面"且是破坏性的就走 y（0.y.z 期间），
@@ -97,7 +97,7 @@
   因为 `--` 停掉的是标志解析，不是参数校验。
 - **信封：** `{status, engine, query, count, results[]}`，一行（§3）。
 - **今天：** `yt-search`（yt-dlp）与 `bili-search`（curl + jq）。同一个信封，不同的传输 ——
-  接缝是信封，不是它背后的工具（ROADMAP D5.2）。
+  接缝是信封，不是它背后的工具（D19）。
 
 ### 1.3 `<engine>-resolve` —— 一个引擎的第二半
 
@@ -275,7 +275,7 @@ core 实现一个宽的多态命令面（一个词是搜索、一个 URL 是播�
 一个粘进 TUI 的 `n`（新搜索）提示里的 URL，除了变成一次被拒绝的搜索之外不能变成任何东西。
 TUI 还**显式**传 `--engine`，**取自信封自己的 `engine` 字段**，从不让 `ut-play` 的默认值来决定：
 装了两个引擎时，那个默认值会把第二个引擎的 URL 送给第一个引擎的 resolver，
-而按 ROADMAP D5.3 那是一个硬用法错误，不是一次悄无声息的贴错标签。
+而按 D20 那是一个硬用法错误，不是一次悄无声息的贴错标签。
 D8 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md §9.3），
 播放器把它的路径发布在 `-d -j` 信封里，正是为了让一个客户端可以用它。
 
@@ -299,7 +299,7 @@ D8 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md §9.3），
   以及它们各自的错误形状。它是那个同时也是命令前缀的 token，
   于是一个手里拿着结果的调用方靠字符串拼接就够到了对应的 resolver（`yt` → `yt-resolve`），
   而 `uting` 不需要一张映射表就能传 `ut-play --engine <那个值>`。
-  **这就是 host 白名单保护的那个字段**（AS-BUILT-engine.md §10，ROADMAP D5.3）：
+  **这就是 host 白名单保护的那个字段**（AS-BUILT-engine.md §10，D20）：
   一个接受了别的站点的 URL 的 resolver，会在这里印出它自己的名字，那条路由声明就成了假的。
   每个引擎都从**一个常量**（`ENGINE_NAME`）印出自己的名字，而不是推导出来，
   所以信封和文件名不可能互相矛盾。
@@ -314,7 +314,7 @@ D8 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md §9.3），
   - **`kind`** —— `ut-play --engine E -- <本行 url>` 会发生什么？恰好播**一个** = `track`；
     一个 handle 出**多个 part** = `multipart`；本行是**多个 handle 的容器** = `collection`。
   - **`access`** —— 匿名解出来的**时间轴**完整吗？完整 = `full`（**码率/音质降级仍是 `full`**）；
-    被截断 = `preview`；解不出流 = `paywalled`。报的是站点事实，不是登录裁决（ROADMAP D7）。
+    被截断 = `preview`；解不出流 = `paywalled`。报的是站点事实，不是登录裁决（D15）。
 
   **枚举装不下的新形态，按这两问映射到最近的值，映射记进 AS-BUILT-engine.md —— 枚举不为它长大。**
   两个字段是**引擎的判断**而不是站点的原始记录，所以 **`-J` 的行同样携带它们**，
@@ -372,7 +372,7 @@ auth 信封（`<engine>-resolve --auth -j`）—— 一行，不发包，也不�
   因为那个账号不是大会员（AS-BUILT-engine.md §8.2）。
   所以 `auth:"cookie"` 与"更好的音质"之间**没有**蕴含关系，两个方向都没有。
   第一件（会话有效性）需要一次鉴权往返 —— 刻意不在这个动词里，也刻意不在这个信封里
-  （ROADMAP D7）。要那个的话，升级路径是把网络调用放到一个 `--auth --probe` 后面，
+  （D15）。要那个的话，升级路径是把网络调用放到一个 `--auth --probe` 后面，
   让这个信封的含义保持不变。
 
 播放状态（`ut-play -j -- <handle>`）—— 播放器自己的信封，也是唯一一个没有 `engine` 键的：
@@ -485,7 +485,7 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
               failed[] 是墓碑列表 —— 那些**自己**死掉的播放器，最新在前，至多 8 条，
               不超过一小时（AS-BUILT-player.md §9.2）。reason 是那个共享的播放枚举。
               一个正常结束或者被 --stop 掉的播放器永远不在里面，
-              所以这个数组是一份**错误记录**，不是收听历史那个功能（ROADMAP D6）——
+              所以这个数组是一份**错误记录**，不是收听历史那个功能（D22）——
               后者有它自己的 durable 存储；这一个住在 $TMPDIR 里且有界。
    --set-volume : {status:"ok", id, volume}          （经 mpv IPC socket 实时调整）
                 | {status:"not_playing"}             （没有目标；退出 4）
@@ -723,8 +723,7 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
 **出厂那份没有任何命令会写。用户那份由 `uting` 写回七个键** —— 见下面「写回」。
 
 **写回（七个键，只写用户那份）。** `uting` 在运行时会改七个设置，它们**就地写回用户那份
-配置**，让下一次会话从这一次停下的地方开始（ROADMAP D8 记着这半条的理由与
-重开条件）。写回的是：
+配置**，让下一次会话从这一次停下的地方开始（理由在 ARCHITECTURE.md D16，重开触发器在 ROADMAP）。写回的是：
 
 ```
    UT_DEFAULT_ENGINE   e 键切来源            UT_SORT_FIELD      o 键换排序字段
@@ -962,7 +961,7 @@ Cookie 处理：`YT_COOKIE_BROWSER` 是按平台做存在性检查的（那个�
 ## 6. 加一个引擎 —— 清单
 
 只有指针；每一项义务上面都已经陈述过一次。一个新来源 `foo` 恰好交付两个可执行文件，
-别的什么也不改（ROADMAP D5.1）：
+别的什么也不改（D18）：
 
 1. **`foo-search`** —— §1.2 那个面：标志 `-n -m -M -s -l -j -J --color -h -V`，
    一个 QUERY 位置参数（拒绝 URL，`--` 之后重新检查），§3 那个搜索信封且
@@ -991,4 +990,4 @@ Cookie 处理：`YT_COOKIE_BROWSER` 是按平台做存在性检查的（那个�
    这一对来发现它（AS-BUILT-tui.md §11）。
 
 引擎按动词自己挑传输（curl 或 yt-dlp 或别的任何东西）—— 接缝是信封，不是它背后的工具
-（ROADMAP D5.2）。
+（D19）。

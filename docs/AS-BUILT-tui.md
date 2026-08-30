@@ -163,7 +163,7 @@
     与这个键从前在第 1 页的 no-op 一模一样。存的是 `RESULT_N`（要了多少）而不是
     `NUM_ENTRIES`（拿到多少）：一次只有 37 条结果的查询不该把下一次查询的起点钉在 37。
 - **七个 cycle 键改的设置会写回用户配置**（`mark_pref` / `flush_prefs`；机制、键表与那三条
-  硬约束在 `AS-BUILT-contract.md` §5「写回」，决定在 ROADMAP D8）。TUI 这一侧只有三件事
+  硬约束在 `AS-BUILT-contract.md` §5「写回」，决定在 ARCHITECTURE.md D16）。TUI 这一侧只有三件事
   值得记在这里：① **置脏点全都在成功路径之后** —— `cycle_engine` / `cycle_sort` 有一个
   取数失败就回滚的窗口，屏幕上是旧值，文件里就必须是旧值；② **写是延后的**，真正落盘发生在
   `nav_tick` 与 `cleanup_on_exit` 这两个现成的地方，所以连按 `t`/`l` 只付**一次**重写，

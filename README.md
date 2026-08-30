@@ -80,7 +80,7 @@ Not a general-purpose terminal music player: that layer is full and well maintai
 ncmpcpp, rmpc, musikcube, kew, termusic — and this is not a replacement for it. What plays here
 comes from an engine, not from `~/Music`.
 
-**All three listening features have landed** (`docs/ROADMAP.md` D6): playlist
+**All three listening features have landed** (`docs/ARCHITECTURE.md` D22): playlist
 management (`ut-playlist`, the `a` and `b` keys), the queue (`ut-play
 --queue/--enqueue/--next`, `+` and `>`), and the listening history (`ut-history`, the `h` key).
 Each shipped with the rule they all carry: an agent surface — a verb and a `-j` envelope —
@@ -174,7 +174,7 @@ The human face carries the project's own name, so `~/bin/uting` is a plain symli
 `shell/uting` — same word at both ends, no alias in between. Want something shorter to type?
 Make one — `alias ut=uting`, or a symlink of your own. Nothing reads its own `argv[0]`, so any
 name works. The suite ships no short form itself, because a second official spelling is a second
-thing to keep in sync (`docs/ROADMAP.md` D4).
+thing to keep in sync (`docs/ARCHITECTURE.md` D0).
 
 `uting --version` (or `-V`) answers before any dependency check, so it works on a machine that
 has not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. Every
@@ -184,7 +184,7 @@ That number is **semver over the CLI contract, not over the code**: the command 
 flags, the exit-code table, the JSON envelopes, and the player lifecycle are the public API — a
 renderer or a comment is not. While the suite is `0.y.z`, a breaking change bumps `y` and an
 addition bumps `z`; `1.0.0` is a promise this reference implementation does not make yet, and
-`docs/ROADMAP.md` D3 says what would change that.
+`docs/ROADMAP.md` D2 says what would change that.
 
 ## Keys
 
@@ -226,12 +226,12 @@ one runs, or it is not claimed. Each file's header says what it proves; run eith
 |---|---|
 | `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the idle lifecycle verbs (including the queue verbs, where a
 payload this process cannot use is a usage error and a well-formed one with nothing playing is
-"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. ~95s and 263 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 191 of those checks in ~16s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
+"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. ~104s and 265 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 191 of those checks in ~17s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
 | `tests/playback.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, and zero orphan mpv at the end. It also owns the **live read** — the `--status` fields off a real mpv socket, `paused:false` distinguished from `paused:null`, and a really-running player whose socket is really removed degrading to nulls with volume off the record — because the peer has no stand-in and never will. It drives a **queue** end to end for the same reason — a mock engine would skip the
 resolve between two tracks, which is the thing most likely to break: `--queue` launches,
 `--enqueue` appends (six concurrent writers, no lost update), `--next` moves the position and
 the player follows, and a track reaching its own end starts the next. It also plays a real
-Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. And it owns the **listening log's wiring**, since only here does a real track really end: a 19-second handle is played out, and the row that appears for it carries no reason — which is what separates a history from a death record. Starts real players at `--volume 0` in a state dir of its own, and points `UT_STATE_DIR` somewhere disposable too, so it never touches what you are listening to nor what you listened to; ~62s, and it needs the network — of which ~30s is seven real engine resolves and ~19s is one 19-second track played out to its own end, so what is left is not waiting. |
+Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. And it owns the **listening log's wiring**, since only here does a real track really end: a 19-second handle is played out, and the row that appears for it carries no reason — which is what separates a history from a death record. Starts real players at `--volume 0` in a state dir of its own, and points `UT_STATE_DIR` somewhere disposable too, so it never touches what you are listening to nor what you listened to; ~72s, and it needs the network — of which ~30s is seven real engine resolves and ~19s is one 19-second track played out to its own end, so what is left is not waiting. |
 
 One more file in `tests/` is not a suite and asserts nothing. `tests/drive.sh` is a **driver** for the TUI, which needs a real tty and so cannot be run from
 a pipe. It launches tmux at a declared geometry, waits on the ready marker, optionally sends
@@ -288,11 +288,11 @@ surface.
   the width layer, the reflow and the three play states.
 - [`docs/AS-BUILT-verification.md`](docs/AS-BUILT-verification.md) — the risk register and the
   verification matrix: what each check proves, and what is deliberately not covered.
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — the decisions and their reopen conditions, and what is
-  not built yet. No changelog, no survey data, and no positioning — that is §1 of the
-  architecture doc.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — the recorded NOs with their reopen conditions, the
+  reopen triggers for settled decisions, and what is not built yet. No changelog, no survey
+  data, and no landed decisions — those are §3 of the architecture doc, positioning is its §1.
 - [`docs/RESEARCH-tui-player.md`](docs/RESEARCH-tui-player.md) — the survey those decisions rest
-  on, kept separate so the roadmap holds decisions rather than data. Two halves, and §1 says
+  on, kept separate so the decision records hold decisions rather than data. Two halves, and §1 says
   which is which: **§2–§5 are measured** — the name screening, what comparable projects do by
   GitHub API, what publishing this shell version costs, and how ready it is. **§6–§11 are read,
   not run** — how other terminal players are built along five orthogonal design axes, the five
