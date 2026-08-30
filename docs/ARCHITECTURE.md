@@ -68,7 +68,7 @@ V. 对齐的最佳实践。**
 
 ### 1.1 分析：驱动决定的六条发现
 
-`ROADMAP.md` §8 的决定从这里取理由。**第 1、2、5、6 条合起来就是 `ROADMAP.md` D10
+`ROADMAP.md` §1 的决定从这里取理由。**第 1、2、5、6 条合起来就是 `ROADMAP.md` D10
 （不做 Go 版）的全部账**：收益只剩"删渲染负债"，分发收益不兑现，成本是一次无法二分的回归。
 
 1. **差异化在契约，不在渲染。** 真正难而有价值的是 JSON envelope、退出码分类、脱离终端的
@@ -1007,12 +1007,12 @@ reflow、共享时钟与三个播放态。
   仍然**刻意**不在范围内的：
     - **前台**播放的实时音量 —— 它有一个真 tty，所以 mpv 自己的音量键本来就能用；不需要 IPC。
       （`uting` 已经不是前台了：它 detached 地播、经 socket 调音量，而 `--status` 会把它活读出来。）
-    - ~~Linux 的 `nc -U` 可移植性~~ —— **已由变体探测关闭**（2026-08-29）：`ut-play` 与
-      `uting` 各带一份 `resolve_nc_unix`，按**能力**探测（`-h` 文本里有没有 `-U`），
-      `nc` 不认 `-U` 就落到 `ncat`（`-w` 只管连接，空闲兜底改拼 `-i 1`），两个都没有才拒。
-      于是 Debian/Ubuntu 的 `netcat-openbsd` 与 Fedora 系的 `ncat` 都直接通；
-      仍然不通的只剩 `netcat-traditional` / busybox-only 的环境 —— 装一个带 `-U` 的变体即可，
-      **socat 依旧被拒**（不加新依赖；netcat 的变体是同一个依赖的第二拼法，不是新依赖）。
+    - **`netcat-traditional` / busybox-only 的主机** —— `ut-play` 与 `uting` 各带一份
+      `resolve_nc_unix`，按**能力**探测（`-h` 文本里有没有 `-U`），`nc` 不认 `-U` 就落到
+      `ncat`（`-w` 只管连接，空闲兜底改拼 `-i 1`），两个都没有才拒。Debian/Ubuntu 的
+      `netcat-openbsd` 与 Fedora 系的 `ncat` 因此直接通，剩下的那类主机装一个带 `-U` 的
+      变体即可。**socat 依旧被拒**（不加新依赖；netcat 的变体是同一个依赖的第二拼法，
+      不是新依赖）。
 
 ## 27. 验证矩阵
 已移出 → `AS-BUILT-verification.md` §27 —— 上一次运行的测量、套件**刻意不覆盖**什么、
