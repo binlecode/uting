@@ -52,7 +52,7 @@ fi
 # and a file recording a value the program has already decided to throw away is a lie that
 # surfaces months later. Ahead of the block below rather than inside it, because that block is
 # duplicated verbatim in all eight entry points and this is uting's alone.
-PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_PLAY_QUALITY UT_SORT_FIELD YT_LANG UT_START_RESULTS"
+PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_PLAY_QUALITY UT_SORT_FIELD YT_LANG UT_START_RESULTS UT_KEYS"
 PREF_PINNED=""
 for _pk in $PREF_KEYS; do
     if eval "[[ -n \"\${$_pk+x}\" ]]"; then PREF_PINNED="$PREF_PINNED $_pk"; fi
@@ -105,7 +105,7 @@ ut_read_config "$UT_CONFIG"
 ut_read_config "$UT_DEFAULTS"
 
 # ── PREFERENCE WRITE-BACK ───────────────────────────────────────────────────────────────
-# The seven keys above are the ones this TUI changes at runtime, and they are written back to
+# The eight keys above are the ones this TUI changes at runtime, and they are written back to
 # the USER's config file in place. A preference that has to be re-pressed every session is not
 # a preference; the reasoning is ARCHITECTURE.md §3.6 (reopen triggers: ROADMAP), the key table is
 # AS-BUILT-contract.md §5. What the code below is:
@@ -132,7 +132,7 @@ PREF_WRITE_OFF=0   # a write failed once; stop retrying at every tick
 PREF_SAID=""       # keys already refused out loud, so the notice is said once each
 
 # The whitelist AND the key→variable map. One case, because two of them would be two places
-# to add the eighth key and one place to forget it.
+# to add the ninth key and one place to forget it.
 pref_value() {
     case "$1" in
     UT_DEFAULT_ENGINE) printf '%s' "$ENGINE" ;;
@@ -142,18 +142,19 @@ pref_value() {
     UT_SORT_FIELD)     printf '%s' "$SORT_FIELD" ;;
     YT_LANG)           printf '%s' "$UI_LANG" ;;
     UT_START_RESULTS)  printf '%s' "$RESULT_N" ;;
+    UT_KEYS)           printf '%s' "$KEYS_TIER" ;;
     esac
 }
 
 # pref_listed <needle> <space-separated haystack>. bash 3.2 has no associative arrays and
-# these lists are seven long, so a set is a string and membership is a glob.
+# these lists are eight long, so a set is a string and membership is a glob.
 pref_listed() {
     case " $2 " in *" $1 "*) return 0 ;; esac
     return 1
 }
 
-# A value is acceptable only if ut_read_config would read it back UNCHANGED. The seven are
-# enumerations and a number, so this never fires today; it is here so an eighth key cannot
+# A value is acceptable only if ut_read_config would read it back UNCHANGED. The eight are
+# enumerations and a number, so this never fires today; it is here so a ninth key cannot
 # quietly write a line the loader mangles — `#` starts a comment, one matching quote pair is
 # stripped, surrounding space is trimmed and a leading ~/ becomes $HOME.
 pref_value_ok() {
@@ -537,8 +538,10 @@ Menu options:
 Keys (List View):
   ↑/↓      move selection              ←/→  change page (→ past the last page
            fetches one batch more; ← on page 1 drops one, no re-fetch)
+  j / k    the same two, for the hand that already lives on them (List View only —
+           with / open they are text you are typing)
   Enter    play / switch track (non-blocking background playback)
-  Tab / p  toggle view: List <-> Now Playing card
+  Tab      toggle view: List <-> Now Playing card
   Esc      (in the card) back to List View
   Space    pause / resume playback
   s        stop playback
@@ -567,10 +570,12 @@ Keys (List View):
            fetch — upload date, likes, chapters, description
                                     (only when the engine has --info; both do)
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
+  ?        show more / fewer keys, any view (also ？). The hint block has two tiers:
+           `core` is this view's own job, `full` is every key above. UT_KEYS pins it
   q        quit (stops background playback on exit)
 
-  The seven settings these keys change — engine, sort field, playback mode, quality tier,
-  theme, chrome language and the result count — are written back to YOUR config file
+  The eight settings these keys change — engine, sort field, playback mode, quality tier,
+  theme, chrome language, the result count and the key-hint tier — are written back to YOUR config file
   (${XDG_CONFIG_HOME:-~/.config}/uting/config), in place: comments and layout are kept,
   only the value moves. The shipped defaults file is never written. A key you have pinned
   in the environment is left alone, and says so once.
@@ -579,6 +584,7 @@ Keys (focus card):
   ←/→      seek backward / forward 5s   Tab  back to List View
   Space    pause / resume               Esc  back to List View
   s        stop playback                q    quit
+  ?        show more / fewer keys       (also ？)
   ↑/↓      select a chapter, and Enter seeks to it — only on the playing
            subject, after `i` has fetched a table that has chapters
   Enter    (on an `i` subject) play it
@@ -676,6 +682,11 @@ PLAY_MODE="$UT_PLAY_MODE" # -f flag overrides. Runtime-mutable: v key rotates it
 # a per-request choice, so it comes from the config chain and the key — CLAUDE.md's flag-vs-key
 # rule, and the reason ut-play's own --quality exists for the agent surface.
 PLAY_QUALITY="$UT_PLAY_QUALITY"
+# Which tier of key hints the two views print, rotated live by the ? key (cycle_keys) and
+# written back like the other seven. There is deliberately NO uting flag for it, by the same
+# rule as the quality tier above: how much of the keymap you want written down is set-once
+# tuning, not a per-request choice. AS-BUILT-tui.md §11.
+KEYS_TIER="$UT_KEYS"
 PLAY_VOLUME="$UT_VOLUME"  # --volume flag overrides
 COLOR_MODE="auto"
 THEME="minimal"          # --theme / YT_THEME override: minimal | mono (palette family)
@@ -818,6 +829,15 @@ case "$PLAY_QUALITY" in
 "") PLAY_QUALITY="auto" ;;
 auto | low | medium | high) ;;
 *) die "UT_PLAY_QUALITY must be one of: auto, low, medium, high" ;;
+esac
+# The key-hint tier rides the same door, normalised the same way and for the same reason: the
+# ? key rotates this value and writes it back, so the word that reaches the file has to be
+# one of the two the loader will read back — a blank renders as core and would be written as
+# core the moment anyone pressed the key, which is a file disagreeing with itself for one press.
+case "$KEYS_TIER" in
+"") KEYS_TIER="core" ;;
+core | full) ;;
+*) die "UT_KEYS must be one of: core, full" ;;
 esac
 
 # A unix-socket netcat as well as jq: every transport key (pause, seek, volume) and every
@@ -1016,7 +1036,7 @@ set_ui_lang() {
     if [[ "$UI_LANG" == "zh" ]]; then
         S_SELECT="选择"; S_PAGE="翻页"; S_PLAY="播放"; S_VIEW="视图"; S_MODE="模式"; S_QUALITY="质量"
         S_SEARCH="搜索"; S_SORT="排序"; S_FILTER="过滤"
-        S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"
+        S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"; S_KEYS="键位"
         S_FOCUS="专注卡片"; S_PAUSE="暂停"; S_VOL="音量"
         S_BACK_LIST="列表"; S_PAUSE_RESUME="暂停"; S_SEEK="跳转"
         S_VOL_ADJUST="音量"; S_STOP_PLAY="停止"
@@ -1053,7 +1073,7 @@ set_ui_lang() {
     else
         S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_VIEW="view"; S_MODE="mode"; S_QUALITY="quality"
         S_SEARCH="search"; S_SORT="sort"; S_FILTER="filter"
-        S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"
+        S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"; S_KEYS="keys"
         S_FOCUS="focus card"; S_PAUSE="pause"; S_VOL="volume"
         S_BACK_LIST="list"; S_PAUSE_RESUME="pause"; S_SEEK="seek"
         S_VOL_ADJUST="vol"; S_STOP_PLAY="stop"
@@ -1095,6 +1115,22 @@ set_ui_lang() {
 cycle_ui_lang() {
     if [[ "$UI_LANG" == "zh" ]]; then set_ui_lang en; else set_ui_lang zh; fi
     mark_pref YT_LANG
+}
+
+# Which tier the key-hint blocks print. A function rather than a second variable mirroring
+# KEYS_TIER: the tier is ONE fact, and every block wants it as a status, not as a string to
+# compare. Called once per conditional cell, so it must stay fork-free — it is.
+keys_full() { [[ "$KEYS_TIER" == "full" ]]; }
+
+# Rotate the key-hint tier in place (key: ?). Two tiers, not three: `core` is one line of
+# this view's own job — move, act on the row, get back out, quit — and `full` adds the
+# engine / store / tuning / playback family. A third "hidden" state was refused (PLAN §4
+# P12): it saves the one line core already costs and gives up every hint on the screen, and
+# the short-terminal fallback already drops the block automatically, which is the reflow's
+# job rather than a tier the user has to choose.
+cycle_keys() {
+    if [[ "$KEYS_TIER" == "full" ]]; then KEYS_TIER="core"; else KEYS_TIER="full"; fi
+    mark_pref UT_KEYS
 }
 
 # Cycle the palette family in place (key: t). set_theme is a pure function of
@@ -2738,9 +2774,11 @@ display_list_menu() {
     # S_SEEK is deliberately the bare word for BOTH sites at two different step sizes — the
     # card's arrows seek 5s, these brackets seek 10s. That is why it is no longer called
     # S_SEEK5: the label never named a number, so the only thing the old name did was promise
-    # a step size that the second caller does not honour. Still undocumented on purpose: p/P
-    # (a pure Tab alias) and Esc (a no-op in this view — the way out of a store is the key
-    # that opened it, see the BACK section).
+    # a step size that the second caller does not honour. Still undocumented on purpose: j/k
+    # (↓/↑ aliases — you press them because you already have the habit, and the block above
+    # them already shows the arrows, so a cell would be a second spelling of a key that is
+    # printed) and Esc (a no-op in this view — the way out of a store is the key that opened
+    # it, see the BACK section).
     #
     # HINT_SEP is set around the MEASURE call as well as the print call below, never just
     # one: the separator is 3 cells against the default 2, and across 11 gaps that is 11
@@ -2755,37 +2793,49 @@ display_list_menu() {
     # what they mean where they land.
     local search_view=0
     [[ "$LIST_SOURCE" == "search" ]] && search_view=1
+    # TWO TIERS, one block (PLAN §4 P12). `core` is this view's own job — move, act on the
+    # row, change view, filter, quit — and everything else is one press of ? away. The tier
+    # is applied cell by cell with keys_full rather than by building a core array and
+    # appending a full one, so the ORDER of the full block is byte-identical to the order it
+    # has always had: the conditionals still say what they mean where they land.
     local nav_items=(
-        "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY" "Tab	$S_VIEW" "v	$S_MODE"
-        "f	$S_QUALITY" "n	$S_SEARCH"
+        "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY" "Tab	$S_VIEW"
     )
+    keys_full && nav_items+=("v	$S_MODE" "f	$S_QUALITY" "n	$S_SEARCH")
     # `o` re-sorts the SEARCH and refetches it, so on a store's rows it can only answer
     # "search rows only" (cycle_sort's own first line). A key whose whole effect is a notice
     # saying it does not apply here must not spend a cell of a measured block — the rule
     # `a`/`b`/`d`/`e` already follow off an install, applied to the VIEW instead.
-    ((search_view)) && nav_items+=("o	$S_SORT")
+    keys_full && ((search_view)) && nav_items+=("o	$S_SORT")
     nav_items+=("/	$S_FILTER")
     # The source key wants BOTH: a second engine installed (on a single-engine install
     # cycle_engine returns immediately) and search rows on screen (it refetches the query,
     # and a playlist is engine-agnostic — its rows route by their own stored engine).
-    ((search_view)) && ((${#ENGINES[@]} > 1)) && nav_items+=("e	$S_ENGINE")
-    nav_items+=(
+    keys_full && ((search_view)) && ((${#ENGINES[@]} > 1)) && nav_items+=("e	$S_ENGINE")
+    keys_full && nav_items+=(
         "l	$S_LANGKEY"
-        "9/0	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "s	$S_STOP" "q	$S_QUIT"
+        "9/0	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "s	$S_STOP"
     )
+    nav_items+=("q	$S_QUIT")
     # Same rule as the source key: a key that cannot do anything must not spend a cell of a
     # measured block. With no ut-playlist installed, `a` and `b` genuinely do nothing.
     # A store key RELABELS itself while its own store is on screen, because that is when it
     # does the other half of its job. No extra entry for the way back: a toggle that spent a
     # second cell would be documenting one key twice in a block that is measured.
+    # THE WAY BACK IS CORE, the way IN is full — the one place the tier split is not simply
+    # "this view's job vs everything else". A relabelled store key is the only exit from the
+    # room the user is standing in, and a core block that hid it would leave them there with
+    # no printed way out; the same key OPENING that room is a place to go, which is what the
+    # full tier is for. Same rule for h and c below.
     if [[ -n "$PLAYLIST_BIN" ]]; then
         if [[ "$LIST_SOURCE" == "playlist" ]]; then
             # d is the one store key that is not offered everywhere, for the same reason `e`
             # is not offered on a single-engine install: it can only act on a row a playlist
             # owns, so anywhere else it would spend a cell of a measured block to say no.
-            nav_items+=("a	$S_PL_ADD" "d	$S_PL_RM_KEY" "b	$S_BACK_SEARCH")
+            keys_full && nav_items+=("a	$S_PL_ADD" "d	$S_PL_RM_KEY")
+            nav_items+=("b	$S_BACK_SEARCH")
         else
-            nav_items+=("a	$S_PL_ADD" "b	$S_PL_OPEN")
+            keys_full && nav_items+=("a	$S_PL_ADD" "b	$S_PL_OPEN")
         fi
     fi
     # Same rule again: with no ut-history installed, h genuinely does nothing.
@@ -2793,7 +2843,7 @@ display_list_menu() {
         if [[ "$LIST_SOURCE" == "history" ]]; then
             nav_items+=("h	$S_BACK_SEARCH")
         else
-            nav_items+=("h	$S_HIST_KEY")
+            keys_full && nav_items+=("h	$S_HIST_KEY")
         fi
     fi
     # The same rule a fourth time, off a CAPABILITY and a VIEW: `c` needs the session engine
@@ -2807,21 +2857,25 @@ display_list_menu() {
     # from inside it.
     if [[ "$LIST_SOURCE" == "parts" ]]; then
         nav_items+=("c	$S_BACK_SEARCH")
-    elif ((search_view)) && ((ENGINE_PARTS_OK)); then
+    elif keys_full && ((search_view)) && ((ENGINE_PARTS_OK)); then
         nav_items+=("c	$S_PARTS_KEY")
     fi
     # And a fifth time, off the other capability: `i` needs `--info`. It does NOT relabel by
     # LIST_SOURCE the way c/b/h do — it is not a row-source toggle, it opens a card, and Tab is
     # the way back from every card there has ever been.
-    if ((ENGINE_INFO_OK)); then
+    if keys_full && ((ENGINE_INFO_OK)); then
         nav_items+=("i	$S_INFO_KEY")
     fi
     # The queue keys are offered only while something is PLAYING: with no player they say
     # "nothing is playing" and nothing else, and a measured block must not spend cells on a
     # key that cannot act (the rule `e` and `a`/`b` already follow).
-    if [[ -n "$CURRENT_PLAY_ID" ]]; then
+    if keys_full && [[ -n "$CURRENT_PLAY_ID" ]]; then
         nav_items+=("+	$S_Q_ADD" ">	$S_Q_SKIP")
     fi
+    # The door, and it is in BOTH tiers — it is the one cell that is not about the rows or
+    # the player, and a core block without it would be a block with no printed way out of
+    # itself. Last, so it reads as the block's own footer rather than one more key.
+    nav_items+=("?	$S_KEYS")
     # Measure the block before committing the space: on a very short terminal it is 4 lines of
     # a 10-line screen, and printing it would push the header off the top no matter how the
     # rows are repaged. Then the keys go and the results stay — the card view still
@@ -3487,7 +3541,13 @@ card_item_body() {
     # leaves it out there: auto is the engine choosing, which is not a tier to report.
     plan_row="$PLAY_MODE"
     [[ "$PLAY_QUALITY" != "auto" ]] && plan_row="$plan_row $GL_SEP $PLAY_QUALITY"
-    hints=("Enter	$S_PLAY_SEL" "Tab	$S_BACK_LIST" "q	$S_QUIT")
+    # This card is a reader, so its core is three cells: play what it is about, go back, quit.
+    # The full tier is the playback family the universal case honours here exactly as it does
+    # everywhere else — a key that WORKS on this screen and is printed nowhere is the gap ?
+    # exists to close (PLAN §4 P12).
+    hints=("Enter	$S_PLAY_SEL" "Tab	$S_BACK_LIST")
+    keys_full && hints+=("Space	$S_PAUSE_RESUME" "[ ]	$S_SEEK" "9/0	$S_VOL_ADJUST" "s	$S_STOP_PLAY")
+    hints+=("q	$S_QUIT" "?	$S_KEYS")
     HINT_SEP=" $GL_SEP "
     HINT_MEASURE=1
     print_hints "$cols" "  " "  " "${hints[@]}"
@@ -3594,9 +3654,14 @@ display_now_playing_card() {
         printf '  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$S_NOTHING" "$C_RESET"
         # 60 CJK cells of copy: pack it like the hint rows so it cannot run off a narrow
         # terminal (the empty state is the one place a full sentence is drawn).
+        # Nothing is playing, so every playback key here is a no-op and the full tier has
+        # exactly one honest cell to add. It still gets ?: the tier is one preference shared
+        # by both views, and this is the one screen a session can open on.
+        local e_hints=("Tab	$S_BACK_SEARCH" "Enter	$S_PLAY_SEL")
+        keys_full && e_hints+=("l	$S_LANGKEY")
+        e_hints+=("?	$S_KEYS")
         HINT_SEP=" $GL_SEP "
-        print_hints "$cols" "  " "  " \
-            "Tab	$S_BACK_SEARCH" "Enter	$S_PLAY_SEL"
+        print_hints "$cols" "  " "  " "${e_hints[@]}"
         HINT_SEP=""
     else
         # fetch_play_times owns the IPC and the live special case (elapsed listening time,
@@ -3674,35 +3739,45 @@ display_now_playing_card() {
         # was doing the job the bold/dim weight split already does, at 2 cells per key, and
         # the labels are one word each — 110 cells of hints became 63, so the block stops
         # being two lines (and stops stealing a row from the body at short heights).
+        # The core here is not the list's core: this card's own job IS the player, so Space
+        # and the seek arrows stay in both tiers and it is the second spelling of volume and
+        # the stop key that step back a tier (PLAN §4 P12).
         local card_hints=(
             "Tab	$S_BACK_LIST" "Space	$S_PAUSE_RESUME" "$GL_AH	$S_SEEK"
-            "9/0	$S_VOL_ADJUST" "s	$S_STOP_PLAY" "q	$S_QUIT"
         )
+        keys_full && card_hints+=("9/0	$S_VOL_ADJUST" "s	$S_STOP_PLAY")
+        card_hints+=("q	$S_QUIT")
         # Same rule as the list view's queue keys: offered only when there is a queue to skip
         # within, so a measured line never spends a cell on a key that would answer "nothing
         # queued after this track".
-        ((CURRENT_QUEUE_LEN > 1)) && card_hints+=(">	$S_Q_SKIP")
+        keys_full && ((CURRENT_QUEUE_LEN > 1)) && card_hints+=(">	$S_Q_SKIP")
         # `i` is offered while it can still add something: the engine has --info and this card
         # is not already showing what that fetch found. Same rule as every other cell in the
         # suite — a key that would answer "you are looking at it" does not spend a cell.
-        ((ENGINE_INFO_OK)) && ((! info_shown)) && card_hints+=("i	$S_INFO_KEY")
-        # The chapter keys are a SEPARATE array because they are the only cells on this card
-        # whose right to exist is decided AFTER the measurement that budgets the blocks: a
-        # short pane can leave the table of contents undrawn, and two cells offering a cursor
-        # into a block that is not there is exactly the dead key every other hint block in
-        # this file refuses to spend a cell on. So they are measured PESSIMISTICALLY (in, if
-        # the table could appear) and printed HONESTLY (in, only if it did). Measuring the
-        # taller of the two shapes is the safe direction — the frame can end up one row short
-        # of its budget, never one row over it, and only an in-place renderer's own top is at
-        # stake. Predicting the block from the budget instead would be a second copy of the
-        # arithmetic below, which is the drift these blocks were rewritten to remove.
+        keys_full && ((ENGINE_INFO_OK)) && ((! info_shown)) && card_hints+=("i	$S_INFO_KEY")
+        # The TAIL of the block: the chapter keys, then the door. They are a SEPARATE array
+        # because the chapter cells are the only ones on this card whose right to exist is
+        # decided AFTER the measurement that budgets the blocks: a short pane can leave the
+        # table of contents undrawn, and two cells offering a cursor into a block that is not
+        # there is exactly the dead key every other hint block in this file refuses to spend a
+        # cell on. So they are measured PESSIMISTICALLY (in, if the table could appear) and
+        # printed HONESTLY (in, only if it did). Measuring the taller of the two shapes is the
+        # safe direction — the frame can end up one row short of its budget, never one row over
+        # it, and only an in-place renderer's own top is at stake. Predicting the block from
+        # the budget instead would be a second copy of the arithmetic below, which is the drift
+        # these blocks were rewritten to remove.
+        #
+        # ? rides this array rather than card_hints so it is the LAST cell either way: it is
+        # the block's footer, not one more player key, and a chapter cell printed after it
+        # would read as something the door opened.
         #
         # There is no volume cell here to take out: 9/0 keeps its own, and what the arrows
         # gave up was a SECOND spelling of it (PLAN §12 handed that to P6).
-        local chap_hints=()
-        ((chap_ok)) && chap_hints=("$GL_AV	$S_CHAP_HEAD" "$GL_ENTER	$S_CHAP_GO")
+        local tail_hints=()
+        ((chap_ok)) && tail_hints=("$GL_AV	$S_CHAP_HEAD" "$GL_ENTER	$S_CHAP_GO")
+        tail_hints+=("?	$S_KEYS")
         HINT_MEASURE=1
-        print_hints "$cols" "  " "  " "${card_hints[@]}" ${chap_hints[@]+"${chap_hints[@]}"}
+        print_hints "$cols" "  " "  " "${card_hints[@]}" "${tail_hints[@]}"
         HINT_MEASURE=0
         # The rows the two blocks share out. `base` is the frame with NEITHER of them — the
         # header row and its blank, the spine, the meta row and the hints, plus the bar and
@@ -3733,8 +3808,9 @@ display_now_playing_card() {
             card_chapter_block "$cols" "$free" 1
             ((CARD_CHAP_LINES > 0)) && CARD_CHAP_ACTIVE=1
         fi
-        # What the block did NOT draw, the hint block does not advertise.
-        ((CARD_CHAP_ACTIVE)) || chap_hints=()
+        # What the block did NOT draw, the hint block does not advertise. The door survives
+        # the trim — it was never about the chapters.
+        ((CARD_CHAP_ACTIVE)) || tail_hints=("?	$S_KEYS")
         if [[ -n "$bar_str" ]]; then
             # \033[K on the spacer row too: the card grows by two rows the moment the
             # bar appears (mpv has no time-pos for the first second or so), so an
@@ -3745,7 +3821,7 @@ display_now_playing_card() {
         # labels, and the hints flow straight after it, bare-indented like the empty state.
         # Nothing closes the card below them — see the rail note above. The block itself was
         # built and measured above, where the queue block needed its height.
-        print_hints "$cols" "  " "  " "${card_hints[@]}" ${chap_hints[@]+"${chap_hints[@]}"}
+        print_hints "$cols" "  " "  " "${card_hints[@]}" "${tail_hints[@]}"
         HINT_SEP=""
     fi
     # Clean up any leftover lines below
@@ -5194,15 +5270,20 @@ move_selection() {
     local input="$1" pmin pmax prev_pages
     pmin=$(( (page_index - 1) * PAGE_SIZE ))
     pmax=$(( pmin + PAGE_SIZE - 1 ))
+    # `k`/`j` ride the SAME arms as ↑/↓ rather than arms of their own: an alias that were a
+    # second case would be a second copy of the page-crossing arithmetic, which is the drift
+    # every duplicated block in this file has been rewritten to remove. Only the desktop
+    # pair, never hjkl entire — `h` is already history, and `g/G` is closed off by binding
+    # case together, so half a vim is worse than none (PLAN §4 P11).
     case "$input" in
-    "[A" | "OA" | "["*A | "O"*A) # up
+    "[A" | "OA" | "["*A | "O"*A | k | K) # up
         if ((selected > 0)); then
             selected=$(( selected - 1 ))
             if ((selected < pmin && page_index > 1)); then
                 page_index=$(( page_index - 1 )); selected=$(( page_index * PAGE_SIZE - 1 ))
             fi
         fi ;;
-    "[B" | "OB" | "["*B | "O"*B) # down
+    "[B" | "OB" | "["*B | "O"*B | j | J) # down
         if ((selected < NUM_ENTRIES - 1)); then
             selected=$(( selected + 1 ))
             if ((selected > pmax && page_index < NUM_PAGES)); then
@@ -5326,9 +5407,16 @@ while true; do
 
     if ! read_nav_input; then continue; fi
 
-    # Universal View Toggle (Tab or p)
+    # Universal View Toggle (Tab)
     # Toggles: list (Search List) ◄──► card (Now Playing Focus Card)
-    if [[ "$READ_NAV_KEY" == $'\t' || "$READ_NAV_KEY" == "p" || "$READ_NAV_KEY" == "P" ]]; then
+    #
+    # `p`/`P` were a SECOND spelling of this until P10, and they went for two reasons that
+    # each stand alone (PLAN §12): mpv, ncmpcpp and cmus all bind `p` to PAUSE, so a player
+    # user pressing it here got a change of screen instead of the one thing they asked for;
+    # and it appeared in no hint block, so nothing on screen could have told them otherwise.
+    # A TUI key is not frozen surface — ARCHITECTURE.md §3.8 freezes the CLI — so retiring one
+    # costs nothing and hands a letter back to a key space that is 26 wide, not 52.
+    if [[ "$READ_NAV_KEY" == $'\t' ]]; then
         # No `clear` on the switch either: both renderers now paint in place and end with
         # \033[J, so the incoming view overwrites the outgoing one line by line and wipes
         # whatever was longer. The clear was the last blank frame left in the app — on a switch
@@ -5344,7 +5432,7 @@ while true; do
         continue
     fi
 
-    # Universal playback controls (active in all views)
+    # Universal controls (active in all views): playback, and the key-hint tier.
     case "$READ_NAV_KEY" in
     " ") toggle_pause; continue ;;
     s | S) stop_current_playback; continue ;;
@@ -5352,6 +5440,13 @@ while true; do
     0) adjust_volume 5; continue ;;
     "[") seek_relative -10; continue ;;
     "]") seek_relative 10; continue ;;
+    # The door to the other key tier, universal for the same reason the playback keys are:
+    # BOTH views print a tiered block, so a door that opened from only one of them would
+    # leave the other showing a core block it could not expand. QUOTED, because a bare ? in a
+    # case pattern is the glob for any single character and would swallow every key below it.
+    # `？` is the full-width form a zh input method makes of shift-/ — utf8_complete already
+    # assembles it into one key, so binding it is one more pattern and not a second path.
+    "?" | "？") cycle_keys; continue ;;
     esac
 
     # Now Playing card specific handlers
@@ -5394,8 +5489,11 @@ while true; do
 
     # List View specific handlers
     case "$READ_NAV_KEY" in
+    # j/k reach move_selection ONLY from here. filter_live drives the same function for its
+    # arrows and deliberately does not add them: with `/` open they are text the user is
+    # typing into the query, and a navigation key that ate a letter would be unusable.
     "[A" | "OA" | "["*A | "O"*A | "[B" | "OB" | "["*B | "O"*B | \
-    "[C" | "OC" | "["*C | "O"*C | "[D" | "OD" | "["*D | "O"*D)
+    "[C" | "OC" | "["*C | "O"*C | "[D" | "OD" | "["*D | "O"*D | j | J | k | K)
         move_selection "$READ_NAV_KEY" ;;
     "" | $'\n' | $'\r') play_selected || true ;;  # Enter → start/switch track in background
     n | N) new_search ;;      # new search (non-blocking: music continues)

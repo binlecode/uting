@@ -683,9 +683,22 @@ report "ut-play rejects a bogus tier"     1 "$(rc shell/ut-play --quality ultra 
 report "ut-play --quality needs a handle" 1 "$(rc shell/ut-play --quality low)"
 report "ut-play --quality keeps the engine gate" 1 \
     "$(rc shell/ut-play --quality low --engine nope -- "$MEDIA_ID")"
-# A bogus tier in the user's config dies in uting the same way, naming the key (PLAN §13).
-report "UT_PLAY_QUALITY=bogus dies in uting" 1 \
-    "$(env UT_PLAY_QUALITY=bogus shell/uting </dev/null >/dev/null 2>&1; echo $?)"
+# A bogus SCALAR knob in the user's config dies in uting the same way, naming the key the
+# user actually wrote (PLAN §13). Stated over every scalar door rather than the tier that
+# happened to be written first: each one is its own `case`, not one loop through one
+# validator the way the four *_CYCLE keys are, so a check driving only the quality tier is
+# green on a door that was never closed — which is the shape UT_KEYS arrived in.
+# And the claim is the MESSAGE, not the exit code: every one of these exits 1 and so does the
+# TTY gate a few lines further down the same file, so an exit code alone cannot separate
+# "refused the value" from "refused the pipe" and the check could not fail.
+for spec in UT_PLAY_QUALITY=bogus UT_KEYS=bogus YT_BG=sideways; do
+    KNOB_OUT=$(env "$spec" shell/uting </dev/null 2>&1 || true)
+    case "$KNOB_OUT" in
+    *"${spec%%=*}"*) KNOB_HIT=yes ;;
+    *) KNOB_HIT=no ;;
+    esac
+    report "${spec%%=*}: a bogus value dies naming the key" "yes" "$KNOB_HIT"
+done
 
 # One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
 # which supports 1700+ sites — so a Bilibili URL resolved fine and came back labelled
@@ -1446,11 +1459,81 @@ else
     # leg pass for free.
     tmux resize-window -t "$TS" -x 100 -y 30 2>/dev/null
 
+    # ---- the key-hint tier (?), the retired p alias, and the j/k pair -----------------
+    # All three ride the pane that is already up, and all three read the ONE hint block —
+    # the only place in the app where a key is written down, so a tier that did not filter
+    # and a tier that filtered everything are both visible from here.
+    #
+    # `9/0 volume` is the marker because it is spelled that way in the LIST block alone: the
+    # card abbreviates it to `9/0 vol` (S_VOL vs S_VOL_ADJUST), and nothing else on a pane
+    # with no player prints either. So one grep says which tier is up AND which view is up.
+    report "the core block leaves the playback keys out" 0 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c '9/0 volume')"
+    # `p` was an undocumented Tab alias until P10 and is now nothing at all. It is asserted
+    # through the key AFTER it, the way the `c` check further down rides on `h`: a `p` that
+    # still toggled would put the CARD on screen, and then `?` would open the card's block —
+    # which spells the volume cell differently and never satisfies the poll below.
+    tmux send-keys -t "$TS" p
+    tmux send-keys -t "$TS" '?'
+    opened=0; i=0
+    while [ $i -lt 40 ]; do
+        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q '9/0 volume' && { opened=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "? opens the full tier" 1 "$opened"
+    report "…and p is not a view toggle any more" 0 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'NOW PLAYING')"
+    # The EIGHTH preference key, on the same deferred write as the seven below. The fixture
+    # carries no UT_KEYS line, so this can only APPEND — and the value is asserted in BOTH
+    # directions, because a tier that wrote itself once and then stopped would leave the file
+    # saying `full` on a screen that had gone back to core.
+    wrote=0; i=0
+    while [ $i -lt 40 ]; do
+        grep -q '^UT_KEYS=full$' "$TUI_CFG" && { wrote=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "? writes the tier to your config" 1 "$wrote"
+    tmux send-keys -t "$TS" '?'
+    closed=0; i=0
+    while [ $i -lt 40 ]; do
+        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q '9/0 volume' || { closed=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "? closes it again" 1 "$closed"
+    wrote=0; i=0
+    while [ $i -lt 40 ]; do
+        grep -q '^UT_KEYS=core$' "$TUI_CFG" && { wrote=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "…and the file follows it back" 1 "$wrote"
+    # j/k are ↓/↑ in the list view and nowhere else. Ten presses is the page (10 rows on this
+    # geometry, 20 in hand), so the marker is the page CROSSING — row 11 appearing — which no
+    # amount of j that failed to move the cursor can produce, and which also proves the keys
+    # reached move_selection's real arms rather than an arm of their own that forgot the
+    # paging arithmetic. The walk back is asserted too: a k bound to the wrong direction
+    # would leave the pane on page 2 and the first check would still be green.
+    i=0
+    while [ $i -lt 10 ]; do tmux send-keys -t "$TS" j; sleep 0.12; i=$((i + 1)); done
+    turned=0; i=0
+    while [ $i -lt 40 ]; do
+        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -qE '^[[:space:]>]*11\. ' && { turned=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "j walks the selection onto the next page" 1 "$turned"
+    i=0
+    while [ $i -lt 10 ]; do tmux send-keys -t "$TS" k; sleep 0.12; i=$((i + 1)); done
+    back=0; i=0
+    while [ $i -lt 40 ]; do
+        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -qE '^[[:space:]>]*11\. ' || { back=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "and k walks it back" 1 "$back"
+
     # ---- the preference write-back and the two count edges ----------------------------
     # All of it on the pane that is ALREADY up: no second cold start, no second cold search.
     # The rows on screen are the fixture these keys need, and the keys are the only way to
     # reach the write path — there is no verb for it, deliberately (the agent surface for a
-    # preference IS the config file, ARCHITECTURE.md D16).
+    # preference IS the config file, ARCHITECTURE.md §3.6).
     #
     # The write is DEFERRED — a cycle sets a dirty bit and the flush happens on the reader's
     # idle tick — so every assertion below POLLS the file instead of reading it once. That is
