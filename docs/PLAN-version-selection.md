@@ -17,12 +17,12 @@
 | P1 | `<engine>-resolve --parts` 动词 + 信封 | **已落**（2026-08-29；`bili-resolve` + `tests/contract.sh`，契约文档留给 P9） |
 | P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | **已落**（2026-08-29；`shell/uting` + `contract.sh` 的 tmux 面上一条 `c` 能力门见证，257 项全绿；五次 drive 实测记在 §13） |
 | P3 | `--quality TIER` 贯穿 `ut-play` → `<engine>-resolve` | **已落**（2026-08-29；`ut-play` + 两个 resolve 半边 + `config`；`contract.sh` 256 项 + `playback.sh` 44 项全绿；档位效果与 `-S` 压过 `--quality` 均实测） |
-| P4 | `uting` 的质量档键位（`f`）与写回 | 未开工 |
+| P4 | `uting` 的质量档键位（`f`）与写回 | **已落**（2026-08-29；`shell/uting` + `config` 的 `UT_QUALITY_CYCLE`；`contract.sh` 263 项全绿，其中三条新检查在 tmux pane 上：`quality=` 在 auto 上不印、`f` 追加写回 `UT_PLAY_QUALITY=medium`、状态行跟上；四个 cycle 键的「不认识的成员退 1」由一条加固过的循环统一陈述） |
 | P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | 未开工，**P6 的前置** |
 | P6 | 章节 → 条目视图里的 seek 目标 | 未开工，排最后 |
 | P7 | Enter 语义不变 | **无需改动**，记录在案以免日后当成疏漏 |
 | P8 | 时长不一致 → 在 parts 视图表头说清 | 已落（随 P2，2026-08-29） |
-| P9 | 文档重同步（六个 as-built + `config` + `CLAUDE.md`） | **已落**（2026-08-29；audit 清单 + 契约 §1.1/§1.3/§1.4/§3/§4/§5、§17 六个函数、engine/tui/player/verification、CLAUDE.md。六个键的文本**刻意没动**——等 P4 落成七个再改，见 §10） |
+| P9 | 文档重同步（六个 as-built + `config` + `CLAUDE.md`） | **已落**（2026-08-29；audit 清单 + 契约 §1.1/§1.3/§1.4/§3/§4/§5、§17 六个函数、engine/tui/player/verification、CLAUDE.md。「六个键」的文本当时**刻意没动**，P4 落地时一并改成「七个」，见 §6） |
 | P10 | 退役 `p`/`P` 的 Tab 别名（键位审计 §12） | 未开工，两行级 |
 | P11 | `j`/`k` = ↓/↑ 别名（键位审计 §12） | 未开工，两行级 |
 | P12 | `?` 随时呼出/收起 keymap（用户新增，2026-08-29） | 未开工 |
@@ -415,9 +415,12 @@ UT_QUALITY_CYCLE=auto medium high           # f 键循环的顺序
 UT_KEYS=core                                # keymap 档位：core | full（? 键现场切换，P12）
 ```
 
-**注意 `PREF_KEYS` 会从六个变成八个**（`shell/uting:55`：+`UT_PLAY_QUALITY`、+`UT_KEYS`）。
-`CLAUDE.md`、`config` 的抬头注释、`ROADMAP.md` D8、`AS-BUILT-contract.md` §5 里
-**四处都写着「六个键」** —— P9 必须全部改掉，否则就是 `audit-conformance` 抓的那类陈旧散文。
+**`PREF_KEYS` 从六个变成七个**（P4 落地：+`UT_PLAY_QUALITY`），P12 落地时再 +`UT_KEYS` 成八个。
+「六个键」那句散文分布在 `CLAUDE.md`（两处）、`config` 抬头、`ROADMAP.md` D8、
+`AS-BUILT-contract.md` §5（七处）、`ARCHITECTURE.md`（三处）、`AS-BUILT-tui.md`、
+`AS-BUILT-verification.md`（两处）、`README.md` —— **P4 已把它们全改成「七个」**；
+P12 落地时同一批地方再改一遍成「八个」。（`AS-BUILT-tui.md` §591 的「六个键」是
+**焦点卡片提示行**的键数，与写回无关，刻意不动。）
 
 ---
 

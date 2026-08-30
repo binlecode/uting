@@ -9,9 +9,9 @@
 #   ${XDG_CONFIG_HOME:-~/.config}/uting/config
 # which is read first and wins over everything here.
 #
-# THIS FILE IS NEVER WRITTEN BY ANY COMMAND. Your file is: `uting` writes six keys back to
-# it when you change one at runtime (engine, sort, mode, theme, language, result count) —
-# in place, comments and layout kept. AS-BUILT-contract.md §5 (write-back), ROADMAP.md D18.
+# THIS FILE IS NEVER WRITTEN BY ANY COMMAND. Your file is: `uting` writes seven keys back to
+# it when you change one at runtime (engine, sort, mode, quality, theme, language, result
+# count) — in place, comments and layout kept. AS-BUILT-contract.md §5 (write-back), ROADMAP.md D18.
 #
 #   Precedence:  flag  >  environment  >  your config  >  this file
 #
@@ -65,7 +65,8 @@ UT_PLAY_MODE=audio                  # the -f default. -f itself accepts audio | 
 UT_VOLUME=                          # the --volume default; empty = leave mpv's own
 UT_PLAY_QUALITY=auto                # the --quality default: auto | low | medium | high.
                                     # The (mode, tier) -> format-sort table lives in the
-                                    # engines (PLAN §4 P3); -S overrides it when both given
+                                    # engines (PLAN §4 P3); -S overrides it when both given.
+                                    # uting's f key rotates it live and writes it back here
 
 # ── scope: player (ut-play) ─────────────────────────────────────────────────────────────
 UT_DEAD_KEEP=8                      # dead player records retained (also bounded to 1 hour)
@@ -80,6 +81,9 @@ UT_FETCH_BATCH=20                   # the STEP each page edge moves by: → past
                                     # A STEP, not a total — UT_SEARCH_RESULTS is the total
 UT_MODE_CYCLE=audio video fast      # order the v key steps through
 UT_SORT_CYCLE=relevance view_count duration          # order the o key steps through
+UT_QUALITY_CYCLE=auto medium high   # order the f key steps through. Not the full tier set:
+                                    # low is a deliberate choice, not a step you want to land
+                                    # on while rotating past it — add it here if you want it
 UT_THEME_CYCLE=minimal catppuccin tokyonight nord gruvbox onedark mono   # the t key
 YT_THEME=minimal                    # palette family; --theme overrides, t cycles live
 YT_BG=auto                          # auto | light | dark

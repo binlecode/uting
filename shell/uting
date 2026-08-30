@@ -52,7 +52,7 @@ fi
 # and a file recording a value the program has already decided to throw away is a lie that
 # surfaces months later. Ahead of the block below rather than inside it, because that block is
 # duplicated verbatim in all eight entry points and this is uting's alone.
-PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_SORT_FIELD YT_LANG UT_START_RESULTS"
+PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_PLAY_QUALITY UT_SORT_FIELD YT_LANG UT_START_RESULTS"
 PREF_PINNED=""
 for _pk in $PREF_KEYS; do
     if eval "[[ -n \"\${$_pk+x}\" ]]"; then PREF_PINNED="$PREF_PINNED $_pk"; fi
@@ -105,7 +105,7 @@ ut_read_config "$UT_CONFIG"
 ut_read_config "$UT_DEFAULTS"
 
 # ── PREFERENCE WRITE-BACK ───────────────────────────────────────────────────────────────
-# The six keys above are the ones this TUI changes at runtime, and they are written back to
+# The seven keys above are the ones this TUI changes at runtime, and they are written back to
 # the USER's config file in place. A preference that has to be re-pressed every session is not
 # a preference; the reasoning and the reopen condition are ROADMAP.md D8, the key table is
 # AS-BUILT-contract.md §5. What the code below is:
@@ -132,12 +132,13 @@ PREF_WRITE_OFF=0   # a write failed once; stop retrying at every tick
 PREF_SAID=""       # keys already refused out loud, so the notice is said once each
 
 # The whitelist AND the key→variable map. One case, because two of them would be two places
-# to add the seventh key and one place to forget it.
+# to add the eighth key and one place to forget it.
 pref_value() {
     case "$1" in
     UT_DEFAULT_ENGINE) printf '%s' "$ENGINE" ;;
     YT_THEME)          printf '%s' "$THEME" ;;
     UT_PLAY_MODE)      printf '%s' "$PLAY_MODE" ;;
+    UT_PLAY_QUALITY)   printf '%s' "$PLAY_QUALITY" ;;
     UT_SORT_FIELD)     printf '%s' "$SORT_FIELD" ;;
     YT_LANG)           printf '%s' "$UI_LANG" ;;
     UT_START_RESULTS)  printf '%s' "$RESULT_N" ;;
@@ -145,14 +146,14 @@ pref_value() {
 }
 
 # pref_listed <needle> <space-separated haystack>. bash 3.2 has no associative arrays and
-# these lists are six long, so a set is a string and membership is a glob.
+# these lists are seven long, so a set is a string and membership is a glob.
 pref_listed() {
     case " $2 " in *" $1 "*) return 0 ;; esac
     return 1
 }
 
-# A value is acceptable only if ut_read_config would read it back UNCHANGED. The six are
-# enumerations and a number, so this never fires today; it is here so a seventh key cannot
+# A value is acceptable only if ut_read_config would read it back UNCHANGED. The seven are
+# enumerations and a number, so this never fires today; it is here so an eighth key cannot
 # quietly write a line the loader mangles — `#` starts a comment, one matching quote pair is
 # stripped, surrounding space is trimmed and a leading ~/ becomes $HOME.
 pref_value_ok() {
@@ -523,6 +524,9 @@ Keys (List View):
   9 / 0    volume down / up (via IPC)
   [ / ]    seek backward / forward 10s (via IPC; works in every view)
   v        cycle playback mode: audio → video → fast (applies to next play)
+  f        cycle quality tier: auto → medium → high (applies to next play; the
+           engine reads it against the mode, so `high` is 1080p for video and a
+           bitrate for audio). UT_QUALITY_CYCLE sets the order and its members
   l        switch chrome language (en <-> zh), any view
   t        cycle palette family live (minimal → catppuccin → tokyonight → nord →
            gruvbox → onedark → mono), any view; no-op when colors are off
@@ -539,8 +543,8 @@ Keys (List View):
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
   q        quit (stops background playback on exit)
 
-  The six settings these keys change — engine, sort field, playback mode, theme, chrome
-  language and the result count — are written back to YOUR config file
+  The seven settings these keys change — engine, sort field, playback mode, quality tier,
+  theme, chrome language and the result count — are written back to YOUR config file
   (${XDG_CONFIG_HOME:-~/.config}/uting/config), in place: comments and layout are kept,
   only the value moves. The shipped defaults file is never written. A key you have pinned
   in the environment is left alone, and says so once.
@@ -632,6 +636,11 @@ RESULT_N=${UT_START_RESULTS:-$UT_FETCH_BATCH}  # -n overrides; → grows it, ←
 IFS=' ,' read -r -a MODE_CYCLE <<<"$UT_MODE_CYCLE"
 # The -f default, one value shared with ut-play and both resolve halves.
 PLAY_MODE="$UT_PLAY_MODE" # -f flag overrides. Runtime-mutable: v key rotates it (cycle_mode).
+# The --quality default, forwarded to ut-play on every launch and rotated live by the f key
+# (cycle_quality). There is deliberately NO uting flag for it: a tier is set-once tuning, not
+# a per-request choice, so it comes from the config chain and the key — CLAUDE.md's flag-vs-key
+# rule, and the reason ut-play's own --quality exists for the agent surface.
+PLAY_QUALITY="$UT_PLAY_QUALITY"
 PLAY_VOLUME="$UT_VOLUME"  # --volume flag overrides
 COLOR_MODE="auto"
 THEME="minimal"          # --theme / YT_THEME override: minimal | mono (palette family)
@@ -645,6 +654,11 @@ BG="dark"
 PAGE_OPT=$UT_PAGE_ROWS
 # The order the o key steps through. Space- or comma-separated, like UT_MODE_CYCLE.
 IFS=' ,' read -r -a SORT_CYCLE <<<"$UT_SORT_CYCLE"
+# The order the f key steps through. The shipped value is a SUBSET of the tier set (auto
+# medium high) — a rotation is a thing you land on by accident, and `low` is a choice you
+# make on purpose. The validator below still accepts the full set, so a user who wants it
+# says so once here, exactly as with the mode cycle.
+IFS=' ,' read -r -a QUALITY_CYCLE <<<"$UT_QUALITY_CYCLE"
 # The -s default, one value shared with both search halves.
 SORT_FIELD="$UT_SORT_FIELD"   # -s flag overrides. Runtime-mutable: o rotates it (cycle_sort).
 # The order the t key steps through, defined here rather than beside cycle_theme so all three
@@ -725,6 +739,7 @@ validate_cycle() {
 }
 validate_cycle UT_MODE_CYCLE "audio video fast" ${MODE_CYCLE[@]+"${MODE_CYCLE[@]}"}
 validate_cycle UT_SORT_CYCLE "relevance view_count duration" ${SORT_CYCLE[@]+"${SORT_CYCLE[@]}"}
+validate_cycle UT_QUALITY_CYCLE "auto low medium high" ${QUALITY_CYCLE[@]+"${QUALITY_CYCLE[@]}"}
 validate_cycle UT_THEME_CYCLE "minimal catppuccin tokyonight nord gruvbox onedark mono" \
     ${THEME_CYCLE[@]+"${THEME_CYCLE[@]}"}
 # Duration bounds and volume are forwarded verbatim (-m/-M to yt-search, --volume to ut-play),
@@ -761,8 +776,12 @@ fi
 # The quality tier rides the same door: a bogus value in the user's config would otherwise
 # surface as a play that silently defaults. Empty reads as auto (the engine sends no sort
 # for blank or auto alike — PLAN §5.3); anything else is a mistyped knob and fails loud.
-case "$UT_PLAY_QUALITY" in
-"" | auto | low | medium | high) ;;
+# NORMALISED to the spelling rather than left blank, because the f key rotates this value:
+# a blank matches no member of the cycle, so the first press would land on the SECOND tier
+# and auto would be reachable only by going all the way round.
+case "$PLAY_QUALITY" in
+"") PLAY_QUALITY="auto" ;;
+auto | low | medium | high) ;;
 *) die "UT_PLAY_QUALITY must be one of: auto, low, medium, high" ;;
 esac
 
@@ -960,7 +979,7 @@ UI_LANG=""
 set_ui_lang() {
     UI_LANG=$1
     if [[ "$UI_LANG" == "zh" ]]; then
-        S_SELECT="选择"; S_PAGE="翻页"; S_PLAY="播放"; S_VIEW="视图"; S_MODE="模式"
+        S_SELECT="选择"; S_PAGE="翻页"; S_PLAY="播放"; S_VIEW="视图"; S_MODE="模式"; S_QUALITY="质量"
         S_SEARCH="搜索"; S_SORT="排序"; S_FILTER="过滤"
         S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"
         S_FOCUS="专注卡片"; S_PAUSE="暂停"; S_VOL="音量"
@@ -992,7 +1011,7 @@ set_ui_lang() {
         S_PREF_PINNED="由环境变量固定，没有写入配置文件"
         S_PREF_FAILED="配置文件写不了，这次改的偏好没有存下来"
     else
-        S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_VIEW="view"; S_MODE="mode"
+        S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_VIEW="view"; S_MODE="mode"; S_QUALITY="quality"
         S_SEARCH="search"; S_SORT="sort"; S_FILTER="filter"
         S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"
         S_FOCUS="focus card"; S_PAUSE="pause"; S_VOL="volume"
@@ -2474,6 +2493,11 @@ display_list_menu() {
     [[ "$MIN_DISP" != "0" ]] && st_items+=("min=${MIN_DISP}s")
     [[ "$MAX_DISP" != "0" ]] && st_items+=("max=${MAX_DISP}s")
     st_items+=("mode=$PLAY_MODE ($status_extra)")
+    # quality= follows mode= because the tier is read against it: the engine's table is
+    # (mode, tier), and `high` means 1080p next to video and a bitrate next to audio. Absent
+    # at `auto` — the same rule min=/max= follow above: a field at its default is pure width,
+    # and auto is what every install that has never pressed f is sitting on.
+    [[ "$PLAY_QUALITY" != "auto" ]] && st_items+=("quality=$PLAY_QUALITY")
     [[ -n "$PLAY_VOLUME" ]] && st_items+=("volume=$PLAY_VOLUME")
     HINT_KEY_COLOR="$C_DIM"
     print_hints "$nav_cols" "" "" "${st_items[@]}"
@@ -2525,6 +2549,7 @@ display_list_menu() {
     local nav_pad="  "
     local nav_items=(
         "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY" "Tab	$S_VIEW" "v	$S_MODE"
+        "f	$S_QUALITY"
         "n	$S_SEARCH" "o	$S_SORT" "/	$S_FILTER" "l	$S_LANGKEY"
         "9/0	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "s	$S_STOP" "q	$S_QUIT"
     )
@@ -2532,8 +2557,10 @@ display_list_menu() {
     # measured and can already cost four lines of a ten-line terminal, so a key that would
     # do nothing must not spend a cell — and on a single-engine install `e` genuinely does
     # nothing (cycle_engine returns immediately).
+    # 9, not 8: the insertion point is "after / filter, before l language", and `f quality`
+    # went in above it. An index is a position, so it moves when the list above it grows.
     if ((${#ENGINES[@]} > 1)); then
-        nav_items=("${nav_items[@]:0:8}" "e	$S_ENGINE" "${nav_items[@]:8}")
+        nav_items=("${nav_items[@]:0:9}" "e	$S_ENGINE" "${nav_items[@]:9}")
     fi
     # Same rule as the source key: a key that cannot do anything must not spend a cell of a
     # measured block. With no ut-playlist installed, `a` and `b` genuinely do nothing.
@@ -3205,7 +3232,11 @@ play_selected() {
     # never reaches ut-play, which would reject it).
     local row_engine="${R_ENGINE[$selected]:-}"
     [[ -n "$row_engine" ]] || row_engine="$CURRENT_ENGINE"
-    out=$("$PLAY_BIN" -d -j --engine "$row_engine" -f "$PLAY_MODE" ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>"$errfile") || rc=$?
+    # --quality rides beside -f because the engine reads the pair: the tier alone selects
+    # nothing. Forwarded as the canonical spelling, never as a format-sort string — this file
+    # holds no yt-dlp vocabulary, and ut-play holds none either (PLAN §4 P3).
+    out=$("$PLAY_BIN" -d -j --engine "$row_engine" -f "$PLAY_MODE" --quality "$PLAY_QUALITY" \
+        ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>"$errfile") || rc=$?
     msg=$(<"$errfile")
     rm -f "$errfile"
     if ((rc != 0)); then
@@ -3878,6 +3909,22 @@ cycle_mode() {
     done
     PLAY_MODE="${MODE_CYCLE[$(( (cur + 1) % n ))]}"
     mark_pref UT_PLAY_MODE
+}
+
+# ── QUALITY action (key: f) ─────────────────────────────────────────────────────────────
+# The same shape as cycle_mode and for the same reason: a tier is a parameter of the NEXT
+# launch, so nothing on screen has to be re-fetched and the player already running keeps the
+# stream it resolved. What it selects is a (mode, tier) row in the ENGINE's format-sort table
+# — this file never learns a yt-dlp expression, which is the whole point of a named tier
+# (PLAN §4 P3). A value not in the cycle (set by config or the environment, e.g. `low` under
+# the shipped cycle) leaves cur at 0, so the first press joins the rotation at its head.
+cycle_quality() {
+    local i n=${#QUALITY_CYCLE[@]} cur=0
+    for (( i = 0; i < n; i++ )); do
+        [[ "${QUALITY_CYCLE[$i]}" == "$PLAY_QUALITY" ]] && { cur=$i; break; }
+    done
+    PLAY_QUALITY="${QUALITY_CYCLE[$(( (cur + 1) % n ))]}"
+    mark_pref UT_PLAY_QUALITY
 }
 
 # One failure path for the re-fetch actions (n / → / o / e). It replaces three copies of this
@@ -4558,6 +4605,7 @@ while true; do
     o | O) cycle_sort ;;      # rotate sort
     e | E) cycle_engine ;;    # switch source (engine), re-fetch the same query
     v | V) cycle_mode ;;      # rotate playback mode
+    f | F) cycle_quality ;;   # rotate quality tier (the engine maps (mode, tier) to a sort)
     l | L) cycle_ui_lang ;;   # toggle chrome language (en <-> zh)
     t | T) cycle_theme ;;     # cycle palette family live
     a | A) add_to_playlist ;; # add the focused row to a playlist

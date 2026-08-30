@@ -725,10 +725,12 @@ reflow、共享时钟与三个播放态。
                   fewer_results（`←` 在第 1 页：ALL_ROWS 就地截断，−1 批，零网络，
                   地板是一屏）—— 两条边，一个键都不占（tui §11）
      Cycles     : cycle_mode（`v`：PLAY_MODE audio→video→fast，纯本地，下一次 Enter 才生效）,
+                  cycle_quality（`f`：PLAY_QUALITY 轮换 UT_QUALITY_CYCLE，同样纯本地 ——
+                  它选的是**引擎那张 (mode, tier) 表的一行**，这个文件不认识 yt-dlp 串）,
                   cycle_sort（`o`：轮换 SORT_FIELD 并**重取** —— 页与选中项在这里刻意重置，
                   因为重排之后旧下标底下是另一个视频）—— 另外三个 cycle 键各自跟着它们的
                   子系统列在别处：cycle_theme / cycle_ui_lang 在 i18n/theme，cycle_engine
-                  在 Engines。五个 cycle 键管六个偏好里的五个，第六个（UT_START_RESULTS）来自上面
+                  在 Engines。六个 cycle 键管七个偏好里的六个，第七个（UT_START_RESULTS）来自上面
                   那两条边；置脏点全都在**成功路径之后**（tui §11）
      Prefs      : mark_pref（cycle 成功之后置脏位；被环境压住的键在这里被拒并说一次）,
                   flush_prefs（冲刷点是 nav_tick 与 cleanup_on_exit 两个现成的地方）,
@@ -736,7 +738,7 @@ reflow、共享时钟与三个播放态。
                   注释与空白逐字节搬过去）, pref_value（键→变量的映射，同时**就是**
                   那张白名单）, pref_value_ok（round-trip 闸）, pref_listed
                   （3.2 没有关联数组，一个集合就是一个字符串）
-                  —— 六个键，且只写**用户那份**（contract §5「写回」、ROADMAP D8）
+                  —— 七个键，且只写**用户那份**（contract §5「写回」、ROADMAP D8）
      Chrome     : term_size（TERM_LINES/TERM_COLS —— 走这个 UI 本来就要求的那个 TTY 的真
                   ioctl，不信 $LINES/$COLUMNS；reflow 与分页的输入，tui §11）, layout_cols,
                   print_hints（HINT_MEASURE）, wrap_print/wrap_emit
@@ -833,8 +835,10 @@ reflow、共享时钟与三个播放态。
                本地截断不取数）· Enter 播放（**detached、非阻塞** —— 菜单保住它的终端，
                而音乐在 n / o / 过滤之间继续放）· / 过滤（实时收窄）· n 新搜索 ·
                o 排序 · v 轮换模式（audio→video→fast，对下一次 Enter 生效）·
+               f 轮换质量档（auto→medium→high，同样对下一次 Enter 生效；档位由引擎
+               按 (mode, tier) 翻译成 format-sort）·
                e 换源并重新取数（只有装了 2 个以上引擎时才画出来）
-               —— 这六个改的设置会写回用户配置（contract §5「写回」，ROADMAP D8）
+               —— 这七个改的设置会写回用户配置（contract §5「写回」，ROADMAP D8）
        卡片  ：←/→ seek ∓5s · ↑/↓ 音量 · Esc 回到列表
        两者  ：Space 暂停/恢复 · s 停止 · 9/0 音量 · [ ] seek ∓10s ·
                l chrome 语言（en↔zh）· t 调色板家族 · q 退出（回收它的播放器）

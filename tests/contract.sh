@@ -19,10 +19,10 @@
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md §28.
 #
 # Cost, measured 2026-08-29 and broken down because a number at the door is what a reader
-# decides on: ~83s in full, of which the live half is ~68s (roughly 21 engine round trips) and
+# decides on: ~95s in full, of which the live half is ~78s (roughly 21 engine round trips) and
 # the tmux section is ~16s of that — it was 4s until the write-back checks landed, and the 12
-# is two re-fetches its own keys ask for. `--offline` stops before the first of them: ~15s,
-# 168 of the 231 checks, no packet sent. That 15 is dominated by one deliberate 5.5s lock
+# is two re-fetches its own keys ask for. `--offline` stops before the first of them: ~16s,
+# 191 of the 263 checks, no packet sent. That 15 is dominated by one deliberate 5.5s lock
 # spin — a FRESH held lock has to be waited out, that being what the spin is for; the
 # stale-lock steal beside it costs 0.1s
 # because staleness is tested before the spin, not after (shell/ut-playlist:lock_playlist).
@@ -967,8 +967,19 @@ report "the file did not create the hijack socket" "absent" \
 # A TYPO MUST BE LOUD. An emptied cycle would otherwise abort on the first keypress (an empty
 # array expansion under set -u aborts on bash 3.2) and an unknown member would put a mode the
 # engines reject under the v key — both a long way from the line the user actually wrote.
-printf 'UT_THEME_CYCLE=nord,bogus\n' > "$CFG"
-report "an unknown cycle member exits 1" "1" "$(UT_CONFIG="$CFG" rc shell/uting q)"
+# Stated over EVERY cycle key rather than the one that happened to be written first: the four
+# are built by one loop of the same three lines and validated by one function, so a check
+# driving only the theme cycle is green on a fourth cycle that forgot to call it — which is
+# exactly the shape UT_QUALITY_CYCLE arrived in.
+# The first member of each is VALID and only the second is bogus: an emptied cycle dies at
+# the line above this one, so a pair like `UT_MODE_CYCLE=bogus` would go green whether the
+# member check ran or not. (Written as a literal list rather than a case inside $( ): on
+# bash 3.2 a case pattern's `)` closes the command substitution.)
+for spec in UT_MODE_CYCLE=audio,bogus UT_SORT_CYCLE=relevance,bogus \
+    UT_THEME_CYCLE=nord,bogus UT_QUALITY_CYCLE=auto,bogus; do
+    printf '%s\n' "$spec" > "$CFG"
+    report "${spec%%=*}: an unknown member exits 1" "1" "$(UT_CONFIG="$CFG" rc shell/uting q)"
+done
 printf 'UT_MAX_SEARCH_RESULTS=-5\n' > "$CFG"
 # Over EVERY discovered engine, not just bili: the ceiling is cross-engine, so a check
 # driving one of them would be green while the other spent an unbounded fetch.
@@ -1436,6 +1447,33 @@ else
     report "your config is still the symlink" 1 "$(test -L "$TUI_CFG" && echo 1 || echo 0)"
     report "and the real file behind it moved" 1 \
         "$(grep -c '^UT_PLAY_MODE=video' "$TUI_CFG_REAL")"
+
+    # The SEVENTH preference key, on the same pane and the same deferred write. Two
+    # discriminators, neither of which a naive implementation gets for free:
+    #   * the fixture has no UT_PLAY_QUALITY line, so this key can only APPEND — the mode
+    #     check above only proves the in-place edit;
+    #   * `auto` is deliberately NOT printed on the status line (a field sitting at its
+    #     default is pure width — the rule min=/max= already follow), so the line is grepped
+    #     BEFORE the press too. An implementation that printed every tier passes the after
+    #     check and fails the before one.
+    # medium, not high: the shipped UT_QUALITY_CYCLE is `auto medium high`, so one press from
+    # the default lands on the second member — an off-by-one that started the rotation at the
+    # head would write auto and go red here.
+    report "quality= is absent at auto" 0 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'quality=')"
+    tmux send-keys -t "$TS" f
+    wrote=0; i=0
+    while [ $i -lt 40 ]; do
+        grep -q '^UT_PLAY_QUALITY=medium$' "$TUI_CFG" && { wrote=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "f writes the quality tier to your config" 1 "$wrote"
+    shown=0; i=0
+    while [ $i -lt 40 ]; do
+        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'quality=medium' && { shown=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "…and the status line says so" 1 "$shown"
 
     # → past the last page fetches one more batch. Two presses is the geometry this pane has
     # (10 rows a page, 20 rows on screen), and the round repeats rather than assuming it: a
