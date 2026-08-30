@@ -795,7 +795,9 @@ reflow、共享时钟与三个播放态。
                   card_item_body（item 主语：free 层 + 取数买来的层 + 按行预算的简介）,
                   card_info_row（上传日期/点赞/章节数 —— **两个主语共用**的那一行片段）,
                   card_queue_block（前方队列块：`--status` 的 queue.upcoming，按行预算，
-                  装不下就退回单行 next: 形式 —— TUI 里唯一**读**队列的地方，tui §11）
+                  装不下就退回单行 next: 形式 —— TUI 里唯一**读**队列的地方，tui §11）,
+                  card_chapter_block（`--info` 的 chapters[]：有播放头就是游标 + seek 目标，
+                  没有就是一份目录；两块都**报告画了几行**，队列先拿，tui §11）
      Input      : read_nav_input/read_esc_tail（ESC-[/O 解码器，拆出来是为了让 PENDING_ESC
                   的再入不成为它的第二份副本）/read_query_input,
                   nav_tick（1 秒一拍：刷新在播读数 + flush 偏好 —— 两个键循环共用）,
@@ -815,6 +817,8 @@ reflow、共享时钟与三个播放态。
                   player_check_ready（core-idle → 清掉 Starting 态，20 秒上限）,
                   play_state_marks（playing/paused/starting → 字形+标签+颜色，两个视图共用）,
                   toggle_pause, seek_relative, adjust_volume, stop_current_playback,
+                  move_chapter / seek_chapter（卡内 ↑/↓ 与 Enter —— 游标本地移动，
+                  跳转走 ut-play --seek-to，不重新 resolve）,
                   check_player_alive, clear_play_state, elapsed_since_play,
                   cleanup_on_exit
      i18n/theme : init_ui_strings（启动时按 YT_LANG、否则按 locale 定一次语言）/

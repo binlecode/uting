@@ -195,6 +195,11 @@ addition bumps `z`; `1.0.0` is a promise this reference implementation does not 
 `Space` pause · `9/0` volume ·
 `[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
 
+In the focus card, once `i` has fetched a track that has chapters, `↑/↓` move a chapter cursor
+and `Enter` seeks to the one selected — a chapter is an offset inside the track already open,
+so nothing is re-resolved. On the item subject the same chapters are a table of contents: that
+card has no playhead. Volume is `9/0`'s alone.
+
 `e` is drawn only when a second engine is installed — the TUI discovers engines by looking for
 `<name>-search` and `<name>-resolve` pairs, so it holds no list of sources. `a` and `b` are
 drawn only when `ut-playlist` is installed and `h` only when `ut-history` is, by the same rule.
