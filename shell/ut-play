@@ -206,6 +206,9 @@ Options:
               UT_DEFAULT_ENGINE). The name is also the command prefix: --engine yt calls
               yt-resolve.
   -S SORT     Engine format-sort override, forwarded verbatim (e.g. res:720,fps)
+  --start SEC Open at SEC seconds instead of the beginning. Whole seconds, 0 or more.
+              A handle carrying its own timestamp (…&t=601s) starts there on its own;
+              this overrides it, and in a queue it applies to the first track only.
   --quality TIER  Quality tier: auto|low|medium|high (default: UT_PLAY_QUALITY / auto).
               The (mode, tier) -> format-sort table lives in the engine; -S overrides it
   -f MODE     Playback mode (default: audio)
@@ -431,6 +434,7 @@ RESOLVED_URLS=()          # [0] = what mpv opens; [1] = its separate audio track
 RESOLVED_HEADER_ARGS=()   # ready-made --http-header-fields-append=... mpv flags
 RESOLVED_TITLE=""
 RESOLVED_DURATION=""      # seconds, or "" for a live stream: read for the listening row only
+RESOLVED_START=""         # where the HANDLE asked to start, or "" — the engine read it, not us
 RESOLVED_HANDLE=""        # what was asked for: the queue moves, so the record must follow
 RESOLVED_FORMAT=""        # the engine's format string: recorded verbatim, never read
 RESOLVED_SELECTED=""      # …and what the engine says it PICKED, recorded the same way
@@ -452,7 +456,8 @@ resolve_media() {
     RESOLVED_HEADER_ARGS=()
     RESOLVED_TITLE=""
     RESOLVED_DURATION=""
-    RESOLVED_FORMAT=""
+    RESOLVED_START=""
+    RESOLVED_FORMAT=""""
     RESOLVED_SELECTED=""
     RESOLVED_SELECTED_RES=""
     RESOLVED_REASON=""
@@ -496,6 +501,11 @@ resolve_media() {
     # read for the listening row, where `seconds` alone cannot tell a track played through
     # from one abandoned at the third minute. Empty for a live stream, which has no length.
     RESOLVED_DURATION=$(printf '%s' "$out" | jq -r 'if (.duration | type) == "number" then (.duration | tostring) else "" end' 2>/dev/null) || RESOLVED_DURATION=""
+    # Where the handle asked to start. Read as a NUMBER test rather than `// ""`, because
+    # the answer 0 is real and different from "no offset": a link ending in ?t=0 says start
+    # at the beginning, and `// ""` would throw that away along with null. The engine did
+    # the site-specific reading (AS-BUILT-engine.md §7) — here it is just a number.
+    RESOLVED_START=$(printf '%s' "$out" | jq -r 'if (.start_seconds | type) == "number" then (.start_seconds | tostring) else "" end' 2>/dev/null) || RESOLVED_START=""
     RESOLVED_FORMAT=$(printf '%s' "$out" | jq -r '.format // ""' 2>/dev/null) || RESOLVED_FORMAT=""
     # The answer beside the request. Read for the same reason `format` is — so --status can
     # say what is playing rather than what was asked for — and read here rather than probed
@@ -591,6 +601,20 @@ run_mpv() {
     # (see YT_IPC_SOCK below and do_set_volume). ARCHITECTURE.md §26.
     if [[ -n "$VOLUME" ]]; then
         mpv_cmd+=(--volume="$VOLUME")
+    fi
+
+    # Where to put the playhead at launch. Two sources, and --start wins: the flag is the
+    # caller's per-request choice and the envelope's start_seconds is what the handle
+    # carried, which is the suite's usual direction (flag beats everything below it).
+    # `:-` rather than a test on emptiness, so a --start of 0 — "ignore the ?t= in this
+    # link and play from the top" — is honoured instead of falling through to the engine.
+    #
+    # Beside --volume rather than among the mode options: those are last because mpv lets
+    # the LAST occurrence win and they are overriding the ones before them. This one has
+    # nothing to override, so it goes with the other launch-time settings.
+    local start_at="${PLAY_START:-$RESOLVED_START}"
+    if [[ -n "$start_at" ]]; then
+        mpv_cmd+=(--start="$start_at")
     fi
 
     # Runtime control channel: only when launched under detach_play, which exports
@@ -1115,6 +1139,13 @@ detached_child_loop() {
         TRACK_STARTED_EPOCH=""
         rc=0
         play_url_directly "$QUEUE_URL" || rc=$?
+        # --start is a one-shot launch intent ("pick it up from here"), not a queue-wide
+        # policy — nobody wants every track in a list to skip its first ten minutes. Cleared
+        # here rather than in either branch of the case below, so a SKIPPED first track
+        # spends it too: --next means the caller moved on from the track the offset was
+        # about. Each item's OWN ?t= is unaffected — that arrives through RESOLVED_START,
+        # which resolve_media refills per track.
+        PLAY_START=""
         # BEFORE the case, because two of its three branches leave the loop or skip the rest
         # of the body: a row is owed for a stopped track and a skipped one exactly as much as
         # for one that played out. This is the line that keeps the log from becoming a record
@@ -1645,7 +1676,8 @@ detach_play() {
     YT_IPC_SOCK="$sock" YT_DETACHED=1 YT_DETACHED_LOG="$log" YT_PLAYER_ID="$id" \
         nohup bash "$SELF" --engine "$ENGINE" -f "$PLAYBACK_MODE" \
         ${VOLUME:+--volume "$VOLUME"} ${FORMAT_SORT:+-S "$FORMAT_SORT"} \
-        ${PLAY_QUALITY:+--quality "$PLAY_QUALITY"} -- "$url" >"$log" 2>&1 &
+        ${PLAY_QUALITY:+--quality "$PLAY_QUALITY"} ${PLAY_START:+--start "$PLAY_START"} \
+        -- "$url" >"$log" 2>&1 &
     pid=$!
     set +m
     disown "$pid" 2>/dev/null || true
@@ -2240,6 +2272,7 @@ PLAYBACK_MODE="$UT_PLAY_MODE"
 FORMAT_SORT=""
 PLAY_QUALITY="$UT_PLAY_QUALITY" # --quality flag overrides; the engine maps (mode, tier)
 VOLUME="$UT_VOLUME"
+PLAY_START=""        # --start: seconds to open at, beating the handle's own offset
 COLOR_MODE="auto"
 # Default output is prose; -j/-J select a machine envelope.
 OUTPUT_MODE="list"
@@ -2323,6 +2356,20 @@ while (($#)); do
         ;;
     --volume=*)
         VOLUME="${1#*=}"
+        shift
+        ;;
+    # Seconds only, and no sign — deliberately NOT mpv's own --start grammar. Passing that
+    # through (--start=-60 counts from the end, --start=50% is a fraction) would publish
+    # mpv's syntax on a frozen surface and make the player impossible to reimplement over
+    # anything else. Seconds is also what the rest of this suite means by a time: duration,
+    # position, --seek-to, and the listening row's `seconds` are all plain seconds.
+    --start)
+        [[ $# -ge 2 ]] || die "--start requires a value"
+        PLAY_START="$2"
+        shift 2
+        ;;
+    --start=*)
+        PLAY_START="${1#*=}"
         shift
         ;;
     --list|-l)
@@ -2461,7 +2508,7 @@ while (($#)); do
         # an unmatched one can never be valid — and left to fall through it reached getopts
         # as `-`, which reported the useless "invalid option: --". The wrapper used to hold
         # this arm; naming the real flags is the half of a gate that helps a caller recover.
-        die "unknown flag '$1' (play flags: -f -S --quality -d -j -l --engine --volume --status --stop --set-volume --pause --resume --seek --seek-to --queue --enqueue --next --id --all --color)"
+        die "unknown flag '$1' (play flags: -f -S --quality -d -j -l --engine --volume --start --status --stop --set-volume --pause --resume --seek --seek-to --queue --enqueue --next --id --all --color)"
         ;;
     *)
         normalized_args+=("$1")
@@ -2537,6 +2584,17 @@ stop | set-volume | pause | resume | seek | seek-to | enqueue | next) ;;
 esac
 if ((STOP_ALL)) && [[ "$ACTION" != stop ]]; then
     die "--all applies only to --stop"
+fi
+if [[ -n "$PLAY_START" ]]; then
+    # Rejected AT THE DOOR rather than clamped or coerced: --start 10:00 and --start -60 are
+    # both a caller who believes something about this flag that is not true, and playing
+    # from the top instead would hide that belief until they noticed the wrong minute.
+    if ! is_non_negative_int "$PLAY_START"; then
+        die "--start must be a whole number of seconds (0 or more), not '$PLAY_START'"
+    fi
+    # --start belongs to the PLAYBACK path. The lifecycle verbs address a player that is
+    # already running, and moving a running playhead is what --seek-to is for.
+    [[ -z "$ACTION" ]] || die "--start applies to starting playback, not to $ACTION_FLAG (to move a running player, use --seek-to)"
 fi
 if ((DETACH)) && [[ -n "$ACTION" ]]; then
     die "-d/--detach cannot be combined with $ACTION_FLAG"
