@@ -80,7 +80,7 @@ Not a general-purpose terminal music player: that layer is full and well maintai
 ncmpcpp, rmpc, musikcube, kew, termusic — and this is not a replacement for it. What plays here
 comes from an engine, not from `~/Music`.
 
-**All three listening features have landed** (`docs/ARCHITECTURE.md` D22): playlist
+**All three listening features have landed** (`docs/ARCHITECTURE.md` §3.5): playlist
 management (`ut-playlist`, the `a` and `b` keys), the queue (`ut-play
 --queue/--enqueue/--next`, `+` and `>`), and the listening history (`ut-history`, the `h` key).
 Each shipped with the rule they all carry: an agent surface — a verb and a `-j` envelope —
@@ -174,7 +174,7 @@ The human face carries the project's own name, so `~/bin/uting` is a plain symli
 `shell/uting` — same word at both ends, no alias in between. Want something shorter to type?
 Make one — `alias ut=uting`, or a symlink of your own. Nothing reads its own `argv[0]`, so any
 name works. The suite ships no short form itself, because a second official spelling is a second
-thing to keep in sync (`docs/ARCHITECTURE.md` D0).
+thing to keep in sync (`docs/ARCHITECTURE.md` §3.1).
 
 `uting --version` (or `-V`) answers before any dependency check, so it works on a machine that
 has not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. Every

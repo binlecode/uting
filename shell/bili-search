@@ -22,7 +22,7 @@
 # through the middle of the engine: the hand-written HTTP path NEVER TOUCHES A CREDENTIAL.
 # The only cookie it sends is a buvid3 it generates itself (see below) — no account, no
 # token, nothing read from a browser profile. Login lives entirely in `bili-resolve`, where
-# yt-dlp owns it. docs/ARCHITECTURE.md §5; ARCHITECTURE.md D19.
+# yt-dlp owns it. docs/ARCHITECTURE.md §5; ARCHITECTURE.md §3.4.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
 # expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md §28.
@@ -108,7 +108,7 @@ SEARCH_ENDPOINT="https://api.bilibili.com/x/web-interface/search/type"
 # code:0, without it 412 (measured 2026-08-23). It is a public constant, not an
 # authentication mechanism — every Bilibili extractor in yt-dlp sends the same one.
 #
-# UNPREFIXED, like SEARCH_ENDPOINT above and for the same reason: since D16 the prefix IS
+# UNPREFIXED, like SEARCH_ENDPOINT above and for the same reason: since ARCHITECTURE.md §3.6 the prefix IS
 # config reachability — ut_read_config accepts every UT_/YT_/BILI_ name that is not in its
 # refusal list — so a BILI_ spelling would be taken off disk and then silently overwritten
 # by this line 16 lines later. A constant must not wear a settable name.

@@ -21,11 +21,11 @@
 | 标题里带 tab/换行会撑破一行 | jq `@tsv` 转义；`load_rows` 里 `IFS=$'\t'` 切分（如今是 US，见 `AS-BUILT-tui.md` §11） |
 | 从渲染好的行里错误地还原 URL | url 与显示分开放在平行数组里（按下标取） |
 | 过滤过度匹配 / 注入一个 glob | 纯 bash：`nocasematch` + AND 词元 + 加引号的 `"$tok"` |
-| 把 URL 当查询粘进去 | `<engine>-search` 拒绝 URL → 不会阻塞式误播（D8） |
+| 把 URL 当查询粘进去 | `<engine>-search` 拒绝 URL → 不会阻塞式误播（ARCHITECTURE.md §3.2） |
 | `uting` 在没有 TTY 时被跑起来（agent/管道） | 要求 `-t 0 && -t 1`，否则 die（不挂起） |
 | 一次改名破坏兄弟定位 | 每个脚本解析自己的符号链接链（ARCHITECTURE.md §4）；步骤 B 先重指，步骤 C 才删 |
 | yt-dlp 的 `ytsearch<N>:` 前缀被覆盖 | 字面量只在 `yt-search` 里，从不被改写 |
-| 一个引擎的 URL 被送去另一个的 resolver（引擎被静默错标） | 每引擎一份显式 host 白名单 → 退 1，绝不返回一条解好的流（`AS-BUILT-player.md` §10、ARCHITECTURE.md D20） |
+| 一个引擎的 URL 被送去另一个的 resolver（引擎被静默错标） | 每引擎一份显式 host 白名单 → 退 1，绝不返回一条解好的流（`AS-BUILT-player.md` §10、ARCHITECTURE.md §3.4） |
 | 新增一个源需要改播放器或 TUI | 它不可能需要：播放器靠拼接引擎名找到 resolver（ARCHITECTURE.md §4），TUI 靠 glob 发现引擎对（`AS-BUILT-tui.md` §11） |
 | 停止之后留下孤儿 mpv | 用进程组（pgid），不走 PID 树 |
 | `set -u` 下的空数组展开（bash 3.2） | 用之前先守卫数组展开 |
@@ -42,7 +42,7 @@
 | 并发的元数据回填与 set-volume 互相覆盖同一份 `<id>.json` | 按 id 的 `mkdir` 锁（`lock_player_state`）把两次 temp+mv 串行化；回填另外还做 pid 守卫（§9.3） |
 | 写回把用户手写的配置改坏（丢注释、错开中文注释列、写下一个自己读不回来的值） | 就地改写只动匹配行 `=` 右边的值：键的空白、值与 `#` 之间那段空白、以及注释本身逐字节搬过去，**注释列刻意不重排**（宽度层住在渲染路径里，按字节补齐会错开中文注释，而文件仍然合法、什么都不报）；写下去的值必须过 round-trip 闸（`#`、引号、换行、首尾空白、开头 `~/` 一律拒）；先写临时文件再 `mv -f`，`cp -p` 在前，所以一个 600 的文件回来还是 600；`mv` 的目标是**沿 symlink 链解析之后的真实路径**，所以一份从 dotfiles 仓库链过来的配置不会被换成普通文件、留下一个被架空的原件（`AS-BUILT-contract.md` §5「写回」）。判别性输入在 `contract.sh` 的 TUI 段（§27） |
 | 跑一次测试套件就改掉开发者自己的配置 | 三个调用点各自隔离（`contract.sh` 通篇一个空的临时文件、TUI pane 另有一个自己的、`drive.sh` 一份副本、`capture-pane` 一个自己的），**外加一条不靠任何人记得的守卫**：`contract.sh` 在两个出口各断言一次用户真实配置的 `cksum` 没变（§27） |
-| 一个被环境变量压住的键被写进文件，然后每次启动被读到又扔掉 | 在读配置**之前**记下七个键里哪些已经在环境中；对这些键，写回变成 no-op 加一行提示（`AS-BUILT-contract.md` §5、ARCHITECTURE.md D16） |
+| 一个被环境变量压住的键被写进文件，然后每次启动被读到又扔掉 | 在读配置**之前**记下七个键里哪些已经在环境中；对这些键，写回变成 no-op 加一行提示（`AS-BUILT-contract.md` §5、ARCHITECTURE.md §3.6） |
 | 一个凭据头到达 mpv 的 argv（在 `ps` 里可见） | 引擎不得把 `Cookie`/`Authorization` 放进 `http_headers`；写在 §8.1 与 AS-BUILT-contract.md §3 |
 | mpv 被 SIGKILL 之后留下陈旧 socket | `[[ -S sock ]]` 测试 → `ipc_failed`，绝不挂起 |
 | 对端不关连接时 `nc` 会等满 `-w1`（一个卡住的 mpv，不是健康的那种） | `request_id` 过滤 + `head -1`；一个**健康**的 mpv 在半关闭时就收，所以一次调用约 0.016s。`uting` 的重绘路径是一个紧循环，所以它根本**不等** `nc`：它从一个进程替换里读回复、读到最后一条就 break，这也把"卡住"那种情形也框住了 |

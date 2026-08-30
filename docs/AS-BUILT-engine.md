@@ -56,8 +56,8 @@ AS-BUILT-contract.md §1。下面的一切 —— 那**一个** jq 程序、内�
 ```
 
 `engine` 之所以在信封里，是因为一个拿着结果的调用方必须能把它**路由回**懂它的那个 resolver ——
-`ut-play --engine <那个值>`（AS-BUILT-contract.md §3、D12）。它正是 host 白名单
-（D20）存在要保其诚实的那个字段。
+`ut-play --engine <那个值>`（AS-BUILT-contract.md §3、ARCHITECTURE.md §3.4）。它正是 host 白名单
+（ARCHITECTURE.md §3.4）存在要保其诚实的那个字段。
 
 `print_list()` 读的是 **`FILTERED_JSON` 这个变量**，不是发出去的 `-j` 流。
 投影只发生在发射点，所以 JSON 契约可以改而不必碰那个消费者。（schema → AS-BUILT-contract.md §3。）
@@ -87,10 +87,10 @@ AS-BUILT-contract.md §3），并为 `-j`/`-J` 发出
 `{status:"error", engine, query, count:0, results:[], reason}`（散文路径：捕获到的 stderr 加一次
 `die`）。退出码是 2+ —— **绝不是 1**，那个被 AS-BUILT-contract.md §4 留给用法/校验错误。
 
-### 7.1 Bilibili 的传输 —— 同一个信封，架在一个手工拼出来的请求上（D11）
+### 7.1 Bilibili 的传输 —— 同一个信封，架在一个手工拼出来的请求上（ARCHITECTURE.md §3.1）
 
 `bili-search` 用 `curl` + `jq` 而不是 yt-dlp 实现了上面的一切。这个拆法不是偏好，
-它是**唯一**行得通的组合（实测，D19）：yt-dlp 的 `--flat-playlist` 用 0.9s 作答，
+它是**唯一**行得通的组合（实测，ARCHITECTURE.md §3.4）：yt-dlp 的 `--flat-playlist` 用 0.9s 作答，
 却**一个元数据都没有**（`BiliBiliSearchIE` 产出 `url_result(arcurl, aid)`，
 把它刚刚解析出来的响应里的 标题/作者/时长/播放量 全丢掉了），而一次完整抽取会递归进
 **每一个合集的每一个分 P** —— 这个站点的音乐结果压倒性地是多 P 的 ——
@@ -117,7 +117,7 @@ AS-BUILT-contract.md §3），并为 `-j`/`-J` 发出
   不带就是 412（2026-08-23 实测）。它是一个公开常量，不是一种认证机制 ——
   yt-dlp 里每一个 Bilibili extractor 发的都是同一个。所以它在代码里叫
   `SEARCH_REFERER` 而**不带** `BILI_` 前缀，与它旁边的 `SEARCH_ENDPOINT` 一组：
-  D16 之后前缀**就是** config 可达性（`ut_read_config` 收下每一个
+  ARCHITECTURE.md §3.6 之后前缀**就是** config 可达性（`ut_read_config` 收下每一个
   `UT_`/`YT_`/`BILI_` 名字），而一个常量不该顶着一个可设置的名字 ——
   否则用户在 config 里写的那个值会被静默覆盖掉。
 - **`buvid3` 是一个**设备**标识，不是凭据**：没有账号、没有 token、不从任何浏览器 profile 读东西
@@ -138,7 +138,7 @@ AS-BUILT-contract.md §3），并为 `-j`/`-J` 发出
 
 **这条手写的 HTTP 路径从不碰任何凭据**，而这就是穿过这个引擎中间的那条线：
 登录状态只到达 yt-dlp、只在解析那一半、只经由 `--cookies-from-browser`。
-正是它让 D11 对"为什么不做一个完整客户端"的回答（"那整块归 yt-dlp"）
+正是它让 ARCHITECTURE.md §3.1 对"为什么不做一个完整客户端"的回答（"那整块归 yt-dlp"）
 对搜索这一半也同样为真。
 
 **能让站点筛的就让站点筛 —— 这是请求数的问题，不是一个功能。** 这个端点每页固定 20 条、
@@ -292,6 +292,9 @@ soft ref：`shell/yt-resolve` 的 `resolve_stream()` / `dump_once()` / `probe_ra
 **并且**那个 profile 目录真的在这台机器上。降级是静默的（那是对的：一个公开视频照样能放），
 于是"我以为我登录着"和"这次是匿名的"在外面长得一模一样。`--auth` 就是把这两个条件的合成
 结果印出来的那个动词，不吃句柄、不发包、不跑 yt-dlp。
+这个动词归 resolve 半边，也**只**归它 —— cookie 决定本来就住在那儿。被否掉的另一个位置
+是给搜索信封加 `auth` 字段：两个引擎不对称（`bili-search` 一个凭据都不发），要报出
+`chrome` 就得在搜索半边抄第 4 份 profile 判断副本（ARCHITECTURE.md §3.4）。
 
 **它报的是"发不发"，此外什么都不报 —— 而"此外"是两件事，不是一件。**
 `auth:"cookie"` 之后还有两个独立的问号：站点**认不认**这份会话（过期登录照样报 `cookie`），
@@ -308,7 +311,7 @@ format 表里），视频 format 表两边逐项相同，`1080P 高码率`（301
 
 这条测量的用处正在这里：**音质永远不能用来反推这个字段，这个字段也永远不能用来预测音质。**
 第一个问号（过期会话）是真实的设计关切，但**上面这组数字没有量到它** ——
-量到它需要一次鉴权往返，这个套件刻意不做（D15）。
+量到它需要一次鉴权往返，这个套件刻意不做（ARCHITECTURE.md §3.4）。
 
 ## 10. 解析 —— 引擎的第二半
 
@@ -331,7 +334,7 @@ yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality
 `--quality` 是流格式选择器，撞上 `--info` / `--parts` / `--transcript` 就退 1
 （门语直说它不适用于那些动词）。
 
-**句柄文法是每引擎自己的，host 白名单也是（D20）。** `normalize_target` 接受
+**句柄文法是每引擎自己的，host 白名单也是（ARCHITECTURE.md §3.4）。** `normalize_target` 接受
 **本**引擎某个 host 上的 URL，或者本引擎自己的媒体 id 形状：
 
 | 引擎 | 接受的 host | 裸 id 形状 |
@@ -398,7 +401,7 @@ yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality
 只填其中之一 —— **信封的形状不得取决于是哪一个**。这是对一个引擎的通则：
 **归一化到契约，绝不把 extractor 的方差原样发布出去。**
 
-### 10.2 字幕（`--transcript`）—— 一个 `bili-resolve` 没有的动词（D13）
+### 10.2 字幕（`--transcript`）—— 一个 `bili-resolve` 没有的动词（ARCHITECTURE.md §3.4）
 
 `yt-resolve --transcript` 取一条字幕轨，并把它清洗成可以直接丢进 prompt 的文本。信封、
 `-j`/`-J` 的分工，以及"只许一次 yt-dlp 调用"的约束：AS-BUILT-contract.md §3，
@@ -408,7 +411,7 @@ yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality
 帮助里也不列它。这是"能力规矩"的微观版：**一个引擎靠"没有那个动词"来说明自己做不到什么**，
 而不是发布一个永远答"没有"的动词 —— 后者让调用方分不清它与"今天不走运"或"被限流了"。
 
-### 10.3 多 P（`--parts`）—— 一个 `yt-resolve` 没有的动词（D13）
+### 10.3 多 P（`--parts`）—— 一个 `yt-resolve` 没有的动词（ARCHITECTURE.md §3.4）
 
 `bili-resolve --parts` 列出多 P 视频的各 P（`?p=N`）—— **一次 HTTP 请求，没有 yt-dlp**
 （`fetch_view_once`，与 `--info` 共用那一次 view 抓取）。信封与

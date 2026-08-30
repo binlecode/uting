@@ -267,7 +267,7 @@ soft ref：`shell/ut-play` 的 `detach_play()` / `stop_group()` / `group_alive()
 同一条规矩的另一面）、**最多 8 条**、**不超过一小时**，而且它住在状态目录里，随目录一起死。
 没有墓志铭就没有墓碑：一份被截断的日志、或一次 `kill -9`，报的是沉默，而不是一次被推断出来的死亡。
 
-> **这条边界活过了范围变更，也因此更要紧。** 收听历史按 ARCHITECTURE.md D22 是一个**功能**、
+> **这条边界活过了范围变更，也因此更要紧。** 收听历史按 ARCHITECTURE.md §3.5 是一个**功能**、
 > 并且已经落地（§9.6），所以"`failed[]` 不是历史"不再是一条"缺席"规矩，
 > 而是一条**分离**规矩，两边都是真实文件：历史是持久的、
 > 用户级的、每一首都记，住在 `$UT_STATE_DIR`；`failed[]` 仍是易失的、有界的、只记失败，
@@ -334,7 +334,7 @@ soft ref：`shell/ut-play` 的 `detach_play()` / `stop_group()` / `group_alive()
 **读**（进度 + 暂停态）和按住不放的音量键直接走 socket，而不是每次按键 fork 一个动词：
 它的 Now-Playing 视图每秒刷一次，否则每一拍都要付一条进程链。它的暂停与 seek 键**确实**搬去了
 动词 —— 一次按键一次调用付得起，一拍一次付不起 —— 而 ARCHITECTURE.md §26 记着划出这条线的
-那次实测。这是对 D8 的一次刻意例外，所以 socket 路径是在 `-d -j` 的信封里**交给客户端**的
+那次实测。这是对 §3.7 的一次刻意例外，所以 socket 路径是在 `-d -j` 的信封里**交给客户端**的
 （`sock`），而不是从状态目录布局里重建出来；并且是这份文档 —— 而不是某个实现细节 ——
 批准了那条 JSON-RPC 通道。对 `--status` 的后果：状态文件里的 `volume` 只知道启动时的 `--volume`
 与 `--set-volume`，所以一个经 socket 改音量的客户端会让它说谎。因此 `--status` 报的是**活的**
@@ -368,7 +368,7 @@ soft ref：`shell/ut-play` 的 `detach_play()` / `stop_group()` / `group_alive()
 而活读存在的意义正是终结这种失败模式。一个有用的副作用：`paused != null` 如今是一个刚 detach
 的播放器诚实的就绪探测 —— 而 `volume` 在 mpv 还没开始监听时就能从状态文件里答出来。
 
-**句柄是一个单调 token，不是 pid（D9）。** `new_player_id` 用
+**句柄是一个单调 token，不是 pid（ARCHITECTURE.md §3.3）。** `new_player_id` 用
 `basename "$(mktemp "$PLAYERS_DIR/XXXXXX")"` 铸出句柄 —— 原子且不撞。这一下解决两个问题：
 (1) socket 必须在**启动时**就经 `YT_IPC_SOCK` 命名，但子进程的 pid 要到启动**之后**的 `$!`
 才知道 —— token 打破了这个先有鸡还是先有蛋；(2) 它把 pid 复用从一个活生生的危险降级成一个
@@ -431,7 +431,7 @@ bash 3.2 的数组（`RESOLVE_PLAYERS_JSON` 的候选）过不了 `$(...)` 捕�
 
 §9.1–§9.3 描述的是**本来就该死**的状态：一条播放器记录住在
 `${TMPDIR:-/tmp}/uting-$(id -u)`，进程组一走它就被回收，整个目录重启即清。这对一个**正在跑的
-进程**是正确的，对一份用户攒了半年的清单则是致命的。所以第一个收听功能（ARCHITECTURE.md D22）
+进程**是正确的，对一份用户攒了半年的清单则是致命的。所以第一个收听功能（ARCHITECTURE.md §3.5）
 从第二个、独立的存储开始：
 
 ```
@@ -443,7 +443,7 @@ bash 3.2 的数组（`RESOLVE_PLAYERS_JSON` 的候选）过不了 `$(...)` 捕�
 **一条记录是一次调用，不是一个引用。** 一个条目是 `{engine, id, url, title, duration,
 added_at}` —— 搜索结果的一个子集，外加从信封里折进来的 `engine`，因为 `engine` + `url`
 恰好就是 `ut-play --engine E -- URL` 的那两个参数。只存一个光秃秃的 URL 等于把路由这个事实
-扔掉，逼后面某个面去猜它 —— 而按 D20（ARCHITECTURE.md），那是一个硬性的用法错误，
+扔掉，逼后面某个面去猜它 —— 而按 ARCHITECTURE.md §3.4（ARCHITECTURE.md），那是一个硬性的用法错误，
 不是一次静默的错标。`channel`、`view_count`、`live_status` 刻意不存：播放用不着它们，
 而它们会过期成错误答案。schema → AS-BUILT-contract.md §3。
 

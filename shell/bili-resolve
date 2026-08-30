@@ -117,7 +117,7 @@ ENGINE_NAME="bili"
 # buvid, no signature. AS-BUILT-engine.md.
 #
 # UNPREFIXED, like bili-search's SEARCH_ENDPOINT/SEARCH_REFERER and for the same reason:
-# since D16 the prefix IS config reachability, so a constant must not wear a settable name.
+# since ARCHITECTURE.md §3.6 the prefix IS config reachability, so a constant must not wear a settable name.
 VIEW_ENDPOINT="https://api.bilibili.com/x/web-interface/view"
 VIEW_REFERER="https://www.bilibili.com/"
 
@@ -732,7 +732,7 @@ resolve_info() {
 # The search half cannot answer this and must not try: its response carries no part count at
 # all (measured — every numeric field on a 100-part row, and not one of them is it), so
 # reporting it there would mean one extra request PER ROW against the endpoint where
-# requests are the scarce resource (ARCHITECTURE.md D19). The resolve half answers it in one.
+# requests are the scarce resource (ARCHITECTURE.md §3.4). The resolve half answers it in one.
 
 VIEW_CURL_RC=0
 VIEW_HTTP=""
