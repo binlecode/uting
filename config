@@ -67,7 +67,8 @@ UT_PLAY_MODE=audio                  # the -f default. -f itself accepts audio | 
 UT_VOLUME=                          # the --volume default; empty = leave mpv's own
 UT_PLAY_QUALITY=auto                # the --quality default: auto | low | medium | high.
                                     # The (mode, tier) -> format-sort table lives in the
-                                    # engines (PLAN §4 P3); -S overrides it when both given.
+                                    # engines (AS-BUILT-engine.md §10); -S overrides it when
+                                    # both are given.
                                     # uting's f key rotates it live and writes it back here
 
 # ── scope: player (ut-play) ─────────────────────────────────────────────────────────────

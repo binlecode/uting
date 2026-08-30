@@ -457,7 +457,8 @@ resolve_media() {
 
     # -S and --quality are forwarded because format-sort is the engine's concept and the
     # caller may have overridden it; everything else the engine decides for itself. -S wins
-    # over --quality INSIDE the engine (PLAN §4 P3), so both are forwarded unchanged.
+    # over --quality INSIDE the engine (AS-BUILT-player.md §8.1), so both are forwarded
+    # unchanged.
     local out rc=0
     out=$("$ENGINE_RESOLVE" -j -f "$mode" ${FORMAT_SORT:+-S "$FORMAT_SORT"} \
         ${PLAY_QUALITY:+--quality "$PLAY_QUALITY"} -- "$handle" 2>/dev/null) || rc=$?
@@ -1635,7 +1636,7 @@ detach_play() {
     # all detached_epitaph needs to read back what mpv said before classifying its own death.
     # -S and --quality are forwarded like --volume so a format-sort override or a quality
     # tier isn't silently lost on the detached path; `--` guards a URL that begins with a
-    # dash. -S wins over --quality inside the engine (PLAN §4 P3).
+    # dash. -S wins over --quality inside the engine (AS-BUILT-player.md §8.1).
     set -m
     YT_IPC_SOCK="$sock" YT_DETACHED=1 YT_DETACHED_LOG="$log" YT_PLAYER_ID="$id" \
         nohup bash "$SELF" --engine "$ENGINE" -f "$PLAYBACK_MODE" \

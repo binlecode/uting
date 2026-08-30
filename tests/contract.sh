@@ -655,8 +655,9 @@ report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcrip
 # exists on one engine and must never appear on the other.
 #
 # THE PAIR IS ALSO THE FEASIBILITY PROOF for how `uting` will probe an engine for the verb
-# without spending a request (PLAN §5.1): it invokes `--parts` with NO handle. The engine
-# that has the verb answers with a usage error about the missing handle; the engine that
+# without spending a request (AS-BUILT-engine.md §10.3): it invokes `--parts` with NO
+# handle. The engine that has the verb answers with a usage error about the missing handle;
+# the engine that
 # does not falls into the unknown-flag arm every gate in this suite shares
 # (AS-BUILT-contract.md §2). BOTH exit 1 — which is exactly why the exit code cannot be the
 # probe, and why what these two pin is the stderr WORDING. An engine that grew --parts and
@@ -678,13 +679,14 @@ report "unknown engine is usage"  1 "$(rc shell/ut-play --engine nope -- "$MEDIA
 report "engine name is validated" 1 "$(rc shell/ut-play --engine ../evil -- "$MEDIA_ID")"
 # The quality tier is validated at the door, before any dependency gate: a mistyped tier
 # is a usage error, and a legal one still falls into the gates the handle and the engine
-# own — the tier must not change what a wrong verb is worth (PLAN §5.3).
+# own — the tier must not change what a wrong verb is worth (AS-BUILT-contract.md §1.3).
 report "ut-play rejects a bogus tier"     1 "$(rc shell/ut-play --quality ultra -- "$MEDIA_ID")"
 report "ut-play --quality needs a handle" 1 "$(rc shell/ut-play --quality low)"
 report "ut-play --quality keeps the engine gate" 1 \
     "$(rc shell/ut-play --quality low --engine nope -- "$MEDIA_ID")"
 # A bogus SCALAR knob in the user's config dies in uting the same way, naming the key the
-# user actually wrote (PLAN §13). Stated over every scalar door rather than the tier that
+# user actually wrote (AS-BUILT-verification.md §27). Stated over every scalar door rather
+# than the tier that
 # happened to be written first: each one is its own `case`, not one loop through one
 # validator the way the four *_CYCLE keys are, so a check driving only the quality tier is
 # green on a door that was never closed — which is the shape UT_KEYS arrived in.

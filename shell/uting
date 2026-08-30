@@ -821,7 +821,8 @@ if [[ -n "$PLAY_VOLUME" ]]; then
 fi
 # The quality tier rides the same door: a bogus value in the user's config would otherwise
 # surface as a play that silently defaults. Empty reads as auto (the engine sends no sort
-# for blank or auto alike — PLAN §5.3); anything else is a mistyped knob and fails loud.
+# for blank or auto alike — AS-BUILT-contract.md §1.3); anything else is a mistyped knob
+# and fails loud.
 # NORMALISED to the spelling rather than left blank, because the f key rotates this value:
 # a blank matches no member of the cycle, so the first press would land on the SECOND tier
 # and auto would be reachable only by going all the way round.
@@ -1124,8 +1125,9 @@ keys_full() { [[ "$KEYS_TIER" == "full" ]]; }
 
 # Rotate the key-hint tier in place (key: ?). Two tiers, not three: `core` is one line of
 # this view's own job — move, act on the row, get back out, quit — and `full` adds the
-# engine / store / tuning / playback family. A third "hidden" state was refused (PLAN §4
-# P12): it saves the one line core already costs and gives up every hint on the screen, and
+# engine / store / tuning / playback family. A third "hidden" state was refused
+# (AS-BUILT-tui.md §11): it saves the one line core already costs and gives up every hint on
+# the screen, and
 # the short-terminal fallback already drops the block automatically, which is the reflow's
 # job rather than a tier the user has to choose.
 cycle_keys() {
@@ -2331,7 +2333,7 @@ move_chapter() {
 # ABSOLUTE spelling of the verb the arrows already use relatively (ut-play requires the sign
 # on the relative one precisely so these two can never be confused), and nothing is
 # re-resolved — a chapter is an offset inside the file already open, which is what separates
-# this axis from parts and from quality (PLAN §3).
+# this axis from parts and from quality (AS-BUILT-tui.md §11).
 seek_chapter() {
     local n
     ((CARD_CHAP_ACTIVE)) || return 0
@@ -2793,7 +2795,7 @@ display_list_menu() {
     # what they mean where they land.
     local search_view=0
     [[ "$LIST_SOURCE" == "search" ]] && search_view=1
-    # TWO TIERS, one block (PLAN §4 P12). `core` is this view's own job — move, act on the
+    # TWO TIERS, one block (AS-BUILT-tui.md §11). `core` is this view's own job — move, act
     # row, change view, filter, quit — and everything else is one press of ? away. The tier
     # is applied cell by cell with keys_full rather than by building a core array and
     # appending a full one, so the ORDER of the full block is byte-identical to the order it
@@ -3422,11 +3424,12 @@ card_queue_block() {
     return 0
 }
 
-# The chapters, and the third axis of this plan's three (PLAN §3): not a row and not a launch
-# parameter but an OFFSET INSIDE THE FILE PLAYING. That is the whole reason it is a block on
-# this card instead of a list source like parts — a chapter has no url of its own, so making
-# it a row would grow the item record a start-offset field and spread that field through
-# playlist, queue and history for the sake of dressing a seek up as a launch.
+# The chapters — the third axis, beside the row (parts) and the launch parameter (quality),
+# and the one that is neither (AS-BUILT-tui.md §11): an OFFSET INSIDE THE FILE PLAYING.
+# That is the whole reason it is a block on this card instead of a list source like parts —
+# a chapter has no url of its own, so making it a row would grow the item record a
+# start-offset field and spread that field through playlist, queue and history for the sake
+# of dressing a seek up as a launch.
 #
 # `live` is the caller's answer to one question: does this card have a PLAYHEAD? On the
 # playing subject it does, so the cursor and Enter are offered and the chapter the playhead
@@ -3544,7 +3547,7 @@ card_item_body() {
     # This card is a reader, so its core is three cells: play what it is about, go back, quit.
     # The full tier is the playback family the universal case honours here exactly as it does
     # everywhere else — a key that WORKS on this screen and is printed nowhere is the gap ?
-    # exists to close (PLAN §4 P12).
+    # exists to close (AS-BUILT-tui.md §11).
     hints=("Enter	$S_PLAY_SEL" "Tab	$S_BACK_LIST")
     keys_full && hints+=("Space	$S_PAUSE_RESUME" "[ ]	$S_SEEK" "9/0	$S_VOL_ADJUST" "s	$S_STOP_PLAY")
     hints+=("q	$S_QUIT" "?	$S_KEYS")
@@ -3574,7 +3577,7 @@ card_item_body() {
     #
     # live=0 — this card has no playhead. The chapters here are a table of contents, not seek
     # targets: nothing is playing FROM this card, so there is nothing to seek. One Tab reaches
-    # the card that has a playhead (PLAN §4 P6).
+    # the card that has a playhead (AS-BUILT-tui.md §11).
     card_chapter_block "$cols" $((budget / 2)) 0
     budget=$((budget - CARD_CHAP_LINES))
     ((budget > CARD_DESC_MAX)) && budget=$CARD_DESC_MAX
@@ -3741,7 +3744,7 @@ display_now_playing_card() {
         # being two lines (and stops stealing a row from the body at short heights).
         # The core here is not the list's core: this card's own job IS the player, so Space
         # and the seek arrows stay in both tiers and it is the second spelling of volume and
-        # the stop key that step back a tier (PLAN §4 P12).
+        # the stop key that step back a tier (AS-BUILT-tui.md §11).
         local card_hints=(
             "Tab	$S_BACK_LIST" "Space	$S_PAUSE_RESUME" "$GL_AH	$S_SEEK"
         )
@@ -3772,7 +3775,7 @@ display_now_playing_card() {
         # would read as something the door opened.
         #
         # There is no volume cell here to take out: 9/0 keeps its own, and what the arrows
-        # gave up was a SECOND spelling of it (PLAN §12 handed that to P6).
+        # gave up was a SECOND spelling of it (AS-BUILT-tui.md §11).
         local tail_hints=()
         ((chap_ok)) && tail_hints=("$GL_AV	$S_CHAP_HEAD" "$GL_ENTER	$S_CHAP_GO")
         tail_hints+=("?	$S_KEYS")
@@ -3794,7 +3797,8 @@ display_now_playing_card() {
         # queue now (a lone handle is a queue of one), so a block that headed itself "1/1"
         # would be chrome that never says anything.
         #
-        # It is served FIRST and the chapters take what is left (PLAN §4 P6): the queue is the
+        # It is served FIRST and the chapters take what is left (AS-BUILT-tui.md §11): the
+        # queue is the
         # one thing on this screen that changes without a keypress, and a card that is watched
         # sheds a static table of contents before it sheds a live readout. Measured at 80x24
         # both fit with ~8 rows to spare, so this is an order, not a choice between them.
@@ -3922,7 +3926,7 @@ play_selected() {
     [[ -n "$row_engine" ]] || row_engine="$CURRENT_ENGINE"
     # --quality rides beside -f because the engine reads the pair: the tier alone selects
     # nothing. Forwarded as the canonical spelling, never as a format-sort string — this file
-    # holds no yt-dlp vocabulary, and ut-play holds none either (PLAN §4 P3).
+    # holds no yt-dlp vocabulary, and ut-play holds none either (AS-BUILT-engine.md §10).
     out=$("$PLAY_BIN" -d -j --engine "$row_engine" -f "$PLAY_MODE" --quality "$PLAY_QUALITY" \
         ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>"$errfile") || rc=$?
     msg=$(<"$errfile")
@@ -4518,7 +4522,7 @@ open_history() {
 # SEARCH ROWS ONLY, through search_only — the guard o and e already use, not a new one.
 # stash_search has a single slot, so opening a part list from a playlist row would either
 # lose the way back to the search or need a stack, and a stack is its own change on its own
-# day (PLAN §9).
+# day (the one-deep return stack is AS-BUILT-contract.md §1.4).
 #
 # ONE fork on the KEY, never on the selection moving. Whether the key is offered at all was
 # answered at the last source switch (refresh_engine_parts), so this costs nothing per redraw.
@@ -4759,7 +4763,8 @@ cycle_mode() {
 # launch, so nothing on screen has to be re-fetched and the player already running keeps the
 # stream it resolved. What it selects is a (mode, tier) row in the ENGINE's format-sort table
 # — this file never learns a yt-dlp expression, which is the whole point of a named tier
-# (PLAN §4 P3). A value not in the cycle (set by config or the environment, e.g. `low` under
+# (AS-BUILT-engine.md §10). A value not in the cycle (set by config or the environment,
+# e.g. `low` under
 # the shipped cycle) leaves cur at 0, so the first press joins the rotation at its head.
 cycle_quality() {
     local i n=${#QUALITY_CYCLE[@]} cur=0
@@ -5274,7 +5279,7 @@ move_selection() {
     # second case would be a second copy of the page-crossing arithmetic, which is the drift
     # every duplicated block in this file has been rewritten to remove. Only the desktop
     # pair, never hjkl entire — `h` is already history, and `g/G` is closed off by binding
-    # case together, so half a vim is worse than none (PLAN §4 P11).
+    # case together, so half a vim is worse than none (AS-BUILT-tui.md §11).
     case "$input" in
     "[A" | "OA" | "["*A | "O"*A | k | K) # up
         if ((selected > 0)); then
@@ -5411,7 +5416,8 @@ while true; do
     # Toggles: list (Search List) ◄──► card (Now Playing Focus Card)
     #
     # `p`/`P` were a SECOND spelling of this until P10, and they went for two reasons that
-    # each stand alone (PLAN §12): mpv, ncmpcpp and cmus all bind `p` to PAUSE, so a player
+    # each stand alone (AS-BUILT-tui.md §11): mpv, ncmpcpp and cmus all bind `p` to PAUSE, so
+    # a player
     # user pressing it here got a change of screen instead of the one thing they asked for;
     # and it appeared in no hint block, so nothing on screen could have told them otherwise.
     # A TUI key is not frozen surface — ARCHITECTURE.md §3.8 freezes the CLI — so retiring one
@@ -5471,7 +5477,7 @@ while true; do
         "[D" | "OD" | "["*D | "O"*D) seek_relative -5 ;;   # left arrow → seek -5s
         # Up/down USED to be volume ±5 — the direction mpv itself spends on seeking, and a
         # second spelling of 9/0 either way. They are the chapter cursor now and nothing else;
-        # volume is 9/0's alone, in every view (PLAN §12 handed this to P6).
+        # volume is 9/0's alone, in every view (AS-BUILT-tui.md §11).
         "[A" | "OA" | "["*A | "O"*A) move_chapter -1 ;;    # up arrow → previous chapter
         "[B" | "OB" | "["*B | "O"*B) move_chapter 1 ;;     # down arrow → next chapter
         l | L) cycle_ui_lang ;;

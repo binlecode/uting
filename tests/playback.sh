@@ -300,7 +300,8 @@ else
 fi
 
 echo "── the quality tier rides the same path as -f ────────────────────"
-# PLAN §13: --quality low must stack with -f and reach the engine without breaking
+# AS-BUILT-verification.md §27: --quality low must stack with -f and reach the engine
+# without breaking
 # format selection — a detached player that comes up and reports position proves the
 # tier did not break the stream. auto (the default) sends no sort at all.
 o4=$(shell/ut-play -d -j --volume 0 --quality low -f audio -- "$U1" 2>/dev/null)

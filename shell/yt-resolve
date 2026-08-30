@@ -341,7 +341,7 @@ format_for_mode() {
 # as format_for_mode: a caller sends a canonical TIER, and the yt-dlp sort string exists
 # only here. auto (or any pair this table maps to "") sends no --format-sort — the default
 # format table already picks the best. -S is the expert escape and EXPLICITLY wins: both
-# given, the caller's own sort replaces this table's (PLAN §4 P3).
+# given, the caller's own sort replaces this table's (AS-BUILT-engine.md §10).
 quality_sort_for_tier() {
     local mode=$1 tier=$2
     case "$mode" in
@@ -437,7 +437,7 @@ dump_once() {
     local cmd=(yt-dlp --dump-single-json --no-playlist -f "$FMT")
     if [[ -n "$FORMAT_SORT" ]]; then
         # -S is the expert escape and explicitly wins over the tier: both given, the
-        # caller's own sort replaces the table's (PLAN §4 P3).
+        # caller's own sort replaces the table's (AS-BUILT-engine.md §10).
         cmd+=(--format-sort "$FORMAT_SORT")
     else
         local sort
