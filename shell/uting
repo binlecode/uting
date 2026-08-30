@@ -2663,21 +2663,31 @@ display_list_menu() {
     # separator than the printer uses is how the reflow underestimates the chrome and lets
     # the header scroll off the top, which is the failure the measure pass exists to prevent.
     local nav_pad="  "
+    # The block is built IN ORDER, with each conditional key at its own place, rather than
+    # spliced into a finished array by index: an index is a position, so every key added
+    # above one moved it, and the comment defending the number was the only thing keeping
+    # `e` next to `/ filter`. Order is the same as it ever was — the conditionals just say
+    # what they mean where they land.
+    local search_view=0
+    [[ "$LIST_SOURCE" == "search" ]] && search_view=1
     local nav_items=(
         "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY" "Tab	$S_VIEW" "v	$S_MODE"
-        "f	$S_QUALITY"
-        "n	$S_SEARCH" "o	$S_SORT" "/	$S_FILTER" "l	$S_LANGKEY"
+        "f	$S_QUALITY" "n	$S_SEARCH"
+    )
+    # `o` re-sorts the SEARCH and refetches it, so on a store's rows it can only answer
+    # "search rows only" (cycle_sort's own first line). A key whose whole effect is a notice
+    # saying it does not apply here must not spend a cell of a measured block — the rule
+    # `a`/`b`/`d`/`e` already follow off an install, applied to the VIEW instead.
+    ((search_view)) && nav_items+=("o	$S_SORT")
+    nav_items+=("/	$S_FILTER")
+    # The source key wants BOTH: a second engine installed (on a single-engine install
+    # cycle_engine returns immediately) and search rows on screen (it refetches the query,
+    # and a playlist is engine-agnostic — its rows route by their own stored engine).
+    ((search_view)) && ((${#ENGINES[@]} > 1)) && nav_items+=("e	$S_ENGINE")
+    nav_items+=(
+        "l	$S_LANGKEY"
         "9/0	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "s	$S_STOP" "q	$S_QUIT"
     )
-    # The source key is offered ONLY when a second engine is installed. This block is
-    # measured and can already cost four lines of a ten-line terminal, so a key that would
-    # do nothing must not spend a cell — and on a single-engine install `e` genuinely does
-    # nothing (cycle_engine returns immediately).
-    # 9, not 8: the insertion point is "after / filter, before l language", and `f quality`
-    # went in above it. An index is a position, so it moves when the list above it grows.
-    if ((${#ENGINES[@]} > 1)); then
-        nav_items=("${nav_items[@]:0:9}" "e	$S_ENGINE" "${nav_items[@]:9}")
-    fi
     # Same rule as the source key: a key that cannot do anything must not spend a cell of a
     # measured block. With no ut-playlist installed, `a` and `b` genuinely do nothing.
     # A store key RELABELS itself while its own store is on screen, because that is when it
@@ -2701,16 +2711,19 @@ display_list_menu() {
             nav_items+=("h	$S_HIST_KEY")
         fi
     fi
-    # The same rule a fourth time, off a CAPABILITY rather than an install: `c` needs the
-    # session engine to have --parts. yt never will — one id there is one file — so on a
-    # YouTube search this key would spend a cell of a measured block to say no. The probe was
-    # paid at the last source switch, not here: this block runs on every redraw.
-    if ((ENGINE_PARTS_OK)); then
-        if [[ "$LIST_SOURCE" == "parts" ]]; then
-            nav_items+=("c	$S_BACK_SEARCH")
-        else
-            nav_items+=("c	$S_PARTS_KEY")
-        fi
+    # The same rule a fourth time, off a CAPABILITY and a VIEW: `c` needs the session engine
+    # to have --parts (yt never will — one id there is one file) AND search rows to act on
+    # (open_parts is search_only: a part belongs to the video a search row names, and the
+    # return stack is one deep by decision). The probe was paid at the last source switch,
+    # not here: this block runs on every redraw.
+    #
+    # The way BACK out of the parts view is offered whatever the capability now says: the
+    # user is standing in that view, and a key that got them somewhere must document itself
+    # from inside it.
+    if [[ "$LIST_SOURCE" == "parts" ]]; then
+        nav_items+=("c	$S_BACK_SEARCH")
+    elif ((search_view)) && ((ENGINE_PARTS_OK)); then
+        nav_items+=("c	$S_PARTS_KEY")
     fi
     # And a fifth time, off the other capability: `i` needs `--info`. It does NOT relabel by
     # LIST_SOURCE the way c/b/h do — it is not a row-source toggle, it opens a card, and Tab is

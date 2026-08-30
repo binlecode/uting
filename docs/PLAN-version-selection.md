@@ -18,7 +18,7 @@
 | P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | **已落**（2026-08-29；`shell/uting` + `contract.sh` 的 tmux 面上一条 `c` 能力门见证，257 项全绿；五次 drive 实测记在 §13） |
 | P3 | `--quality TIER` 贯穿 `ut-play` → `<engine>-resolve` | **已落**（2026-08-29；`ut-play` + 两个 resolve 半边 + `config`；`contract.sh` 256 项 + `playback.sh` 44 项全绿；档位效果与 `-S` 压过 `--quality` 均实测） |
 | P4 | `uting` 的质量档键位（`f`）与写回 | **已落**（2026-08-29；`shell/uting` + `config` 的 `UT_QUALITY_CYCLE`；`contract.sh` 263 项全绿，其中三条新检查在 tmux pane 上：`quality=` 在 auto 上不印、`f` 追加写回 `UT_PLAY_QUALITY=medium`、状态行跟上；四个 cycle 键的「不认识的成员退 1」由一条加固过的循环统一陈述） |
-| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | **在建**，**P6 的前置**。前置 F04 **已落**（2026-08-29；`JQ_TEXT_DEFS` 一份定义，两个 row builder 与 `apply_player_record`（含 `queue.next.title`）共用；实测见 §13 末）。**A 步已落**（`CARD_SUBJECT` + `card_subject_head` / `card_meta_row` 抽出 + `card_item_body`，屏幕零变化，旧新双树逐帧对照）。**B 步的门已落**（`i` 键 + `ENGINE_INFO_OK` 探测 + `apply_item_info` + 单槽缓存 + `nav_tick` 按 subject 早返回 + Tab 进门即复位 subject；`contract.sh` 268 项全绿，其中三条新检查在 tmux 面上，并把面里的 `YT_LANG` 钉成 en 才能断言 chrome 字串）。**前方队列块的契约前置已落**（§5.4 的 `upcoming`，2026-08-29；`ut-play` 的 `queue_snapshot` + `usage()`，`playback.sh` 46 项全绿 —— 动工前实读源码，发现 §11 修订一「数据已在 `queue` 键里」是错的）。**在播分支的两处已落**（2026-08-29；`card_queue_block` 前方队列块 + meta 行的 `selected` 字段；`contract.sh` 268 项 + `playback.sh` 46 项全绿，五次 drive 实测记在 §13 末）。**余下：卡内 `i` 对在播曲目叠 info、F05 提示格按视图态把门、文档重同步** |
+| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | **在建**，**P6 的前置**。前置 F04 **已落**（2026-08-29；`JQ_TEXT_DEFS` 一份定义，两个 row builder 与 `apply_player_record`（含 `queue.next.title`）共用；实测见 §13 末）。**A 步已落**（`CARD_SUBJECT` + `card_subject_head` / `card_meta_row` 抽出 + `card_item_body`，屏幕零变化，旧新双树逐帧对照）。**B 步的门已落**（`i` 键 + `ENGINE_INFO_OK` 探测 + `apply_item_info` + 单槽缓存 + `nav_tick` 按 subject 早返回 + Tab 进门即复位 subject；`contract.sh` 268 项全绿，其中三条新检查在 tmux 面上，并把面里的 `YT_LANG` 钉成 en 才能断言 chrome 字串）。**前方队列块的契约前置已落**（§5.4 的 `upcoming`，2026-08-29；`ut-play` 的 `queue_snapshot` + `usage()`，`playback.sh` 46 项全绿 —— 动工前实读源码，发现 §11 修订一「数据已在 `queue` 键里」是错的）。**在播分支的两处已落**（2026-08-29；`card_queue_block` 前方队列块 + meta 行的 `selected` 字段；`contract.sh` 268 项 + `playback.sh` 46 项全绿，五次 drive 实测记在 §13 末）。**F05 已落**（2026-08-29；`o`/`e`/`c` 的提示格按视图态把门 —— 三者都是 `search_only`，在 store/parts 视图里唯一的效果是一句「只对搜索结果生效」的提示；顺手退掉 `e` 那个按下标 splice 的写法，整块改成按顺序构建。审议里点名的第三个死格 `m` 在 0.3.10 就没了（§12 已证伪），所以是两个键加一个 `c`。`contract.sh` 268 项全绿，history / playlist / parts 三个视图各 drive 实测一次）。**余下：卡内 `i` 对在播曲目叠 info、文档重同步** |
 | P6 | 章节 → 条目视图里的 seek 目标 | 未开工，排最后 |
 | P7 | Enter 语义不变 | **无需改动**，记录在案以免日后当成疏漏 |
 | P8 | 时长不一致 → 在 parts 视图表头说清 | 已落（随 P2，2026-08-29） |
@@ -580,6 +580,8 @@ critique 自己列的填充候选（前方队列、transcript、本曲目的收�
    一个清洗器，两个摄入点都过它。
 3. **提示格规则从安装态扩到视图态（F05）。** `c` 只在 search 视图 + 引擎有 `--parts` 时出现；
    `i` 只在引擎有 `--info` 时出现；顺手把 store 视图里三个死格（`m`/`o`/`e`）修掉 —— P2 反正要动同一段。
+   **已落（2026-08-29）**，只是死格是**两个**不是三个：`m` 在 0.3.10 就被 ←/→ 边缘取数换掉了（§12），
+   派发表里根本没有它。`c` 的门也就地补上了 search 视图那一半。
 
 **留给用户的两个候选（审议建议、本计划未承诺 —— 各要一次额外 fork/网络）：**
 
