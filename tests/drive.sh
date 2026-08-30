@@ -158,8 +158,6 @@ if [ -n "$KEYS" ]; then
             sleep 0.3; j=$((j + 1))
         done
         [ $j -ge 100 ] && echo "drive.sh: '$WAIT_FOR' never appeared" >&2
-    else
-        sleep 0.6                       # let the frame settle before we photograph it
     fi
 fi
 
@@ -170,6 +168,54 @@ if ((ATTACH)); then
     exit 0
 fi
 
+# SETTLE BEFORE PHOTOGRAPHING — wait until the frame STOPS CHANGING, on every path that
+# reaches the capture. This used to be a fixed 0.6s on the one path that waits for nothing,
+# which is the path least likely to need it.
+#
+# Waiting on a marker does not remove the need; it CONCENTRATES it. The capture that matches
+# a marker is, by definition, the first one to see the new frame's TOP — so it is biased to
+# land inside that frame's paint rather than after it, and polling faster or slower does not
+# move the bias. A frame torn that way does not look torn, which is what makes it expensive:
+# the top is the view you asked for and the bottom is the view you left, so it reads as a
+# renderer that forgot to erase. It is not. `uting` repaints in place — every line erases its
+# own tail and the render ends on \033[J (shell/uting:3832).
+#
+# THE NUMBER THIS IS SIZED AGAINST, measured 2026-08-30 at 100x30 by sampling the pane every
+# 0.1s from the keypress: `i` on a row with a long description and 28 chapters spends 2.7s on
+# the fetch (the spinner, changing every ~0.1s), writes the card's HEADER at 2.76s, then goes
+# COMPLETELY QUIET FOR 0.88s before writing the rest at 3.64s. That quiet stretch is the trap:
+# it is not a slow trickle with small pauses, it is one long stall mid-frame — the width layer
+# doing per-character work on a description (AS-BUILT-tui.md §11) — so a settle shorter than
+# it photographs the tear no matter how it is spelled. A first attempt at 0.6s did, and so
+# did a quiescence test with a 0.25s window. For scale, the list frame the 15-24ms figure in
+# shell/uting:2688 describes is two orders of magnitude away from this one.
+#
+# So: unchanged across a 1.5s window, not a 1.5s sleep. On this machine the two would behave
+# the same; they part on a slower one, where the stall grows and a fixed sleep goes back to
+# photographing tears silently while a stability window simply waits longer. Same rule as the
+# ready marker above — watch the thing, do not time it.
+#
+# The bound is a fuse, not the mechanism, and it is sized as one: settling costs at most the
+# stall plus the window (0.88 + 1.5 = ~2.4s) on the worst frame measured, so 4s clears it with
+# margin. It exists for the frame that CANNOT go still — a running player's clock moves once a
+# second, so `-k Enter -w Playing` always spends the fuse and says so. That path is the reason
+# the fuse is 4s and not the 10s a first cut used: doubling the cost of the most common
+# playback drive to protect a frame that was never going to settle is the wrong trade, and
+# photographing after 4s of a ticking clock is no more torn than photographing after 10s.
+STILL=0; k=0
+prev=$(tmux capture-pane -t "$S" -p 2>/dev/null)
+while [ $k -lt 16 ]; do
+    sleep 0.25
+    cur=$(tmux capture-pane -t "$S" -p 2>/dev/null)
+    if [ "$cur" = "$prev" ]; then
+        STILL=$((STILL + 1))
+        [ $STILL -ge 6 ] && break          # 6 x 0.25s = 1.5s with nothing moving
+    else
+        STILL=0
+    fi
+    prev=$cur; k=$((k + 1))
+done
+[ $k -ge 16 ] && echo "drive.sh: frame still moving after 4s (a running player's clock does that) — photographing it anyway" >&2
 echo "── ${COLS}x${ROWS}  query=$QUERY${KEYS:+  keys=$KEYS} ──"
 tmux capture-pane -t "$S" -p
 tmux send-keys -t "$S" 'q' 2>/dev/null   # let it reap its own player before the trap fires
