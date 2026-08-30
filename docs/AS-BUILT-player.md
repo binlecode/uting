@@ -172,10 +172,14 @@ mpv 都包含在内。mpv 那个 flag 也保留：它在"读得到 mpv"的地方
         nohup bash SELF -f MODE --engine NAME [--volume N] [-S SORT] -- HANDLE \
             </dev/null >mpv-<id>.log 2>&1 &     # pgid == pid（$!）；stdin 见上文
       set +m ; disown
-      players/<id>.json ← {id,pid,url,mode,format:null,selected:null,
+      players/<id>.json ← {id,pid,url,engine,mode,format:null,selected:null,
                            selected_resolution:null,started_at,log,sock,title:null,volume}
       rm PLAYERS_DIR/<id>            # 丢掉光秃秃的 mktemp token；状态住在 <id>.json 里
-                                     # title/format/selected 由子进程回填（见下）
+                                     # title/format/selected/engine 由子进程回填（见下）
+                                     # engine 与 url 合起来是**这条记录代表的那次调用**：
+                                     # {engine,url} 就是 ut-play 的 argv，与 ut-playlist
+                                     # 存的记录同一个形状。启动时写下、每条队列轨道回填时
+                                     # 跟着换 —— 一条队列可以混源，所以它不是一次性的
 
    ┌─ 进程组  pgid = 57678（播放器 <id>）───────────────────────┐
    │  57678  bash ut-play -f audio --engine yt HANDLE（组长）    │
@@ -543,8 +547,30 @@ UTF-8 是错的，所以在这里写任何归一化，对最需要它的那些�
 **推进发生在墓碑写下之前**：当队列耗尽时，死的是**播放器**，那条记录归父进程、来自日志里的
 墓志铭。反过来写的话，一次失败会被记两遍 —— 实测过，一个坏句柄同时留下 `<id>` 与 `<id>-q0`。
 
-**记录跟着曲目走。** `patch_player_meta` 除了 `title` 与 `format` 之外也补 `url`，
-所以十分钟后取的一次 `--status` 描述的是**正在播的**，而不是**当初启动的**。
+**记录跟着曲目走。** `patch_player_meta` 除了 `title` 与 `format` 之外也补 `url` 与 `engine`，
+所以十分钟后取的一次 `--status` 描述的是**正在播的**，而不是**当初启动的**。`engine` 跟着走的
+理由和 `url` 一样、但更硬一层：队列的 engine 是**每条**的（一条播放列表可以混源），子进程每换一条
+轨道就 `ENGINE=$QUEUE_ENGINE`，所以一份只在启动时写下 engine 的记录，恰好在混源队列上是错的 ——
+而 `{engine,url}` 就是**这条记录代表的那次调用**（`ut-play --engine E -- URL`）。两处墓碑
+（播放器的 `record_player_death` 与曲目的 `queue_note_failure`）同样带上它：一条重发不了的调用，
+在墓碑里同样重发不了。
+
+**队列的读那一半：`queue_snapshot` 的投影。** 三处报队列的信封（`--status`、`--enqueue`、`--next`）
+共用这一个生产者，形状是 `{pos, len, next, upcoming}`：
+
+- `next` 是 pos **之后**的那一条（`{title,url,engine}`），到末尾是 `null`；
+- `upcoming` 是**同一条队尾的列表形式**，每条 `{title,url,engine,duration}` —— 时长是 `next`
+  从来没有过的那个字段，而队列文件里每条本来就有（`read_queue_items` 归一化时就留了）；
+- **封顶 `QUEUE_UPCOMING_MAX`（5，只声明在 `ut-play` 这一处，`usage()` 直接插值它）。**
+  队列没有上界（`--enqueue` 一直追加）而 `--status --all` 每个活播放器印一条记录，
+  所以投出整条队尾等于把调用方的信封大小交给"别人排了多少首"决定。`len` 仍是诚实的总数，
+  于是"队尾被截断"与"队列到底了"（空数组）永远分得清。
+- 两者**故意**重叠（`upcoming[0]` 就是 `next` 多一个时长）：`next` 是三处信封已经承诺的形状，
+  加一个字段是新增，改一个已发字段不是。
+
+读的时候**不取锁**：读者要么看到 `mv` 之前的那份文件、要么看到之后的那份，永远不会看到写了一半的。
+这一半是 `uting` 卡片上"前方队列块"的数据源，也是 TUI 里唯一能**读**队列的地方
+（`+` 与 `>` 是写的那一半）—— 在它之前，TUI 只能说出一条 `next` 且不带时长。
 
 **三条 bash 3.2 的事实塑造了子进程的循环，每一条都是量出来的，不是推出来的。**
 

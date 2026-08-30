@@ -571,8 +571,8 @@ AS-BUILT-contract.md §3）。`bili-resolve` 根本没有 `--transcript` 那一�
                         │
                         ▼
    进程 2 ：ut-play（YT_DETACHED=1、YT_IPC_SOCK=<sock>）→ 走上面的 B，
-            并在锁下、且 pid 仍匹配时，从解析信封把 `title`、`format` 与
-            `selected`/`selected_resolution` 补进**它自己的**记录。
+            并在锁下、且 pid 仍匹配时，从解析信封把 `title`、`format`、
+            `selected`/`selected_resolution` 与 `engine` 补进**它自己的**记录。
 ```
 
 **那个后台标题更新器没有了。** 它存在的唯一理由是"被播放的东西是一个 URL、而上游没人知道标题"；
@@ -705,7 +705,8 @@ reflow、共享时钟与三个播放态。
                   （stdin → items，三种形状，所有拒绝都是用法错误），
                   queue_write_new/queue_append/queue_bump（父进程这边的写者），
                   queue_advance_from（子进程的 compare-and-swap）, queue_current,
-                  queue_snapshot（{pos,len,next}，每个要报队列的信封都用它），
+                  queue_snapshot（{pos,len,next,upcoming}，每个要报队列的信封都用它；
+                  upcoming 是队尾的列表形式、带时长、封顶 QUEUE_UPCOMING_MAX=5），
                   queue_note_failure（一首**曲目**的墓碑，<id>-q<pos>），
                   child_signal + detached_child_loop（子进程：一个播放器，一条队列），
                   do_enqueue, do_next
@@ -799,6 +800,13 @@ reflow、共享时钟与三个播放态。
                   print_hints（HINT_MEASURE）, wrap_print/wrap_emit
                   （WRAP_MEASURE）, print_details（DETAIL_MEASURE）, card_divider,
                   repeat_glyph, render_prog_bar
+     Card       : display_now_playing_card（**一个**视图、两个主语，CARD_SUBJECT
+                  = playing | item）, card_subject_head（rail + 标题 + 频道，两个主语共用的
+                  骨架）, card_meta_row（从右往左丢字段、tail 永不丢的那一行）,
+                  card_item_body（item 主语：free 层 + 取数买来的层 + 按行预算的简介）,
+                  card_info_row（上传日期/点赞/章节数 —— **两个主语共用**的那一行片段）,
+                  card_queue_block（前方队列块：`--status` 的 queue.upcoming，按行预算，
+                  装不下就退回单行 next: 形式 —— TUI 里唯一**读**队列的地方，tui §11）
      Input      : read_nav_input/read_esc_tail（ESC-[/O 解码器，拆出来是为了让 PENDING_ESC
                   的再入不成为它的第二份副本）/read_query_input,
                   confirm_key（确认是**一个字节**不是一行文本：`read -rsn1`，默认否 ——
@@ -833,7 +841,12 @@ reflow、共享时钟与三个播放态。
                   "以有没有声明能力"的路，§3.4）, open_parts（`c` 键：把聚焦行的多 P
                   部分开成一个列表 —— 一次 `<engine>-resolve --parts -j`，把信封 reshape
                   成与存储同样的七字段行；`LIST_SOURCE="parts"` 是它自己的一个来源，
-                  再按 `c` 回到搜索）
+                  再按 `c` 回到搜索）, refresh_engine_info（同一套探测，问的是 `--info`）,
+                  open_item（`i` 键：聚焦行 → item 主语，**进门即取数**，单槽缓存）,
+                  open_playing_info（卡内 `i`：对**在播**曲目叠 info，主语不变；
+                  engine 取自播放器记录，不取自当初启动的那一行）,
+                  fetch_item_info（两扇门背后的**同一次**取数：一个 spinner、一份错误措辞、
+                  一个 engine:url 单槽缓存）, apply_item_info（--info 信封 → ITEM_* 字段）
      Stores     : build_playlist_rows（一个存储信封 → 与搜索建出来的同样的七字段行；
                   播放列表的 --show 与日志的 --ls 是一个形状，所以一个构造器服务两者）,
                   add_to_playlist（`a`）, browse_playlists / open_playlist（`b`）,
@@ -894,7 +907,10 @@ reflow、共享时钟与三个播放态。
                按 (mode, tier) 翻译成 format-sort）·
                e 换源并重新取数（只有装了 2 个以上引擎时才画出来）
                —— 这七个改的设置会写回用户配置（contract §5「写回」，§3.6）
-       卡片  ：←/→ seek ∓5s · ↑/↓ 音量 · Esc 回到列表
+               i 把聚焦行开成卡片的 **item 主语**（一次 `<engine>-resolve --info`，
+               进门即取数 —— 唯一的入口，任何行源都行）
+       卡片  ：←/→ seek ∓5s · ↑/↓ 音量 · Esc 回到列表 ·
+               i 对**在播**曲目叠一行 info（主语不变：播头、前方队列块、播放状态都还在）
        两者  ：Space 暂停/恢复 · s 停止 · 9/0 音量 · [ ] seek ∓10s ·
                l chrome 语言（en↔zh）· t 调色板家族 · q 退出（回收它的播放器）
 ```

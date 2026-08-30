@@ -143,7 +143,8 @@
   auto→medium→high；档位是**规范拼写**，翻成 format-sort 是引擎的事，见 §1.4）·
   `e` 切换来源（只有一个引擎时隐藏）·
   `l` 切换界面语言（en↔zh，任一视图）· `t` 循环配色家族（任一视图）·
-  `n` 新搜索 · `o` 排序 · `c` 多 P 部分（§1.3）· `/` 过滤 · `q` 退出 ·
+  `n` 新搜索 · `o` 排序 · `c` 多 P 部分（§1.3）· `i` 聚焦行的详情（§1.3 的 `--info`）·
+  `/` 过滤 · `q` 退出 ·
   行数由两条**边**管，不由一个键管：`→` 越过最后一页**追加**一批（一次取数），
   `←` 在第 1 页**砍掉**一批（纯本地截断，不取数，地板是一屏）。
   这七个键改的设置会写回用户配置（§5「写回」）。
@@ -151,7 +152,13 @@
   `h` 把收听日志打开为行来源 · `c` 把聚焦行的多 P 部分打开为一个列表（§1.3 的 `--parts`；
   引擎没有那个动词时按键沉默 —— 同一个"以有没有声明能力"的降级；再按一次 `c` 回到搜索）。
   `c` 打开的部分列表是搜索行专用的：播放列表与历史的行上它走与 `o`/`e` 同一条拒绝路径
-  （返回栈只有一层，存储的行上不打开第二个来源）。
+  （返回栈只有一层，存储的行上不打开第二个来源）。**这三个键在非搜索视图里连提示格都不占** ——
+  一个量宽度的块不能拿一格去说"这里不行"（`AS-BUILT-tui.md` §11）。
+  `i` 把聚焦行开成焦点卡片的 **item 主语**（一次 `<engine>-resolve --info`，按 `engine:url`
+  单槽缓存；引擎没有那个动词时按键沉默）。它是那个主语**唯一**的入口，而且进门即取数 ——
+  于是那张卡的每一帧都带着列表放不下的东西。任何行源都行：一行就是 `{engine,url}`。
+  在**卡片里**按 `i` 则是对在播曲目叠一行 info，主语不变；它问的 engine 取自 `--status`
+  的 `engine` 字段（§3），因为队列可以走到这个界面从没启动过的曲目、甚至另一个源。
   `a`/`b` 只在 `ut-playlist` 装了时出现（§1.5），`h` 只在 `ut-history` 装了时出现（§1.6）——
   跟单引擎安装下隐藏 `e` 是同一条规则。两者都**替换**屏幕上的行，且两者都是 **toggle**：
   打开一个存储的那个键把它关掉（再按一次 `h`、再按一次 `b`），
@@ -471,9 +478,10 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
    -d       : {status:"started", id, pid, url, mode, started_at, title:null, sock, log}
               sock/log 是交出去的，好让一个客户端永远不必自己重建状态目录的布局
    --status : {status:"players",
-               players:[{id,pid,url,mode,volume,paused,position,duration,title,
-                         selected,selected_resolution,started_at,queue:{pos,len,next}}…],
-               failed:[{id,url,mode,started_at,ended_at,exit_code,reason}…]}
+               players:[{id,pid,url,engine,mode,volume,paused,position,duration,title,
+                         selected,selected_resolution,started_at,
+                         queue:{pos,len,next,upcoming:[{title,url,engine,duration}…]}}…],
+               failed:[{id,url,engine,mode,started_at,ended_at,exit_code,reason}…]}
               没有在放 / 没有失败时是空数组（仍然退出 0）
               detach 之后的头一两秒 title 是 null：解析是那个 detached 的**子进程**做的
               （父进程必须在毫秒级返回），它一拿到解析信封就把 `title`、`format` 与
@@ -490,8 +498,20 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
               而一个单独的句柄是一个长度为 1 的队列（AS-BUILT-player.md §9.5）。
               它是从播放器自己的队列文件上读的，不是从 socket 上 —— mpv 一次只被递一个 URL，
               从来不知道有一个列表。`next` 是 pos **之后**的那一条，最后一条曲目上是 `null`。
-              url 与 title 跟着**曲目**走：子进程每解析一次就补一次它自己的记录，
+              `upcoming` 是**同一条队尾的列表形式**，每条带 `duration`（`next` 从来没有过），
+              至多 5 条（`ut-play` 的 `QUEUE_UPCOMING_MAX`，那个数只声明在那一处）：
+              队列没有上界而 --status --all 每个活播放器印一条记录，所以投出整条队尾等于
+              把调用方的信封大小交给"别人排了多少首"决定。`len` 仍是诚实的总数，于是
+              "队尾被截断"与"队列到底了"（空数组）永远分得清；`upcoming[0]` 就是 `next`
+              多一个时长，重叠是**故意**的 —— `next` 是三处信封已经承诺的形状。
+              url、engine 与 title 跟着**曲目**走：子进程每解析一次就补一次它自己的记录，
               所以十分钟后取的一次 --status 描述的是**此刻**在放的东西。
+              engine 与 url 合起来就是**正在放的那次调用**（`ut-play --engine E -- URL`）——
+              一条记录本来就该是一次调用，与 `ut-playlist` 的记录同一个形状（ARCHITECTURE.md §3.5）。
+              少了它，一个读 --status 的调用方说得出在放什么、却说不出该找谁再放一遍，
+              而一条队列可以混源（`--queue` 的 engine 是**每条**的），所以拿启动那一条去猜，
+              恰好在混源队列上是错的。同一笔账，failed[] 也带 engine：
+              一条重发不了的调用，在墓碑里同样重发不了。
               failed[] 是墓碑列表 —— 那些**自己**死掉的播放器，最新在前，至多 8 条，
               不超过一小时（AS-BUILT-player.md §9.2）。reason 是那个共享的播放枚举。
               一个正常结束或者被 --stop 掉的播放器永远不在里面，
@@ -512,8 +532,10 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
               seek 过了尽头**不是**错误：mpv 夹住，信封报告它落在哪儿，退出 0。
               一路直播没有可 seek 的时间线，mpv 会拒绝；那次拒绝浮现为 ipc_failed（退出 4），
               而不是播放器从一个 null 的 duration 做出的一次预测 —— 那会是它并不持有的站点知识。
-   --enqueue: {status:"ok", id, added:<n>, queue:{pos,len,next}}
-   --next   : {status:"ok", id, queue:{pos,len,next}}
+   --enqueue: {status:"ok", id, added:<n>, queue:{pos,len,next,upcoming}}
+   --next   : {status:"ok", id, queue:{pos,len,next,upcoming}}
+              `queue` 与 --status 里的那个是**同一个对象**（同一个生产者），
+              所以上面关于 next / upcoming / 封顶的每一句在这里也成立。
               两者都采用上面的 not_playing / ambiguous 形状 —— 同一套目标解析、
               同一套退出分类学 —— 但永远不会 ipc_failed：一个队列是播放器在磁盘上的状态，
               不打开任何 socket。它们自己的两种失败是

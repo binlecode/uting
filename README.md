@@ -191,15 +191,25 @@ addition bumps `z`; `1.0.0` is a promise this reference implementation does not 
 `↑/↓` select · `←/→` page · `Enter` play · `Tab` focus card · `/` filter · `n` new search ·
 `o` sort · `v` playback mode · `f` quality tier · `e` switch source · `a` add to playlist ·
 `b` open a playlist · `d` remove from the playlist on screen · `h` listening history ·
-`c` the focused row's parts · `+` add to the queue · `>` next track ·
+`c` the focused row's parts · `i` info on the focused row · `+` add to the queue · `>` next track ·
 `Space` pause · `9/0` volume ·
 `[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
 
 `e` is drawn only when a second engine is installed — the TUI discovers engines by looking for
 `<name>-search` and `<name>-resolve` pairs, so it holds no list of sources. `a` and `b` are
 drawn only when `ut-playlist` is installed and `h` only when `ut-history` is, by the same rule.
-`c` follows the same rule off a CAPABILITY rather than an install: it is drawn only when the
-session's engine has `--parts`, which YouTube never will — one id there is one file.
+`c` and `i` follow the same rule off a CAPABILITY rather than an install: `c` is drawn only
+when the session's engine has `--parts`, which YouTube never will — one id there is one file —
+and `i` only when it has `--info`. Three of them go one step further and read the VIEW as well:
+`o`, `e` and `c` re-sort or re-fetch a SEARCH, so on a playlist, the history or a parts list
+their only effect would be a notice saying they do not apply — and a measured block does not
+spend a cell to say no.
+
+`i` opens the focus card on the row you asked about rather than the one that is playing: one
+view, two subjects. It is the only door, and entering costs one `--info` — which is what keeps
+that card from being a full-screen repeat of what the list already shows. Pressed inside the
+card instead, `i` adds what that fetch found to the track that is PLAYING and leaves the card
+where it is, playhead and queue intact.
 `h` asks for no name — the log is one thing — and shows the 50 newest listenings. `d` is the
 mirror: it is drawn only with a **playlist** on screen, because a search result is a row of
 nothing and the log has no per-row removal to call. It names the track and defaults to no.
@@ -226,12 +236,12 @@ one runs, or it is not claimed. Each file's header says what it proves; run eith
 |---|---|
 | `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the idle lifecycle verbs (including the queue verbs, where a
 payload this process cannot use is a usage error and a well-formed one with nothing playing is
-"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. ~104s and 265 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 191 of those checks in ~17s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
+"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. ~93s and 268 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 191 of those checks in ~16s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
 | `tests/playback.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4, a targeted one moves only its target, and zero orphan mpv at the end. It also owns the **live read** — the `--status` fields off a real mpv socket, `paused:false` distinguished from `paused:null`, and a really-running player whose socket is really removed degrading to nulls with volume off the record — because the peer has no stand-in and never will. It drives a **queue** end to end for the same reason — a mock engine would skip the
 resolve between two tracks, which is the thing most likely to break: `--queue` launches,
 `--enqueue` appends (six concurrent writers, no lost update), `--next` moves the position and
 the player follows, and a track reaching its own end starts the next. It also plays a real
-Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. And it owns the **listening log's wiring**, since only here does a real track really end: a 19-second handle is played out, and the row that appears for it carries no reason — which is what separates a history from a death record. Starts real players at `--volume 0` in a state dir of its own, and points `UT_STATE_DIR` somewhere disposable too, so it never touches what you are listening to nor what you listened to; ~72s, and it needs the network — of which ~30s is seven real engine resolves and ~19s is one 19-second track played out to its own end, so what is left is not waiting. |
+Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. And it owns the **listening log's wiring**, since only here does a real track really end: a 19-second handle is played out, and the row that appears for it carries no reason — which is what separates a history from a death record. Starts real players at `--volume 0` in a state dir of its own, and points `UT_STATE_DIR` somewhere disposable too, so it never touches what you are listening to nor what you listened to; ~68s, and it needs the network — of which ~30s is seven real engine resolves and ~19s is one 19-second track played out to its own end, so what is left is not waiting. |
 
 One more file in `tests/` is not a suite and asserts nothing. `tests/drive.sh` is a **driver** for the TUI, which needs a real tty and so cannot be run from
 a pipe. It launches tmux at a declared geometry, waits on the ready marker, optionally sends

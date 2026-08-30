@@ -18,7 +18,7 @@
 | P2 | `uting` 的 parts 行源（`LIST_SOURCE="parts"`，`c` 键） | **已落**（2026-08-29；`shell/uting` + `contract.sh` 的 tmux 面上一条 `c` 能力门见证，257 项全绿；五次 drive 实测记在 §13） |
 | P3 | `--quality TIER` 贯穿 `ut-play` → `<engine>-resolve` | **已落**（2026-08-29；`ut-play` + 两个 resolve 半边 + `config`；`contract.sh` 256 项 + `playback.sh` 44 项全绿；档位效果与 `-S` 压过 `--quality` 均实测） |
 | P4 | `uting` 的质量档键位（`f`）与写回 | **已落**（2026-08-29；`shell/uting` + `config` 的 `UT_QUALITY_CYCLE`；`contract.sh` 263 项全绿，其中三条新检查在 tmux pane 上：`quality=` 在 auto 上不印、`f` 追加写回 `UT_PLAY_QUALITY=medium`、状态行跟上；四个 cycle 键的「不认识的成员退 1」由一条加固过的循环统一陈述） |
-| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | **在建**，**P6 的前置**。前置 F04 **已落**（2026-08-29；`JQ_TEXT_DEFS` 一份定义，两个 row builder 与 `apply_player_record`（含 `queue.next.title`）共用；实测见 §13 末）。**A 步已落**（`CARD_SUBJECT` + `card_subject_head` / `card_meta_row` 抽出 + `card_item_body`，屏幕零变化，旧新双树逐帧对照）。**B 步的门已落**（`i` 键 + `ENGINE_INFO_OK` 探测 + `apply_item_info` + 单槽缓存 + `nav_tick` 按 subject 早返回 + Tab 进门即复位 subject；`contract.sh` 268 项全绿，其中三条新检查在 tmux 面上，并把面里的 `YT_LANG` 钉成 en 才能断言 chrome 字串）。**前方队列块的契约前置已落**（§5.4 的 `upcoming`，2026-08-29；`ut-play` 的 `queue_snapshot` + `usage()`，`playback.sh` 46 项全绿 —— 动工前实读源码，发现 §11 修订一「数据已在 `queue` 键里」是错的）。**在播分支的两处已落**（2026-08-29；`card_queue_block` 前方队列块 + meta 行的 `selected` 字段；`contract.sh` 268 项 + `playback.sh` 46 项全绿，五次 drive 实测记在 §13 末）。**F05 已落**（2026-08-29；`o`/`e`/`c` 的提示格按视图态把门 —— 三者都是 `search_only`，在 store/parts 视图里唯一的效果是一句「只对搜索结果生效」的提示；顺手退掉 `e` 那个按下标 splice 的写法，整块改成按顺序构建。审议里点名的第三个死格 `m` 在 0.3.10 就没了（§12 已证伪），所以是两个键加一个 `c`。`contract.sh` 268 项全绿，history / playlist / parts 三个视图各 drive 实测一次）。**卡内 `i` 已落**（2026-08-30；`open_playing_info` + 共用的 `fetch_item_info` / `card_info_row` 两个片段，卡片仍是在播主语——播头、队列、状态全在，只多一行取数买来的东西；靠 §5.5 的 `engine` 字段才知道该问哪个引擎）。**余下：文档重同步**（等另一条 session 把 `docs/` 那几个文件落完） |
+| P5 | **焦点卡扩成「条目视图」**，元数据不另开渲染器 | **已落**（2026-08-29/30，六步：F04 一份标题清洗 → A 步抽 `CARD_SUBJECT` 与两个骨架片段（屏幕零变化）→ B 步的门（`i` 键 + 能力探测 + 单槽缓存 + Tab 进门复位主语）→ 契约前置 §5.4 `upcoming` → 在播分支的前方队列块与 `selected` 字段 → F05 提示格按视图态把门 → 契约前置 §5.5 `engine` + 卡内 `i`）。**内容已进 as-built**：`AS-BUILT-tui.md` §11（两个主语、下半张卡、提示格规矩）、`AS-BUILT-contract.md` §1.4/§3、`AS-BUILT-player.md` §9.1/§9.5、`AS-BUILT-verification.md` §27。末态 `contract.sh` **268** / `playback.sh` **47** 全绿 |
 | P6 | 章节 → 条目视图里的 seek 目标 | 未开工，排最后 |
 | P7 | Enter 语义不变 | **无需改动**，记录在案以免日后当成疏漏 |
 | P8 | 时长不一致 → 在 parts 视图表头说清 | 已落（随 P2，2026-08-29） |
@@ -35,16 +35,11 @@
 
 ---
 
-**land 时的记账债（2026-08-29，P5 的 B 步之后）：** `contract.sh` 的条数从 **265 变成 268**
-（tmux 面上 `i` 的三条）。三处写着 265 的地方**还没改**，因为 as-built 文档一律在 land、
-代码停稳之后才重同步：`CLAUDE.md`（第 42、145 行）、`README.md`（§Tests）、
-`docs/AS-BUILT-verification.md`（§第 57 行与 §27 的 250 行附近）。
-**注意**：这三个文件里 `CLAUDE.md` 当时正被另一个 session 改着（未提交），所以它那一处要单独确认再动，
-别把别人的半成品一起提交。
-
-**同一笔账，`playback.sh` 那半：** 条数从 **45 变成 47** —— 队尾封顶一条（§5.4）、
-记录里的 engine 一条（§5.5）。`docs/AS-BUILT-verification.md` 第 58 行写着 45，同样等 land 再改。
-§5.4 与 §5.5 各自的信封文档债记在那两节末尾。
+**记账债已还清（2026-08-30，随 P5 的文档重同步）。** 留在这里当清单，因为后面几条 P 还会再欠一次：
+计数重新测过并填进去（`contract.sh` **268 / 93s**、`--offline` **191 / 16s**、`playback.sh` **47 / 68s**），
+改的是 `CLAUDE.md`、`README.md`、`docs/AS-BUILT-verification.md` 三处；信封与视图的那几段
+见 §5.4 / §5.5 末尾与 P5 行。**下一次同样别在另一个 session 改着同一批文件时动它们** ——
+这一次是等它先落了（`56d1b36`）才开工的。
 
 ---
 
@@ -445,8 +440,9 @@ cmus 的 j/k 本来就是导航，零反义。**只取 j/k，不取 hjkl 全套*
 `upcoming` 与 `next` 说的是同一条、且 `duration` 键在；九条队列那处**新增一条**
 `upcoming is capped, len is not` = 5 —— 九条正是能把「投出整条队尾」判红的那个输入。46 项全绿。
 
-**留给 land 的文档债（本节自己的）：** `AS-BUILT-contract.md` §3 的 `--status`/`--enqueue`/`--next`
-信封三处、`AS-BUILT-player.md` §9.5 的队列一节，都要补 `upcoming` 与它的封顶。
+**文档债已还（2026-08-30）：** `AS-BUILT-contract.md` §3 的 `--status`/`--enqueue`/`--next`
+信封三处、`AS-BUILT-player.md` §9.5 新增"队列的读那一半"一段（投影形状、封顶、不取锁），
+`ARCHITECTURE.md` 的函数表也跟着改成 `{pos,len,next,upcoming}`。
 
 ### 5.5 player record 加 `engine`（第四项契约动作；卡内 `i` 要它）——**已落**（2026-08-30）
 
@@ -469,6 +465,10 @@ backfill 时跟着换、`--status` 投影带上；两处死亡记录（播放器
 而套件默认是 yt，所以「字段填的是默认值」或「字段压根没写」都会答 `yt` 而红。47 项全绿。
 **没有单独检查的一条**（照实说）：`engine` 跟着队列换轨道 —— 那要一条混源队列真的走到第二首，
 成本是一次真实的轨道结束；它由构造保证（backfill 与 `ENGINE` 在同一个循环体里，url 也走同一条路径）。
+
+**文档债已还（2026-08-30）：** `AS-BUILT-contract.md` §3 的 players[] 与 failed[] 两处键集 +
+"engine 与 url 合起来是那次调用"一段、`AS-BUILT-player.md` §9.1 的记录形状与 §9.5 的"记录跟着曲目走"、
+`ARCHITECTURE.md` 的子进程回填那一句。
 
 ---
 
