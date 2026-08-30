@@ -1005,6 +1005,8 @@ set_ui_lang() {
         S_HIST_KEY="历史"; S_HIST_ACT="收听历史"; S_HIST_LABEL="最近收听"
         S_HIST_EMPTY="还没有收听记录"; S_HIST_ABSENT="未安装 ut-history"
         S_PARTS_KEY="分P"; S_PARTS_ACT="分P"; S_PARTS_ONE="这个视频只有一 P"
+        S_CARD_HEAD_ITEM="条目卡片"; S_UPLOADED="发布"; S_LIKES="点赞"
+        S_CHAPTERS="章"; S_VIEWS="次播放"
         S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_NEXT="下一首"; S_Q_ACT="队列"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
         S_PREF_ACT="配置"
@@ -1037,6 +1039,8 @@ set_ui_lang() {
         S_HIST_KEY="history"; S_HIST_ACT="History"; S_HIST_LABEL="newest first"
         S_HIST_EMPTY="nothing listened to yet"; S_HIST_ABSENT="ut-history is not installed"
         S_PARTS_KEY="parts"; S_PARTS_ACT="Parts"; S_PARTS_ONE="this video has only one part"
+        S_CARD_HEAD_ITEM="ITEM FOCUS"; S_UPLOADED="uploaded"; S_LIKES="likes"
+        S_CHAPTERS="chapters"; S_VIEWS="views"
         S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_NEXT="next"; S_Q_ACT="Queue"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
         S_PREF_ACT="Config"
@@ -1195,6 +1199,36 @@ CURRENT_PLAY_LOADING=0
 # time-pos=77390 duration=77403 percent-pos=99.98.
 CURRENT_PLAY_IS_LIVE=0
 CURRENT_PLAY_STARTED=0     # epoch seconds when WE attached, for the elapsed readout
+
+# ── The card's SUBJECT ──────────────────────────────────────────────────────────────────
+# The focus card is ONE view with two SUBJECTS, not two views. AS-BUILT-tui.md §11 rules a
+# third renderer out, and a second card body would be that same rule broken by another
+# spelling: one state, two renderers, drift on a schedule.
+#
+#   "playing"  Tab — the running track. Unchanged, and Tab still reaches nothing else.
+#   "item"     i   — the row you asked about, carrying one `<engine>-resolve --info`.
+#
+# `i` is the DOOR, and that is what keeps the item subject from being a degenerate frame:
+# every field the list screen already has (title, channel, duration, views, id, mode,
+# quality) IS on the list screen, so a card showing only those would be a full-screen
+# repeat of the details block. Entering through the key that fetches means every item frame
+# carries something the list cannot hold — upload date, likes, chapters, the description.
+CARD_SUBJECT="playing"
+ITEM_ENGINE=""
+ITEM_URL=""
+ITEM_TITLE=""
+ITEM_CHANNEL=""
+ITEM_DUR_FMT=""
+ITEM_VIEWS=""
+ITEM_UPLOADED=""
+ITEM_LIKES=""
+ITEM_CHAP_N=0
+ITEM_DESC=""
+# One slot, not a map: bash 3.2 has no associative arrays, and parallel arrays are a cache's
+# complexity without a cache's behaviour — the rhythm this exists for is going back into the
+# item you just looked at. Keyed `engine:url`, session-only, never written to disk.
+INFO_CACHE_KEY=""
+INFO_CACHE_JSON=""
 
 # Cursor helpers
 # Terminal size. NOT `$(tput cols)`: inside command substitution ncurses can miss the
@@ -2984,6 +3018,183 @@ display_list_menu() {
     fi
 }
 
+# ── The card's shared spine ─────────────────────────────────────────────────────────────
+# The rail, the title and the channel: the three rows that describe a subject whatever the
+# subject is. Extracted rather than copied for exactly the reason AS-BUILT-tui.md §11 refuses
+# a mini player — two copies of one state's rendering is drift with a schedule, and "where
+# does the title wrap" is enough on its own to make them disagree.
+#
+# CARD_TEXT_W is cols minus the deepest body indent (4), the only prefix left now that the
+# 8-cell label field and its 3-cell gap are gone — which is also why the title gets ~11 more
+# cells before it wraps. No floor. It was 25, and under the old 40-column clamp it could never
+# fire (cols - 4 >= 36), so it was dead code that came alive the moment layout_cols started
+# believing narrow terminals: at 28 columns it wrapped the title at 25 cells behind a 4-cell
+# indent, i.e. one cell past the pane. layout_cols' own floor is the guarantee this needs —
+# cols >= LAYOUT_MIN, so CARD_TEXT_W >= 20.
+# CARD_HEAD_LINES is how tall the spine came out, for a caller that has to budget the rows
+# below it (card_item_body's description). Measured through the printer, never estimated
+# beside it — the rule print_hints and wrap_print already follow.
+CARD_TEXT_W=0
+CARD_HEAD_LINES=0
+card_subject_head() {
+    local cols=$1 div=$2 title=$3 channel=$4
+    CARD_TEXT_W=$((cols - 4))
+    printf '%s%s%s\033[K\n' "$C_CYAN" "$div" "$C_RESET"
+    CARD_HEAD_LINES=1
+    wrap_print "$title" "$CARD_TEXT_W" "  ${C_BOLD}" "  "
+    CARD_HEAD_LINES=$((CARD_HEAD_LINES + WRAP_LINES))
+    wrap_print "$channel" "$CARD_TEXT_W" "    ${C_DIM}" "    "
+    CARD_HEAD_LINES=$((CARD_HEAD_LINES + WRAP_LINES))
+    return 0
+}
+
+# The meta row and its degradation, in three steps: fields are given MOST IMPORTANT FIRST and
+# dropped from the right until the row fits; then the first field is elided; then it goes
+# entirely. The TAIL is never dropped — for the playing subject it is the play state, and the
+# earlier floor of 8 cells on the elision failed by winning against the width instead of the
+# field (at 24 columns "▘ Starting" plus the indent leaves 5 cells and the floor drew 8,
+# wrapping the one row the card exists for).
+#
+# The separator belongs to the PAIR, not to the row: with the fields gone a fixed GL_SEP left
+# the tail hanging off a separator with nothing on its left. Empty fields are dropped rather
+# than joined, the same way print_details drops an absent view count instead of printing a
+# separator with nothing beside it.
+card_meta_row() {
+    local cols=$1 tail=$2 tail_color=$3
+    shift 3
+    local fields=() f meta="" tail_w n i tw
+    for f in "$@"; do
+        [[ -n "$f" ]] && fields+=("$f")
+    done
+    if [[ -n "$tail" ]]; then
+        disp_w " $GL_SEP $tail"
+        tail_w=$((DISP_W + 4))
+    else
+        tail_w=4                       # 4 = the body indent, the whole tail when there is none
+    fi
+    n=${#fields[@]}
+    while :; do
+        meta=""
+        i=0
+        while ((i < n)); do
+            if [[ -n "$meta" ]]; then meta="$meta $GL_SEP ${fields[$i]}"; else meta="${fields[$i]}"; fi
+            i=$((i + 1))
+        done
+        disp_w "$meta"
+        ((DISP_W + tail_w <= cols)) && break
+        ((n > 1)) || break
+        n=$((n - 1))
+    done
+    disp_w "$meta"
+    if ((DISP_W + tail_w > cols)); then
+        tw=$((cols - tail_w))
+        if ((tw < 1)); then
+            meta=""
+        else
+            truncate_disp "$meta" "$tw"
+            meta="$TRUNC_TEXT"
+        fi
+    fi
+    if [[ -n "$meta" && -n "$tail" ]]; then
+        printf '    %s%s %s %s%s%s%s\033[K\n' \
+            "$C_DIM" "$meta" "$GL_SEP" "$C_RESET" "$tail_color" "$tail" "$C_RESET"
+    elif [[ -n "$meta" ]]; then
+        printf '    %s%s%s\033[K\n' "$C_DIM" "$meta" "$C_RESET"
+    elif [[ -n "$tail" ]]; then
+        printf '    %s%s%s\033[K\n' "$tail_color" "$tail" "$C_RESET"
+    else
+        printf '\033[K\n'
+    fi
+    return 0
+}
+
+# The ITEM subject's body — same spine, same meta row, then the rows the one --info fetch paid
+# for: upload date, likes, chapter count, the description. Last comes what Enter WOULD play
+# (mode, and the quality tier when it is not auto) — the only fact on this card about the
+# future rather than the past, and the reason the card can answer "play this how?" without
+# starting anything.
+#
+# The description is BUDGETED, not trusted: this card renders in place and ends on \033[J, so
+# a block that overran the pane would scroll the frame off its own top-left. The budget is
+# whatever rows are left after the spine, the two meta rows and the hint block — measured, and
+# capped at 6 because a card is a card and not a reader. Pre-cut to budget x width cells, then
+# measured through wrap_print itself and shaved half a line at a time; a description that
+# still will not fit is dropped whole rather than drawn over the edge.
+CARD_DESC_MAX=6
+card_item_body() {
+    local cols=$1 div=$2
+    local meta_views="" info_row="" plan_row="" hints=() budget used txt cut try fits
+    card_subject_head "$cols" "$div" "$ITEM_TITLE" "$ITEM_CHANNEL"
+    # The free tier: two fields the search row also carries. They are here because the card
+    # states its subject completely, not because the fetch found them.
+    if [[ -n "$ITEM_VIEWS" ]]; then
+        commas "$ITEM_VIEWS"
+        meta_views="$COMMAS $S_VIEWS"
+    fi
+    card_meta_row "$cols" "" "" "$ITEM_DUR_FMT" "$meta_views"
+    # The paid tier. Each field is dropped when the site did not publish it — an absent like
+    # count is not zero likes, the rule print_details states for view counts.
+    [[ -n "$ITEM_UPLOADED" ]] && info_row="$S_UPLOADED $ITEM_UPLOADED"
+    if [[ -n "$ITEM_LIKES" ]]; then
+        commas "$ITEM_LIKES"
+        [[ -n "$info_row" ]] && info_row="$info_row $GL_SEP "
+        info_row="$info_row$COMMAS $S_LIKES"
+    fi
+    if ((ITEM_CHAP_N > 0)); then
+        [[ -n "$info_row" ]] && info_row="$info_row $GL_SEP "
+        info_row="$info_row$ITEM_CHAP_N $S_CHAPTERS"
+    fi
+    if [[ -n "$info_row" ]]; then
+        truncate_disp "$info_row" "$CARD_TEXT_W"
+        printf '    %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+    fi
+    # What Enter would play. `quality=` is absent at auto for the same reason the status line
+    # leaves it out there: auto is the engine choosing, which is not a tier to report.
+    plan_row="$PLAY_MODE"
+    [[ "$PLAY_QUALITY" != "auto" ]] && plan_row="$plan_row $GL_SEP $PLAY_QUALITY"
+    hints=("Enter	$S_PLAY_SEL" "Tab	$S_BACK_LIST" "q	$S_QUIT")
+    HINT_SEP=" $GL_SEP "
+    HINT_MEASURE=1
+    print_hints "$cols" "  " "  " "${hints[@]}"
+    HINT_MEASURE=0
+    # `used` is the frame WITHOUT a description — 2 for the header row and its blank, the
+    # spine, the meta row, the optional info row, 2 for the plan row and the blank above the
+    # hints, and the hint block itself. The description then gets what is left LESS TWO: its
+    # own blank separator, which is drawn only when there is a description to separate, and
+    # one row so the last hint line is never the pane's last row. Measured at 62x14, where
+    # forgetting the separator put the frame one row over and scrolled the header off its
+    # own top — the failure mode an in-place renderer has instead of a scrollbar.
+    used=$((2 + CARD_HEAD_LINES + 1 + 2 + HINT_LINES))
+    [[ -n "$info_row" ]] && used=$((used + 1))
+    budget=$((TERM_LINES - used - 2))
+    ((budget > CARD_DESC_MAX)) && budget=$CARD_DESC_MAX
+    txt=""
+    if ((budget > 0)) && [[ -n "$ITEM_DESC" ]]; then
+        cut=$((budget * CARD_TEXT_W))
+        try=0
+        fits=0
+        while ((try < 4 && cut > 0)); do
+            truncate_disp "$ITEM_DESC" "$cut"
+            txt="$TRUNC_TEXT"
+            WRAP_MEASURE=1
+            wrap_print "$txt" "$CARD_TEXT_W" "    " "    "
+            WRAP_MEASURE=0
+            ((WRAP_LINES <= budget)) && { fits=1; break; }
+            cut=$((cut - CARD_TEXT_W / 2))
+            try=$((try + 1))
+        done
+        ((fits)) || txt=""
+    fi
+    if [[ -n "$txt" ]]; then
+        printf '\033[K\n'
+        wrap_print "$txt" "$CARD_TEXT_W" "    ${C_DIM}" "    "
+    fi
+    printf '\033[K\n    %s%s%s\033[K\n' "$C_DIM" "$plan_row" "$C_RESET"
+    print_hints "$cols" "  " "  " "${hints[@]}"
+    HINT_SEP=""
+    return 0
+}
+
 # Now Playing Focus Card (in-place render, like the list above — see display_list_menu)
 display_now_playing_card() {
     cursor_hide
@@ -3003,9 +3214,13 @@ display_now_playing_card() {
     # The header names the view the same way the key hint that reaches it does (S_FOCUS,
     # "focus card" / "专注卡片") — one view, one name, in both languages. Elided the way the
     # list's title row is: measure the fixed brand/bullet prefix, give the name what is left.
-    local c_pre="${GL_NOTE:+$GL_NOTE }$GL_BRAND  $GL_BULLET  "
+    local c_pre="${GL_NOTE:+$GL_NOTE }$GL_BRAND  $GL_BULLET  " c_head="$S_CARD_HEAD"
+    # One view, two subjects — so the name in the header says which subject, not which view:
+    # "NOW PLAYING FOCUS" is a lie about a row you merely asked about, and it is the header
+    # that would tell it.
+    [[ "$CARD_SUBJECT" == "item" ]] && c_head="$S_CARD_HEAD_ITEM"
     disp_w "$c_pre"
-    truncate_disp "$S_CARD_HEAD" $((cols - DISP_W))
+    truncate_disp "$c_head" $((cols - DISP_W))
     printf '%s%s%s%s%s  %s  %s%s%s\033[K\n\033[K\n' \
         "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$GL_BULLET" \
         "$C_BOLD" "$TRUNC_TEXT" "$C_RESET"
@@ -3021,7 +3236,9 @@ display_now_playing_card() {
     # There is only ONE rail now: the bottom one was a third parallel line closing a box the
     # card does not need, and with the bar spanning the full width the card already ends on a
     # horizontal. `\033[J` at the end of the render, not a rail, is what clears stale rows.
-    if [[ -z "$CURRENT_PLAY_ID" ]]; then
+    if [[ "$CARD_SUBJECT" == "item" ]]; then
+        card_item_body "$cols" "$div"
+    elif [[ -z "$CURRENT_PLAY_ID" ]]; then
         printf '%s%s%s\033[K\n' "$C_CYAN" "$div" "$C_RESET"
         printf '  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$S_NOTHING" "$C_RESET"
         # 60 CJK cells of copy: pack it like the hint rows so it cannot run off a narrow
@@ -3048,66 +3265,26 @@ display_now_playing_card() {
         # No labels anywhere in the body: typography carries the structure that "Title:" /
         # "Channel:" / "Time:" used to spell out — bold title, dim channel, dim meta row. The
         # play state lives in the meta row's coloured status, so the title drops its play
-        # glyph too: one state indicator, not two. text_w is cols minus the deepest body
-        # indent (4), the only prefix left now that the 8-cell label field and its 3-cell gap
-        # are gone — which is also why the title gets ~11 more cells before it wraps.
-        # No floor. It was 25, and under the old 40-column clamp it could never fire
-        # (cols - 4 >= 36), so it was dead code that came alive the moment layout_cols
-        # started believing narrow terminals: at 28 columns it wrapped the title at 25
-        # cells behind a 4-cell indent, i.e. one cell past the pane. layout_cols' own
-        # floor is the guarantee this line needs — cols >= LAYOUT_MIN, so text_w >= 20.
-        local text_w=$((cols - 4))
-
-        printf '%s%s%s\033[K\n' "$C_CYAN" "$div" "$C_RESET"
-        wrap_print "$CURRENT_PLAY_TITLE" "$text_w" "  ${C_BOLD}" "  "
-        wrap_print "$CURRENT_PLAY_CHANNEL" "$text_w" "    ${C_DIM}" "    "
+        # glyph too: one state indicator, not two.
+        #
+        # The spine (rail, title, channel) and the meta row's degradation left this branch:
+        # they describe A SUBJECT, not the playing track, and the item subject renders through
+        # the same two calls. CARD_TEXT_W is the body width card_subject_head measured.
+        card_subject_head "$cols" "$div" "$CURRENT_PLAY_TITLE" "$CURRENT_PLAY_CHANNEL"
+        local text_w=$CARD_TEXT_W
         # One meta row, fields joined by the suite's separator: "3:21 / 9:27 (37%) · audio ·
         # ● Playing" (live: elapsed · ● LIVE · …, no percent). The labelled version needed a
         # one-line/two-line branch because 4 labels and their gaps cost ~30 cells; without
-        # them the row fits at every width the card supports, and the guard below degrades by
-        # DROPPING fields (mode first, then eliding the time) rather than wrapping mid-field.
-        # The status is never dropped — it is the readout the card exists for.
-        local seg_time meta tw
+        # them the row fits at every width the card supports. Fields go most-important-first
+        # and the status is the TAIL, which card_meta_row never drops — it is the readout the
+        # card exists for.
+        local seg_time
         if ((CURRENT_PLAY_IS_LIVE)); then
             seg_time="$cur_time $GL_SEP $total_time"
         else
             seg_time="$cur_time / $total_time$pct_str"
         fi
-        meta="$seg_time $GL_SEP $CURRENT_PLAY_MODE"
-        # 4 = body indent. Assignment form, not ((x += DISP_W)) — an arithmetic command
-        # evaluating to 0 returns status 1, which set -e would take as a failure (see char_w).
-        disp_w " $GL_SEP $p_status"
-        local tail_w=$((DISP_W + 4))
-        disp_w "$meta"
-        if ((DISP_W + tail_w > cols)); then
-            meta="$seg_time"
-            disp_w "$meta"
-            if ((DISP_W + tail_w > cols)); then
-                tw=$((cols - tail_w))
-                # Third and last step of the same degradation: mode went, then the time is
-                # elided, and where even that will not fit the readout goes ENTIRELY. The
-                # floor here used to be 8, which is the shape the banner had too — and it
-                # fails the same way, by winning against the width instead of the field:
-                # at 24 columns "▘ Starting" plus the indent leaves 5 cells and the floor
-                # drew 8, wrapping the one row the card exists for. The status is still
-                # never dropped.
-                if ((tw < 1)); then
-                    meta=""
-                else
-                    truncate_disp "$meta" "$tw"
-                    meta="$TRUNC_TEXT"
-                fi
-            fi
-        fi
-        # The separator belongs to the pair, not to the row: with the readout dropped
-        # (narrowest terminals, above) a fixed GL_SEP left the status hanging off a
-        # separator with nothing on its left.
-        if [[ -n "$meta" ]]; then
-            printf '    %s%s %s %s%s%s%s\033[K\n' \
-                "$C_DIM" "$meta" "$GL_SEP" "$C_RESET" "$p_color" "$p_status" "$C_RESET"
-        else
-            printf '    %s%s%s\033[K\n' "$p_color" "$p_status" "$C_RESET"
-        fi
+        card_meta_row "$cols" "$p_status" "$p_color" "$seg_time" "$CURRENT_PLAY_MODE"
         # The queue, on its own row and ONLY when there is more than one track: every
         # detached player has a queue now (a lone handle is a queue of one), so a row that
         # printed "1/1" would be chrome that never says anything. It is a row of its own
