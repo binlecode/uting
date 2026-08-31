@@ -1677,8 +1677,8 @@ init_cell_tables() {
 init_cell_tables
 
 # Cells taken by ONE character. Returns through CHAR_W: this is the innermost loop of every
-# measurement, so no subshell, no command substitution. All four measuring sites (disp_w,
-# truncate_disp, and both of wrap_print's loops) go through here — when the rule lived
+# measurement, so no subshell, no command substitution. All five measuring sites (disp_w,
+# disp_fits, truncate_disp, and both of wrap_print's loops) go through here — when the rule lived
 # inline in each of them, a fix to one silently disagreed with the other three, and
 # measurement disagreeing with line-breaking is worse than a uniform over-count.
 CHAR_W=0
@@ -1711,6 +1711,33 @@ disp_w() {
         n=$((n + CHAR_W))
     done
     DISP_W=$n
+}
+
+# Does PLAIN text fit in <max> cells? Answers through DISP_FITS, without measuring past the
+# point where the answer is settled. char_w's range is {0,1,2} — all non-negative, so the
+# running total only ever grows, and the character that crosses <max> is the last one that
+# can change the answer. Strictly equivalent to `disp_w "$s"; ((DISP_W <= max))`, but bounded
+# by <max> instead of by the length of the text.
+# That bound is the whole point where the text is long and the budget is not: the item card
+# measures a ~3.6k-character description against a ~576-cell budget, and the handful of emoji
+# a description uses as section markers knocks the entire string off disp_w's all-or-nothing
+# ASCII fast path (54 non-ASCII characters, 3621 walked). Measured on 3.2.57 with that
+# description: whole-string 0.479s, stop-at-budget 0.132s.
+# Same no-fork, accumulate-with-$(( )) discipline as disp_w, and for the same reasons.
+DISP_FITS=0
+disp_fits() {
+    local s=$1 max=$2 i n=0
+    DISP_FITS=0
+    if [[ "$s" != *[![:ascii:]]* ]]; then
+        ((${#s} <= max)) && DISP_FITS=1
+        return
+    fi
+    for ((i = 0; i < ${#s}; i++)); do
+        char_w "${s:$i:1}"
+        n=$((n + CHAR_W))
+        ((n > max)) && return
+    done
+    DISP_FITS=1
 }
 
 # Pull a cut point back out of the middle of a grapheme cluster. Severing a base character
@@ -1746,8 +1773,10 @@ cluster_back() {
 TRUNC_TEXT=""
 truncate_disp() {
     local text=$1 max=$2 mark="$GL_ELL" i w=0
-    disp_w "$text"
-    if ((DISP_W <= max)); then
+    # Bounded on purpose: the only question here is whether the text already fits, and
+    # disp_w would walk a 3.6k-character description to answer it. See disp_fits.
+    disp_fits "$text" "$max"
+    if ((DISP_FITS)); then
         TRUNC_TEXT="$text"
         return
     fi

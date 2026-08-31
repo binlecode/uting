@@ -767,7 +767,8 @@ reflow、共享时钟与三个播放态。
                   一个读取器、一份 Esc 契约、没有第二套实现
      Views      : display_list_menu（行 + 横幅 + reflow；原地 \033[H/K/J）,
                   display_now_playing_card, display_menu（分派、DCS 帧保持）
-     Width layer: char_w/disp_w/truncate_disp/cluster_back, cw_range/init_cell_tables
+     Width layer: char_w/disp_w/disp_fits（有界判定，tui §11）/truncate_disp/cluster_back,
+                  cw_range/init_cell_tables
      Fetch UX   : spin_start/spin_stop（后台子 shell，sleep 0.12 一帧）夹住 fetch_json ——
                   每一条取数路径都有动画
      Row count  : more_results（`→` 越过末页：用当前查询重取，+1 批）,
