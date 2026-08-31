@@ -4952,9 +4952,15 @@ while true; do
     a | A) add_to_playlist ;; # add the focused row to a playlist
     b | B) browse_playlists ;;# open a stored playlist as the row source
     d | D) delete_from_playlist ;; # remove the focused row from the playlist on screen
-    h | H) open_history ;;    # open the listening log as the row source
-    c | C) open_parts ;;      # open the focused row's parts (?p=N) as the row source
-    i | I) open_versions ;;   # open the focused row's chapters as the row source (one --info)
+    # The three row sources say "did not open" with 1 — an empty log, a one-part video, a
+    # video with no chapters, and every fetch that failed — and each of those paths has
+    # already printed its notice and waited on a key. Without `|| true` set -e reads that 1
+    # as a dying TUI and takes the whole loop down ON THE KEYPRESS that was supposed to
+    # dismiss the notice, which is the worst possible moment to exit: the user pressed a key
+    # to go back. Same guard, same reason, as the Enter arm above.
+    h | H) open_history || true ;;    # open the listening log as the row source
+    c | C) open_parts || true ;;      # open the focused row's parts (?p=N) as the row source
+    i | I) open_versions || true ;;   # open the focused row's chapters as the row source (one --info)
     "+") enqueue_selected ;;  # append the focused row to the running player's queue
     ">") skip_next ;;         # skip to the next queued track
     "/") filter_live ;;       # LIVE incremental filter

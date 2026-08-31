@@ -1794,6 +1794,48 @@ else
     done
     report "h again leaves it for search" 1 "$backed"
 
+    # A NOTICE IS NOT AN EXIT. Every row source answers "did not open" with a notice and a
+    # press-any-key — an empty log, a one-part video, a video with no chapters — and each of
+    # them hands a 1 back to the menu loop's case arm. An arm without the `|| true` guard
+    # turns that 1 into set -e, so the TUI dies ON THE KEY that was supposed to dismiss the
+    # notice. It shipped that way for `h`, `c` and `i`.
+    #
+    # The log is cleared HERE rather than seeded empty, by the same real command that seeded
+    # it, because the check above needs rows and this one needs none: the two claims disagree
+    # about the fixture, not about the pane. Deterministic either way — no query decides
+    # whether this door is closed, which is what the `i` walk below cannot say for itself.
+    UT_STATE_DIR="$TUI_STATE" shell/ut-history --clear -j >/dev/null 2>&1
+    report "the log fixture really cleared" 0 \
+        "$(UT_STATE_DIR="$TUI_STATE" shell/ut-history --ls -j 2>/dev/null | jq -r '.count // 0')"
+    tmux send-keys -t "$TS" h
+    said=0; i=0
+    while [ $i -lt 40 ]; do
+        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'nothing listened to yet' && { said=1; break; }
+        sleep 0.25; i=$((i + 1))
+    done
+    report "an empty log answers with a notice" 1 "$said"
+    # Space dismisses it (inert here — there is no player to pause). The witness is the notice
+    # LEAVING the pane, not the list being in it: the list is still on screen underneath while
+    # the notice holds the frame, so "results= is visible" would be green before the keypress
+    # and could not fail. A TUI that died leaves the notice where it is and prints RC= under it.
+    tmux send-keys -t "$TS" Space
+    alive=0; i=0
+    while [ $i -lt 40 ]; do
+        pane=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null)
+        case "$pane" in
+        *"RC="*) break ;;
+        *"nothing listened to yet"*) ;;
+        *) alive=1; break ;;
+        esac
+        sleep 0.25; i=$((i + 1))
+    done
+    report "…and the key that dismisses it does not exit" 1 "$alive"
+    if [ "$alive" != 1 ]; then
+        echo "  ---- pane after the notice was dismissed ----" >&2
+        tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
+        echo "  ---- end of pane ----" >&2
+    fi
+
     # `b` is the same door as `h`, but it has to ASK which room — and asking used to mean one
     # line of the store's own prose above a caret identical to the search prompt, with the
     # name typed from memory. It now prints the store NUMBERED, and the number is resolved in
