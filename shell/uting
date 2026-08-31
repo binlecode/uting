@@ -571,6 +571,8 @@ Keys (List View):
            to the search results. A chapter row is a call: Enter plays from it,
            + queues from it, a stores it
                                     (only when the engine has --info; both do)
+  +        append the focused row to the running player's queue (nothing playing: says so)
+  >        skip to the next queued track
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
   ?        show more / fewer keys (also ？). The hint block has two tiers:
            `core` is this view's own job, `full` is every key above. UT_KEYS pins it
@@ -1027,7 +1029,7 @@ set_ui_lang() {
     if [[ "$UI_LANG" == "zh" ]]; then
         S_SELECT="选择"; S_PAGE="翻页"; S_PLAY="播放"; S_MODE="模式"; S_QUALITY="质量"
         S_SEARCH="搜索"; S_SORT="排序"; S_FILTER="过滤"
-        S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"; S_KEYS="键位"
+        S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"; S_THEMEKEY="主题"; S_KEYS="键位"
         S_PAUSE="暂停"; S_VOL="音量"
         S_SEEK="跳转"
         S_PLAYING="播放中"; S_PAUSED="已暂停"; S_STARTING="缓冲中"
@@ -1051,7 +1053,7 @@ set_ui_lang() {
         S_HIST_EMPTY="还没有收听记录"; S_HIST_ABSENT="未安装 ut-history"
         S_PARTS_KEY="分P"; S_PARTS_ACT="分P"; S_PARTS_ONE="这个视频只有一 P"
         S_INFO_ACT="详情"
-        S_VER_KEY="版本"; S_VER_NONE="这个条目没有章节"
+        S_VER_KEY="章节"; S_VER_NONE="这个条目没有章节"
         S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_ACT="队列"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
         S_PREF_ACT="配置"
@@ -1060,7 +1062,7 @@ set_ui_lang() {
     else
         S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_MODE="mode"; S_QUALITY="quality"
         S_SEARCH="search"; S_SORT="sort"; S_FILTER="filter"
-        S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"; S_KEYS="keys"
+        S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"; S_THEMEKEY="theme"; S_KEYS="keys"
         S_PAUSE="pause"; S_VOL="volume"
         S_SEEK="seek"
         S_PLAYING="Playing"; S_PAUSED="Paused"; S_STARTING="Starting"
@@ -1084,7 +1086,7 @@ set_ui_lang() {
         S_HIST_EMPTY="nothing listened to yet"; S_HIST_ABSENT="ut-history is not installed"
         S_PARTS_KEY="parts"; S_PARTS_ACT="Parts"; S_PARTS_ONE="this video has only one part"
         S_INFO_ACT="Info"
-        S_VER_KEY="versions"; S_VER_NONE="this item has no chapters"
+        S_VER_KEY="chapters"; S_VER_NONE="this item has no chapters"
         S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_ACT="Queue"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
         S_PREF_ACT="Config"
@@ -2875,8 +2877,13 @@ display_list_menu() {
     # cycle_engine returns immediately) and search rows on screen (it refetches the query,
     # and a playlist is engine-agnostic — its rows route by their own stored engine).
     keys_full && ((search_view)) && ((${#ENGINES[@]} > 1)) && nav_items+=("e	$S_ENGINE")
+    keys_full && nav_items+=("l	$S_LANGKEY")
+    # `t` is a chrome key like `l`, and it sat in usage() and the README while printing in
+    # NEITHER tier — the one key the block never documented. Its own condition is why it is
+    # a line of its own: with colors off cycle_theme returns immediately, which is the same
+    # "cannot act" the source key and the store keys are gated on.
+    keys_full && ((COLORS_ON)) && nav_items+=("t	$S_THEMEKEY")
     keys_full && nav_items+=(
-        "l	$S_LANGKEY"
         "9/0	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "s	$S_STOP"
     )
     nav_items+=("q	$S_QUIT")
@@ -2931,6 +2938,10 @@ display_list_menu() {
     if [[ "$LIST_SOURCE" == "versions" ]]; then
         nav_items+=("i	$S_BACK_SEARCH")
     elif keys_full && ((search_view)) && ((ENGINE_INFO_OK)); then
+        # The label says what the KEY does — chapters — not what the row source is CALLED.
+        # `versions` is the internal source name (and the header field `versions='<title>'`,
+        # which contract.sh and four docs cite); the block is the one place a user reads a
+        # word to find out what a key is for, and "versions" is not that word.
         nav_items+=("i	$S_VER_KEY")
     fi
     # The queue keys are offered only while something is PLAYING: with no player they say

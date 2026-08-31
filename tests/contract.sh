@@ -1564,6 +1564,17 @@ else
     report "? opens the full tier" 1 "$opened"
     report "…and p is not a view toggle any more" 0 \
         "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'NOW PLAYING')"
+    # EVERY key that can act is printed by the full tier, and `t` is the one that was not:
+    # it sat in usage() and the README while appearing in neither tier, so the block — the
+    # one place a user reads what a key is for — was the only surface that did not know it
+    # existed. The pane is a tty with colors on, which is exactly `t`'s own gate, so a
+    # correct block has to print it here. `i` rides along with the word the KEY does
+    # (`chapters`), not the row source's internal name (`versions`, which is still the
+    # header field asserted further down) — the block used to print the latter.
+    report "the full tier prints the theme key" 1 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 't theme')"
+    report "…and names i by what it opens" 1 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'i chapters')"
     # The EIGHTH preference key, on the same deferred write as the seven below. The fixture
     # carries no UT_KEYS line, so this can only APPEND — and the value is asserted in BOTH
     # directions, because a tier that wrote itself once and then stopped would leave the file
