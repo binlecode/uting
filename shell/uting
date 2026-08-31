@@ -1730,14 +1730,21 @@ disp_fits() {
     DISP_FITS=0
     if [[ "$s" != *[![:ascii:]]* ]]; then
         ((${#s} <= max)) && DISP_FITS=1
-        return
+        # `return 0`, never a bare `return`: a bare one hands back the status of the LAST
+        # COMMAND, which here is an arithmetic test that is false exactly when the text does
+        # not fit — so every truncation aborted the whole TUI under set -e. It reached a
+        # terminal 100 cells wide as "nothing ever truncates there"; contract.sh's 26x24
+        # resize is what says it out loud. Same trap as the accumulate rule above, one step
+        # further along: the status of a test is not the status of a function.
+        return 0
     fi
     for ((i = 0; i < ${#s}; i++)); do
         char_w "${s:$i:1}"
         n=$((n + CHAR_W))
-        ((n > max)) && return
+        ((n > max)) && return 0
     done
     DISP_FITS=1
+    return 0
 }
 
 # Pull a cut point back out of the middle of a grapheme cluster. Severing a base character
