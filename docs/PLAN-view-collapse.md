@@ -1,7 +1,7 @@
 # PLAN —— 视图塌缩：取消焦点卡，`i` 成为第五个 row source
 
-**状态：** 已定稿，未 pre-mortem，未动工。
-**开工第一件事是 pre-mortem（`discuss-with-me`），不是写代码。**
+**状态：** 已定稿，pre-mortem **已由本人裁决跳过**（2026-08-30），未动工。
+**没有待答复的阻塞项 —— 可以直接开工。**
 
 ---
 
@@ -48,21 +48,19 @@
   **进度条**、**queue-ahead 块**、大标题没有去处。
   列表的 `▶ Playing:` 那行保留标题、`00:04 / 01:01:13` 和资源读数。
   丢的是"进度画出来的那条线"和"接下来放什么"，**不是任何一个能按的键**。
+  加上 §5 那条：卡片的**描述块**在列表布局里也没有槽位，一并丢弃。
   补不补是**以后另开的一个单元**，不在本方案内。
 
 ---
 
-## 3. 还没定的（开工前需要一个答复）
+## 3. 曾经的开放项 —— 都已落定
 
-- **O-1 `f` 键（循环 quality）要不要删。**
-  它和 version 列表里的 quality 行重了。
-  *建议：删* —— 一件事一个地方，且 quality 不是每首都要调的东西。
-  留着也行，那它就是个快捷方式。**这条不定，version 模式仍可开工**，只是收尾时要回来。
-- **O-2 version 模式收哪几条轴。** 建议三条全收（见 §5），
-  但只做 chapter 一条也是成立的最小版本 —— parts 今天已经有 `c` 键了，会重。
-  *建议：chapter + quality 两条，parts 保持在 `c`*（否则 `i` 和 `c` 内容重叠）。
-
----
+- **O-1 `f` 键（循环 quality）删不删 —— 自动消解。**
+  它当初的问题是和 version 列表里的 quality 行重了；O-2 定成只收章节之后，
+  **version 模式里没有 quality 行了**，`f` 不跟任何东西重复。**`f` 原样保留，不动。**
+- **O-2 version 模式收哪几条轴 —— 定了：只有章节，照搬今天焦点卡上那一块。**
+  不收 quality 轴（留在 `f`），不收 parts 轴（留在 `c`）。
+  详见 §5 —— 这不是一次设计，是一次**搬运**。
 
 ## 4. 代码盘点
 
@@ -101,9 +99,9 @@
   `build_version_rows` + `stash_search` + `LIST_SOURCE="versions"` + `load_rows`。
   前面的 fetch（`fetch_item_info "$row_engine" "$url"`）一字不动。
 - `open_playing_info()` 4706 —— 并入 `open_item()`。D-d 之后不再有"卡片上的 i"这回事。
-- **新** `build_version_rows()` —— 把 `ITEM_CHAP_*`（+ O-2 定的其它轴）转成
+- **新** `build_version_rows()` —— 把 `ITEM_CHAP_SEC/TIME/TITLE[]` 转成
   **七字段 item 记录**（`url · title · duration_fmt · views · channel · live · engine`），
-  和 `build_playlist_rows()` 出同样的形状。chapter 行多带一个偏移，见 §5。
+  和 `build_playlist_rows()` 出同样的形状；时间进右列，偏移随行走。**只有章节一种行**（§5）。
 - `open_versions()` 的开关半边 —— 抄 `open_parts()` 4599 的骨架
   （`LIST_SOURCE` 相等则 `back_to_search`；`ENGINE_INFO_OK` 门；`stash_search`）。
 - 提示块 —— `i versions` / 模式内就地改词 `i back to results`（`b` 已有的做法）；
@@ -111,15 +109,26 @@
 
 ---
 
-## 5. version 行的形状（等 O-2 定）
+## 5. version 行的形状 —— 照搬 `card_chapter_block()`
 
-一句话：**同一个东西的另一种放法**。每一行都是一次 call，所以什么新字段都不用加。
+**这一节没有新设计。**行的内容和列，一律从今天的 `card_chapter_block()`
+（`uting:3518`）搬过来。搬运清单：
 
-| 轴 | 是什么 | 行记录 | 已存在的东西 |
-|---|---|---|---|
-| chapter | 同一个文件里的一个偏移 | `{engine, url, title, start_seconds}` | `--info` 的 `chapters[]` + `ut-play --start SEC` |
-| quality | 同样内容的另一种编码 | `{engine, url, title, quality}` | `ut-play --quality`，引擎侧 (mode,tier) 表 |
-| ~~part 分P~~ | 同一个 id 下的另一个文件 | —— | 已经是 `c` 键，建议不重复收 |
+| 卡片上今天是什么 | 搬到 version 模式的哪 | 变化 |
+|---|---|---|
+| 章节行：`时间`（按 `ITEM_CHAP_TW` 右对齐）+ `标题` | 列表的行：右列放时间，标题放标题列 | **正好对上** —— 列表的右列今天放的就是时长，同样是个时间 |
+| 窗口上限 `CARD_CHAP_MAX=6` | —— | **去掉。**列表自己会分页，不需要滑动窗口 |
+| `CHAP_SEL` 章节游标 | 列表的 `selected` | 普通行导航，`move_chapter()` 因此可删 |
+| 播放头所在那章：`C_BOLD` | 行的 bold | 列表本来就按行改字重，不是布局改动 |
+| 块头 `M/N · 章节` | 状态行的 `items=N` | 列表表头本来就有这个位置 |
+
+行记录仍是七字段的 item 形状（和 `build_playlist_rows()` 同形），
+章节多带一个偏移 —— 见下面那条关键事实。
+
+**卡片上没搬走的东西（`card_info_row()` / `card_item_body()`）：**
+上传日期、点赞数、章节总数、`mode` 与 `quality` → 进 version 模式的状态行与详情块，
+列表布局本来就有这两个槽位。
+**描述（description）没有槽位 → 丢弃**，并入 §2 的 D-g 一起记账。
 
 **关键事实（值得单独记一笔）：**
 2026-08-29 那版方案**否决过**"章节当行"，理由是它会把一个 start-offset 字段推进 item record，
@@ -128,8 +137,6 @@
 `ut-play --start SEC` 也已落地（commit `ae8f261` / `f79b484`）。
 所以一个 chapter 行**已经是一个合法的 call，不需要任何新字段**。
 Enter 播、`+` 入队、`a` 存歌单，全部是继承来的。
-
----
 
 ## 6. agent 面 —— 为什么不需要新 verb
 
@@ -141,9 +148,9 @@ ROADMAP 的规矩：每个功能都要有 agent 面（一个 verb + 一个 `-j` 
 ```
 <engine>-resolve --info -j   → .chapters[]   （章节，含 start_time）
 ut-play --start SEC          → 从偏移起播
-ut-play --quality TIER       → 换编码
-<engine>-resolve --parts -j  → 分P（已由 c 键覆盖）
 ```
+
+（`--quality` 与 `--parts` 不在本方案内 —— 它们分别留在 `f` 键和 `c` 键。）
 
 一个 agent 要做 TUI 里 `i` 能做的事，今天就能做，不用等本方案落地。
 **所以本方案不新增任何 CLI 表面，契约冻结面一个字不动。**
@@ -154,7 +161,7 @@ ut-play --quality TIER       → 换编码
 
 | 步 | 做什么 | 出口 |
 |---|---|---|
-| **0** | **pre-mortem**（`discuss-with-me`，冷读者只拿这份 plan） | 每条预防性修正被接受或明确拒绝，写回本文件 |
+| ~~0~~ | ~~pre-mortem~~ —— **本人 2026-08-30 裁决跳过** | 不做 |
 | **A** | 先建新路：`build_version_rows()` + `open_versions()` 开关，**卡片仍在**。tmux 里验 | `i` 能开能关，交互路径一刻也没缺过 |
 | **B** | 把 `i` 改绑到新路，`Tab` 解绑。跑无头回归 | `tests/contract.sh --offline` 绿 |
 | **C** | **删卡片**（§4.1）—— 破坏性的一步，最后且最小。每个删掉的符号先 grep gate | 无悬空引用；再回归一次 |
@@ -171,7 +178,9 @@ ut-play --quality TIER       → 换编码
 - [ ] `tests/contract.sh --offline` 绿（每次提交；~16s）
 - [ ] `tests/contract.sh` 全跑绿（推之前；~118s）
 - [ ] `tests/playback.sh` 绿 —— **本方案不碰播放器，但 D-e 的 seek 路径碰了活播放器**，所以要跑
-- [ ] `tests/drive.sh -k 'i' -w <version 模式的标记>` —— 真的进得去
+- [ ] `tests/drive.sh -k 'i' -w <version 模式的标记>` —— 真的进得去，且行是章节
+- [ ] `grep -n 'move_chapter\|CHAP_SEL' shell/uting` 无输出（游标被普通行导航取代）
+- [ ] `f` 键仍在且仍能轮换 quality（O-1 消解的护栏）
 - [ ] `tests/drive.sh -k 'i i'` —— 真的回得来，且回到 search
 - [ ] `tests/drive.sh -k 'Tab'` —— Tab 现在什么都不做，且**没把 TUI 弄死**
 - [ ] `tests/drive.sh -x 62 -y 20` 与 `-x 62 -y 12` —— 窄屏没崩（layout 没改，但行来源换了）
@@ -179,7 +188,6 @@ ut-play --quality TIER       → 换编码
 - [ ] `grep -n 'card_divider' shell/uting` **仍有输出**（护栏：它是列表的，不是卡片的）
 - [ ] shellcheck 基线计数**重新量过**并写回 `RESEARCH-tui-player.md` §5.1（删代码会改这个数）
 - [ ] as-built 文档 resync 完（§7 D 步）
-- [ ] O-1（`f` 键）有了答复并落实
 - [ ] 本文件删除 —— plan 落地即删，不归档
 
 ## 9. 验证矩阵里诚实的那一格
