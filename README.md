@@ -70,7 +70,7 @@ sets for you.
   four fields a listening has (`played_at`, `ended_at`, `seconds`, `reason`), so
   `ut-history --ls -j` pipes straight into `ut-playlist --add` or `ut-play -d --queue -`.
   `UT_HISTORY=0` turns the writing off; optional, like the playlist store.
-- **`uting`** — the human face. Self-rendered list and focus card, live filter, pagination that
+- **`uting`** — the human face. One self-rendered list, live filter, pagination that
   reflows against the measured chrome, three playback states, en/zh chrome, ASCII fallback, themes.
   No TUI framework, no fzf.
 
@@ -192,11 +192,11 @@ addition bumps `z`; `1.0.0` is a promise this reference implementation does not 
 
 ## Keys
 
-`↑/↓` (or `j`/`k`) select · `←/→` page · `Enter` play · `Tab` focus card · `/` filter ·
+`↑/↓` (or `j`/`k`) select · `←/→` page · `Enter` play · `/` filter ·
 `?` more / fewer keys · `n` new search ·
 `o` sort · `v` playback mode · `f` quality tier · `e` switch source · `a` add to playlist ·
 `b` open a playlist · `d` remove from the playlist on screen · `h` listening history ·
-`c` the focused row's parts · `i` info on the focused row · `+` add to the queue · `>` next track ·
+`c` the focused row's parts · `i` the focused row's chapters · `+` add to the queue · `>` next track ·
 `Space` pause · `9/0` volume ·
 `[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
 
@@ -208,10 +208,9 @@ back to your own config as `UT_KEYS=core|full`, and `？` is bound with it — a
 shift-/ is a full-width question mark. `j`/`k` are list-view only: with `/` open they are text
 you are typing.
 
-In the focus card, once `i` has fetched a track that has chapters, `↑/↓` move a chapter cursor
-and `Enter` seeks to the one selected — a chapter is an offset inside the track already open,
-so nothing is re-resolved. On the item subject the same chapters are a table of contents: that
-card has no playhead. Volume is `9/0`'s alone.
+There is ONE view. `b`, `h`, `c` and `i` each replace the rows in it and are pressed again to
+come back — a playlist, the listening log, a video's parts, a video's chapters. Nothing
+toggles a second renderer, so `Tab` is unbound and prints nowhere.
 
 `e` is drawn only when a second engine is installed — the TUI discovers engines by looking for
 `<name>-search` and `<name>-resolve` pairs, so it holds no list of sources. `a` and `b` are
@@ -223,11 +222,13 @@ and `i` only when it has `--info`. Three of them go one step further and read th
 their only effect would be a notice saying they do not apply — and a measured block does not
 spend a cell to say no.
 
-`i` opens the focus card on the row you asked about rather than the one that is playing: one
-view, two subjects. It is the only door, and entering costs one `--info` — which is what keeps
-that card from being a full-screen repeat of what the list already shows. Pressed inside the
-card instead, `i` adds what that fetch found to the track that is PLAYING and leaves the card
-where it is, playhead and queue intact.
+`i` puts the focused row's CHAPTERS on screen as rows, paid for by one `--info` (the upload
+date and the like count land on the status line — the two facts a row cannot hold). A chapter
+row is a call, not a reference: its url carries `t=<second>`, which both engines already read
+into the resolve envelope's `start_seconds`, so `Enter` plays from that chapter, `+` queues
+from it and `a` stores it. `Enter` on a chapter of the track already playing SEEKS instead —
+an offset inside the file that is open needs no second resolve. An item with no chapters says
+so and stays where it is.
 `h` asks for no name — the log is one thing — and shows the 50 newest listenings. `d` is the
 mirror: it is drawn only with a **playlist** on screen, because a search result is a row of
 nothing and the log has no per-row removal to call. It names the track and defaults to no.

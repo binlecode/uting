@@ -1484,8 +1484,8 @@ else
     # language-neutral by necessity — the default is "zh under a zh* locale, English
     # otherwise", so the pane spoke whichever language the machine did, and a check that named
     # a chrome string would have been green on one host and red on the next. The `i` checks
-    # below need to name one (the item card's head, and the label on a field the list cannot
-    # hold), so the language becomes an input rather than an accident. Nothing else in the
+    # below need to name one (the `i` view's own label, and a field the list cannot hold), so
+    # the language becomes an input rather than an accident. Nothing else in the
     # section reads a chrome string, so nothing else changes.
     TUI_CMD="cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance YT_LANG=en shell/uting 'lofi hip hop'"
     TUI_CMD="$TUI_CMD"'; printf "RC=%s\n" $?'
@@ -1546,15 +1546,14 @@ else
     # the only place in the app where a key is written down, so a tier that did not filter
     # and a tier that filtered everything are both visible from here.
     #
-    # `9/0 volume` is the marker because it is spelled that way in the LIST block alone: the
-    # card abbreviates it to `9/0 vol` (S_VOL vs S_VOL_ADJUST), and nothing else on a pane
-    # with no player prints either. So one grep says which tier is up AND which view is up.
+    # `9/0 volume` is the marker because the full tier is the only thing that prints it, and
+    # nothing else on a pane with no player prints it at all. One grep says which tier is up.
     report "the core block leaves the playback keys out" 0 \
         "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c '9/0 volume')"
-    # `p` was an undocumented Tab alias until P10 and is now nothing at all. It is asserted
-    # through the key AFTER it, the way the `c` check further down rides on `h`: a `p` that
-    # still toggled would put the CARD on screen, and then `?` would open the card's block —
-    # which spells the volume cell differently and never satisfies the poll below.
+    # `p` was an undocumented view-toggle alias until P10 and is now nothing at all — as is
+    # Tab, since the view it toggled to went (the collapse). It is asserted through the key
+    # AFTER it, the way the `c` check further down rides on `h`: a `p` that still did anything
+    # would have to leave the list, and the poll below would never see the list's own block.
     tmux send-keys -t "$TS" p
     tmux send-keys -t "$TS" '?'
     opened=0; i=0
@@ -1834,51 +1833,60 @@ else
     done
     report "b again leaves it for search" 1 "$backed"
 
-    # `i` — the focus card's second SUBJECT, and the only door to it. Three claims in one
-    # sequence, and the middle one is the whole point: a card that opened carrying only the
-    # fields the LIST already shows (title, channel, duration, views, id, mode, quality) would
-    # be the degenerate full-screen frame P5 rejected, and it would sail through a "the card
-    # opened" check. So the witness is a field the list CANNOT hold — the upload date the
-    # fetch went and got. Down first, onto row 2: row 1 of this query is a 24/7 live radio,
-    # and an item's upload date is only reliably published for an ordinary video.
-    tmux send-keys -t "$TS" Down
-    sleep 0.4
-    tmux send-keys -t "$TS" i
-    shown=0; i=0
-    while [ $i -lt 80 ]; do
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'ITEM FOCUS' && { shown=1; break; }
-        sleep 0.3; i=$((i + 1))
+    # `i` — the fifth row source, and its whole round trip. Three claims in one sequence, and
+    # the middle one is the point: a view that opened carrying only what the LIST already
+    # shows (title, duration, id) would be the degenerate frame P5 rejected, and it would sail
+    # through an "it opened" check. So the witness is a field the list CANNOT hold — the
+    # upload date the fetch went and got, on the status line.
+    #
+    # It WALKS the rows rather than naming one, because the door is conditional on live data:
+    # `i` opens only where the item has chapters, and which of today's results does is not
+    # something this file gets to decide. A row without them answers with the notice instead,
+    # which is dismissed and the walk continues. Six rows is the bet; the pane is dumped if
+    # none of them opened, so a failure says whether the door is broken or the query simply
+    # went chapterless.
+    shown=0; paid=0; row=0
+    while [ $row -lt 6 ]; do
+        tmux send-keys -t "$TS" i
+        i=0
+        while [ $i -lt 40 ]; do
+            pane=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null)
+            case "$pane" in
+            *"versions="*) shown=1; break ;;
+            *"no chapters"*) break ;;
+            esac
+            sleep 0.3; i=$((i + 1))
+        done
+        [ "$shown" = 1 ] && break
+        tmux send-keys -t "$TS" Space          # dismiss the notice
+        sleep 0.5
+        tmux send-keys -t "$TS" Down
+        sleep 0.4
+        row=$((row + 1))
     done
-    report "i opens the item subject" 1 "$shown"
-    paid=0
-    tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'uploaded 2' && paid=1
+    report "i opens the chapter rows" 1 "$shown"
+    tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'uploaded=2' && paid=1
     report "…and it carries what the fetch got" 1 "$paid"
     if [ "$shown" != 1 ] || [ "$paid" != 1 ]; then
-        echo "  ---- pane at the moment i did not open an item card ----" >&2
+        echo "  ---- pane at the moment i did not open the chapter rows ----" >&2
         tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
         echo "  ---- end of pane ----" >&2
     fi
-    # Tab's semantics are unchanged, and this is the line that says so rather than the commit
-    # message: out of the item card is the list, and Tab back in is the card about the PLAYING
-    # track. Nothing is playing in this pane, so that card is the empty state — whose head is
-    # the playing subject's, not the item's. A subject that was never reset would show the
-    # item head here and the two heads differ, so the check cannot pass by accident.
-    tmux send-keys -t "$TS" Tab
-    sleep 0.5
-    tmux send-keys -t "$TS" Tab
-    reset=0; i=0
+    # The way back, which is the same key — the rule b, h and c already follow, and the line
+    # that says so rather than the commit message. It cannot pass by accident: `versions=` and
+    # `results=` are different field NAMES on the same header line, so a view that never
+    # changed would still be showing the first one.
+    tmux send-keys -t "$TS" i
+    backed=0; i=0
     while [ $i -lt 40 ]; do
         pane=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null)
         case "$pane" in
-        *"ITEM FOCUS"*) ;;
-        *"NOW PLAYING FOCUS"*) reset=1; break ;;
+        *"versions="*) ;;
+        *"results="*) backed=1; break ;;
         esac
         sleep 0.25; i=$((i + 1))
     done
-    report "Tab still means the playing track" 1 "$reset"
-    # Back to the list, so `q` below is pressed where it has always been pressed.
-    tmux send-keys -t "$TS" Tab
-    sleep 0.5
+    report "i again leaves it for search" 1 "$backed"
 
     # `q` used to be asserted by waiting for tmux to tear the session down, which proves the
     # pty is not wedged but says nothing about the status or about what was handed back. The

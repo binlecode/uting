@@ -8,10 +8,11 @@
 #   play                   → ut-play -d -j -f MODE -- url  (ASYNCHRONOUS: detached background player)
 #   filter (narrow rows)   → pure bash, no external tool
 #
-# uting renders its OWN menu with dual switchable views:
-#   List View          → interactive result list + live Now-Playing status banner
-#   Now Playing card   → dedicated full-screen Now-Playing metadata & control card
-# Toggle between the two with [Tab] at any time without stopping audio.
+# uting renders its OWN menu, and there is ONE view: the result list, its live Now-Playing
+# status banner, and the details block under it. What used to be a second full-screen
+# renderer is a fifth ROW SOURCE — b (a playlist), h (the listening log), c (a video's parts)
+# and i (a video's chapters) each replace the rows in place and are pressed again to come
+# back. No view toggle, so no Tab.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features (no ${v,,}, no mapfile); guard
 # empty-array expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). §28.
@@ -540,20 +541,19 @@ Keys (List View):
            fetches one batch more; ← on page 1 drops one, no re-fetch)
   j / k    the same two, for the hand that already lives on them (List View only —
            with / open they are text you are typing)
-  Enter    play / switch track (non-blocking background playback)
-  Tab      toggle view: List <-> Now Playing card
-  Esc      (in the card) back to List View
+  Enter    play / switch track (non-blocking background playback); on a chapter row,
+           play FROM that chapter — a seek if that item is already playing
   Space    pause / resume playback
   s        stop playback
   9 / 0    volume down / up (via IPC)
-  [ / ]    seek backward / forward 10s (via IPC; works in every view)
+  [ / ]    seek backward / forward 10s (via IPC)
   v        cycle playback mode: audio → video → fast (applies to next play)
   f        cycle quality tier: auto → medium → high (applies to next play; the
            engine reads it against the mode, so `high` is 1080p for video and a
            bitrate for audio). UT_QUALITY_CYCLE sets the order and its members
-  l        switch chrome language (en <-> zh), any view
+  l        switch chrome language (en <-> zh)
   t        cycle palette family live (minimal → catppuccin → tokyonight → nord →
-           gruvbox → onedark → mono), any view; no-op when colors are off
+           gruvbox → onedark → mono); no-op when colors are off
   n        new search (fetch a different query without interrupting music)
   o        rotate sort field / order (relevance → view_count → duration), re-fetch
   e        switch source, re-fetch the same query (only when >1 engine is installed)
@@ -566,11 +566,13 @@ Keys (List View):
            returns to the search results                    (needs ut-history)
   c        open the focused row's parts as the row source; c again returns to the
            search results          (only when the engine has --parts; Bilibili does)
-  i        open the focused row as the focus card's subject, with one metadata
-           fetch — upload date, likes, chapters, description
+  i        open the focused row's CHAPTERS as the row source, with one metadata
+           fetch (upload date and likes land on the status line); i again returns
+           to the search results. A chapter row is a call: Enter plays from it,
+           + queues from it, a stores it
                                     (only when the engine has --info; both do)
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
-  ?        show more / fewer keys, any view (also ？). The hint block has two tiers:
+  ?        show more / fewer keys (also ？). The hint block has two tiers:
            `core` is this view's own job, `full` is every key above. UT_KEYS pins it
   q        quit (stops background playback on exit)
 
@@ -579,21 +581,6 @@ Keys (List View):
   (${XDG_CONFIG_HOME:-~/.config}/uting/config), in place: comments and layout are kept,
   only the value moves. The shipped defaults file is never written. A key you have pinned
   in the environment is left alone, and says so once.
-
-Keys (focus card):
-  ←/→      seek backward / forward 5s   Tab  back to List View
-  Space    pause / resume               Esc  back to List View
-  s        stop playback                q    quit
-  ?        show more / fewer keys       (also ？)
-  ↑/↓      select a chapter, and Enter seeks to it — only on the playing
-           subject, after `i` has fetched a table that has chapters
-  Enter    (on an `i` subject) play it
-
-  The card has one renderer and two subjects: Tab is always the track that is
-  playing, `i` is the row you asked about. There is no third view.
-  A chapter is an offset inside the track already open, so it is a seek and never
-  a re-resolve. On the item subject the same chapters are a table of contents:
-  that card has no playhead, so there is nothing there to seek.
 
 Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
@@ -682,7 +669,7 @@ PLAY_MODE="$UT_PLAY_MODE" # -f flag overrides. Runtime-mutable: v key rotates it
 # a per-request choice, so it comes from the config chain and the key — CLAUDE.md's flag-vs-key
 # rule, and the reason ut-play's own --quality exists for the agent surface.
 PLAY_QUALITY="$UT_PLAY_QUALITY"
-# Which tier of key hints the two views print, rotated live by the ? key (cycle_keys) and
+# Which tier of key hints the view prints, rotated live by the ? key (cycle_keys) and
 # written back like the other seven. There is deliberately NO uting flag for it, by the same
 # rule as the quality tier above: how much of the keymap you want written down is set-once
 # tuning, not a per-request choice. AS-BUILT-tui.md §11.
@@ -1016,8 +1003,7 @@ UI_LANG=""
 # set_ui_lang <en|zh> — fill the table. Kept separate from the initial choice below so the
 # `l` key can re-resolve it live without re-reading the environment. NOTHING drawn as chrome
 # may be a literal at its print site. The last holdouts were the play state (S_PLAYING /
-# S_PAUSED, drawn twice — the list banner's label and the card's status), the card's own
-# header, and every TRANSIENT line: the startup prompt, the n prompt, searching, the →/o
+# S_PAUSED, the banner's labels), and every TRANSIENT line: the startup prompt, the n prompt, searching, the →/o
 # action echoes, the no-matches copy, the filter banner, press-any-key and Quitting. The
 # transient ones lasted longest because they print into the scroll area and the next redraw
 # wipes them — they are in no captured frame, so no frame check could see them.
@@ -1039,13 +1025,12 @@ UI_LANG=""
 set_ui_lang() {
     UI_LANG=$1
     if [[ "$UI_LANG" == "zh" ]]; then
-        S_SELECT="选择"; S_PAGE="翻页"; S_PLAY="播放"; S_VIEW="视图"; S_MODE="模式"; S_QUALITY="质量"
+        S_SELECT="选择"; S_PAGE="翻页"; S_PLAY="播放"; S_MODE="模式"; S_QUALITY="质量"
         S_SEARCH="搜索"; S_SORT="排序"; S_FILTER="过滤"
         S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"; S_KEYS="键位"
-        S_FOCUS="专注卡片"; S_PAUSE="暂停"; S_VOL="音量"
-        S_BACK_LIST="列表"; S_PAUSE_RESUME="暂停"; S_SEEK="跳转"
-        S_VOL_ADJUST="音量"; S_STOP_PLAY="停止"
-        S_PLAYING="播放中"; S_PAUSED="已暂停"; S_STARTING="缓冲中"; S_CARD_HEAD="专注卡片"
+        S_PAUSE="暂停"; S_VOL="音量"
+        S_SEEK="跳转"
+        S_PLAYING="播放中"; S_PAUSED="已暂停"; S_STARTING="缓冲中"
         S_PROMPT_SEARCH="搜索"; S_NEW_SEARCH="新搜索（Esc 或留空取消）"
         S_ENGINE="音源"; S_ENGINE_ACT="音源"
         S_SEARCHING="搜索中"; S_REFETCH="重新获取"; S_RESULTS_N="条"
@@ -1053,7 +1038,7 @@ set_ui_lang() {
         S_MORE_ACT="更多"; S_SORT_ACT="排序"
         S_NO_MATCH="(无匹配"; S_NO_MATCH_KEYS="按 / 改过滤，或 n 重新搜索)"
         S_FILTER_HINT="过滤（输入即筛选，Enter 播放，Esc 清除）"
-        S_NOTHING="(暂无正在播放的音频)"; S_BACK_SEARCH="返回搜索列表"; S_PLAY_SEL="播放选中歌曲"
+        S_BACK_SEARCH="返回搜索列表"
         S_PL_ADD="加入列表"; S_PL_OPEN="播放列表"; S_PL_ACT="播放列表"
         S_PL_PROMPT_ADD="加入哪个（序号或名称，Esc 取消）"; S_PL_PROMPT_OPEN="打开哪个（序号或名称，Esc 取消）"
         S_PL_PROMPT_NEW="新建列表名称（Esc 取消）"
@@ -1065,24 +1050,20 @@ set_ui_lang() {
         S_HIST_KEY="历史"; S_HIST_ACT="收听历史"; S_HIST_LABEL="最近收听"
         S_HIST_EMPTY="还没有收听记录"; S_HIST_ABSENT="未安装 ut-history"
         S_PARTS_KEY="分P"; S_PARTS_ACT="分P"; S_PARTS_ONE="这个视频只有一 P"
-        S_CARD_HEAD_ITEM="条目卡片"; S_UPLOADED="发布"; S_LIKES="点赞"
-        S_INFO_KEY="详情"; S_INFO_ACT="详情"
-        S_CHAPTERS="章"; S_VIEWS="次播放"
-        S_CHAP_HEAD="章节"; S_CHAP_GO="前往"
-        S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_NEXT="下一首"; S_Q_ACT="队列"
-        S_Q_UPCOMING="接下来"
+        S_INFO_ACT="详情"
+        S_VER_KEY="版本"; S_VER_NONE="这个条目没有章节"
+        S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_ACT="队列"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
         S_PREF_ACT="配置"
         S_PREF_PINNED="由环境变量固定，没有写入配置文件"
         S_PREF_FAILED="配置文件写不了，这次改的偏好没有存下来"
     else
-        S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_VIEW="view"; S_MODE="mode"; S_QUALITY="quality"
+        S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_MODE="mode"; S_QUALITY="quality"
         S_SEARCH="search"; S_SORT="sort"; S_FILTER="filter"
         S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"; S_KEYS="keys"
-        S_FOCUS="focus card"; S_PAUSE="pause"; S_VOL="volume"
-        S_BACK_LIST="list"; S_PAUSE_RESUME="pause"; S_SEEK="seek"
-        S_VOL_ADJUST="vol"; S_STOP_PLAY="stop"
-        S_PLAYING="Playing"; S_PAUSED="Paused"; S_STARTING="Starting"; S_CARD_HEAD="NOW PLAYING FOCUS"
+        S_PAUSE="pause"; S_VOL="volume"
+        S_SEEK="seek"
+        S_PLAYING="Playing"; S_PAUSED="Paused"; S_STARTING="Starting"
         S_PROMPT_SEARCH="Search"; S_NEW_SEARCH="New search (Esc or empty to cancel)"
         S_ENGINE="source"; S_ENGINE_ACT="Source"
         S_SEARCHING="searching"; S_REFETCH="re-fetching"; S_RESULTS_N="results"
@@ -1090,7 +1071,7 @@ set_ui_lang() {
         S_MORE_ACT="More"; S_SORT_ACT="Sort"
         S_NO_MATCH="(no matches"; S_NO_MATCH_KEYS="press / to change filter, or n for new search)"
         S_FILTER_HINT="filter (type to narrow, Enter plays, Esc clears)"
-        S_NOTHING="(nothing playing)"; S_BACK_SEARCH="back to results"; S_PLAY_SEL="play selection"
+        S_BACK_SEARCH="back to results"
         S_PL_ADD="add to list"; S_PL_OPEN="playlists"; S_PL_ACT="Playlist"
         S_PL_PROMPT_ADD="Add to which (number, name, Esc cancels)"; S_PL_PROMPT_OPEN="Open which (number, name, Esc cancels)"
         S_PL_PROMPT_NEW="Name the new playlist (Esc cancels)"
@@ -1102,12 +1083,9 @@ set_ui_lang() {
         S_HIST_KEY="history"; S_HIST_ACT="History"; S_HIST_LABEL="newest first"
         S_HIST_EMPTY="nothing listened to yet"; S_HIST_ABSENT="ut-history is not installed"
         S_PARTS_KEY="parts"; S_PARTS_ACT="Parts"; S_PARTS_ONE="this video has only one part"
-        S_CARD_HEAD_ITEM="ITEM FOCUS"; S_UPLOADED="uploaded"; S_LIKES="likes"
-        S_INFO_KEY="info"; S_INFO_ACT="Info"
-        S_CHAPTERS="chapters"; S_VIEWS="views"
-        S_CHAP_HEAD="chapters"; S_CHAP_GO="go"
-        S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_NEXT="next"; S_Q_ACT="Queue"
-        S_Q_UPCOMING="up next"
+        S_INFO_ACT="Info"
+        S_VER_KEY="versions"; S_VER_NONE="this item has no chapters"
+        S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_ACT="Queue"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
         S_PREF_ACT="Config"
         S_PREF_PINNED="is fixed by the environment — not written to your config"
@@ -1175,7 +1153,7 @@ GL_NOTE="♫ "; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
 # Everything else the chrome draws. These used to be hardcoded, so YT_ASCII=1 still left
 # ▶ / ❚❚ / ● and the arrow hints as tofu on a font that can't draw them.
 GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_DOT="●"; GL_DOT_OFF="○"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="↵"
-GL_BULLET="•"; GL_ELL="…"; GL_ARROW="→"; GL_DASH="—"
+GL_ELL="…"; GL_ARROW="→"; GL_DASH="—"
 # The resource readout's two labels (UT_RESOURCE): geometric squares from the same family as
 # the rails' stroke language — ▣ an abstract chip, ▤ a filled "storage cell". Both are
 # East-Asian Ambiguous, so they are tabled in CW_AMBIG below, not hardcoded as one cell.
@@ -1200,7 +1178,7 @@ init_glyphs() {
     if ((ASCII_GLYPHS)); then
         GL_NOTE=""; GL_LIVE="LIVE"; GL_SEP="|"; GL_CARET=">"
         GL_PLAY=">"; GL_PAUSE="||"; GL_DOT="*"; GL_DOT_OFF="o"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
-        GL_BULLET="-"; GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
+        GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
         GL_CPU="cpu"; GL_RAM="ram"
         GL_SPIN=("|" "/" "-" "\\")
     fi
@@ -1237,9 +1215,9 @@ US=$'\x1f'
 
 # The one title cleaner, and the only copy of it. TWO ingest points reach a title — the row
 # builders below (a search or an item envelope) and apply_player_record (a live player
-# record) — and the focus card puts both spellings of the SAME subject on one screen, so a
-# title that changed writing as the selection moved onto the playing row would read as two
-# different tracks. Prepended to every jq program that takes a title by adjacent quoting:
+# record) — and the list puts both spellings of the SAME subject on one screen, the banner
+# over the row, so a title that changed writing as the selection moved onto the playing row
+# would read as two different tracks. Prepended to every jq program that takes a title by adjacent quoting:
 # the program itself stays single-quoted, so nothing inside it is exposed to the shell.
 # `clean` strips the emoji/dingbat blocks a title carries as decoration; `oneline` only
 # folds whitespace, for a field (a channel) where a symbol is part of the name.
@@ -1250,15 +1228,11 @@ JQ_TEXT_DEFS='
   def oneline: gsub("\\s+"; " ") | gsub("^ | $"; "");
 '
 
-# ── Playback & View State Model ─────────────────────────────────────────────────────────
-TUI_VIEW_MODE="list"       # "list" (Search List) | "card" (Now Playing Focus Card)
-
+# ── Playback State Model ────────────────────────────────────────────────────────────────
 CURRENT_PLAY_ID=""
 CURRENT_PLAY_PID=""
 CURRENT_PLAY_TITLE=""
-CURRENT_PLAY_CHANNEL=""
 CURRENT_PLAY_DURATION=""
-CURRENT_PLAY_MODE=""
 CURRENT_PLAY_SOCK=""
 CURRENT_PLAY_PAUSED=0
 # What the PLAYER is playing, as opposed to what this screen last launched. A detached player
@@ -1270,30 +1244,19 @@ CURRENT_PLAY_PAUSED=0
 # re-read the record. Polling --status every tick would be a process chain per second, which
 # is the cost the read path exists to avoid (ARCHITECTURE.md §26).
 CURRENT_PLAY_MPV_TITLE=""
+# Where the running player is in its queue. Two numbers, not the tail: the tail had one
+# reader and it was the card's queue-ahead block (D-g). These two stay because they are the
+# only thing on screen that answers `+` — the status line prints them the moment there is a
+# queue to report.
 CURRENT_QUEUE_POS=0
 CURRENT_QUEUE_LEN=0
-CURRENT_QUEUE_NEXT=""
-# The tail of the queue, as two parallel arrays (bash 3.2 has no array of records, and the
-# alternative — re-running jq over a cached envelope at render time — would be a fork per
-# frame on the once-a-second redraw path). Durations are formatted ONCE, here, for the same
-# reason: the renderer below does no forks. The player caps the list it projects, so these
-# are never longer than a card can hold (ut-play's QUEUE_UPCOMING_MAX).
-Q_UP_TITLE=()
-Q_UP_DUR=()
-# What the ENGINE actually picked, as opposed to CURRENT_PLAY_MODE, which is what we ASKED
-# for. Verbatim from the record: it is a yt-dlp format spelling, and a TUI that parsed it
-# into pieces would be learning an engine's grammar one level too far up.
-CURRENT_PLAY_SELECTED=""
 # The CALL that is playing — `ut-play --engine E -- URL`, the same pair a stored row holds.
 # Seeded by the launch and then re-read from the record, because a queue moves to a track this
 # screen never launched, and it may move to another SOURCE: only the record knows which engine
-# resolved what is playing now. This is what `i` on the card asks --info with.
+# resolved what is playing now. It is also what Enter on a chapter row compares against
+# (play_chapter).
 CURRENT_PLAY_URL=""
 CURRENT_PLAY_ENGINE=""
-# Whether the playing card is showing the row that one `--info` paid for. Set by `i` in the
-# card, dropped the moment the track changes: an upload date belongs to a track, not to a
-# player, and a stale one is worse than an absent one.
-CARD_PLAY_INFO=0
 # Third state, between "launched" and "playing": the -d envelope comes back as soon as the player
 # has forked, but the detached child still has to ask the engine to resolve the stream and let
 # mpv fill its cache, and that window is seconds long on a cold URL. (The extraction moved into
@@ -1309,43 +1272,24 @@ CURRENT_PLAY_LOADING=0
 CURRENT_PLAY_IS_LIVE=0
 CURRENT_PLAY_STARTED=0     # epoch seconds when WE attached, for the elapsed readout
 
-# ── The card's SUBJECT ──────────────────────────────────────────────────────────────────
-# The focus card is ONE view with two SUBJECTS, not two views. AS-BUILT-tui.md §11 rules a
-# third renderer out, and a second card body would be that same rule broken by another
-# spelling: one state, two renderers, drift on a schedule.
-#
-#   "playing"  Tab — the running track. Unchanged, and Tab still reaches nothing else.
-#   "item"     i   — the row you asked about, carrying one `<engine>-resolve --info`.
-#
-# `i` is the DOOR, and that is what keeps the item subject from being a degenerate frame:
-# every field the list screen already has (title, channel, duration, views, id, mode,
-# quality) IS on the list screen, so a card showing only those would be a full-screen
-# repeat of the details block. Entering through the key that fetches means every item frame
-# carries something the list cannot hold — upload date, likes, chapters, the description.
-CARD_SUBJECT="playing"
+# ── The item one `<engine>-resolve --info` describes (key: i) ───────────────────────────
+# `i` is the DOOR, and the fetch behind it is what keeps this from being a second spelling of
+# the row: title, channel, duration, views, id, mode and quality are all on the list screen
+# already. What the round trip buys is what the list cannot hold — the upload date and the
+# like count (the status line prints them) and the CHAPTER TABLE, which becomes the rows
+# themselves (build_version_rows).
 ITEM_ENGINE=""
 ITEM_URL=""
 ITEM_TITLE=""
-ITEM_CHANNEL=""
-ITEM_DUR_FMT=""
-ITEM_VIEWS=""
 ITEM_UPLOADED=""
 ITEM_LIKES=""
 ITEM_CHAP_N=0
-ITEM_DESC=""
-# The chapter table, three parallel arrays because bash 3.2 has no associative one: start
-# second (arithmetic, for the playhead scan and for --seek-to), the same second already
-# formatted (fmt_sec is a subshell, and this card redraws once a second — 50 chapters would
-# be 50 forks a frame), and the title. Filled once per `--info`, not per frame.
-# CHAP_SEL is the cursor into them, reset by apply_item_info because a new subject's
-# chapter 7 is not this subject's chapter 7.
+# The chapter table, two parallel arrays because bash 3.2 has no associative one: the start
+# second (arithmetic — it becomes the row's `t=` and the --seek-to target) and the title.
+# Filled once per `--info`, and read once more by build_version_rows; there is no cursor into
+# them, because the rows built from them carry the list's own `selected`.
 ITEM_CHAP_SEC=()
-ITEM_CHAP_TIME=()
 ITEM_CHAP_TITLE=()
-# The widest formatted start time in the table — the block's time column, measured once so
-# the column cannot move as the window scrolls past a chapter that crosses an hour.
-ITEM_CHAP_TW=0
-CHAP_SEL=0
 # One slot, not a map: bash 3.2 has no associative arrays, and parallel arrays are a cache's
 # complexity without a cache's behaviour — the rhythm this exists for is going back into the
 # item you just looked at. Keyed `engine:url`, session-only, never written to disk.
@@ -1545,12 +1489,12 @@ repeat_glyph() {
     GLYPH_RUN="$out"
 }
 
-# The width every view lays out against: the real terminal width, optionally capped at
-# <max>, and floored at 24. Sets LAYOUT_COLS. All three views carried this clamp trio
-# inline. The cap is deliberately not uniform — the two player cards pass 80 so their rails
-# do not stretch across an ultrawide window, the list view passes nothing and uses the full
-# width for its rows — and passing it as an argument is what makes that asymmetry visible
-# instead of looking like a lost line.
+# The width the view lays out against: the real terminal width, floored at 24. Sets
+# LAYOUT_COLS. Every renderer carried this clamp inline once. It took an optional cap while
+# the player cards existed — they passed 80 so their rails did not stretch across an
+# ultrawide window, the list passed nothing and used the full width for its rows — and the
+# cap went with them: one view, one width, and an unused parameter is a promise the caller
+# does not make.
 #
 # The FLOOR was 40, and its comment said "below that nothing fits, and clamping beats
 # drawing garbage". Clamping WAS the garbage: laying out for 40 cells in a 30-cell pane
@@ -1569,16 +1513,16 @@ repeat_glyph() {
 LAYOUT_MIN=24
 LAYOUT_COLS=0
 layout_cols() {
-    local max=${1:-0}
     term_size
     LAYOUT_COLS=$TERM_COLS
-    ((max > 0 && LAYOUT_COLS > max)) && LAYOUT_COLS=$max
     ((LAYOUT_COLS < LAYOUT_MIN)) && LAYOUT_COLS=$LAYOUT_MIN
     return 0
 }
 
-# Divider rail for the player cards, cached on (width, glyph mode): it is redrawn every
-# second and only changes when the terminal is resized or the glyph mode flips. Sets
+# Divider rail, cached on (width, glyph mode): it is redrawn every second and only changes
+# when the terminal is resized or the glyph mode flips. Two callers, both in the list — the
+# chrome band's boundary and the details block's own rule. (The name is the player cards',
+# which is where it started; renaming it is its own change on its own day.) Sets
 # DIV_STR. This was `printf '─%.0s' $(seq 1 "$cols")` — a fork plus precisely the idiom
 # repeat_glyph exists to replace — run twice, once to build the Unicode rail and again to
 # throw it away in ASCII mode.
@@ -1815,9 +1759,9 @@ truncate_disp() {
 # default); an item with no TAB is a plain field (no label). The chrome used to print each view's hints as ONE fixed
 # string, which simply ran off the right edge and wrapped mid-item below ~72 columns —
 # sooner still because the labels are CJK, i.e. double-width. Every emitted line carries
-# \033[K for the in-place card renders. HINT_KEY_COLOR overrides the key style for
+# \033[K for the in-place render. HINT_KEY_COLOR overrides the key style for
 # one call (the status row wants its fields dim, not key-bold); HINT_SEP overrides the
-# item separator for one call (the focus card joins with " · " so its six keys pack into
+# item separator for one call (the key block joins with " · " so its keys pack into
 # one line without brackets). Both are printed and MEASURED from the same value — a
 # separator whose width the packer did not know would wrap one item early or late. HINT_LINES reports how many
 # lines were emitted: this block is variable-height by design, and the list view has to know
@@ -1930,7 +1874,7 @@ PT_POS_SEC=""
 # with ONE portable spelling: `ps -g` selects by pgid on macOS but by session/group name
 # under procps, and rss is KB on both. Measured at 24ms — cheap, but not once-a-second
 # cheap, so it rides every UT_RESOURCE_TICKS-th call of the shared clock (fetch_play_times,
-# the one beat both views pass through) and the renderers read the cached pair. %cpu is
+# the one beat) and the banner reads the cached pair. %cpu is
 # ps's own semantics on each platform (a decaying/lifetime average, not an instant) — the
 # approximation is the price of the one-command reader. Empty means no reading: disabled,
 # nothing playing, or the group already gone.
@@ -2031,8 +1975,8 @@ fetch_play_times() {
 }
 
 # Progress bar sized to the caller's layout. $2 is the FULL cell width the bar may occupy,
-# so a caller can lay it exactly over the card's divider rails instead of the old hardcoded
-# 44 columns that ignored the terminal width entirely. The rendered string is ALWAYS exactly
+# so the caller can lay it exactly over the divider rail it replaces while a track plays,
+# instead of the old hardcoded 44 columns that ignored the terminal width entirely. The rendered string is ALWAYS exactly
 # that many cells — the head glyph is part of the track, and `filled` is capped at width-1 so
 # it stays so at 100%; a bar whose length changed with position made the whole line jitter
 # every second.
@@ -2265,58 +2209,28 @@ refresh_player_record() {
 # LEFT ALONE rather than blanked: an envelope that carries only `queue` must not erase the
 # title.
 apply_player_record() {
-    local rec=$1 t d s u eng q ut ud
-    IFS="$US" read -r t d s u eng < <(printf '%s' "$rec" |
+    local rec=$1 t d u eng q
+    IFS="$US" read -r t d u eng < <(printf '%s' "$rec" |
         jq -r "$JQ_TEXT_DEFS"'[(.title // "" | clean), (.duration // "" | tostring),
-                               (.selected // "" | oneline), (.url // ""), (.engine // "")]
+                               (.url // ""), (.engine // "")]
                               | join("\u001f")' 2>/dev/null) || return 0
     [[ -n "$t" ]] && CURRENT_PLAY_TITLE="$t"
     [[ -n "$d" && "$d" != "null" ]] && CURRENT_PLAY_DURATION=$(fmt_sec "$d")
-    # `selected` is null in the record until the resolve backfills it, and the tripwire that
-    # brings us here fires on mpv's media-title — which mpv has only once that resolve is
-    # done. So an empty value here is a queue verb's envelope (which carries no record fields
-    # at all), not a track whose format is still being decided: left alone, like the title.
-    [[ -n "$s" ]] && CURRENT_PLAY_SELECTED="$s"
-    # The url is what MOVED when a queue advanced, so it is also the tripwire for anything
-    # that described the old track: the info overlay is dropped here rather than at the key,
-    # which is the one place that learns a track changed.
-    if [[ -n "$u" && "$u" != "$CURRENT_PLAY_URL" ]]; then
-        CURRENT_PLAY_URL="$u"
-        CARD_PLAY_INFO=0
-    fi
+    [[ -n "$u" ]] && CURRENT_PLAY_URL="$u"
     [[ -n "$eng" ]] && CURRENT_PLAY_ENGINE="$eng"
     q=$(printf '%s' "$rec" | jq -c '.queue // empty' 2>/dev/null) || q=""
     if [[ -n "$q" ]]; then
-        IFS="$US" read -r CURRENT_QUEUE_POS CURRENT_QUEUE_LEN CURRENT_QUEUE_NEXT < <(
-            printf '%s' "$q" | jq -r "$JQ_TEXT_DEFS"'[(.pos // 0 | tostring), (.len // 0 | tostring),
-                                       (.next.title // .next.url // "" | clean)] | join("\u001f")' 2>/dev/null
+        IFS="$US" read -r CURRENT_QUEUE_POS CURRENT_QUEUE_LEN < <(
+            printf '%s' "$q" | jq -r '[(.pos // 0 | tostring), (.len // 0 | tostring)]
+                                      | join("\u001f")' 2>/dev/null
         ) || true
-        # The tail, rebuilt WHOLE rather than field by field: unlike the scalars above there
-        # is no "absent" case to preserve — an envelope that carries `queue` carries its
-        # `upcoming`, so anything left from the previous queue is stale by construction (a
-        # track ended, `+` appended, `>` skipped). The title falls back to the url the way a
-        # stored row does: an item queued by an agent that had only a handle still has to be
-        # readable in a list.
-        Q_UP_TITLE=()
-        Q_UP_DUR=()
-        while IFS="$US" read -r ut ud; do
-            [[ -n "$ut" ]] || continue
-            Q_UP_TITLE+=("$ut")
-            if [[ -n "$ud" && "$ud" != "null" ]]; then
-                Q_UP_DUR+=("$(fmt_sec "$ud")")
-            else
-                Q_UP_DUR+=("")
-            fi
-        done < <(printf '%s' "$q" | jq -r "$JQ_TEXT_DEFS"'.upcoming // [] | .[]
-                    | [(.title // .url // "" | clean), (.duration // "" | tostring)]
-                    | join("\u001f")' 2>/dev/null)
     fi
     return 0
 }
 
 # `+` — append the focused row to the RUNNING player's queue. The player owns the queue, so
 # this is one verb call and no state of our own; the envelope answers with the queue it wrote,
-# which is what the card then shows.
+# which is what the status line then counts.
 enqueue_selected() {
     ((NUM_ENTRIES > 0)) || return 0
     if [[ -z "$CURRENT_PLAY_ID" ]]; then
@@ -2330,8 +2244,8 @@ enqueue_selected() {
         store_notice "$S_Q_ACT:" "$S_PL_FAILED"
         return 0
     fi
-    # No press_any_key on success: one keypress should cost one keypress, and the card's own
-    # track counter IS the confirmation.
+    # No press_any_key on success: one keypress should cost one keypress, and the status
+    # line's queue= field IS the confirmation.
     apply_player_record "$out"
     return 0
 }
@@ -2392,39 +2306,6 @@ seek_relative() {
     return 0
 }
 
-# The chapter cursor. It moves only while the block is on screen, which is also the only
-# time the hint block offers the keys — one condition, read from the render, so a card with
-# no chapters cannot silently hold a cursor into a table that is not there.
-#
-# Clamped, not wrapped: this is a table of contents with a beginning and an end, and a list
-# that jumps from the last chapter to the first is answering a question nobody asked. The
-# window in card_chapter_block follows this index; nothing else moves.
-move_chapter() {
-    local delta=$1 n
-    ((CARD_CHAP_ACTIVE)) || return 0
-    n=${#ITEM_CHAP_SEC[@]}
-    ((n > 0)) || return 0
-    CHAP_SEL=$((CHAP_SEL + delta))
-    ((CHAP_SEL < 0)) && CHAP_SEL=0
-    ((CHAP_SEL >= n)) && CHAP_SEL=$((n - 1))
-    return 0
-}
-
-# Enter on the playing card: seek to the selected chapter's start. `--seek-to` is the
-# ABSOLUTE spelling of the verb the arrows already use relatively (ut-play requires the sign
-# on the relative one precisely so these two can never be confused), and nothing is
-# re-resolved — a chapter is an offset inside the file already open, which is what separates
-# this axis from parts and from quality (AS-BUILT-tui.md §11).
-seek_chapter() {
-    local n
-    ((CARD_CHAP_ACTIVE)) || return 0
-    [[ -n "$CURRENT_PLAY_ID" ]] || return 0
-    n=${#ITEM_CHAP_SEC[@]}
-    ((CHAP_SEL >= 0 && CHAP_SEL < n)) || return 0
-    play_verb --seek-to "${ITEM_CHAP_SEC[$CHAP_SEL]}" >/dev/null
-    return 0
-}
-
 adjust_volume() {
     local delta="$1" cur target
     [[ -n "$CURRENT_PLAY_ID" ]] || return 0
@@ -2451,20 +2332,13 @@ adjust_volume() {
 clear_play_state() {
     CURRENT_QUEUE_POS=0
     CURRENT_QUEUE_LEN=0
-    CURRENT_QUEUE_NEXT=""
-    Q_UP_TITLE=()
-    Q_UP_DUR=()
-    CURRENT_PLAY_SELECTED=""
     CURRENT_PLAY_URL=""
     CURRENT_PLAY_ENGINE=""
-    CARD_PLAY_INFO=0
     CURRENT_PLAY_MPV_TITLE=""
     CURRENT_PLAY_ID=""
     CURRENT_PLAY_PID=""
     CURRENT_PLAY_TITLE=""
-    CURRENT_PLAY_CHANNEL=""
     CURRENT_PLAY_DURATION=""
-    CURRENT_PLAY_MODE=""
     CURRENT_PLAY_SOCK=""
     CURRENT_PLAY_PAUSED=0
     CURRENT_PLAY_LOADING=0
@@ -2492,12 +2366,12 @@ clear_play_state() {
 # The detached player owns its own lifecycle, so uting only learns of its death by asking.
 # Nothing used to ask: send_mpv_ipc swallows every failure and mpv_get_prop answers empty on a
 # dead socket, so a track that ended (or an mpv crash) left the list banner showing its title
-# forever, the card showing --:-- against a stale title, and Space flipping a local paused flag
-# with no IPC peer on the far end.
+# forever against a stale title, and Space flipping a local paused flag with no IPC peer on
+# the far end.
 #
 # kill -0 is the same truth the core reaps on (§9.3 "process group alive"), reached from the
 # client side: the -d envelope's pid is the bash WRAPPER's, and the wrapper blocks on mpv, so
-# wrapper alive ⇔ still playing. One builtin, no fork — cheap enough for the card's 1 s tick.
+# wrapper alive ⇔ still playing. One builtin, no fork — cheap enough for the 1 s tick.
 # Pid reuse can false-positive it, exactly as §25 records for the core's own group_alive;
 # narrowed by the monotonic id, not closed, and not worth a second mechanism in the client.
 check_player_alive() {
@@ -2553,10 +2427,10 @@ player_check_ready() {
     return 0
 }
 
-# THREE states now, drawn by TWO views (the list banner and the focus card), so the choice of
-# glyph/label/colour lives here instead of twice. The views differ only in which glyph means
-# "playing" — ▶ for the banner, ● for the card, the same two they used before — so that comes
-# in as an argument. Loading takes the fetch spinner's frames (§ GL_SPIN) and the dim accent:
+# THREE states, and the choice of glyph/label/colour lives here rather than at the print
+# site. It was written for two views and outlived one of them; the glyph that means "playing"
+# still comes in as an argument (▶ for the banner), because the state and the glyph are two
+# facts and only one of them is this function's. Loading takes the fetch spinner's frames (§ GL_SPIN) and the dim accent:
 # same visual language as the search that got us here, and dim because it is not the steady
 # state. Colour never carries the state (one accent per palette); the glyph does.
 PS_ICON=""; PS_LABEL=""; PS_COLOR=""
@@ -2719,6 +2593,91 @@ build_playlist_rows() {
         ] | join("\u001f")')
 }
 
+# A handle with any `t=` taken off it, and no fragment: the KEY that says two handles name
+# the same item. Both engines read `t=` off a handle into the resolve envelope's
+# start_seconds (AS-BUILT-engine.md §10.4), so the same video at two offsets is two urls and
+# one item — which is exactly the question Enter asks on a chapter row before it decides
+# between a seek and a launch. Written as an anchored walk over the query rather than
+# ${var//t=/}: pattern SUBSTITUTION is quadratic on 3.2 (§28) and there is none left in this
+# file.
+HANDLE_KEY=""
+handle_key() {
+    local url=$1 base query seg out=""
+    case "$url" in *\#*) url="${url%%#*}" ;; esac
+    base="${url%%\?*}"
+    query=""
+    case "$url" in *\?*) query="${url#*\?}" ;; esac
+    while [[ -n "$query" ]]; do
+        seg="${query%%&*}"
+        if [[ "$query" == *"&"* ]]; then query="${query#*&}"; else query=""; fi
+        case "$seg" in t=* | "") continue ;; esac
+        if [[ -n "$out" ]]; then out="$out&$seg"; else out="$seg"; fi
+    done
+    if [[ -n "$out" ]]; then HANDLE_KEY="$base?$out"; else HANDLE_KEY="$base"; fi
+}
+
+# The row url for one chapter: the item's own handle carrying `t=SEC`. This is what makes a
+# chapter row a CALL and not a reference — the offset rides in the handle, where both engines
+# already read it, so Enter, `+` and `a` inherit it with no eighth field in the record and no
+# new state parallel to the rows (which the live filter would desynchronise anyway). An
+# existing `t=` is dropped first: a handle carrying two of them starts wherever the engine's
+# parser happens to look.
+CHAP_URL=""
+chapter_url() {
+    local sec=$2
+    handle_key "$1"
+    case "$HANDLE_KEY" in
+    *\?*) CHAP_URL="$HANDLE_KEY&t=$sec" ;;
+    *) CHAP_URL="$HANDLE_KEY?t=$sec" ;;
+    esac
+}
+
+# The seconds a chapter row carries, back out of its own url — the row IS the record, so the
+# offset is read from it rather than from an index into ITEM_CHAP_SEC, which the live filter
+# and paging would have made point at another chapter.
+CHAP_SEC=""
+chapter_sec() {
+    local u=$1
+    CHAP_SEC=""
+    case "$u" in *[?\&]t=*) u="${u##*[?\&]t=}" ;; *) return 1 ;; esac
+    u="${u%%[&#]*}"
+    [[ "$u" =~ ^[0-9]+$ ]] || return 1
+    CHAP_SEC="$u"
+    return 0
+}
+
+# The chapter table as an ENVELOPE (VER_JSON), which build_playlist_rows then walks — this
+# does not emit rows itself, for two reasons. `a` and `+` cut one item out of `json`
+# (focused_payload), so a row source whose json did not match its rows would be a list you can
+# play but cannot store; and the caller must be able to fail AFTER this returns without having
+# touched ALL_ROWS, the way open_parts reshapes before it stashes. One jq call for the whole
+# table, fed US-joined lines — the shape ut-playlist and ut-play --enqueue already read, and
+# the same shape open_parts reshapes --parts into.
+#
+# The duration column carries the chapter's START time, in the engine's wire spelling: the
+# rail runs every row through short_dur, so a "00:15" written here would print as "--:--".
+# One time in one column, spelled the way this view spells every other one.
+VER_JSON=""
+build_version_rows() {
+    local i n=${#ITEM_CHAP_SEC[@]} sec h m ss lines="" out
+    VER_JSON=""
+    ((n > 0)) || return 1
+    for ((i = 0; i < n; i++)); do
+        sec="${ITEM_CHAP_SEC[$i]}"
+        h=$((sec / 3600)); m=$(((sec % 3600) / 60)); ss=$((sec % 60))
+        chapter_url "$ITEM_URL" "$sec"
+        printf -v out '%s%s%s%s%02dh:%02dm:%02ds' \
+            "$CHAP_URL" "$US" "${ITEM_CHAP_TITLE[$i]}" "$US" "$h" "$m" "$ss"
+        lines="$lines$out"$'\n'
+    done
+    VER_JSON=$(printf '%s' "$lines" | jq -Rsc --arg eng "$ITEM_ENGINE" '
+        [ split("\n")[] | select(length > 0) | split("\u001f")
+          | {url: .[0], title: .[1], duration_fmt: .[2], engine: $eng} ]
+        | {status: "ok", count: length, items: .}' 2>/dev/null) || VER_JSON=""
+    [[ -n "$VER_JSON" ]] || return 1
+    return 0
+}
+
 apply_search_results() {
     LIST_SOURCE="search"
     build_all_rows
@@ -2752,7 +2711,10 @@ load_rows() {
     ((NUM_PAGES > 0)) || NUM_PAGES=1
 }
 
-# ── VIEW RENDERERS ──────────────────────────────────────────────────────────────────────
+# ── THE VIEW ────────────────────────────────────────────────────────────────────────────
+# One renderer. What used to be a second one is a row source (open_versions), so everything
+# below draws rows whatever they came from — a search, a playlist, the log, a video's parts,
+# a video's chapters.
 
 # List View: result rows + Now-Playing status banner
 display_list_menu() {
@@ -2765,7 +2727,7 @@ display_list_menu() {
     layout_cols
     nav_cols=$LAYOUT_COLS
     LINES_N=$TERM_LINES
-    # In-place repaint, the way the card has always done it: home the cursor and let every line
+    # In-place repaint: home the cursor and let every line
     # below erase its own tail (\033[K), then \033[J at the end wipes whatever the old frame
     # left underneath. This used to be `clear`, which blanks the screen and THEN redraws it —
     # two visible states per frame, so pause/resume (one changed glyph) flashed the whole list.
@@ -2808,6 +2770,13 @@ display_list_menu() {
         # against the per-part durations in the rows below, so the mismatch reads as the
         # structure it is. NOT repeated as "part 1 is 12:06": that row is on screen underneath.
         [[ "$LIST_SOURCE" == "parts" && -n "$PARTS_TOTAL_FMT" ]] && st_items+=("total=$PARTS_TOTAL_FMT")
+        # The two fields the `--info` fetch paid for that no row can hold. They are the item's,
+        # not the rows' — which is why they sit on the line that already names the item
+        # (versions='<title>') and not in the details block, which describes one chapter.
+        if [[ "$LIST_SOURCE" == "versions" ]]; then
+            [[ -n "$ITEM_UPLOADED" ]] && st_items+=("uploaded=$ITEM_UPLOADED")
+            [[ -n "$ITEM_LIKES" ]] && st_items+=("likes=$ITEM_LIKES")
+        fi
     else
         st_items=("engine=$ENGINE" "results=$NUM_ENTRIES" "sort=$SORT_FIELD")
         # auth= sits next to engine= because it qualifies it: same source, different
@@ -2825,6 +2794,11 @@ display_list_menu() {
     # and auto is what every install that has never pressed f is sitting on.
     [[ "$PLAY_QUALITY" != "auto" ]] && st_items+=("quality=$PLAY_QUALITY")
     [[ -n "$PLAY_VOLUME" ]] && st_items+=("volume=$PLAY_VOLUME")
+    # The only confirmation `+` has: the queue-ahead block that used to be it went with the
+    # card (D-g), and a key whose whole effect is invisible is a key you press twice. Absent
+    # below two, by the rule min=/max=/quality= already follow — a queue of one is what every
+    # player has.
+    ((CURRENT_QUEUE_LEN > 1)) && st_items+=("queue=$CURRENT_QUEUE_POS/$CURRENT_QUEUE_LEN")
     HINT_KEY_COLOR="$C_DIM"
     print_hints "$nav_cols" "" "" "${st_items[@]}"
     HINT_KEY_COLOR=""
@@ -2835,13 +2809,12 @@ display_list_menu() {
     # keys. When this block prints (its gate below passes), the banner stays pure status
     # — one key source per screen, and the playing title gains the tail's ~30 cells; when
     # the gate drops this block on a short terminal, the banner's tail carries
-    # Tab/Space/s/9/0 instead. A rail sits UNDER the block (Option B): one boundary
-    # between the chrome band (status + banner + keys) and the result rows — the card's
-    # rail language. It prints only with the block: no keys, no rail.
+    # Space/s/9/0 instead. A rail sits UNDER the block (Option B): one boundary
+    # between the chrome band (status + banner + keys) and the result rows. It prints only
+    # with the block: no keys, no rail.
     #
-    # NO LABEL, and GL_SEP between items — the same two-space indent and the same separator
-    # the card's own hint block uses, so the two views print one object rather than two that
-    # merely list the same keys. The label went for the reason the card's body has none: the
+    # NO LABEL, and GL_SEP between items — a two-space indent and one separator. The label
+    # went for the reason nothing else on the band carries one: the
     # keys ARE the content, and its neighbours (the banner above, the rail below) carry no
     # label either, so "Navigation:" was the only thing on the chrome band announcing what
     # the reader could already see. It also cost 12 cells on the widest line here.
@@ -2851,9 +2824,6 @@ display_list_menu() {
     # and all three were missing from the one view whose job is to write the keys down. The
     # card's hint block and the banner's short-terminal fallback already documented volume and
     # pause, which is what made their absence here a gap rather than a decision.
-    #
-    # S_VOL ("volume"), not the card's S_VOL_ADJUST ("vol"): this block spells its labels out
-    # ("language", "search") where the card abbreviates to keep six keys on one line.
     #
     # The seek keys print as "[ ]", NOT "[/]": / is this line's "or" separator (9/0, ↑/↓), but
     # the two keys here ARE brackets, so wrapping a slash in them read as "a bracketed /" and
@@ -2887,8 +2857,12 @@ display_list_menu() {
     # is applied cell by cell with keys_full rather than by building a core array and
     # appending a full one, so the ORDER of the full block is byte-identical to the order it
     # has always had: the conditionals still say what they mean where they land.
+    # No Tab: there is one view, so the key it toggled has nothing to reach. It is not
+    # rebound — an empty key is better than a key spent on whatever was nearest — and it
+    # leaves this block by the rule every other key here follows: a key that cannot act must
+    # not spend a cell of a measured block.
     local nav_items=(
-        "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY" "Tab	$S_VIEW"
+        "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY"
     )
     keys_full && nav_items+=("v	$S_MODE" "f	$S_QUALITY" "n	$S_SEARCH")
     # `o` re-sorts the SEARCH and refetches it, so on a store's rows it can only answer
@@ -2949,11 +2923,15 @@ display_list_menu() {
     elif keys_full && ((search_view)) && ((ENGINE_PARTS_OK)); then
         nav_items+=("c	$S_PARTS_KEY")
     fi
-    # And a fifth time, off the other capability: `i` needs `--info`. It does NOT relabel by
-    # LIST_SOURCE the way c/b/h do — it is not a row-source toggle, it opens a card, and Tab is
-    # the way back from every card there has ever been.
-    if keys_full && ((ENGINE_INFO_OK)); then
-        nav_items+=("i	$S_INFO_KEY")
+    # And a fifth time, off the other capability and the same two conditions `c` carries:
+    # `i` needs `--info`, and it replaces the rows, so it needs search rows to come back to
+    # (open_versions is search_only for the reason open_parts is — one stash slot). It
+    # relabels from inside its own view exactly as c/b/h do: the way back is CORE, the way in
+    # is full.
+    if [[ "$LIST_SOURCE" == "versions" ]]; then
+        nav_items+=("i	$S_BACK_SEARCH")
+    elif keys_full && ((search_view)) && ((ENGINE_INFO_OK)); then
+        nav_items+=("i	$S_VER_KEY")
     fi
     # The queue keys are offered only while something is PLAYING: with no player they say
     # "nothing is playing" and nothing else, and a measured block must not spend cells on a
@@ -2967,8 +2945,8 @@ display_list_menu() {
     nav_items+=("?	$S_KEYS")
     # Measure the block before committing the space: on a very short terminal it is 4 lines of
     # a 10-line screen, and printing it would push the header off the top no matter how the
-    # rows are repaged. Then the keys go and the results stay — the card view still
-    # documents the keys.
+    # rows are repaged. Then the keys go and the results stay, and the banner's tail picks up
+    # the playback keys (see its short-terminal fallback).
     HINT_MEASURE=1
     HINT_SEP=" $GL_SEP "
     print_hints "$nav_cols" "$nav_pad" "$nav_pad" "${nav_items[@]}"
@@ -2995,15 +2973,15 @@ display_list_menu() {
         # Accent, not a status hue: the banner's state colour is the same accent the
         # marker and rails use, so it reads as this palette (see the palette block). The
         # glyph is what says which state — dimmed for paused, a turning quadrant while the
-        # stream is still coming up. play_state_marks owns that choice for both views.
+        # stream is still coming up. play_state_marks owns that choice.
         play_state_marks "$GL_PLAY"
         local p_icon="$PS_ICON" p_label="$PS_LABEL" p_color="$PS_COLOR"
         # Pure status line: shares ONE line with a variable-length title, so measure the
         # fixed parts and give the title what is left (elided). The key tail appears only
         # when the Navigation block above was dropped (short-terminal fallback).
         local b_head="$p_icon $p_label: "
-        # The tail is a POSITION readout, not a duration: elapsed / total, the same pairing
-        # the card's meta row shows, so the two views do not disagree about where the track
+        # The tail is a POSITION readout, not a duration: elapsed / total, the pairing the
+        # live rail under it draws as a bar, so the two cannot disagree about where the track
         # is. PT_CUR/PT_TOTAL come from the shared clock — nav_tick fetches them once a
         # second while the list is up — so the banner costs no IPC of its own and is at most
         # one second stale, the resolution it is drawn at anyway.
@@ -3015,7 +2993,7 @@ display_list_menu() {
         # never changes SHAPE a second into playback — it is short_dur and fmt_sec spelling
         # the same number (see CURRENT_PLAY_DURATION's note in play_selected).
         #
-        # Live keeps the card's live form (elapsed GL_SEP LIVE, no slash): mpv's clock
+        # Live keeps its own form (elapsed GL_SEP LIVE, no slash): mpv's clock
         # describes the broadcast, not this listen, so there is no total to divide by — the
         # same fact fetch_play_times encodes by returning early for live.
         local b_tail=" $GL_SEP $CURRENT_PLAY_DURATION"
@@ -3033,7 +3011,7 @@ display_list_menu() {
         [[ -n "$RES_CPU" ]] && b_res=" $GL_SEP $GL_CPU ${RES_CPU}% $GL_RAM ${RES_MEM}M"
         local b_hint=""
         if ((!nav_ok)); then
-            b_hint="  [Tab $S_FOCUS | Space $S_PAUSE | s $S_STOP | 9/0 $S_VOL]"
+            b_hint="  [Space $S_PAUSE | s $S_STOP | 9/0 $S_VOL]"
         fi
         # Assignment form, not ((head_w += DISP_W)): an arithmetic command evaluating to 0
         # returns status 1, which `set -e` would take as a failure (see char_w).
@@ -3089,9 +3067,8 @@ display_list_menu() {
         HINT_SEP=""
         chrome_h=$((chrome_h + nav_h))
         # Rail under the key-hint block: one boundary between the chrome band and the
-        # result rows (card_divider caches on width+glyph, like the card rails). Accent, not
-        # dim: a rail is a rail in every view, and the card's carries the accent because it
-        # pairs with the live rail — matching here keeps one rail language across views.
+        # result rows (card_divider caches on width+glyph). Accent, not dim: it pairs with
+        # the live rail below, and the two must read as one rail language.
         #
         # And while a track plays this IS that live rail: the shared clock leaves the percent
         # in PT_PCT (nav_tick), so the boundary doubles as the position readout and the list
@@ -3289,8 +3266,7 @@ display_list_menu() {
             # over the cells between the title and the rail without writing them, so a
             # trailing erase would leave the previous frame's longer title showing through the
             # gap. Erasing the line before drawing it is the only order that covers a hole the
-            # draw itself never touches. (The card needs no such thing — it writes every line
-            # contiguously from column 1.)
+            # draw itself never touches.
             if ((i == selected)); then
                 # Marker AND number in C_MARK (accent), title in bold, rail back to its own
                 # dim — the selected line no longer inherits one hue end-to-end.
@@ -3351,601 +3327,12 @@ display_list_menu() {
     fi
 }
 
-# ── The card's shared spine ─────────────────────────────────────────────────────────────
-# The rail, the title and the channel: the three rows that describe a subject whatever the
-# subject is. Extracted rather than copied for exactly the reason AS-BUILT-tui.md §11 refuses
-# a mini player — two copies of one state's rendering is drift with a schedule, and "where
-# does the title wrap" is enough on its own to make them disagree.
-#
-# CARD_TEXT_W is cols minus the deepest body indent (4), the only prefix left now that the
-# 8-cell label field and its 3-cell gap are gone — which is also why the title gets ~11 more
-# cells before it wraps. No floor. It was 25, and under the old 40-column clamp it could never
-# fire (cols - 4 >= 36), so it was dead code that came alive the moment layout_cols started
-# believing narrow terminals: at 28 columns it wrapped the title at 25 cells behind a 4-cell
-# indent, i.e. one cell past the pane. layout_cols' own floor is the guarantee this needs —
-# cols >= LAYOUT_MIN, so CARD_TEXT_W >= 20.
-# CARD_HEAD_LINES is how tall the spine came out, for a caller that has to budget the rows
-# below it (card_item_body's description). Measured through the printer, never estimated
-# beside it — the rule print_hints and wrap_print already follow.
-CARD_TEXT_W=0
-CARD_HEAD_LINES=0
-card_subject_head() {
-    local cols=$1 div=$2 title=$3 channel=$4
-    CARD_TEXT_W=$((cols - 4))
-    printf '%s%s%s\033[K\n' "$C_CYAN" "$div" "$C_RESET"
-    CARD_HEAD_LINES=1
-    wrap_print "$title" "$CARD_TEXT_W" "  ${C_BOLD}" "  "
-    CARD_HEAD_LINES=$((CARD_HEAD_LINES + WRAP_LINES))
-    wrap_print "$channel" "$CARD_TEXT_W" "    ${C_DIM}" "    "
-    CARD_HEAD_LINES=$((CARD_HEAD_LINES + WRAP_LINES))
-    return 0
-}
-
-# The meta row and its degradation, in three steps: fields are given MOST IMPORTANT FIRST and
-# dropped from the right until the row fits; then the first field is elided; then it goes
-# entirely. The TAIL is never dropped — for the playing subject it is the play state, and the
-# earlier floor of 8 cells on the elision failed by winning against the width instead of the
-# field (at 24 columns "▘ Starting" plus the indent leaves 5 cells and the floor drew 8,
-# wrapping the one row the card exists for).
-#
-# The separator belongs to the PAIR, not to the row: with the fields gone a fixed GL_SEP left
-# the tail hanging off a separator with nothing on its left. Empty fields are dropped rather
-# than joined, the same way print_details drops an absent view count instead of printing a
-# separator with nothing beside it.
-card_meta_row() {
-    local cols=$1 tail=$2 tail_color=$3
-    shift 3
-    local fields=() f meta="" tail_w n i tw
-    for f in "$@"; do
-        [[ -n "$f" ]] && fields+=("$f")
-    done
-    if [[ -n "$tail" ]]; then
-        disp_w " $GL_SEP $tail"
-        tail_w=$((DISP_W + 4))
-    else
-        tail_w=4                       # 4 = the body indent, the whole tail when there is none
-    fi
-    n=${#fields[@]}
-    while :; do
-        meta=""
-        i=0
-        while ((i < n)); do
-            if [[ -n "$meta" ]]; then meta="$meta $GL_SEP ${fields[$i]}"; else meta="${fields[$i]}"; fi
-            i=$((i + 1))
-        done
-        disp_w "$meta"
-        ((DISP_W + tail_w <= cols)) && break
-        ((n > 1)) || break
-        n=$((n - 1))
-    done
-    disp_w "$meta"
-    if ((DISP_W + tail_w > cols)); then
-        tw=$((cols - tail_w))
-        if ((tw < 1)); then
-            meta=""
-        else
-            truncate_disp "$meta" "$tw"
-            meta="$TRUNC_TEXT"
-        fi
-    fi
-    if [[ -n "$meta" && -n "$tail" ]]; then
-        printf '    %s%s %s %s%s%s%s\033[K\n' \
-            "$C_DIM" "$meta" "$GL_SEP" "$C_RESET" "$tail_color" "$tail" "$C_RESET"
-    elif [[ -n "$meta" ]]; then
-        printf '    %s%s%s\033[K\n' "$C_DIM" "$meta" "$C_RESET"
-    elif [[ -n "$tail" ]]; then
-        printf '    %s%s%s\033[K\n' "$tail_color" "$tail" "$C_RESET"
-    else
-        printf '\033[K\n'
-    fi
-    return 0
-}
-
-# The row the one `--info` fetch paid for: upload date, like count, chapter count. It is a
-# FRAGMENT rather than part of either body because both subjects draw it — the item card, and
-# the playing card once `i` has been pressed on the track — and one row rendered in two places
-# is the drift AS-BUILT-tui.md §11 refuses on principle.
-#
-# Each field is dropped when the site did not publish it: an absent like count is not zero
-# likes, the rule print_details states for view counts. CARD_INFO_ROW reports whether anything
-# was drawn, because the callers budget rows around it.
-CARD_INFO_ROW=""
-card_info_row() {
-    CARD_INFO_ROW=""
-    [[ -n "$ITEM_UPLOADED" ]] && CARD_INFO_ROW="$S_UPLOADED $ITEM_UPLOADED"
-    if [[ -n "$ITEM_LIKES" ]]; then
-        commas "$ITEM_LIKES"
-        [[ -n "$CARD_INFO_ROW" ]] && CARD_INFO_ROW="$CARD_INFO_ROW $GL_SEP "
-        CARD_INFO_ROW="$CARD_INFO_ROW$COMMAS $S_LIKES"
-    fi
-    if ((ITEM_CHAP_N > 0)); then
-        [[ -n "$CARD_INFO_ROW" ]] && CARD_INFO_ROW="$CARD_INFO_ROW $GL_SEP "
-        CARD_INFO_ROW="$CARD_INFO_ROW$ITEM_CHAP_N $S_CHAPTERS"
-    fi
-    if [[ -n "$CARD_INFO_ROW" ]]; then
-        truncate_disp "$CARD_INFO_ROW" "$CARD_TEXT_W"
-        printf '    %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
-    fi
-    return 0
-}
-
-# The forward queue, and the only place in this suite where a queue is READ: `+` and `>` write
-# one, `--status` answers with one, and until `upcoming` landed the card could show a single
-# title with no length. A player consuming a queue is the one thing on this screen that moves
-# without a keypress, so what is coming is the fact the card is watched for.
-#
-# It is a BLOCK rather than a field in the meta row above for the reason that row states about
-# itself: it degrades by dropping fields from the right, and the title of the next track is
-# exactly what would go first. The header row keeps the n/N count, and when there is no room
-# for a single title row it falls back to the one-line `next:` form the card had before — a
-# short pane loses the block, never the position.
-#
-# Budgeted like the item body's description, and for the same reason: this card renders in
-# place and ends on \033[J, so a block that overran the pane would scroll the frame off its own
-# top. `budget` is rows, counted by the caller, which is the only place that knows how tall the
-# spine came out and whether there is a progress bar.
-#
-# The duration column is placed with CHA (\033[<n>G) and the row is erased BEFORE it is drawn,
-# both for the reasons the list's rows state at length: our width rule over-counts by design,
-# so computed padding lands the column raggedly, and a jump leaves the cells it skipped
-# holding the previous frame.
-CARD_QUEUE_LINES=0
-card_queue_block() {
-    local cols=$1 budget=$2
-    local head n i rail rail_w row_w
-    n=${#Q_UP_TITLE[@]}
-    ((budget < 0)) && budget=0
-    ((n > budget)) && n=$budget
-    head="$((CURRENT_QUEUE_POS + 1))/$CURRENT_QUEUE_LEN"
-    if ((n > 0)); then
-        head="$head $GL_SEP $S_Q_UPCOMING"
-    elif [[ -n "$CURRENT_QUEUE_NEXT" ]]; then
-        head="$head $GL_SEP $S_Q_NEXT: $CURRENT_QUEUE_NEXT"
-    fi
-    truncate_disp "$head" "$CARD_TEXT_W"
-    printf '    %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
-    for ((i = 0; i < n; i++)); do
-        rail="${Q_UP_DUR[$i]}"
-        disp_w "$rail"
-        rail_w=$DISP_W
-        # 6 = this block's own indent (one step deeper than the body, so the rows read as
-        # belonging to the header above them); 2 more keep the longest title off the rail.
-        row_w=$((cols - 6 - 2 - rail_w))
-        ((row_w < 12)) && row_w=12
-        truncate_disp "${Q_UP_TITLE[$i]}" "$row_w"
-        printf '\033[K      %s%s' "$C_DIM" "$TRUNC_TEXT"
-        ((rail_w > 0)) && printf '\033[%dG%s' $((cols - rail_w + 1)) "$rail"
-        printf '%s\n' "$C_RESET"
-    done
-    # What it actually drew, for the caller that has to fit a block under it. Counted rather
-    # than predicted: `n` is already clamped to the budget above, and a second copy of that
-    # clamp in the caller is the arithmetic that drifts.
-    CARD_QUEUE_LINES=$((1 + n))
-    return 0
-}
-
-# The chapters — the third axis, beside the row (parts) and the launch parameter (quality),
-# and the one that is neither (AS-BUILT-tui.md §11): an OFFSET INSIDE THE FILE PLAYING.
-# That is the whole reason it is a block on this card instead of a list source like parts —
-# a chapter has no url of its own, so making it a row would grow the item record a
-# start-offset field and spread that field through playlist, queue and history for the sake
-# of dressing a seek up as a launch.
-#
-# `live` is the caller's answer to one question: does this card have a PLAYHEAD? On the
-# playing subject it does, so the cursor and Enter are offered and the chapter the playhead
-# is inside is drawn at full weight. On the item subject there is no playhead, no bar and no
-# elapsed time, so the same rows are a table of contents: no cursor, nothing to seek. A card
-# about a track that happens to be playing is one Tab from the card that can seek it.
-#
-# Three weights, no new glyph (the inventory stays closed, so YT_ASCII and the mono theme
-# read the same): the chapter under the playhead is bold, the cursor's row is plain, every
-# other row is dim — and the cursor also takes the list's own 2-cell `> ` marker in the
-# accent, because a weight alone is not a cursor.
-#
-# Budgeted in rows like the queue block above it and for the same reason: this card renders
-# in place and ends on \033[J, so a block that overran would scroll the frame off its own top.
-CARD_CHAP_MAX=6
-CARD_CHAP_LINES=0
-# Whether the chapter keys can act, and it is the RENDER that answers: the block is on screen
-# with a playhead behind it, or it is not. Deriving it in the key handler instead would mean a
-# second copy of the guard the info row already carries (right url, right track, non-empty
-# table) — and the two copies disagree exactly when the track changed under a held key.
-CARD_CHAP_ACTIVE=0
-card_chapter_block() {
-    local cols=$1 budget=$2 live=$3
-    local n win start i head cur=-1 mark weight row_w
-    CARD_CHAP_LINES=0
-    n=${#ITEM_CHAP_SEC[@]}
-    ((n > 0)) || return 0
-    # A header with no row under it is chrome that says what the info row already said.
-    ((budget >= 2)) || return 0
-    win=$((budget - 1))
-    ((win > CARD_CHAP_MAX)) && win=$CARD_CHAP_MAX
-    ((win > n)) && win=$n
-    # Where the playhead is. A linear scan of integers, per frame, on a list this card has
-    # already paid a network fetch for — cheaper than any structure that would avoid it, and
-    # the only reason the chapters can say "you are here" at all.
-    if ((live)) && [[ -n "$PT_POS_SEC" ]]; then
-        for ((i = 0; i < n; i++)); do
-            if ((ITEM_CHAP_SEC[i] <= PT_POS_SEC)); then cur=$i; fi
-        done
-    fi
-    # The window follows the cursor and then stops at the end of the list, so the last page
-    # is full rather than ragged. Without a cursor it is simply the head of the table.
-    start=0
-    if ((live)); then
-        if ((CHAP_SEL >= win)); then start=$((CHAP_SEL - win + 1)); fi
-        if ((start + win > n)); then start=$((n - win)); fi
-        if ((start < 0)); then start=0; fi
-    fi
-    # Same header grammar as the queue block: position first when there is a cursor to have
-    # a position, a bare count when the block is a table of contents.
-    if ((live)); then
-        head="$((CHAP_SEL + 1))/$n $GL_SEP $S_CHAP_HEAD"
-    else
-        head="$n $GL_SEP $S_CHAP_HEAD"
-    fi
-    truncate_disp "$head" "$CARD_TEXT_W"
-    printf '    %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
-    for ((i = start; i < start + win && i < n; i++)); do
-        mark="  "
-        if ((live && i == CHAP_SEL)); then mark="$C_MARK> $C_RESET"; fi
-        if ((i == cur)); then weight="$C_BOLD"
-        elif ((live && i == CHAP_SEL)); then weight=""
-        else weight="$C_DIM"; fi
-        # 4 = the body indent, 2 = the marker slot, ITEM_CHAP_TW = the widest start time in
-        # THIS table (measured once at fetch, so the column does not move as the window
-        # scrolls), 2 more separate the time from the title.
-        row_w=$((cols - 4 - 2 - ITEM_CHAP_TW - 2))
-        ((row_w < 12)) && row_w=12
-        truncate_disp "${ITEM_CHAP_TITLE[$i]}" "$row_w"
-        printf '\033[K    %s%s%*s  %s%s\n' \
-            "$mark" "$weight" "$ITEM_CHAP_TW" "${ITEM_CHAP_TIME[$i]}" "$TRUNC_TEXT" "$C_RESET"
-    done
-    CARD_CHAP_LINES=$((1 + win))
-    return 0
-}
-
-# The ITEM subject's body — same spine, same meta row, then the rows the one --info fetch paid
-# for: upload date, likes, chapter count, the description. Last comes what Enter WOULD play
-# (mode, and the quality tier when it is not auto) — the only fact on this card about the
-# future rather than the past, and the reason the card can answer "play this how?" without
-# starting anything.
-#
-# The description is BUDGETED, not trusted: this card renders in place and ends on \033[J, so
-# a block that overran the pane would scroll the frame off its own top-left. The budget is
-# whatever rows are left after the spine, the two meta rows and the hint block — measured, and
-# capped at 6 because a card is a card and not a reader. Pre-cut to budget x width cells, then
-# measured through wrap_print itself and shaved half a line at a time; a description that
-# still will not fit is dropped whole rather than drawn over the edge.
-# A format selection is free text from the engine, so the card gives it a fixed ceiling
-# rather than a share of the row: 24 cells is a full audio selection ("251 - audio only
-# (medium)") and the identifying head of a video one.
-CARD_SELECTED_MAX=24
-CARD_DESC_MAX=6
-card_item_body() {
-    local cols=$1 div=$2
-    local meta_views="" info_row="" plan_row="" hints=() budget used txt cut try fits
-    card_subject_head "$cols" "$div" "$ITEM_TITLE" "$ITEM_CHANNEL"
-    # The free tier: two fields the search row also carries. They are here because the card
-    # states its subject completely, not because the fetch found them.
-    if [[ -n "$ITEM_VIEWS" ]]; then
-        commas "$ITEM_VIEWS"
-        meta_views="$COMMAS $S_VIEWS"
-    fi
-    # The engine is LAST, so it is the first field dropped when the row will not fit: on a
-    # mixed playlist it is the fact the row itself cannot state (F07), and on a single-engine
-    # list it is the least surprising thing on the card.
-    card_meta_row "$cols" "" "" "$ITEM_DUR_FMT" "$meta_views" "$ITEM_ENGINE"
-    # The paid tier, one row, drawn by the fragment both subjects share.
-    card_info_row
-    info_row="$CARD_INFO_ROW"
-    # What Enter would play. `quality=` is absent at auto for the same reason the status line
-    # leaves it out there: auto is the engine choosing, which is not a tier to report.
-    plan_row="$PLAY_MODE"
-    [[ "$PLAY_QUALITY" != "auto" ]] && plan_row="$plan_row $GL_SEP $PLAY_QUALITY"
-    # This card is a reader, so its core is three cells: play what it is about, go back, quit.
-    # The full tier is the playback family the universal case honours here exactly as it does
-    # everywhere else — a key that WORKS on this screen and is printed nowhere is the gap ?
-    # exists to close (AS-BUILT-tui.md §11).
-    hints=("Enter	$S_PLAY_SEL" "Tab	$S_BACK_LIST")
-    keys_full && hints+=("Space	$S_PAUSE_RESUME" "[ ]	$S_SEEK" "9/0	$S_VOL_ADJUST" "s	$S_STOP_PLAY")
-    hints+=("q	$S_QUIT" "?	$S_KEYS")
-    HINT_SEP=" $GL_SEP "
-    HINT_MEASURE=1
-    print_hints "$cols" "  " "  " "${hints[@]}"
-    HINT_MEASURE=0
-    # `used` is the frame WITHOUT a description — 2 for the header row and its blank, the
-    # spine, the meta row, the optional info row, 2 for the plan row and the blank above the
-    # hints, and the hint block itself. The description then gets what is left LESS TWO: its
-    # own blank separator, which is drawn only when there is a description to separate, and
-    # one row so the last hint line is never the pane's last row. Measured at 62x14, where
-    # forgetting the separator put the frame one row over and scrolled the header off its
-    # own top — the failure mode an in-place renderer has instead of a scrollbar.
-    used=$((2 + CARD_HEAD_LINES + 1 + 2 + HINT_LINES))
-    [[ -n "$info_row" ]] && used=$((used + 1))
-    budget=$((TERM_LINES - used - 2))
-    # The chapters and the description share the rows left, chapters first — the same order
-    # the playing card gives the queue, for the same reason one step down: a table of contents
-    # is structure and a description is prose, and prose is what shaves gracefully (it has a
-    # loop that does exactly that; a chapter list can only be shorter).
-    #
-    # Half the pool, never more: this card's signature payload is the description, and a
-    # 40-chapter video would otherwise take every row and leave the reader nothing to read.
-    # Below two rows the block cannot draw a header AND a chapter, so it declines and the
-    # frame is exactly today's.
-    #
-    # live=0 — this card has no playhead. The chapters here are a table of contents, not seek
-    # targets: nothing is playing FROM this card, so there is nothing to seek. One Tab reaches
-    # the card that has a playhead (AS-BUILT-tui.md §11).
-    card_chapter_block "$cols" $((budget / 2)) 0
-    budget=$((budget - CARD_CHAP_LINES))
-    ((budget > CARD_DESC_MAX)) && budget=$CARD_DESC_MAX
-    txt=""
-    if ((budget > 0)) && [[ -n "$ITEM_DESC" ]]; then
-        cut=$((budget * CARD_TEXT_W))
-        try=0
-        fits=0
-        while ((try < 4 && cut > 0)); do
-            truncate_disp "$ITEM_DESC" "$cut"
-            txt="$TRUNC_TEXT"
-            WRAP_MEASURE=1
-            wrap_print "$txt" "$CARD_TEXT_W" "    " "    "
-            WRAP_MEASURE=0
-            ((WRAP_LINES <= budget)) && { fits=1; break; }
-            cut=$((cut - CARD_TEXT_W / 2))
-            try=$((try + 1))
-        done
-        ((fits)) || txt=""
-    fi
-    if [[ -n "$txt" ]]; then
-        printf '\033[K\n'
-        wrap_print "$txt" "$CARD_TEXT_W" "    ${C_DIM}" "    "
-    fi
-    printf '\033[K\n    %s%s%s\033[K\n' "$C_DIM" "$plan_row" "$C_RESET"
-    print_hints "$cols" "  " "  " "${hints[@]}"
-    HINT_SEP=""
-    return 0
-}
-
-# Now Playing Focus Card (in-place render, like the list above — see display_list_menu)
-display_now_playing_card() {
-    CARD_CHAP_ACTIVE=0
-    cursor_hide
-    # Reposition cursor to top-left without blanking the screen (eliminates flicker)
-    printf '\033[H'
-
-    # Width first, because the header row below is measured against it. It used to print
-    # before the size was read — the last unmeasured chrome row in either view — and at 28
-    # columns the view name alone ran past the edge and wrapped, costing a second physical
-    # line in the one row that tells the two views apart.
-    local cols div
-    layout_cols 80
-    cols=$LAYOUT_COLS
-    card_divider "$cols"
-    div="$DIV_STR"
-
-    # The header names the view the same way the key hint that reaches it does (S_FOCUS,
-    # "focus card" / "专注卡片") — one view, one name, in both languages. Elided the way the
-    # list's title row is: measure the fixed brand/bullet prefix, give the name what is left.
-    local c_pre="${GL_NOTE:+$GL_NOTE }$GL_BRAND  $GL_BULLET  " c_head="$S_CARD_HEAD"
-    # One view, two subjects — so the name in the header says which subject, not which view:
-    # "NOW PLAYING FOCUS" is a lie about a row you merely asked about, and it is the header
-    # that would tell it.
-    [[ "$CARD_SUBJECT" == "item" ]] && c_head="$S_CARD_HEAD_ITEM"
-    disp_w "$c_pre"
-    truncate_disp "$c_head" $((cols - DISP_W))
-    printf '%s%s%s%s%s  %s  %s%s%s\033[K\n\033[K\n' \
-        "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$GL_BULLET" \
-        "$C_BOLD" "$TRUNC_TEXT" "$C_RESET"
-
-    # Same accent as the banner, the rails and the marker — one hue per palette, with the
-    # glyph carrying the state (dim accent when paused). See the palette block.
-    play_state_marks "$GL_DOT"
-    local p_status="$PS_ICON $PS_LABEL" p_color="$PS_COLOR"
-
-    # The rail carries the ACCENT, not dim: it and the progress rail are the same object in
-    # two states — one static, one live — so they share the hue and differ only in glyph. A dim
-    # rail above an accent bar read as two unrelated lines that happened to be the same width.
-    # There is only ONE rail now: the bottom one was a third parallel line closing a box the
-    # card does not need, and with the bar spanning the full width the card already ends on a
-    # horizontal. `\033[J` at the end of the render, not a rail, is what clears stale rows.
-    if [[ "$CARD_SUBJECT" == "item" ]]; then
-        card_item_body "$cols" "$div"
-    elif [[ -z "$CURRENT_PLAY_ID" ]]; then
-        printf '%s%s%s\033[K\n' "$C_CYAN" "$div" "$C_RESET"
-        printf '  %s%s%s\033[K\n\033[K\n' "$C_DIM" "$S_NOTHING" "$C_RESET"
-        # 60 CJK cells of copy: pack it like the hint rows so it cannot run off a narrow
-        # terminal (the empty state is the one place a full sentence is drawn).
-        # Nothing is playing, so every playback key here is a no-op and the full tier has
-        # exactly one honest cell to add. It still gets ?: the tier is one preference shared
-        # by both views, and this is the one screen a session can open on.
-        local e_hints=("Tab	$S_BACK_SEARCH" "Enter	$S_PLAY_SEL")
-        keys_full && e_hints+=("l	$S_LANGKEY")
-        e_hints+=("?	$S_KEYS")
-        HINT_SEP=" $GL_SEP "
-        print_hints "$cols" "  " "  " "${e_hints[@]}"
-        HINT_SEP=""
-    else
-        # fetch_play_times owns the IPC and the live special case (elapsed listening time,
-        # no percent, no bar — mpv's own position would be pinned at 100%).
-        local pct_str="" bar_str="" cur_time total_time
-        fetch_play_times
-        cur_time="$PT_CUR"
-        total_time="$PT_TOTAL"
-        if [[ -n "$PT_PCT" ]]; then
-            pct_str=" (${PT_PCT}%)"
-            # The bar is NOT body-indented: it is the live rail, not text, so it lays
-            # exactly over the divider rail's own footprint — `cols` cells from column 0.
-            render_prog_bar "$PT_PCT" "$cols"
-            bar_str="$PROG_BAR"
-        fi
-
-        # No labels anywhere in the body: typography carries the structure that "Title:" /
-        # "Channel:" / "Time:" used to spell out — bold title, dim channel, dim meta row. The
-        # play state lives in the meta row's coloured status, so the title drops its play
-        # glyph too: one state indicator, not two.
-        #
-        # The spine (rail, title, channel) and the meta row's degradation left this branch:
-        # they describe A SUBJECT, not the playing track, and the item subject renders through
-        # the same two calls. CARD_TEXT_W is the body width card_subject_head measured.
-        card_subject_head "$cols" "$div" "$CURRENT_PLAY_TITLE" "$CURRENT_PLAY_CHANNEL"
-        # One meta row, fields joined by the suite's separator: "3:21 / 9:27 (37%) · audio ·
-        # ● Playing" (live: elapsed · ● LIVE · …, no percent). The labelled version needed a
-        # one-line/two-line branch because 4 labels and their gaps cost ~30 cells; without
-        # them the row fits at every width the card supports. Fields go most-important-first
-        # and the status is the TAIL, which card_meta_row never drops — it is the readout the
-        # card exists for.
-        local seg_time
-        if ((CURRENT_PLAY_IS_LIVE)); then
-            seg_time="$cur_time $GL_SEP $total_time"
-        else
-            seg_time="$cur_time / $total_time$pct_str"
-        fi
-        # `mode` is what we ASKED for and is known from the keypress; `selected` is what the
-        # engine PICKED and arrives with the record, seconds later — two facts, so two fields,
-        # and the second is last because a row that must shed a field should shed the one that
-        # was not there a moment ago anyway. Verbatim: the string is yt-dlp's own spelling of a
-        # format, and a TUI that split it into pieces would be learning an engine's grammar one
-        # level too far up. Capped, though — a video selection names two formats ("137 -
-        # 1920x1080 (1080p)+251 - audio only (medium)") and at 80 columns the whole thing is
-        # the field card_meta_row drops first, so the card would show a format only on a wide
-        # terminal. Cut, it always says what is playing; dropped, it says nothing.
-        local sel_field=""
-        if [[ -n "$CURRENT_PLAY_SELECTED" ]]; then
-            truncate_disp "$CURRENT_PLAY_SELECTED" "$CARD_SELECTED_MAX"
-            sel_field="$TRUNC_TEXT"
-        fi
-        # The player's footprint (UT_RESOURCE), cached by fetch_play_res on the call above —
-        # the same pair the list banner shows, so the two views agree. Rightmost, so
-        # card_meta_row sheds it first: it describes the player's cost, never the track.
-        local res_field=""
-        [[ -n "$RES_CPU" ]] && res_field="$GL_CPU ${RES_CPU}% $GL_RAM ${RES_MEM}M"
-        card_meta_row "$cols" "$p_status" "$p_color" "$seg_time" "$CURRENT_PLAY_MODE" "$sel_field" "$res_field"
-        # The row `i` paid for, on the track that is playing — the same fragment the item card
-        # draws, so an upload date is spelled once. Only what one fetch found, never the
-        # description: this card is a live readout with a queue under it, and a paragraph would
-        # be taking the rows the queue block exists to fill (the reader is the item subject,
-        # one Tab and one `i` away). The url is checked, not just the flag: a track can change
-        # between the fetch and this frame.
-        local info_shown=0 chap_ok=0
-        if ((CARD_PLAY_INFO)) && [[ -n "$ITEM_URL" && "$ITEM_URL" == "$CURRENT_PLAY_URL" ]]; then
-            card_info_row
-            [[ -n "$CARD_INFO_ROW" ]] && info_shown=1
-            # The chapters ride the SAME guard as the row above them, and for the same
-            # reason: the fetch is about one url and the track can change under it between
-            # the fetch and this frame. This is also the one flag that says the chapter keys
-            # can act — the hint block below and the key dispatch both read it through what
-            # is on screen, never through what was fetched.
-            ((ITEM_CHAP_N > 0)) && chap_ok=1
-        fi
-        # The hints are built and MEASURED here, above the block that has to fit around them:
-        # the queue block's budget is counted in rows, and the hint block is the one thing
-        # below it whose height is not known without measuring (print_hints reflows).
-        HINT_SEP=" $GL_SEP "
-        # Six keys on ONE line at 80 cols: no brackets, joined by GL_SEP. The bracket pair
-        # was doing the job the bold/dim weight split already does, at 2 cells per key, and
-        # the labels are one word each — 110 cells of hints became 63, so the block stops
-        # being two lines (and stops stealing a row from the body at short heights).
-        # The core here is not the list's core: this card's own job IS the player, so Space
-        # and the seek arrows stay in both tiers and it is the second spelling of volume and
-        # the stop key that step back a tier (AS-BUILT-tui.md §11).
-        local card_hints=(
-            "Tab	$S_BACK_LIST" "Space	$S_PAUSE_RESUME" "$GL_AH	$S_SEEK"
-        )
-        keys_full && card_hints+=("9/0	$S_VOL_ADJUST" "s	$S_STOP_PLAY")
-        card_hints+=("q	$S_QUIT")
-        # Same rule as the list view's queue keys: offered only when there is a queue to skip
-        # within, so a measured line never spends a cell on a key that would answer "nothing
-        # queued after this track".
-        keys_full && ((CURRENT_QUEUE_LEN > 1)) && card_hints+=(">	$S_Q_SKIP")
-        # `i` is offered while it can still add something: the engine has --info and this card
-        # is not already showing what that fetch found. Same rule as every other cell in the
-        # suite — a key that would answer "you are looking at it" does not spend a cell.
-        keys_full && ((ENGINE_INFO_OK)) && ((! info_shown)) && card_hints+=("i	$S_INFO_KEY")
-        # The TAIL of the block: the chapter keys, then the door. They are a SEPARATE array
-        # because the chapter cells are the only ones on this card whose right to exist is
-        # decided AFTER the measurement that budgets the blocks: a short pane can leave the
-        # table of contents undrawn, and two cells offering a cursor into a block that is not
-        # there is exactly the dead key every other hint block in this file refuses to spend a
-        # cell on. So they are measured PESSIMISTICALLY (in, if the table could appear) and
-        # printed HONESTLY (in, only if it did). Measuring the taller of the two shapes is the
-        # safe direction — the frame can end up one row short of its budget, never one row over
-        # it, and only an in-place renderer's own top is at stake. Predicting the block from
-        # the budget instead would be a second copy of the arithmetic below, which is the drift
-        # these blocks were rewritten to remove.
-        #
-        # ? rides this array rather than card_hints so it is the LAST cell either way: it is
-        # the block's footer, not one more player key, and a chapter cell printed after it
-        # would read as something the door opened.
-        #
-        # There is no volume cell here to take out: 9/0 keeps its own, and what the arrows
-        # gave up was a SECOND spelling of it (AS-BUILT-tui.md §11).
-        local tail_hints=()
-        ((chap_ok)) && tail_hints=("$GL_AV	$S_CHAP_HEAD" "$GL_ENTER	$S_CHAP_GO")
-        tail_hints+=("?	$S_KEYS")
-        HINT_MEASURE=1
-        print_hints "$cols" "  " "  " "${card_hints[@]}" "${tail_hints[@]}"
-        HINT_MEASURE=0
-        # The rows the two blocks share out. `base` is the frame with NEITHER of them — the
-        # header row and its blank, the spine, the meta row and the hints, plus the bar and
-        # its spacer when there is one and the info row when `i` has been pressed. The -1
-        # keeps the last hint row off the pane's final line, the margin card_item_body keeps
-        # for the same reason. It used to be counted per block, with the block's own header
-        # folded into the constant; two blocks made that one clamp too many, so each block is
-        # now handed a budget and REPORTS what it drew.
-        local base=$((2 + CARD_HEAD_LINES + 1 + HINT_LINES)) free
-        [[ -n "$bar_str" ]] && base=$((base + 2))
-        ((info_shown)) && base=$((base + 1))
-        free=$((TERM_LINES - base - 1))
-        # The queue block, ONLY when there is more than one track: every detached player has a
-        # queue now (a lone handle is a queue of one), so a block that headed itself "1/1"
-        # would be chrome that never says anything.
-        #
-        # It is served FIRST and the chapters take what is left (AS-BUILT-tui.md §11): the
-        # queue is the
-        # one thing on this screen that changes without a keypress, and a card that is watched
-        # sheds a static table of contents before it sheds a live readout. Measured at 80x24
-        # both fit with ~8 rows to spare, so this is an order, not a choice between them.
-        if ((CURRENT_QUEUE_LEN > 1)); then
-            card_queue_block "$cols" $((free - 1))
-            free=$((free - CARD_QUEUE_LINES))
-        fi
-        # live=1: this branch is the card WITH a playhead, so the cursor, the Enter seek and
-        # the "you are here" weight are all on.
-        if ((chap_ok)); then
-            card_chapter_block "$cols" "$free" 1
-            ((CARD_CHAP_LINES > 0)) && CARD_CHAP_ACTIVE=1
-        fi
-        # What the block did NOT draw, the hint block does not advertise. The door survives
-        # the trim — it was never about the chapters.
-        ((CARD_CHAP_ACTIVE)) || tail_hints=("?	$S_KEYS")
-        if [[ -n "$bar_str" ]]; then
-            # \033[K on the spacer row too: the card grows by two rows the moment the
-            # bar appears (mpv has no time-pos for the first second or so), so an
-            # uncleared spacer kept showing the divider rail the previous frame drew there.
-            printf '\033[K\n%s%s%s\033[K\n' "$C_CYAN" "$bar_str" "$C_RESET"
-        fi
-        # No rail between the bar and the hints: the readout sits directly above the bar it
-        # labels, and the hints flow straight after it, bare-indented like the empty state.
-        # Nothing closes the card below them — see the rail note above. The block itself was
-        # built and measured above, where the queue block needed its height.
-        print_hints "$cols" "  " "  " "${card_hints[@]}" "${tail_hints[@]}"
-        HINT_SEP=""
-    fi
-    # Clean up any leftover lines below
-    printf '\033[J'
-}
-
 display_menu() {
     # Kitty-spec DCS 1 q / 2 q frame hold: the terminal shows the repaint only when DCS
     # 2 q arrives, so a full-screen redraw cannot flash a half-rendered frame. Skipped
     # under tmux by default (it buffers output and needs terminal-overrides passthrough).
     if ((SYNC_ON)); then printf '\033P=1q'; fi
-    case "$TUI_VIEW_MODE" in
-    card) display_now_playing_card ;;
-    *) display_list_menu "$1" ;;
-    esac
+    display_list_menu "$1"
     if ((SYNC_ON)); then printf '\033P=2q'; fi
 }
 
@@ -4066,16 +3453,14 @@ play_selected() {
 
     CURRENT_PLAY_ID="$id"
     CURRENT_PLAY_PID="$pid"
-    CURRENT_PLAY_MODE="$PLAY_MODE"
     CURRENT_PLAY_SOCK="$sock"
     CURRENT_PLAY_PAUSED=0
     # The call we just made, seeded from the argv rather than waited for: the record answers
-    # the same pair, but not until mpv has a media-title to trip the re-read on, and `i` in
-    # the card must work in that window too. From the first track boundary on, the record
-    # wins — it is the one that knows a queue moved.
+    # the same pair, but not until mpv has a media-title to trip the re-read on, and Enter on
+    # a chapter row has to know what is playing in that window too (play_chapter). From the
+    # first track boundary on, the record wins — it is the one that knows a queue moved.
     CURRENT_PLAY_URL="$url"
     CURRENT_PLAY_ENGINE="$row_engine"
-    CARD_PLAY_INFO=0
     # Launched, not yet audible. player_check_ready clears this when mpv says it is producing
     # output, and read_nav_input runs on a 1 s tick until it does, so the banner flips on its
     # own rather than waiting for the user to press something.
@@ -4087,7 +3472,6 @@ play_selected() {
     # the file. Liveness now comes from the row's own live_status field rather than from
     # recognising a rendered badge.
     CURRENT_PLAY_TITLE="${R_TITLE[$selected]:-Unknown}"
-    CURRENT_PLAY_CHANNEL="${R_CHAN[$selected]:-Unknown}"
     if [[ "${R_LIVE[$selected]}" == "is_live" ]]; then
         CURRENT_PLAY_IS_LIVE=1
         CURRENT_PLAY_DURATION="$GL_LIVE"
@@ -4402,9 +3786,12 @@ open_playlist() {
 # apart the way F11/F12 did (ARCHITECTURE.md).
 # `parts` belongs here even though no store holds it: what this predicate actually asks is
 # "does `.items[]` read this envelope", and open_parts reshapes `--parts` to exactly that.
-# The name outlived its first meaning by one row source; the behaviour it selects did not.
+# `versions` is the same answer for the same reason — build_version_rows writes that envelope
+# from the chapter table. The name outlived its first meaning by two row sources; the
+# behaviour it selects did not.
 stored_rows() {
-    [[ "$LIST_SOURCE" == "playlist" || "$LIST_SOURCE" == "history" || "$LIST_SOURCE" == "parts" ]]
+    [[ "$LIST_SOURCE" == "playlist" || "$LIST_SOURCE" == "history" ||
+        "$LIST_SOURCE" == "parts" || "$LIST_SOURCE" == "versions" ]]
 }
 
 search_only() {
@@ -4705,53 +4092,97 @@ open_parts() {
     return 0
 }
 
-# ── The item subject's door (key: i) ────────────────────────────────────────────────────
-# One fetch, on the KEY — never on the selection moving, the constraint `c` and the ←/→ edge
-# fetch already respect. `i` is the ONLY way into the item subject, and that is what stops the
-# item card from being a full-screen repeat of the details block: entering costs a fetch, so
-# every item frame carries something the fetch found and the list cannot hold.
+# ── The focused row's chapters as the row source (key: i) ───────────────────────────────
+# Fourth of the row-source family — b, h, c and i all do one job, replace the rows — and
+# built like the other three: no new renderer, no new keys, no new item shape. The chapter
+# table `--info` already returns becomes the same seven-field row a search does, so every key
+# that works on a stored row works here, and a chapter row is a CALL (chapter_url).
 #
-# ANY row source, unlike `c`: the item card replaces no rows, so there is nothing to stash and
-# no second slot to want. A playlist row and a history row are each a {engine, url} pair, which
-# is all `--info` is asked for.
-open_item() {
+# One fetch, on the KEY — never on the selection moving, the constraint `c` and the ←/→ edge
+# fetch already respect. That fetch is also what keeps this view from being a repeat of the
+# details block: entering costs a round trip, so what comes back is something the list did
+# not already hold.
+#
+# SEARCH ROWS ONLY, through search_only — the guard o, e and c already use, not a new one.
+# stash_search has a single slot, so opening a chapter list from a playlist row would either
+# lose the way back to the search or need a stack, and a stack is its own change on its own
+# day (the one-deep return stack is AS-BUILT-contract.md §1.4).
+open_versions() {
+    # The toggle, tested literally for the reason open_history and open_parts give: with a
+    # chapter list on screen `i` is the way back, and a chapter list is the only thing `i`
+    # closes.
+    if [[ "$LIST_SOURCE" == "versions" ]]; then
+        back_to_search
+        return 0
+    fi
     ((NUM_ENTRIES > 0)) || return 0
     # Typed blind on an engine without the verb: nothing, silently — the answer `e` gives on a
     # single-engine install, and for the same reason (the hints never offered it).
     ((ENGINE_INFO_OK)) || return 0
+    search_only || return 0
     local url="${urls[$selected]}" row_engine
     # The ROW's engine, the way play_selected and open_parts read it: a mixed playlist plays
     # either source correctly, so it must describe either source correctly too.
     row_engine="${R_ENGINE[$selected]:-}"
     [[ -n "$row_engine" ]] || row_engine="$CURRENT_ENGINE"
     fetch_item_info "$row_engine" "$url" || return 1
-    CARD_SUBJECT="item"
-    TUI_VIEW_MODE="card"
+    # No chapters is not an error and it is not a view either — an empty list would cost a
+    # keypress and a redraw to say nothing, and there is no second axis on this screen to fall
+    # back to (quality is `f`, parts are `c`). The notice answers the question the key asks,
+    # exactly as `c` answers "is there more of this than the row shows?" with S_PARTS_ONE.
+    if ((ITEM_CHAP_N == 0)); then
+        store_notice "$S_INFO_ACT:" "$S_VER_NONE"
+        return 1
+    fi
+    # Built BEFORE the stash, the order open_parts takes: a build that failed after it would
+    # leave the search stashed behind rows that do not exist. It writes VER_JSON and nothing
+    # else, so a failure here leaves the search on screen untouched.
+    if ! build_version_rows; then
+        store_notice "$S_INFO_ACT:" "$S_PL_FAILED"
+        return 1
+    fi
+    stash_search
+    json="$VER_JSON"
+    LIST_SOURCE="versions"
+    # Single-engine by construction — every row is an offset into ONE item — so the label is
+    # that item's engine rather than a jq pass over rows this file just wrote itself.
+    PLAYLIST_ENGINES="$ITEM_ENGINE"
+    QUERY_LABEL="$ITEM_TITLE"
+    build_playlist_rows
+    FILTER_LABEL=""
+    FILTER_MODE=0
+    selected=0
+    page_index=1
+    load_rows "$ALL_ROWS"
     return 0
 }
 
-# `i` again, pressed INSIDE the card on the playing track. Same fetch, same cache, same fields
-# — what differs is only the subject it lands on: the card stays about the playing track and
-# grows the row the fetch paid for, rather than switching to the item subject and losing the
-# playhead, the queue and the state that made this card worth looking at.
-#
-# The engine comes from the RECORD, not from the row that launched it: a queue may mix sources
-# and the track playing three items later is not the one this screen started. That field is
-# `--status`'s answer to "what call is playing", which is why it had to exist before this key
-# could.
-open_playing_info() {
-    [[ -n "$CURRENT_PLAY_ID" ]] || return 0
-    ((ENGINE_INFO_OK)) || return 0
-    [[ -n "$CURRENT_PLAY_URL" && -n "$CURRENT_PLAY_ENGINE" ]] || return 0
-    fetch_item_info "$CURRENT_PLAY_ENGINE" "$CURRENT_PLAY_URL" || return 1
-    CARD_PLAY_INFO=1
-    return 0
+# Enter on a chapter row: "start playing from here". Two branches, one meaning. If the player
+# already holds THIS item, the offset is a seek inside the file it has open — nothing is
+# re-resolved, which is what separates this axis from parts and from quality
+# (AS-BUILT-tui.md §11); otherwise the row plays like any other row, and the `t=` its url
+# carries is what the engine turns into start_seconds.
+play_chapter() {
+    ((NUM_ENTRIES > 0)) || return 0
+    local url="${urls[$selected]}" cur eng="${R_ENGINE[$selected]:-}"
+    if [[ -n "$CURRENT_PLAY_ID" ]] && chapter_sec "$url"; then
+        # The pair, not the url alone: a record is {engine, url} everywhere else in this file,
+        # and "the player already holds this item" is a question about the call.
+        handle_key "$CURRENT_PLAY_URL"; cur="$HANDLE_KEY"
+        handle_key "$url"
+        if [[ -n "$cur" && "$cur" == "$HANDLE_KEY" && "$eng" == "$CURRENT_PLAY_ENGINE" ]]; then
+            play_verb --seek-to "$CHAP_SEC" >/dev/null
+            return 0
+        fi
+    fi
+    play_selected
 }
 
-# The fetch behind both doors: one `--info`, one single-slot cache, one set of ITEM_* fields.
-# Extracted rather than copied when the card grew its own `i` — two callers of one fetch is the
-# shape this file already uses for a store verb, and two copies of a spinner, an error
-# vocabulary and a cache key is the drift AS-BUILT-tui.md §11 refuses on the render side.
+# The fetch behind `i`: one `--info`, one single-slot cache, one set of ITEM_* fields. It is
+# a function rather than an inline block in open_versions because the cache is the point —
+# pressing i on the same row twice must not pay a second round trip, and the store verbs in
+# this file already keep their spinner, their error vocabulary and their cache key in one
+# place each.
 fetch_item_info() {
     local eng=$1 url=$2 bin key out rc=0 errfile msg
     bin=$(engine_resolve_bin "$eng") || bin=""
@@ -4784,72 +4215,44 @@ fetch_item_info() {
     return 0
 }
 
-# The `--info` envelope into the card's item fields. ONE jq call, US-joined, the way every
-# other envelope read in this file works — and the DESCRIPTION LAST because it is the one
-# free-text field: with IFS=US the final `read` variable takes the whole remainder, separators
-# and all, so a stray 0x1f inside a description can only pollute the description.
-#
-# The duration is formatted HERE by fmt_sec rather than taken from the envelope's
-# duration_fmt: that field is the engine's wire spelling (`00h:03m:36s`) and this screen
-# already has exactly one spelling of a duration. A live item has no meaningful one, so it
-# gets the badge print_details gives a live row instead of a number.
+# The `--info` envelope into the item fields. ONE jq call, US-joined, the way every other
+# envelope read in this file works. It reads FOUR fields and not the eight it used to: the
+# view count, the channel and the duration are already on the row this key was pressed from,
+# and the description has nowhere to go now that the rows below are the chapter table (D-g) —
+# a field nothing draws is a field nothing should read, and the description was also the one
+# free-text value in the read (with IFS=US the last variable takes the whole remainder).
 apply_item_info() {
-    local eng=$1 url=$2 dur live csec ctitle
-    IFS="$US" read -r ITEM_TITLE ITEM_CHANNEL dur live ITEM_VIEWS ITEM_LIKES \
-                      ITEM_UPLOADED ITEM_DESC < <(
+    local eng=$1 url=$2 csec ctitle
+    IFS="$US" read -r ITEM_TITLE ITEM_UPLOADED ITEM_LIKES < <(
         printf '%s' "$INFO_CACHE_JSON" | jq -r "$JQ_TEXT_DEFS"'[
             (.title // "" | clean),
-            (.channel // .uploader // "" | oneline),
-            (.duration // "" | tostring),
-            (.live_status // ""),
-            (.view_count // "" | tostring),
-            (.like_count // "" | tostring),
             (.upload_date // "" | if length == 8 then .[0:4] + "-" + .[4:6] + "-" + .[6:8] else . end),
-            (.description // "" | clean)
+            (.like_count // "" | tostring)
           ] | join("\u001f")' 2>/dev/null
     ) || return 1
-    # A record with no title is not a record: the envelope was not what it claimed, and the
-    # card would open onto an empty subject.
+    # A record with no title is not a record: the envelope was not what it claimed, and `i`
+    # would open onto rows labelled with nothing.
     [[ -n "$ITEM_TITLE" ]] || return 1
     ITEM_ENGINE="$eng"
     ITEM_URL="$url"
-    if [[ "$live" == "is_live" ]]; then
-        ITEM_DUR_FMT="$GL_LIVE"
-    elif [[ -n "$dur" && "$dur" != "null" ]]; then
-        ITEM_DUR_FMT=$(fmt_sec "$dur")
-    else
-        ITEM_DUR_FMT=""
-    fi
     # The chapter table, read on its own because it is a LIST and the US-joined read above is
-    # a record. The count is no longer asked for: it is the array's length, so the info row's
-    # "4 chapters" and a block that draws three rows can never disagree.
-    #
-    # The start second is FLOORED here rather than at the seek: `--seek-to 726.855` is a
-    # legal call, but the same number is also this row's printed time and the playhead
-    # comparison, and one chapter having three spellings is how a row comes to disagree with
-    # the bar under it. A whole second is under the granularity of every one of the three.
+    # a record. The start second is FLOORED here rather than at the row: `t=726.855` is a
+    # legal handle, but the same number is also the row's printed time and the --seek-to
+    # target, and one chapter having three spellings is how a row comes to disagree with the
+    # player. A whole second is under the granularity of all three. The times are NOT
+    # pre-formatted any more — the rows carry the engine's wire spelling and the rail's own
+    # short_dur renders it, which is one fmt_sec fork per chapter that no longer happens.
     ITEM_CHAP_SEC=()
-    ITEM_CHAP_TIME=()
     ITEM_CHAP_TITLE=()
     while IFS="$US" read -r csec ctitle; do
         [[ "$csec" =~ ^[0-9]+$ ]] || continue
         ITEM_CHAP_SEC+=("$csec")
-        ITEM_CHAP_TIME+=("$(fmt_sec "$csec")")
         ITEM_CHAP_TITLE+=("$ctitle")
     done < <(
         printf '%s' "$INFO_CACHE_JSON" | jq -r "$JQ_TEXT_DEFS"'(.chapters // [])[]
             | "\((.start_time // 0) | floor)\u001f\(.title // "" | oneline)"' 2>/dev/null
     )
     ITEM_CHAP_N=${#ITEM_CHAP_SEC[@]}
-    ITEM_CHAP_TW=0
-    # if-form, not `((test)) && assign`: a for loop returns its last command's status, and an
-    # && list whose test came out false returns 1 — which under set -e aborts the redraw the
-    # moment the widest time is not the last one. Same trap as toggle_pause's note.
-    for csec in ${ITEM_CHAP_TIME[@]+"${ITEM_CHAP_TIME[@]}"}; do
-        if ((${#csec} > ITEM_CHAP_TW)); then ITEM_CHAP_TW=${#csec}; fi
-    done
-    # A new subject's chapter 7 is not the old subject's chapter 7.
-    CHAP_SEL=0
     return 0
 }
 
@@ -5169,7 +4572,7 @@ init_lead_tables
 # byte that is not a lead byte pass through untouched — an invalid byte is one "character" here,
 # which is also how bash's own ${q%?} treats it, so backspace can still take it back off.
 # The continuation reads TIME OUT rather than blocking: a lone lead byte (a torn paste, a
-# terminal that drops bytes) must not wedge the card's once-a-second tick behind a read that
+# terminal that drops bytes) must not wedge the once-a-second tick behind a read that
 # never completes. An incomplete sequence is passed through as-is for the same reason a discard
 # would be worse — it would eat a keypress silently, and the main loop's catch-all already
 # ignores anything it cannot use.
@@ -5201,23 +4604,16 @@ utf8_complete() {
 
 # ── Key Input Readers ───────────────────────────────────────────────────────────────────
 
-# What one tick of the shared clock does before the caller redraws. The card polls inside its
-# own renderer — its whole body IS the readout — so it wants nothing here; every other view
-# needs only the percent for its rail. Doing that poll on the CLOCK rather than in the
+# What one tick of the shared clock does before the caller redraws: the position, which the
+# banner prints and the rail draws as a bar. Doing that poll on the CLOCK rather than in the
 # renderer is the point: a keypress redraw then costs no IPC at all (fetch_play_times is an
 # `nc` + `jq` pair, i.e. two forks), and a view that repaints between ticks simply reuses the
 # last values — at most one second old, which is the resolution the rail is drawn at anyway.
 nav_tick() {
-    # The idle flush, ahead of every early return below: a preference changed in the card view
-    # or with nothing playing must land too. What ARMS the timeout that gets us here when
+    # The idle flush, ahead of every early return below: a preference changed with nothing
+    # playing must land too. What ARMS the timeout that gets us here when
     # nothing is playing is the PREF_DIRTY test in read_nav_input.
     flush_prefs
-    # Only the PLAYING subject fetches its own times — it does that inside its own render,
-    # which is why this returned early for the whole card view. The item subject makes no IPC
-    # call at all, so under it this tick is the only thing advancing the shared clock: without
-    # this test the banner's readout was as stale as the moment `i` was pressed the instant you
-    # pressed Tab back to the list.
-    if [[ "$TUI_VIEW_MODE" == "card" && "$CARD_SUBJECT" == "playing" ]]; then return 0; fi
     if [[ -z "$CURRENT_PLAY_ID" ]]; then return 0; fi
     fetch_play_times
     return 0
@@ -5296,16 +4692,16 @@ read_nav_input() {
         return 0
     fi
     local -a t_opt=()
-    # ONE clock, shared by every view that reads through this function (list, card, and the
-    # live filter, which drives the same reader). It used to be card-only, which is why the
-    # list could not carry a live element at all: two timers would also be two places to
-    # change the cadence, and they drift.
+    # ONE clock, shared by everything that reads through this function (the list and the live
+    # filter, which drives the same reader). It used to belong to the focus card alone, which
+    # is why the list could not carry a live element at all: two timers would also be two
+    # places to change the cadence, and they drift.
     #
     # The gate is not WHICH view is up but whether anything on screen can change without a
     # keypress — that is playback, so it is one condition in one place. Consequences both
-    # ways: the list now ticks while a track plays (its rail is live), and the card no longer
-    # ticks when nothing is playing, where it used to repaint a static "(nothing playing)"
-    # once a second forever. LOADING is in the test because the pre-socket window has a
+    # ways: the list ticks while a track plays (its rail is live), and nothing ticks when
+    # nothing is playing — the card that used to repaint a static "(nothing playing)" once a
+    # second forever is gone, and the condition that made that wrong is still the one here. LOADING is in the test because the pre-socket window has a
     # spinner to advance before there is any play id to poll.
     #
     # Deliberately NOT shared: read_query_input, the `n` new-search prompt. A tick there would
@@ -5517,32 +4913,6 @@ while true; do
 
     if ! read_nav_input; then continue; fi
 
-    # Universal View Toggle (Tab)
-    # Toggles: list (Search List) ◄──► card (Now Playing Focus Card)
-    #
-    # `p`/`P` were a SECOND spelling of this until P10, and they went for two reasons that
-    # each stand alone (AS-BUILT-tui.md §11): mpv, ncmpcpp and cmus all bind `p` to PAUSE, so
-    # a player
-    # user pressing it here got a change of screen instead of the one thing they asked for;
-    # and it appeared in no hint block, so nothing on screen could have told them otherwise.
-    # A TUI key is not frozen surface — ARCHITECTURE.md §3.8 freezes the CLI — so retiring one
-    # costs nothing and hands a letter back to a key space that is 26 wide, not 52.
-    if [[ "$READ_NAV_KEY" == $'\t' ]]; then
-        # No `clear` on the switch either: both renderers now paint in place and end with
-        # \033[J, so the incoming view overwrites the outgoing one line by line and wipes
-        # whatever was longer. The clear was the last blank frame left in the app — on a switch
-        # it flashed the whole screen for the sake of rows the next render was about to cover.
-        case "$TUI_VIEW_MODE" in
-        # Tab's semantics are unchanged BY THIS LINE: the subject is reset on the way in, so
-        # Tab still means "the track that is playing" and never lands on the item you last
-        # pressed `i` on. Resetting here rather than on the way out keeps the one place that
-        # decides what Tab is about in the arm that Tab takes.
-        list) CARD_SUBJECT="playing"; TUI_VIEW_MODE="card" ;;
-        *) TUI_VIEW_MODE="list" ;;
-        esac
-        continue
-    fi
-
     # Universal controls (active in all views): playback, and the key-hint tier.
     case "$READ_NAV_KEY" in
     " ") toggle_pause; continue ;;
@@ -5560,44 +4930,6 @@ while true; do
     "?" | "？") cycle_keys; continue ;;
     esac
 
-    # Now Playing card specific handlers
-    if [[ "$TUI_VIEW_MODE" == "card" ]]; then
-        case "$READ_NAV_KEY" in
-        ESC) TUI_VIEW_MODE="list" ;;                       # in-place, as with Tab above
-        # Enter on the ITEM subject plays what the card is about, which is what its own hint
-        # row promises. The row is still the selected one — `i` changed no rows — so this is
-        # play_selected and not a second launch path. The subject then becomes the playing
-        # track: you asked for it to play, so the card is about the playing track now.
-        # Enter on the ITEM subject plays; on the PLAYING subject it is the chapter seek,
-        # and it was an unbound key there until this line. The two never overlap: the item
-        # card has no playhead, so seek_chapter's own guard is false there anyway.
-        "" | $'\n' | $'\r')
-            if [[ "$CARD_SUBJECT" == "item" ]]; then
-                play_selected || true
-                CARD_SUBJECT="playing"
-            else
-                seek_chapter
-            fi ;;
-        "[C" | "OC" | "["*C | "O"*C) seek_relative 5 ;;    # right arrow → seek +5s
-        "[D" | "OD" | "["*D | "O"*D) seek_relative -5 ;;   # left arrow → seek -5s
-        # Up/down USED to be volume ±5 — the direction mpv itself spends on seeking, and a
-        # second spelling of 9/0 either way. They are the chapter cursor now and nothing else;
-        # volume is 9/0's alone, in every view (AS-BUILT-tui.md §11).
-        "[A" | "OA" | "["*A | "O"*A) move_chapter -1 ;;    # up arrow → previous chapter
-        "[B" | "OB" | "["*B | "O"*B) move_chapter 1 ;;     # down arrow → next chapter
-        l | L) cycle_ui_lang ;;
-        t | T) cycle_theme ;;   # cycle palette family live
-        # `i` here does NOT change the subject: it fetches what the list's `i` fetches and
-        # leaves the card about the playing track, which is the only reason the key is worth
-        # having in this view (the item subject would drop the playhead and the queue).
-        i | I) if [[ "$CARD_SUBJECT" == "playing" ]]; then open_playing_info || true; fi ;;
-        ">") skip_next ;;       # the card is where a queue is watched, so it skips too
-        q | Q) printf '%s%s\n' "$S_QUITTING" "$GL_ELL"; exit 0 ;;
-        *) ;;
-        esac
-        continue
-    fi
-
     # List View specific handlers
     case "$READ_NAV_KEY" in
     # j/k reach move_selection ONLY from here. filter_live drives the same function for its
@@ -5606,7 +4938,10 @@ while true; do
     "[A" | "OA" | "["*A | "O"*A | "[B" | "OB" | "["*B | "O"*B | \
     "[C" | "OC" | "["*C | "O"*C | "[D" | "OD" | "["*D | "O"*D | j | J | k | K)
         move_selection "$READ_NAV_KEY" ;;
-    "" | $'\n' | $'\r') play_selected || true ;;  # Enter → start/switch track in background
+    # Enter → start/switch track in background. A chapter row means the same thing with an
+    # offset, and says so through play_chapter's two branches.
+    "" | $'\n' | $'\r')
+        if [[ "$LIST_SOURCE" == "versions" ]]; then play_chapter || true; else play_selected || true; fi ;;
     n | N) new_search ;;      # new search (non-blocking: music continues)
     o | O) cycle_sort ;;      # rotate sort
     e | E) cycle_engine ;;    # switch source (engine), re-fetch the same query
@@ -5619,7 +4954,7 @@ while true; do
     d | D) delete_from_playlist ;; # remove the focused row from the playlist on screen
     h | H) open_history ;;    # open the listening log as the row source
     c | C) open_parts ;;      # open the focused row's parts (?p=N) as the row source
-    i | I) open_item ;;       # open the focused row as the card's subject (one --info)
+    i | I) open_versions ;;   # open the focused row's chapters as the row source (one --info)
     "+") enqueue_selected ;;  # append the focused row to the running player's queue
     ">") skip_next ;;         # skip to the next queued track
     "/") filter_live ;;       # LIVE incremental filter

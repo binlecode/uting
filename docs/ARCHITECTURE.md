@@ -13,7 +13,7 @@
    ├── AS-BUILT-contract.md       冻结的 CLI 面：命令面、把门、envelope、退出码、配置键
    ├── AS-BUILT-engine.md         站点那一半：搜索、解析、登录/PO-token 探测、句柄文法
    ├── AS-BUILT-player.md         播放器、队列，与两个持久存储
-   ├── AS-BUILT-tui.md            人机面：两个视图、宽度层、重排、三个播放态
+   ├── AS-BUILT-tui.md            人机面：一个视图五个行源、宽度层、重排、三个播放态
    ├── AS-BUILT-verification.md   风险登记与验证矩阵
    ├── ROADMAP.md                 还开着的：记下来的 NO、重开条件、没做的事
    ├── RESEARCH-tui-player.md     这套决定所依赖的那份外部调研
@@ -234,6 +234,17 @@ ROADMAP D10（不做 Go 版）的全部账**：收益只剩"删渲染负债"，�
   除非经由播放器已经公布出来的那个 socket。（AS-BUILT-contract.md §2）
 - **TUI 里不用 emoji**：17 个字形的封闭库存，全部文本呈现，宽度表因此**精确**
   而不只是保守。（AS-BUILT-tui.md §11）
+- **一个渲染器，五个行源。** 屏上永远是同一张列表；`b`/`h`/`c`/`i` 各自**换掉那些行**
+  并由同一个键退出。曾经的第二个渲染器（Now Playing 焦点卡，`Tab` 切入）在 100×30 上只填满
+  27%，换来的是一个状态两个渲染器 —— 那正是这份文档一直用来否掉 "mini player" 的理由，
+  于是 2026-08-30 把它用在了它自己身上：**要么把整屏挣回来，要么别占它**。`Tab` 随之空出、
+  刻意不派新活。纯显示的损失（大标题、前方队列块、简介、`selected`）是**明写下来收下**的，
+  而没有任何一个键跟着走。（AS-BUILT-tui.md §11）
+- **一个章节行是一次调用，不是一条引用。** `i` 把 `--info` 的 `chapters[]` 变成行，偏移写在
+  行自己的 url 里（`t=<秒>`，两个引擎都从句柄读它 → 信封的 `start_seconds`），所以条目记录
+  一个新字段都不用加，`Enter`/`+`/`a` 全是继承来的。这条 2026-08-29 曾被否掉，理由是它会把
+  一个起始偏移字段推进播放列表、队列与历史；`0.4.0` 落地 `start_seconds` 之后那条理由失效。
+  （AS-BUILT-tui.md §11、AS-BUILT-engine.md §10.4）
 
 ### 3.8 冻结面 —— 契约本身（接口：整份 AS-BUILT-contract.md）
 
@@ -625,7 +636,7 @@ AS-BUILT-contract.md §3）。`bili-resolve` 根本没有 `--transcript` 那一�
 已移出 → `AS-BUILT-engine.md` §10（含 §10.1 `--info`、§10.2 `--transcript` 与 §10.3 `--parts`）。
 
 ## 11. `uting` 编排（自有胶水，零站点逻辑）
-已移出 → `AS-BUILT-tui.md` §11 —— 引擎发现、两个视图、原地渲染、宽度层与封闭字形库存、
+已移出 → `AS-BUILT-tui.md` §11 —— 引擎发现、一个视图与它的五个行源、原地渲染、宽度层与封闭字形库存、
 reflow、共享时钟与三个播放态。
 
 # 第三部分 —— 模块 API（契约面）
@@ -765,8 +776,8 @@ reflow、共享时钟与三个播放态。
                   new_search [read_query_input，Esc 取消] · filter_live → apply_filter）
                   启动提示：同一个 read_query_input，在第一次取数前以 echo 关闭的状态跑 ——
                   一个读取器、一份 Esc 契约、没有第二套实现
-     Views      : display_list_menu（行 + 横幅 + reflow；原地 \033[H/K/J）,
-                  display_now_playing_card, display_menu（分派、DCS 帧保持）
+     Views      : display_list_menu（行 + 横幅 + reflow；原地 \033[H/K/J）—— **唯一**的
+                  渲染器, display_menu（DCS 帧保持；不再分派）
      Width layer: char_w/disp_w/disp_fits（有界判定，tui §11）/truncate_disp/cluster_back,
                   cw_range/init_cell_tables
      Fetch UX   : spin_start/spin_stop（后台子 shell，sleep 0.12 一帧）夹住 fetch_json ——
@@ -798,15 +809,14 @@ reflow、共享时钟与三个播放态。
                   print_hints（HINT_MEASURE）, wrap_print/wrap_emit
                   （WRAP_MEASURE）, print_details（DETAIL_MEASURE）, card_divider,
                   repeat_glyph, render_prog_bar
-     Card       : display_now_playing_card（**一个**视图、两个主语，CARD_SUBJECT
-                  = playing | item）, card_subject_head（rail + 标题 + 频道，两个主语共用的
-                  骨架）, card_meta_row（从右往左丢字段、tail 永不丢的那一行）,
-                  card_item_body（item 主语：free 层 + 取数买来的层 + 按行预算的简介）,
-                  card_info_row（上传日期/点赞/章节数 —— **两个主语共用**的那一行片段）,
-                  card_queue_block（前方队列块：`--status` 的 queue.upcoming，按行预算，
-                  装不下就退回单行 next: 形式 —— TUI 里唯一**读**队列的地方，tui §11）,
-                  card_chapter_block（`--info` 的 chapters[]：有播放头就是游标 + seek 目标，
-                  没有就是一份目录；两块都**报告画了几行**，队列先拿，tui §11）
+     Row sources: open_playlist（`b`）, open_history（`h`）, open_parts（`c`）,
+                  open_versions（`i`：`--info` 的 chapters[] → build_version_rows →
+                  `{items:[…]}` → build_playlist_rows；带 `t=` 的 url 让一行成为一次**调用**，
+                  tui §11）, stash_search/back_to_search（一层返回栈）,
+                  stored_rows（这五个源里哪四个走 `.items[]`）,
+                  handle_key/chapter_url/chapter_sec（句柄 ↔ 偏移；`t=` 的剥与挂）,
+                  play_chapter（`Enter` 在章节行上：在播的就是这一条则 --seek-to，
+                  否则照常起播）
      Input      : read_nav_input/read_esc_tail（ESC-[/O 解码器，拆出来是为了让 PENDING_ESC
                   的再入不成为它的第二份副本）/read_query_input,
                   nav_tick（1 秒一拍：刷新在播读数 + flush 偏好 —— 两个键循环共用）,
@@ -824,7 +834,7 @@ reflow、共享时钟与三个播放态。
                   send_mpv_ipc, mpv_get_prop, fetch_play_times（一条连接取 pos/dur/pct +
                   pause；直播路径上**只**取 pause）,
                   player_check_ready（core-idle → 清掉 Starting 态，20 秒上限）,
-                  play_state_marks（playing/paused/starting → 字形+标签+颜色，两个视图共用）,
+                  play_state_marks（playing/paused/starting → 字形+标签+颜色）,
                   toggle_pause, seek_relative, adjust_volume, stop_current_playback,
                   keys_full（提示块印哪一档的**状态函数**，不 fork —— 每个只属于 full
                   的格子在它自己的位置上带一句 `keys_full &&`，于是 full 档的顺序与它一直
@@ -911,15 +921,15 @@ AS-BUILT-engine.md §7（一个引擎自己的时长规矩住在那儿）—— 
 
 ```
    $ uting "lofi hip hop" -n 40 [-f video] [-p 15] [--theme nord] [--engine bili]
-     → 自绘菜单，两个视图用 Tab 切换：
-       列表  ：浏览 / 翻页 / 实时过滤 / 新搜索；Enter 播放是 **detached、非阻塞**的 ——
-               菜单保住它的终端，音乐在后续每一步操作之间继续放。
-               轮换键改源 / 排序 / 模式 / 质量档 / 语言 / 主题（改的设置写回用户
-               配置 —— contract §5「写回」，§3.6）；行源可以换成一个播放列表（b）、
-               收听历史（h）或聚焦行的多 P 列表（c，能力探测决定画不画）；
-               聚焦行可以入队（+）、加进播放列表（a），或开成卡片的 item 主语（i）
-       卡片  ：播放头 + 前方队列块；seek / 音量 / 跳下一首 / 对在播曲目叠 info
-       两者  ：Space 暂停 · s 停止 · ? 键位提示换档（core↔full）· q 退出（回收它的播放器）
+     → 自绘菜单，**一个视图**：浏览 / 翻页 / 实时过滤 / 新搜索；Enter 播放是
+       **detached、非阻塞**的 —— 菜单保住它的终端，音乐在后续每一步操作之间继续放。
+       轮换键改源 / 排序 / 模式 / 质量档 / 语言 / 主题（改的设置写回用户配置 ——
+       contract §5「写回」，§3.6）。
+       行源有五个，四个键各管一个来回：播放列表（b）、收听历史（h）、
+       聚焦行的多 P 列表（c）、聚焦行的**章节**（i，一次 `--info`）—— 后两个由能力探测
+       决定画不画，而一个章节行是一次带偏移的调用：Enter 从那一章起播（在播的就是这一条
+       则 seek），`+` 入队、`a` 存进播放列表都带着那个偏移。
+       Space 暂停 · s 停止 · ? 键位提示换档（core↔full）· q 退出（回收它的播放器）
      完整键位面：AS-BUILT-contract.md §1.4（命令面与按键清单）、AS-BUILT-tui.md §11（行为）
 ```
 

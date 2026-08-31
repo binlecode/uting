@@ -27,7 +27,7 @@
 #   tests/drive.sh                                  100x30, default query, dump the frame
 #   tests/drive.sh -x 62 -y 20                      a narrower geometry
 #   tests/drive.sh -q '周杰伦'                       another query (exercises CJK widths)
-#   tests/drive.sh -k 'Tab'                         send keys after the list is ready
+#   tests/drive.sh -k 'i'                           send keys after the list is ready
 #   tests/drive.sh -k 'Enter' -w Playing            send Enter, wait for the banner
 #   tests/drive.sh -i                               leave it up and ATTACH (interactive)
 #   YT_ASCII=1 tests/drive.sh                       any YT_* var is passed through
@@ -181,13 +181,15 @@ fi
 # own tail and the render ends on \033[J (shell/uting:3832).
 #
 # THE NUMBER THIS IS SIZED AGAINST, measured 2026-08-30 at 100x30 by sampling the pane every
-# 0.1s from the keypress: `i` on a row with a long description and 28 chapters spends 2.7s on
-# the fetch (the spinner, changing every ~0.1s), writes the card's HEADER at 2.76s, then goes
-# COMPLETELY QUIET FOR 0.88s before writing the rest at 3.64s. That quiet stretch is the trap:
-# it is not a slow trickle with small pauses, it is one long stall mid-frame — the width layer
-# doing per-character work on a description (AS-BUILT-tui.md §11) — so a settle shorter than
-# it photographs the tear no matter how it is spelled. A first attempt at 0.6s did, and so
-# did a quiescence test with a 0.25s window. For scale, the list frame the 15-24ms figure in
+# 0.1s from the keypress: `i` on a row with 28 chapters spends 2.7s on the fetch (the spinner,
+# changing every ~0.1s), writes the frame's head at 2.76s, then goes QUIET before writing the
+# rest. That quiet stretch is the trap: it is not a slow trickle with small pauses, it is one
+# stall mid-frame — the width layer measuring what the frame is about to print
+# (AS-BUILT-tui.md §11) — so a settle shorter than it photographs the tear no matter how it is
+# spelled. A first attempt at 0.6s did, and so did a quiescence test with a 0.25s window. The
+# stall itself was 0.88s when this was written and is 0.20s since disp_fits bounded the
+# measurement; the window is not re-tuned down, because what it is sized against is the SLOW
+# machine, not this one. For scale, the list frame the 15-24ms figure in
 # shell/uting:2688 describes is two orders of magnitude away from this one.
 #
 # So: unchanged across a 1.5s window, not a 1.5s sleep. On this machine the two would behave
