@@ -411,7 +411,7 @@ mpv socket（AS-BUILT-player.md「运行时 IPC」）。
     （AS-BUILT-player.md「运行时 IPC」 的进程组存活）是同一个真相，只是从客户端一侧、
     用一个 builtin、零 fork 够到 —— 便宜到 1 秒一拍也付得起。**空**的 pid 意思是"未知"
     而不是"死了"（`play_selected` 只要求 id 与 sock），所以它不动 chrome。
-    pid 复用会让它误报，与 `AS-BUILT-verification.md`「风险登记」 为播放器自己的 `group_alive`
+    pid 复用会让它误报，与 ARCHITECTURE.md「风险登记」 为播放器自己的 `group_alive`
     记下的完全一样。这次清除是静默的：那些空状态本身已经说明了，
     而在列表视图里它会落在下一次按键上，因为那次读是阻塞的。
   - **TUI 拥有终端的 echo，而每一个键入字符在成为"一个键"之前先被拼装完整。**
@@ -426,7 +426,7 @@ mpv socket（AS-BUILT-player.md「运行时 IPC」）。
     `stty -g` 存下的状态：`read -s` 只按**单次读**压制回显，于是两次读之间，
     驱动会把一次突发输入留在队列里的东西回显出来 —— 叠在这个 UI 自己已经画的回显上面。
     ICANON 跟着 echo 一起关，是因为"`-echo` 而 ICANON 还开着"正是 `getpass()` 的 termios 签名，
-    而终端会对这一对做出反应（`AS-BUILT-verification.md`「风险登记」、ARCHITECTURE.md「可移植性契约」）；
+    而终端会对这一对做出反应（ARCHITECTURE.md「风险登记」与「可移植性契约」）；
     `min 1 time 0` 让一次裸读阻塞在一个字节上，而不是在零字节上空转。
     过滤的兜底分支必须从 `?)`（一个字节，所以永远不是一个完整 CJK 字符）放宽成 `*)`，
     这正是这两处必须同批发的原因 —— 而它止步于方向键分支没有认领的那些转义序列，

@@ -52,7 +52,7 @@ done
 command -v tmux >/dev/null 2>&1 || { echo "drive.sh: tmux is required (uting needs a real tty)" >&2; exit 1; }
 
 # ---- a state dir of this run's own --------------------------------------------------
-# Why, once, for all three files under tests/: contract.sh's header, and AS-BUILT-verification.md「验证矩阵」. What is specific
+# Why, once, for all three files under tests/: contract.sh's header. What is specific
 # to a DRIVER: the pane holds a real `uting` driving a real `ut-play` and a real mpv, so only
 # whose state it lands on changes — and their playlists and history still render, because
 # UT_STATE_DIR is deliberately NOT redirected (a frame captured here should show the store a

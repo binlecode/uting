@@ -9,12 +9,11 @@
    docs/
    ├── ARCHITECTURE.md          ← 你在这里。伞：定位与非目标、六条发现、
    │                              设计决定（按模块与接口）、拓扑与接缝、控制流、
-   │                              四条工作流、已知约束、bash 3.2 契约
+   │                              四条工作流、已知约束、风险登记、bash 3.2 契约
    ├── AS-BUILT-contract.md       面向 agent 的冻结面：why 与 semver 边界（形状在 usage() 与测试里）
    ├── AS-BUILT-engine.md         站点那一半：搜索、解析、登录/PO-token 探测、句柄文法
    ├── AS-BUILT-player.md         播放器、队列，与两个持久存储
    ├── AS-BUILT-tui.md            人机面：一个视图五个行源、宽度层、重排、三个播放态
-   ├── AS-BUILT-verification.md   风险登记与验证矩阵
    ├── ROADMAP.md                 还开着的：记下来的 NO、重开条件、没做的事
    ├── RESEARCH-tui-player.md     这套决定所依赖的那份外部调研
    └── PLAN-<topic>.md            在飞的工作
@@ -777,6 +776,55 @@ AS-BUILT-contract.md「命令规格」）与 `-j`（结构化结果），
       剩下的这一类装一个带 `-U` 的变体即可。**socat 依旧被拒**
       （不加新依赖；netcat 的变体是同一个依赖的第二拼法，不是新依赖）。
 
+## 风险登记 —— 已知会在哪儿翻车，以及挡它的是什么
+
+**这是一张威胁清单，不是一份覆盖率报告。** 每一行是一种**具体的翻车方式**，加上挡它的那一道
+防线；防线的 why 在它所属的那一册，这里只给一句和一个指针。挡住这些的**大多数不是检查，
+是设计** —— 所以它们既不在 `tests/` 里，也不在任何一册的叙事线上，需要一张自己的表。
+凡是新提一个功能之前值得先读一遍的，就是这张表。
+
+| 风险 | 防线 | 详见 |
+|---|---|---|
+| 一个引擎的 URL 被送去另一个的 resolver（`engine` 字段静默说谎） | 每引擎一份**显式** host 白名单，非本站退 1，绝不返回一条解好的流 | AS-BUILT-engine.md「解析」 |
+| 某个引擎发明一个新的 `reason` 值 | 枚举是封闭的，三个分类器实现它、谁都不许扩展 | AS-BUILT-contract.md「数据契约」 |
+| 一条长得像 flag 的查询变成一个动作 | `--` 在**每一个**动词里结束选项解析，之后各自重新施加位置参数检查 | AS-BUILT-contract.md「门模型」 |
+| 一次工具失败在 `-j` 下把 jq 解析错误交给 agent | 捕获 stderr → 分类 → `status:"error"` 信封，退 2+ | AS-BUILT-engine.md「搜索子系统」 |
+| 一次风控挑战被报成一次零结果的**成功** | HTTP 状态、响应体 `.code`、风控券三层都查（**无自动覆盖**：一张券没法按需产生，唯一能产生它的东西是替身） | AS-BUILT-engine.md「Bilibili 的传输」 |
+| 服务端的粗桶剪掉了 `-m/-M` 本会留下的行（筛选改了**答案**而不只是**代价**） | 只在整个窗口落进一个桶时才下推，且本地那对精确边界无论如何都照跑 | AS-BUILT-engine.md「Bilibili 的传输」 |
+| 链接里的起播偏移搭在 `url` 里被存进播放列表（收藏曲每次从 10:01 起） | `url` 与 `start_seconds` 各答一问，B 站那半剥且只剥 `t=` | AS-BUILT-engine.md「起播偏移」 |
+| 一个凭据头到达 mpv 的 argv，在 `ps` 里看得见 | 引擎不得把 `Cookie`/`Authorization` 放进 `http_headers` | AS-BUILT-player.md「模式 → 格式 → mpv」 |
+| 停止之后留下还在响的孤儿 mpv | 对**进程组**下手，不走 PID 树（pgid 在改挂父进程时不变） | AS-BUILT-player.md「进程组模型」 |
+| 一个被捕获的 `-d` stdout 阻塞在某个后台作业上 | detach 路径上没有后台作业；未来任何 `… &` 必须自己关掉 fd | AS-BUILT-player.md「进程组模型」 |
+| 长命 detached 播放器的 mpv 状态行把磁盘写满 | `YT_DETACHED` → 子进程里把日志钉在有界大小 | AS-BUILT-player.md「进程组模型」 |
+| 别的进程连上某个播放器的 IPC socket | `STATE_DIR/players` 0700；Linux 回退到 `/tmp` 时钉住权限 | AS-BUILT-player.md「运行时 IPC」 |
+| 并发的元数据回填与 `--set-volume` 互相覆盖同一份记录 | 按 id 的 `mkdir` 锁串行化两次 temp+mv，回填另加 pid 守卫 | AS-BUILT-player.md「运行时 IPC」 |
+| 客户端在 `--status` 背后经 socket 改了音量，记录从此说谎 | `--status` 从 socket **活读**，记录值只作兜底 | AS-BUILT-player.md「运行时 IPC」 |
+| 一个被 `SIGKILL` 的 mpv 留下陈旧 socket，调用方挂住 | `[[ -S sock ]]` 测的是"它是不是 socket" → `ipc_failed`，绝不挂起 | AS-BUILT-player.md「运行时 IPC」 |
+| 写回把用户手写的配置改坏（丢注释、写下一个读不回来的值、架空一条 symlink） | 就地只改匹配行 `=` 右边的值 + round-trip 闸 + `mv` 到**解析后**的真实路径 | AS-BUILT-contract.md「配置面」 |
+| 一个被环境压住的键被写进文件，此后每次启动读到又扔掉 | 读配置**之前**记下哪些键已在环境中，对它们写回是 no-op 加一行提示 | AS-BUILT-contract.md「配置面」 |
+| 跑一次测试套件改掉开发者自己的配置、历史或正在听的播放器 | `tests/` 下每个入口点各自 export `TMPDIR`/`UT_STATE_DIR`/`UT_CONFIG`，外加 `contract.sh` 在两个出口断言用户真实配置的 `cksum` 没变 | `tests/contract.sh` 门口 |
+| `uting` 在没有 TTY 时被跑起来（agent、管道） | 要求 `-t 0 && -t 1`，否则 `die` —— 绝不挂起等一个不会来的按键 | AS-BUILT-contract.md「退出码、TTY、依赖」 |
+| 标题里的 tab / 换行 / glob 撑破一行或撑破过滤 | 字段用 US 切分；过滤是纯 bash 的 `nocasematch` + 加引号的词元 | AS-BUILT-tui.md |
+| 一个自己画输入的 UI 让终端亮起 Secure Input / 锁图标 | `-echo` 必须连着 `-icanon`（终端反应的是这一对），并从恢复光标的同一个 trap 里恢复 | 「可移植性契约」 |
+| `set -u` 下的空数组展开在 3.2 上中止 | 展开前先守卫 | 「可移植性契约」 |
+| 一次改名让某个脚本找不到它的兄弟 | 每个脚本解析自己的符号链接链；A→E 里先重指（B）再删（C） | 「命令拓扑」 |
+
+**已接受的残余风险 —— 收窄了，没关闭，写在这里免得被当成 bug 重新发现一遍。**
+
+- **pid 复用**（`AS-BUILT-player.md`「进程组模型」）。句柄是单调 token、存活检查看记录里存的 pid、
+  记录在进程组消失时立即回收 —— 但 `group_alive` 仍是 `pgrep -g`，所以在"已回收未扫到、且那个
+  pid 已被某个**组长**回收再用"的窄窗口里，一次 `--stop` 会给一个无关的组发信号。真正堵上它需要
+  第二个不变量（进程启动时间，或去探播放器自己的 socket）。
+- **`resolve_nc_unix` 的 ncat 分支在 macOS 上跑不到**：本机 `nc -h` 有 `-U`，探测永远选 nc。
+  **如实记为无覆盖** —— 造覆盖要么 shim PATH（那是替身，规矩禁止），要么真上一台 Linux；
+  后者才是补法。
+- **一次未定位的整体变慢**（2026-08-30，`playback.sh` 七条一起红，两次背靠背同样 346s / 348s，
+  同日第三次 79s 全绿）。七条的共同点是**都要求播放头真的往前走**，而只要信封的检查全绿；
+  机制是 `wait_live` 那个**固定 40 秒**的预算被一次约 4.4× 的普遍变慢吃掉（健康时首个非零位置
+  只要 4–8s，余量 5–8 倍）。触发没定位，最吻合的是上游突发之后限流，但没有证据。
+  **不调那个数**：调大买到抖动更少，付出的是一次真的挂住要更久才报出来 —— 一次观察不足以做这笔
+  交易。再次观察到时，该动的是让这几条等一个**事件**而不是等一段时间。
+
 ## 可移植性契约 —— bash 3.2
 
 **`shell/` 里的每一个脚本都必须能在 bash 3.2 下跑**（macOS 那个被冻住的系统 `/bin/bash`，
@@ -824,7 +872,7 @@ bash）下行为一致。我们*不*依赖 Homebrew 的 bash —— 一个被管
                         read -rsn1 只在它自己那次读的时长里清掉 ICANON，
                         所以"整个会话拥有回显、却不动 ICANON"，会让**每一次按键之间的空隙**
                         以及**任何一次阻塞调用的全程**都看起来像密码提示
-                        （`AS-BUILT-verification.md`「风险登记」）。两个一起放倒 ——
+                        （「风险登记」）。两个一起放倒 ——
                         stty -echo -icanon min 1 time 0 —— 并恢复进来时用 stty -g 存下的状态，
                         而不是在一个调用方自己设好的 tty 上重新摁上一套默认值。
    ${var//pat/} 是 O(n2)：在 3.2 上，一旦字符串里含有**一个**匹配，模式**替换**就是

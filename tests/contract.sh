@@ -60,7 +60,7 @@ done
 
 # ---- the player's state dir, pointed somewhere disposable ---------------------------
 # THE ARGUMENT FOR THIS LIVES HERE, and the other two files under tests/ point at it rather
-# than restating it (docs/AS-BUILT-verification.md「验证矩阵」 is the doc-level home of the same fact).
+# than restating it. ARCHITECTURE.md「风险登记」 carries the one-line risk row; this is its why.
 #
 # `ut-play` derives its state dir from TMPDIR ("${TMPDIR:-/tmp}/uting-$(id -u)", shell/ut-play)
 # and takes no override of its own. Left at the user's real TMPDIR, this file --stop --all's a
@@ -388,8 +388,8 @@ report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - -
 #
 # ORDER IS LOAD-BEARING: this section must stay AHEAD of the TUI section. The pane's `uting`
 # polls --status once a second, every lifecycle verb reaps, and a reaped fixture is a fixture
-# deleted before the assertion that reads it — the failure docs/AS-BUILT-verification.md「验证矩阵」 already
-# has on record. Today the order holds by accident of layout; this comment is what makes it
+# deleted before the assertion that reads it — the flake that cost three runs on 2026-08-23,
+# back when a second uting anywhere on the machine could reap this file's fixtures. Today the order holds by accident of layout; this comment is what makes it
 # hold on purpose.
 echo "── the death record: failures only, bounded, never inferred ───────"
 SD="${TMPDIR:-/tmp}/uting-$(id -u)"
@@ -706,7 +706,7 @@ report "ut-play --quality needs a handle" 1 "$(rc shell/ut-play --quality low)"
 report "ut-play --quality keeps the engine gate" 1 \
     "$(rc shell/ut-play --quality low --engine nope -- "$MEDIA_ID")"
 # A bogus SCALAR knob in the user's config dies in uting the same way, naming the key the
-# user actually wrote (AS-BUILT-verification.md「验证矩阵」). Stated over every scalar door rather
+# user actually wrote. Stated over every scalar door rather
 # than the tier that
 # happened to be written first: each one is its own `case`, not one loop through one
 # validator the way the four *_CYCLE keys are, so a check driving only the quality tier is

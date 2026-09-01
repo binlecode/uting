@@ -307,9 +307,9 @@ Lessons these paid for, every one of which produced a wrong result first:
 surface.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the umbrella: what this suite is positioned to
-  be and what it deliberately is not, topology, seams, the control-flow diagrams and every
-  non-obvious decision. Diagrams, flows and decisions; the detail is in
-  the per-scope docs below.
+  be and what it deliberately is not, topology, seams, the control-flow diagrams, every
+  non-obvious decision, and the risk register — the known ways this can go wrong and what
+  defends each one. Diagrams, flows and decisions; the detail is in the per-scope docs below.
 - [`docs/AS-BUILT-contract.md`](docs/AS-BUILT-contract.md) — the frozen CLI contract: envelopes, exit codes,
   lifecycle semantics, and the checklist for adding an engine.
 - [`docs/AS-BUILT-engine.md`](docs/AS-BUILT-engine.md) — the site half: query shaping, the Bilibili
@@ -318,8 +318,6 @@ surface.
   stores: the detached lifecycle, runtime IPC, `ut-playlist` and `ut-history`.
 - [`docs/AS-BUILT-tui.md`](docs/AS-BUILT-tui.md) — the human face: one view with five row sources, in-place rendering,
   the width layer, the reflow and the three play states.
-- [`docs/AS-BUILT-verification.md`](docs/AS-BUILT-verification.md) — the risk register and the
-  verification matrix: what each check proves, and what is deliberately not covered.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — the recorded NOs with their reopen conditions, the
   reopen triggers for settled decisions, and what is not built yet. No changelog, no survey
   data, and no landed decisions — those live in the architecture doc's decisions chapter; positioning is its opening chapter.

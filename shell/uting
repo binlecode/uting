@@ -2430,7 +2430,7 @@ clear_play_state() {
 # kill -0 is the same truth the core reaps on (AS-BUILT-player.md「运行时 IPC」, "process group alive"), reached from the
 # client side: the -d envelope's pid is the bash WRAPPER's, and the wrapper blocks on mpv, so
 # wrapper alive ⇔ still playing. One builtin, no fork — cheap enough for the 1 s tick.
-# Pid reuse can false-positive it, exactly as AS-BUILT-verification.md「风险登记」records for the core's own group_alive;
+# Pid reuse can false-positive it, exactly as ARCHITECTURE.md「风险登记」 records for the core's own group_alive;
 # narrowed by the monotonic id, not closed, and not worth a second mechanism in the client.
 check_player_alive() {
     [[ -n "$CURRENT_PLAY_ID" ]] || return 0

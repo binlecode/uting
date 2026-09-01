@@ -41,7 +41,7 @@ REPO=$(cd -P "$(dirname "$0")/.." && pwd -P) || exit 1
 cd "$REPO" || exit 1
 
 # ---- a state dir of this file's own -------------------------------------------------
-# Why, once, for all three files under tests/: contract.sh's header, and AS-BUILT-verification.md「验证矩阵」. Here it earns
+# Why, once, for all three files under tests/: contract.sh's header. Here it earns
 # the sharpest form of the same sentence — every --stop --all below would reach the player the
 # user is listening to, and every orphan count would be a count of THEIR mpv.
 UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-playback.XXXXXX") || exit 1
@@ -255,9 +255,12 @@ report "--resume reads back running" "false" \
 report "…and --status agrees"         "false" \
     "$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.paused')"
 
-# NOT checked here: the `head -n <count>` pipe close in live_props (AS-BUILT-player.md「运行时 IPC」). Tried, pulled, and
-# why — with the real peer it cannot go red — is recorded in docs/AS-BUILT-verification.md「验证矩阵」. Do not
-# re-add it as a timing assertion.
+# NOT checked here: the `head -n <count>` pipe close in live_props (AS-BUILT-player.md「运行时 IPC」).
+# Tried and pulled: against the real peer it cannot go red — swap the `head` for a bare `cat`
+# and the same read still measures 0.04s, so the assertion passes whatever the code does. The
+# 1.11s that guard appeared to save was measured against a SCRIPTED peer, and this suite keeps
+# none. The guard stays in the player as a defence; it does not get a green tick pretending
+# this file proved it. Do not re-add it as a timing assertion.
 # The degradation an agent must be able to tell from a reading — and it is produced by doing
 # it, not by imitating it: the socket of a REALLY running player is really removed, which is
 # what a crashed mpv or a half-cleaned state dir leaves behind. Live fields go null and volume
@@ -300,8 +303,7 @@ else
 fi
 
 echo "── the quality tier rides the same path as -f ────────────────────"
-# AS-BUILT-verification.md「验证矩阵」: --quality low must stack with -f and reach the engine
-# without breaking
+# --quality low must stack with -f and reach the engine without breaking
 # format selection — a detached player that comes up and reports position proves the
 # tier did not break the stream. auto (the default) sends no sort at all.
 o4=$(shell/ut-play -d -j --volume 0 --quality low -f audio -- "$U1" 2>/dev/null)
@@ -462,10 +464,10 @@ report "--stop ends the queue" 0 "$(shell/ut-play --stop --all -j >/dev/null 2>&
 wait_no_players
 report "no players after a queue" 0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
 no_orphans "no orphan mpv after a queue"
-# NOT checked here: that a stopped queue files no tombstone. Tried, pulled, and why — it could
-# not be made to go red here — is recorded in docs/AS-BUILT-verification.md「验证矩阵」; contract.sh drives the
-# tombstone boundaries from fixtures instead, which is where a rule about what the REAPER
-# records belongs.
+# NOT checked here: that a stopped queue files no tombstone. Tried and pulled: disable the
+# child's `stopped` branch outright and failed[] is STILL empty, so the check was green against
+# broken code. contract.sh drives the tombstone boundaries from fixtures instead, which is
+# where a rule about what the REAPER records belongs.
 
 echo "── the listening log, written by a player that really played ─────"
 # contract.sh drives ut-history's own contract from fixtures. The WIRING — that a track
