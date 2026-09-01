@@ -26,7 +26,10 @@
      风险登记 + 验证矩阵，测量全部带日期，按自己的节奏重同步。
    - `AS-BUILT-contract/engine/player/tui` 四份删除，各自的 why 收敛为
      ARCHITECTURE 的章。
-5. CLAUDE.md 规则先行改写（已完成），docs/ 随后迁移到合规状态 —— 本 PLAN 的工作项。
+5. **agentic DLC 三阶段，roadmap 为根：roadmap → plan → as-built。** research 不是
+   ADLC 的阶段 —— 它是外部活动，按自己的节奏进行，产出以 roadmap 条目的形式进入
+   生命周期；`RESEARCH-` 文档是条目背后的证据，位于生命周期之外。
+6. CLAUDE.md 规则先行改写（已完成），docs/ 随后迁移到合规状态 —— 本 PLAN 的工作项。
 
 ## 迁移工作项
 
