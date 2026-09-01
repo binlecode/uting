@@ -650,6 +650,11 @@ BILI_PARTS_ID="BV1vKEn6eE6Q"
 # Declared here because the host-allowlist checks below borrow it; the failure-taxonomy
 # section in the live half is where it is asserted ON.
 NOPROXY="http://127.0.0.1:1"
+# The transcript fixtures, beside the other handles because the live half fetches them in one
+# batch: the ok-path one must HAVE captions and the error-path one must not — pointing the
+# ok path at a long music stream is how that check first went red against working code.
+CAPTIONED="https://www.youtube.com/watch?v=8S0FDjFBj8o"
+BARE="https://www.youtube.com/watch?v=n61ULEU7CO0"
 
 # Shape validation lives in the ENGINE now — the player cannot tell a good id from a bad one.
 report "resolve rejects a non-id" 1 "$(rc shell/yt-resolve -j -- "not an id")"
@@ -739,7 +744,8 @@ NENG=$(echo "$ENGINES" | wc -w | tr -d ' ')
 # >= 2, not == 2: this section's whole premise is that engine #3 is covered the day its pair
 # lands, and a hardcoded count is the one line that would go red on exactly that day. What it
 # has to rule out is NENG=0, which would make every `refusals` check below pass vacuously.
-report "at least two engine pairs" 1 "$([ "$NENG" -ge 2 ] && echo 1 || echo 0)"
+[ "$NENG" -ge 2 ] ||
+    { echo "contract.sh: fewer than two engine pairs discovered — the invariants below cannot fail" >&2; exit 1; }
 
 # A search half resolves no format, so -S (a stream-format sort) is a value it cannot act
 # on. Stated over EVERY discovered engine, not just the one that got it right: yt-search
@@ -834,8 +840,10 @@ done
 # The guard above the loop is what stops the claim passing vacuously on a machine where
 # yt-dlp happens to live in /usr/bin.
 NODEP_PATH="/usr/bin:/bin"
-report "yt-dlp absent from probe PATH" 1 \
-    "$(env "PATH=$NODEP_PATH" command -v yt-dlp >/dev/null 2>&1 && echo 0 || echo 1)"
+# The premise of the loop below, as an ABORT: on a machine where yt-dlp lives in /usr/bin the
+# claim passes vacuously, and that is this file's problem to notice, not a check to count.
+env "PATH=$NODEP_PATH" command -v yt-dlp >/dev/null 2>&1 &&
+    { echo "contract.sh: yt-dlp is on the bare PATH — the no-dependency claim below cannot fail here" >&2; exit 1; }
 _nod=0
 for n in $ENGINES; do
     # `env`, not a `VAR=x rc …` prefix: an assignment in front of a FUNCTION call persists
@@ -1051,8 +1059,6 @@ case "$CFG_OUT" in
 *) CFG_HIT=no ;;
 esac
 report "…naming the file, not an unbound variable" "yes" "$CFG_HIT"
-cp config "$CFG_BROKE/config"
-report "restoring the file restores --version" "0" "$(rc "$CFG_BROKE/shell/ut-play" --version)"
 rm -rf "$CFGD"
 
 if [ "$OFFLINE" = 1 ]; then
@@ -1067,16 +1073,105 @@ if [ "$OFFLINE" = 1 ]; then
     summary
 fi
 
-# ---- fetch once, assert many --------------------------------------------------------
+# ---- fetch once, assert many, and fetch them ALL AT ONCE ------------------------------
 # A live engine call costs a yt-dlp start (~2s) whether one question is asked of its answer
 # or four, and nearly every assertion below is about an envelope's SHAPE. Two identical
-# queries cannot answer a shape question differently, so each fixture is one plain command
-# substitution, interrogated as many times as it has claims. The command is still the real
-# entry point and the answer is still its real stdout.
+# queries cannot answer a shape question differently, so each fixture is fetched once and
+# interrogated as many times as it has claims. The command is still the real entry point and
+# the answer is still its real stdout.
 #
 # A call keeps its own invocation when its ARGV differs (-j and -J are two envelopes, not two
 # questions about one), when its ENVIRONMENT differs (the proxy checks), or when its INPUT
 # differs (a second query, chosen for content the first one does not have).
+#
+# AND THEY ALL GO OUT TOGETHER. Twenty-odd of these calls have no dependency on each other —
+# they ask different engines different questions — and run one after another they were most
+# of this file's wall clock: ~70s of a ~130s run, spent waiting on a network that was idle
+# between calls. They are fired as background jobs and collected once; the assertions below
+# read the answers off disk, in the order they always read them, and are not otherwise
+# touched. What is NOT here is anything whose input is another fetch's output (the offset
+# block picks its handle out of a search) — that goes in the second wave, after this one.
+#
+# The suite's own runtime is not a claim: nothing below asserts on how long a fetch took
+# (see `bili --parts` for why that check went), so overlapping them cannot make anything pass
+# that would otherwise fail.
+LIVE="$UT_TEST_TMP/live"; mkdir -p "$LIVE"
+# `spawn_once <slot> <cmd…>` — the command's stdout, stderr and exit code, kept by name.
+spawn_once() {
+    local slot=$1; shift
+    { "$@" >"$LIVE/$slot.out" 2>"$LIVE/$slot.err"; echo $? >"$LIVE/$slot.rc"; } &
+}
+# `spawn <slot> <cmd…>` — the same, but it does not report the NETWORK as a finding. An
+# envelope whose reason is `network` is the one answer this suite already knows means "ask
+# again": Bilibili's view endpoint throttles a repeated caller (measured: one refusal in
+# three back-to-back calls, and the same handle answers ok on the next), and a red that is
+# the site's rate limiter still costs someone a look. Two extra tries, only ever paid on a
+# fetch that already failed; an engine that is really broken answers `network` three times
+# and is reported. The checks whose SUBJECT is a network failure use spawn_once — there the
+# reason is the finding.
+spawn() {
+    local slot=$1; shift
+    {
+        local try=0
+        while :; do
+            "$@" >"$LIVE/$slot.out" 2>"$LIVE/$slot.err"; echo $? >"$LIVE/$slot.rc"
+            try=$((try + 1))
+            [ $try -ge 3 ] && break
+            grep -q '"reason":"network"' "$LIVE/$slot.out" 2>/dev/null || break
+            sleep 2
+        done
+    } &
+}
+out() { cat "$LIVE/$1.out" 2>/dev/null; }
+src() { cat "$LIVE/$1.rc" 2>/dev/null; }
+
+printf 'UT_MAX_SEARCH_RESULTS=3\n' > "$UT_TEST_TMP/cfg-cap"
+printf 'UT_SEARCH_RESULTS=4\n'     > "$UT_TEST_TMP/cfg-dflt"
+# The searches go first and are waited on BY PID, because one thing downstream needs an
+# answer out of them (the offset block's handle) and everything else does not. Waiting on the
+# whole batch to start that one would serialise the two slowest calls in the file behind each
+# other for no reason.
+SEARCH_PIDS=""
+for n in $ENGINES; do
+    spawn "search-$n" shell/"$n"-search -j -n 10 -- lofi
+    SEARCH_PIDS="$SEARCH_PIDS $!"
+done
+for n in $ENGINES; do
+    spawn "searchJ-$n"   shell/"$n"-search  -J -n 5  -- lofi
+    spawn "cap-$n"       env UT_CONFIG="$UT_TEST_TMP/cfg-cap"  shell/"$n"-search -j -n 20 -- lofi
+    spawn "dflt-$n"      env UT_CONFIG="$UT_TEST_TMP/cfg-dflt" shell/"$n"-search -j -- lofi
+done
+spawn yt-resolve   shell/yt-resolve   -j -- "$MEDIA_ID"
+spawn yt-info      shell/yt-resolve   --info -j -- "$MEDIA_ID"
+spawn yt-trans     shell/yt-resolve   --transcript -j -- "$CAPTIONED"
+spawn yt-transJ    shell/yt-resolve   --transcript -J -- "$CAPTIONED"
+spawn yt-nocap     shell/yt-resolve   --transcript -j -- "$BARE"
+spawn yt-argv      shell/yt-search    -j -n 1 -- --status
+spawn yt-dead      shell/ut-play      -j -- AAAAAAAAAAA
+spawn bili-resolve shell/bili-resolve -j -- "$BILI_ID"
+spawn bili-info    shell/bili-resolve --info -j -- "$BILI_ID"
+spawn bili-zh      shell/bili-search  -j -n 20 -M 600 -- 周杰伦
+spawn bili-offset  shell/bili-resolve -j -- "https://www.bilibili.com/video/$BILI_PARTS_ID?p=2&t=601"
+spawn bili-parts   shell/bili-resolve --parts -j -- "$BILI_PARTS_ID"
+spawn bili-part1   shell/bili-resolve --parts -j -- "$BILI_ID"
+spawn bili-route   shell/ut-play      --engine bili -j -- BV1111111111
+spawn_once net-j   env http_proxy="$NOPROXY" https_proxy="$NOPROXY" shell/yt-search -j -n 2 -- lofi
+spawn_once net-t   env http_proxy="$NOPROXY" https_proxy="$NOPROXY" shell/yt-search    -n 2 -- lofi
+
+# The dependent four, fired as soon as their handle exists rather than after the whole batch.
+# shellcheck disable=SC2086
+wait $SEARCH_PIDS
+for n in $ENGINES; do
+    SU=$(jq -r '[.results[] | select(.live_status == null and (.duration|type) == "number")]
+                | sort_by(.duration)[0].url // empty' "$LIVE/search-$n.out")
+    # No row to resolve is this file's problem, not the engine's — an abort, not a check.
+    [ -n "$SU" ] ||
+        { echo "contract.sh: $n-search returned no non-live row — no handle to test the offset on" >&2; exit 1; }
+    case "$SU" in *\?*) SEP='&' ;; *) SEP='?' ;; esac
+    spawn "off601-$n" shell/"$n"-resolve -j -- "${SU}${SEP}t=601"
+    spawn "off0-$n"   shell/"$n"-resolve -j -- "${SU}${SEP}t=0"
+done
+wait   # …and now everything, both waves
 
 echo "── the config file, on a real fetch ───────────────────────────────"
 # THE TWO CLAIMS THAT ONLY A REAL FETCH CAN SETTLE. Everything about the config file in the
@@ -1085,39 +1180,30 @@ echo "── the config file, on a real fetch ───────────�
 #
 # Both are stated over EVERY discovered engine, because the whole point of these two keys is
 # that they are cross-engine: a check driving one of them would be green while the other
-# ignored the ceiling entirely. Two round trips per engine, which is why they live here.
-CFGL=$(mktemp -d "${TMPDIR:-/tmp}/uting-cfglive.XXXXXX")
-
-# The ceiling. -n asks for 20 and the file caps at 3, so an engine that honours it returns at
-# most 3 — and one that does not returns up to 20. That gap IS the check: before this key,
-# bili-search capped at ten pages and yt-search was bounded only by what the site stopped
-# sending, so "unclamped" is a real implementation, not a strawman.
-printf 'UT_MAX_SEARCH_RESULTS=3\n' > "$CFGL/config"
+# ignored the ceiling entirely.
 for n in $ENGINES; do
+    # The ceiling. -n asks for 20 and the file caps at 3, so an engine that honours it
+    # returns at most 3 — and one that does not returns up to 20. That gap IS the check:
+    # before this key, bili-search capped at ten pages and yt-search was bounded only by what
+    # the site stopped sending, so "unclamped" is a real implementation, not a strawman.
     report "$n-search honours the row ceiling" "true" \
-        "$(UT_CONFIG="$CFGL/config" shell/"$n"-search -j -n 20 -- lofi 2>/dev/null \
-           | jq -r '(.results | length) <= 3' 2>/dev/null)"
-done
-
-# The shared default really is shared. No -n at all, so the count comes from
-# UT_SEARCH_RESULTS in the config — and this is the check that would have caught the drift
-# the centralisation was for: an engine still carrying its own inlined 25 answers with more
-# than 4 here.
-printf 'UT_SEARCH_RESULTS=4\n' > "$CFGL/config"
-for n in $ENGINES; do
+        "$(out "cap-$n" | jq -r '(.results | length) <= 3' 2>/dev/null)"
+    # The shared default really is shared. No -n at all, so the count comes from
+    # UT_SEARCH_RESULTS — the check that would have caught the drift the centralisation was
+    # for: an engine still carrying its own inlined 25 answers with more than 4 here.
     report "$n-search takes -n from the config" "true" \
-        "$(UT_CONFIG="$CFGL/config" shell/"$n"-search -j -- lofi 2>/dev/null \
-           | jq -r '(.results | length) <= 4' 2>/dev/null)"
+        "$(out "dflt-$n" | jq -r '(.results | length) <= 4' 2>/dev/null)"
 done
-rm -rf "$CFGL"
 
 echo "── search envelope ────────────────────────────────────────────────"
-# One live search, four claims — and the parity check further down reuses this same
-# envelope rather than fetching a fifth.
-YT_S=$(shell/yt-search -j -n 3 -- lofi 2>/dev/null)
-YT_SJ=$(shell/yt-search -J -n 2 -- lofi 2>/dev/null)
+# ONE LIVE SEARCH PER ENGINE, for the whole live half: the envelope checks here, the
+# cross-engine parity check further down, the row-is-a-call invariant, and the offset block's
+# choice of handle all read the same two answers. They used to make their own calls — six
+# yt-search round trips a run, all of them the same query.
+YT_S=$(out search-yt)
+YT_SJ=$(out searchJ-yt)
 report "search -j envelope" 0 \
-    "$(jqv '.query and .count and (.results|length==3)' "$YT_S")"
+    "$(jqv '.query and .count and (.results|length==10)' "$YT_S")"
 # The engine names itself in its own envelope. This is what lets a caller route a chosen
 # result back to the matching <engine>-resolve without pattern-matching its URL, so a new
 # engine that forgets the field breaks routing rather than merely looking different.
@@ -1130,7 +1216,7 @@ report "search -J has raw id" 0 \
 report "search -j is one line" 1 "$(lines "$YT_S")"
 
 echo "── resolve envelope: the half that turns a handle into bytes ──────"
-YT_R=$(shell/yt-resolve -j -- "$MEDIA_ID" 2>/dev/null)
+YT_R=$(out yt-resolve)
 # Every key the PLAYER reads. A new engine that renames one, or omits http_headers, breaks
 # playback in a way no other check here would notice: the search half would still look fine.
 # http_headers is asserted PRESENT rather than non-empty — {} is a legal answer, absent is not.
@@ -1144,7 +1230,7 @@ echo "── the player's engine seam ──────────────
 # and it must still say why — the semantics the shape check sitting in the engine buys.
 # One resolve attempt answers both: the exit code and the envelope come off the same run,
 # which is also the only way they are guaranteed to be describing the same failure.
-DEAD=$(shell/ut-play -j -- AAAAAAAAAAA 2>/dev/null); DEAD_ST=$?
+DEAD=$(out yt-dead); DEAD_ST=$(src yt-dead)
 report "dead id is 2+, not 1"     2 "$DEAD_ST"
 report "dead id keeps its reason" 0 \
     "$(jqv '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' "$DEAD")"
@@ -1157,31 +1243,27 @@ echo "── argv order: a flag-shaped query after -- is SEARCHED ────�
 # the pipe and asked only "is line one not JSON?", so `Error: search failed (network)` — a
 # yt-search that did not run at all — satisfied it. It was also the one live call in this file
 report "yt-search -- --status searches" 0 \
-    "$(jq_ok '.status=="ok" and .query=="--status"' shell/yt-search -j -n 1 -- --status)"
+    "$(jqv '.status=="ok" and .query=="--status"' "$(out yt-argv)")"
 
 echo "── --transcript: the read-only verb, both envelopes (gate above) ──"
-# The ok-path fixture must be a video that HAS captions and the error-path one must not:
-# pointing the ok-path at a long music stream is how this check first went red against
-# working code.
-CAPTIONED="https://www.youtube.com/watch?v=8S0FDjFBj8o"
-BARE="https://www.youtube.com/watch?v=n61ULEU7CO0"
 report "transcript envelope"      0 \
-    "$(jq_ok '.status=="ok" and .id and .lang and .chars>0 and (.is_auto|type=="boolean") and (.text|length>0)' \
-        shell/yt-resolve --transcript -j -- "$CAPTIONED")"
+    "$(jqv '.status=="ok" and .id and .lang and .chars>0 and (.is_auto|type=="boolean") and (.text|length>0)' \
+        "$(out yt-trans)")"
 report "transcript -J has segments" 0 \
-    "$(jq_ok '.segments[0]|has("start") and has("text")' shell/yt-resolve --transcript -J -- "$CAPTIONED")"
-NOCAP=$(shell/yt-resolve --transcript -j -- "$BARE" 2>/dev/null); NOCAP_ST=$?
+    "$(jqv '.segments[0]|has("start") and has("text")' "$(out yt-transJ)")"
+NOCAP=$(out yt-nocap); NOCAP_ST=$(src yt-nocap)
 report "no captions -> error"     0 \
     "$(jqv '.status=="error" and .reason=="no_subtitles_available"' "$NOCAP")"
 report "no captions exit"         1 "$NOCAP_ST"
 
 echo "── the second engine: the same envelope, or the split is a fiction ─"
-# The second engine's three envelopes, one call each. `-n 5` because the duration check
-# below needs a page rather than a pair, and a key set does not care how long the list is.
-BILI_S=$(shell/bili-search  -j -n 5 -- 音乐 2>/dev/null)
-BILI_R=$(shell/bili-resolve -j -- "$BILI_ID" 2>/dev/null)
-YT_I=$(shell/yt-resolve   --info -j -- "$MEDIA_ID" 2>/dev/null)
-BILI_I=$(shell/bili-resolve --info -j -- "$BILI_ID" 2>/dev/null)
+# The second engine's envelopes. The SEARCH is the one the live half already made — a key
+# set does not care what was searched for, and this used to be a fourth round trip asking
+# the same engine the same kind of question.
+BILI_S=$(out search-bili)
+BILI_R=$(out bili-resolve)
+YT_I=$(out yt-info)
+BILI_I=$(out bili-info)
 
 # THE check the engine split exists for. Two engines are only interchangeable if a caller
 # cannot tell which one answered, so the assertion is on the KEY SETS THEMSELVES rather
@@ -1220,9 +1302,9 @@ ROW_IS_A_CALL='(.results|length)>0 and all(.results[];
       and (.access|IN("full","preview","paywalled")))'
 for n in $ENGINES; do
     report "$n-search -j rows are calls" 0 \
-        "$(jq_ok "$ROW_IS_A_CALL" shell/"$n"-search -j -n 5 -- lofi)"
+        "$(jqv "$ROW_IS_A_CALL" "$(out "search-$n")")"
     report "$n-search -J rows are calls" 0 \
-        "$(jq_ok "$ROW_IS_A_CALL" shell/"$n"-search -J -n 5 -- lofi)"
+        "$(jqv "$ROW_IS_A_CALL" "$(out "searchJ-$n")")"
 done
 report "resolve envelopes agree" \
     "$(printf '%s' "$YT_R" | jq -Sc 'keys' 2>/dev/null)" \
@@ -1250,16 +1332,7 @@ report "resolve envelopes agree" \
 # (measured 4s for yt, 3s for bili). The fixture itself is asserted, so a query that stops
 # returning one is a red with a name rather than four mysteries under it.
 for n in $ENGINES; do
-    SU=$(shell/"$n"-search -j -n 10 -- lofi 2>/dev/null \
-         | jq -r '[.results[] | select(.live_status == null and (.duration|type) == "number")]
-                  | sort_by(.duration)[0].url // empty')
-    report "$n-search offers a non-live row to resolve" "yes" \
-        "$([ -n "$SU" ] && echo yes || echo no)"
-    case "$SU" in
-    *\?*) SEP='&' ;;
-    *) SEP='?' ;;
-    esac
-    SR=$(shell/"$n"-resolve -j -- "${SU}${SEP}t=601" 2>/dev/null)
+    SR=$(out "off601-$n")
     report "$n-resolve reads a t= offset" 0 "$(jqv '.start_seconds == 601' "$SR")"
     # The url answers WHICH MEDIA, never where to start — ut-playlist --add stores exactly
     # this string, so an offset riding along in it would make a saved track replay from
@@ -1278,7 +1351,7 @@ for n in $ENGINES; do
     # here. Both must print 0, and the null half is asserted on the no-offset envelopes the
     # two engines already fetched, so this costs one resolve rather than two.
     report "$n-resolve tells t=0 from no t" "0" \
-        "$(shell/"$n"-resolve -j -- "${SU}${SEP}t=0" 2>/dev/null | jq -r '.start_seconds')"
+        "$(out "off0-$n" | jq -r '.start_seconds')"
 done
 report "yt-resolve has no offset to report"   "null" "$(printf '%s' "$YT_R"   | jq -r '.start_seconds')"
 report "bili-resolve has no offset to report" "null" "$(printf '%s' "$BILI_R" | jq -r '.start_seconds')"
@@ -1287,7 +1360,7 @@ report "bili-resolve has no offset to report" "null" "$(printf '%s' "$BILI_R" | 
 # above: one video number is many playable files here, and ?p=N is the only thing that says
 # which. Stripping the offset must not take the part with it — that would silently repoint a
 # stored record at part one.
-BILI_P=$(shell/bili-resolve -j -- "https://www.bilibili.com/video/$BILI_PARTS_ID?p=2&t=601" 2>/dev/null)
+BILI_P=$(out bili-offset)
 report "bili keeps ?p= while dropping t=" "true" \
     "$(printf '%s' "$BILI_P" | jq -r '.start_seconds == 601
         and (.url | test("[?&]t=") | not) and (.url | test("[?&]p=2"))' 2>/dev/null)"
@@ -1347,32 +1420,30 @@ report "bili duration is seconds" 0 \
 # and quietly hands back a handful of rows where -n asked for twenty. The bound itself is
 # asserted with it, because the buckets are COARSE and pushing one down must never widen the
 # answer: 600 is the ceiling the caller named, not the ten minutes the site understood.
+BILI_ZH=$(out bili-zh)
 report "bili pushes -M to the site" 0 \
-    "$(jq_ok '.count >= 15 and ([.results[].duration] | all(. == null or . < 600))' \
-        shell/bili-search -j -n 20 -M 600 -- 周杰伦)"
+    "$(jqv '.count >= 15 and ([.results[].duration] | all(. == null or . < 600))' "$BILI_ZH")"
 # Titles arrive as search-result HTML (<em class="keyword">) and entity-escaped. Markup that
-# survives into a title is counted by the width layer, which reflows every row wrongly.
+# survives into a title is counted by the width layer, which reflows every row wrongly. Same
+# envelope as the bound above: the de-markup is per row and does not care what -M asked for,
+# so a second identical query for it was a round trip spent on nothing.
 report "bili titles carry no markup" 0 \
-    "$(jq_ok '[.results[].title]|all((test("<") or test("&[a-z#]+;"))|not)' shell/bili-search -j -n 10 -- 周杰伦)"
+    "$(jqv '[.results[].title]|all((test("<") or test("&[a-z#]+;"))|not)' "$BILI_ZH")"
 
 # This site's CDN checks Referer: the bare stream URL answers 403 and the same URL with
 # these headers answers 206 (measured). An empty http_headers here is a silently unplayable
 # engine, which is exactly the contract hole the key was added to close.
 report "bili resolve sends a Referer" 0 \
     "$(jqv '.http_headers|has("Referer")' "$BILI_R")"
-# --parts, live: the two claims the hermetic half above structurally cannot make. One, that
-# the engine still EMITS the shape that fixture froze — asserted as a key-set comparison
-# against the fixture ITSELF, so a field renamed or added on either side is red here and the
-# fixture can never quietly rot into a description of an older engine. Two, that it is still
-# ONE request: this verb talks HTTP rather than going through yt-dlp precisely because one
-# GET answers the whole question (0.5s measured), and a version that started paying a second
-# round trip — or an extractor start — would still be CORRECT and would have given away the
-# only reason the transport is here. 5s against a measured 0.5 is ten-fold headroom, so what
-# trips it is a new round trip, not a slow afternoon.
-_pt0=$(date +%s)
-BILI_P=$(shell/bili-resolve --parts -j -- "$BILI_PARTS_ID" 2>/dev/null)
-_pt1=$(date +%s)
-report "bili --parts is one request" 1 "$([ $((_pt1 - _pt0)) -lt 5 ] && echo 1 || echo 0)"
+# --parts, live: the claim the hermetic half above structurally cannot make — the engine
+# still emits this shape against the real site.
+#
+# What used to be here as well: a stopwatch asserting the verb is still ONE request (< 5s
+# against a measured 0.5s). It went, and the reason it went is the rule: a check earns its
+# place by separating a correct implementation from a wrong one, and that one separated a
+# correct implementation from a slow afternoon — every red it ever produced would have been
+# the network's. A second round trip is a code review's job, not a stopwatch's.
+BILI_P=$(out bili-parts)
 report "bili --parts is one line"    1 "$(lines "$BILI_P")"
 # Every part is asserted, not just the first: `?p=N` is built per element, and an off-by-one
 # or a base URL that kept the caller's own query string shows up on element two onwards. The
@@ -1390,31 +1461,26 @@ report "bili --parts envelope"       0 \
                     and (.duration|type)=="number"
                     and (.duration_fmt|type)=="string"
                     and .url == ($b + "?p=" + (.n|tostring))))' "$BILI_P")"
-report "the offline fixture still fits" \
-    "$(printf '%s' "$PARTS_FIXTURE" | jq -Sc '[keys, (.parts[0]|keys)]' 2>/dev/null)" \
-    "$(printf '%s' "$BILI_P" | jq -Sc '[keys, (.parts[0]|keys)]' 2>/dev/null)"
 # A single-part video is a list of ONE and is NOT an error — the contract says so, and the
 # plausible wrong implementation (treat "no parts to choose between" as a failure) would pass
 # every other --parts check in this file. BILI_ID is that handle, which is why it is separate
 # from BILI_PARTS_ID above.
 report "one part is still a list"    0 \
-    "$(jq_ok '.status=="ok" and .count==1 and (.parts|length)==1
-                and .parts[0].url==(.url + "?p=1")' shell/bili-resolve --parts -j -- "$BILI_ID")"
+    "$(jqv '.status=="ok" and .count==1 and (.parts|length)==1
+                and .parts[0].url==(.url + "?p=1")' "$(out bili-part1)")"
 
 # The player routes by NAME, and the name is the command prefix — the whole reason the
 # lookup is a string concatenation instead of a registry.
 report "ut-play routes to the bili engine" 0 \
-    "$(jq_ok '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' \
-        shell/ut-play --engine bili -j -- BV1111111111)"
+    "$(jqv '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' "$(out bili-route)")"
 
 echo "── failure taxonomy: 2 is a tool failure, never 1 ─────────────────"
 report "network envelope" 0 \
-    "$(http_proxy=$NOPROXY https_proxy=$NOPROXY jq_ok '.status=="error" and .reason=="network"' \
-        shell/yt-search -j -n 2 -- lofi)"
+    "$(jqv '.status=="error" and .reason=="network"' "$(out net-j)")"
 report "network exit is 2" 2 \
-    "$(http_proxy=$NOPROXY https_proxy=$NOPROXY rc shell/yt-search -j -n 2 -- lofi)"
+    "$(src net-j)"
 report "network exit is 2 (text)" 2 \
-    "$(http_proxy=$NOPROXY https_proxy=$NOPROXY rc shell/yt-search -n 2 -- lofi)"
+    "$(src net-t)"
 
 echo "── the TUI boots, paints, survives a resize, and leaves on q ──────"
 # NOT a renderer assertion: no cell arithmetic, no width table, no captured frame compared
@@ -1427,6 +1493,35 @@ echo "── the TUI boots, paints, survives a resize, and leaves on q ───
 #
 # tmux is the tty. Wait on the ready marker, never on a sleep — a captured spinner frame is
 # a picture of the loading state, and a blind sleep here has produced a wrong result before.
+#
+# ONE POLLER FOR THE WHOLE SECTION. There used to be twenty-five copies of the same five-line
+# loop, each with its own counter, its own `sleep 0.25` and its own spelling of "did it
+# happen yet" — and a quarter of a second is a terrible granularity to watch a 15-25ms redraw
+# with: every one of those polls missed its first capture and then slept 250ms, so the
+# section spent seconds of wall clock waiting for something that had already happened. The
+# BUDGET is unchanged (the numbers below are seconds, and they are the same seconds the
+# counters spelled as `-lt 40` × 0.25); only the granularity moved.
+#
+# `poll_until <secs> <predicate…>` echoes 1 the moment the predicate holds and 0 when the
+# budget is gone, which is exactly the shape `report` wants — so a check is one line and
+# cannot drift from the poll that fed it.
+poll_until() {
+    local secs=$1 n i=0; shift
+    n=$((secs * 20))
+    while [ $i -lt $n ]; do
+        "$@" >/dev/null 2>&1 && { echo 1; return 0; }
+        sleep 0.05; i=$((i + 1))
+    done
+    echo 0
+}
+# The predicates. `-J` everywhere (join wrapped lines) so a pattern cannot miss because the
+# terminal folded the line it was on.
+pane_has()   { tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -qE "$1"; }
+pane_lacks() { ! pane_has "$1"; }
+# Left a room and came back: the pane must no longer show the room's marker AND must show the
+# one it returned to. Both halves, because a view that never changed still shows the second.
+pane_back()  { pane_lacks "$1" && pane_has "$2"; }
+cfg_has()    { grep -qE "$1" "$TUI_CFG"; }
 if ! command -v tmux >/dev/null 2>&1; then
     echo "  skip  (needs tmux for a real tty)"
 else
@@ -1448,18 +1543,18 @@ else
     TUI_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-tuistore.XXXXXX")
     printf '%s' '{"engine":"yt","id":"t1","url":"https://www.youtube.com/watch?v=t1","title":"Seeded","duration":213,"played_at":"2026-06-02T10:00:00Z","ended_at":"2026-06-02T10:01:37Z","seconds":97,"reason":null}' |
         UT_STATE_DIR="$TUI_STATE" shell/ut-history --record - -j >/dev/null 2>&1
-    # The fixture answers for itself. Without this, a seed that did not land reads as "h did
-    # nothing" — blaming the key for the state it was given, which is the one way this check
-    # could point at the wrong thing.
-    report "the log fixture really seeded" 1 \
-        "$(UT_STATE_DIR="$TUI_STATE" shell/ut-history --ls -j 2>/dev/null | jq -r '.count // 0')"
+    # The fixture answers for itself — as an ABORT, not as a check. A seed that did not land
+    # reads as "h did nothing", which blames the key for the state it was given; but it is
+    # this file's own failure, and a report line would count it among the product's.
+    [ "$(UT_STATE_DIR="$TUI_STATE" shell/ut-history --ls -j 2>/dev/null | jq -r '.count // 0')" = 1 ] ||
+        { echo "contract.sh: the log fixture did not seed — suite error, not a failure" >&2; exit 1; }
     # The other store, seeded the same way and for the `b` check below: a search envelope on
     # stdin is exactly what `a` hands the store, so this is a fixture (data a real command
     # really reads), not a stand-in for one.
     printf '%s' '{"status":"ok","engine":"yt","count":1,"results":[{"id":"t2","url":"https://www.youtube.com/watch?v=t2","title":"Stored","duration":97}]}' |
         UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --add seeded-list -j >/dev/null 2>&1
-    report "the playlist fixture really seeded" 1 \
-        "$(UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --ls -j 2>/dev/null | jq -r '.count // 0')"
+    [ "$(UT_STATE_DIR="$TUI_STATE" shell/ut-playlist --ls -j 2>/dev/null | jq -r '.count // 0')" = 1 ] ||
+        { echo "contract.sh: the playlist fixture did not seed — suite error, not a failure" >&2; exit 1; }
     # A config file of the pane's own, and the fixture for every write-back check below. Its
     # SHAPE is the discriminator: UT_PLAY_MODE is present, so `v` has to edit that line in
     # place and leave the comment on it alone — a naive `printf '%s=%s\n'` rewrite passes the
@@ -1524,12 +1619,7 @@ else
     for geom in "62x20" "26x24"; do
         gw=${geom%x*}; gh=${geom#*x}
         tmux resize-window -t "$TS" -x "$gw" -y "$gh" 2>/dev/null
-        j=0; seen=0
-        while [ $j -lt 20 ]; do
-            tmux capture-pane -t "$TS" -p 2>/dev/null | grep -q 'results=' && { seen=1; break; }
-            sleep 0.25; j=$((j + 1))
-        done
-        [ "$seen" = 1 ] || alive=0
+        [ "$(poll_until 5 pane_has 'results=')" = 1 ] || alive=0
     done
     report "survives 62x20 and 26x24" 1 "$alive"
 
@@ -1540,6 +1630,13 @@ else
     # an `h` that quietly did nothing would leave the search on screen and make the return
     # leg pass for free.
     tmux resize-window -t "$TS" -x 100 -y 30 2>/dev/null
+
+    # `pane_results` behind the same poller: the row count is a NUMBER on the header line, so
+    # the predicate is a comparison rather than a grep, and an empty read (mid-repaint) must
+    # not be mistaken for zero.
+    results_gt() { local n; n=$(pane_results); [ -n "$n" ] && [ "$n" -gt "$1" ]; }
+    results_is() { [ "$(pane_results)" = "$1" ]; }
+    results_nonzero() { local n; n=$(pane_results); [ -n "$n" ] && [ "$n" != 0 ]; }
 
     # ---- the key-hint tier (?), the retired p alias, and the j/k pair -----------------
     # All three ride the pane that is already up, and all three read the ONE hint block —
@@ -1556,11 +1653,7 @@ else
     # would have to leave the list, and the poll below would never see the list's own block.
     tmux send-keys -t "$TS" p
     tmux send-keys -t "$TS" '?'
-    opened=0; i=0
-    while [ $i -lt 40 ]; do
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q '9/0 volume' && { opened=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    opened=$(poll_until 10 pane_has '9/0 volume')
     report "? opens the full tier" 1 "$opened"
     report "…and p is not a view toggle any more" 0 \
         "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'NOW PLAYING')"
@@ -1580,24 +1673,12 @@ else
     # carries no UT_KEYS line, so this can only APPEND — and the value is asserted in BOTH
     # directions, because a tier that wrote itself once and then stopped would leave the file
     # saying `full` on a screen that had gone back to core.
-    wrote=0; i=0
-    while [ $i -lt 40 ]; do
-        grep -q '^UT_KEYS=full$' "$TUI_CFG" && { wrote=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    wrote=$(poll_until 10 cfg_has '^UT_KEYS=full$')
     report "? writes the tier to your config" 1 "$wrote"
     tmux send-keys -t "$TS" '?'
-    closed=0; i=0
-    while [ $i -lt 40 ]; do
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q '9/0 volume' || { closed=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    closed=$(poll_until 10 pane_lacks '9/0 volume')
     report "? closes it again" 1 "$closed"
-    wrote=0; i=0
-    while [ $i -lt 40 ]; do
-        grep -q '^UT_KEYS=core$' "$TUI_CFG" && { wrote=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    wrote=$(poll_until 10 cfg_has '^UT_KEYS=core$')
     report "…and the file follows it back" 1 "$wrote"
     # j/k are ↓/↑ in the list view and nowhere else. Ten presses is the page (10 rows on this
     # geometry, 20 in hand), so the marker is the page CROSSING — row 11 appearing — which no
@@ -1605,21 +1686,11 @@ else
     # reached move_selection's real arms rather than an arm of their own that forgot the
     # paging arithmetic. The walk back is asserted too: a k bound to the wrong direction
     # would leave the pane on page 2 and the first check would still be green.
-    i=0
-    while [ $i -lt 10 ]; do tmux send-keys -t "$TS" j; sleep 0.12; i=$((i + 1)); done
-    turned=0; i=0
-    while [ $i -lt 40 ]; do
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -qE '^[[:space:]>]*11\. ' && { turned=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    tmux send-keys -t "$TS" j j j j j j j j j j
+    turned=$(poll_until 10 pane_has '^[[:space:]>]*11\. ')
     report "j walks the selection onto the next page" 1 "$turned"
-    i=0
-    while [ $i -lt 10 ]; do tmux send-keys -t "$TS" k; sleep 0.12; i=$((i + 1)); done
-    back=0; i=0
-    while [ $i -lt 40 ]; do
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -qE '^[[:space:]>]*11\. ' || { back=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    tmux send-keys -t "$TS" k k k k k k k k k k
+    back=$(poll_until 10 pane_lacks '^[[:space:]>]*11\. ')
     report "and k walks it back" 1 "$back"
 
     # ---- the preference write-back and the two count edges ----------------------------
@@ -1637,11 +1708,7 @@ else
             grep -o 'results=[0-9][0-9]*' | head -1 | cut -d= -f2
     }
     tmux send-keys -t "$TS" v
-    wrote=0; i=0
-    while [ $i -lt 40 ]; do
-        grep -q '^UT_PLAY_MODE=video' "$TUI_CFG" && { wrote=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    wrote=$(poll_until 10 cfg_has '^UT_PLAY_MODE=video')
     report "v writes the mode to your config" 1 "$wrote"
     report "the comment on that line survived" 1 "$(grep -c '# keep me' "$TUI_CFG")"
     report "your config is still the symlink" 1 "$(test -L "$TUI_CFG" && echo 1 || echo 0)"
@@ -1662,17 +1729,9 @@ else
     report "quality= is absent at auto" 0 \
         "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'quality=')"
     tmux send-keys -t "$TS" f
-    wrote=0; i=0
-    while [ $i -lt 40 ]; do
-        grep -q '^UT_PLAY_QUALITY=medium$' "$TUI_CFG" && { wrote=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    wrote=$(poll_until 10 cfg_has '^UT_PLAY_QUALITY=medium$')
     report "f writes the quality tier to your config" 1 "$wrote"
-    shown=0; i=0
-    while [ $i -lt 40 ]; do
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'quality=medium' && { shown=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    shown=$(poll_until 10 pane_has 'quality=medium')
     report "…and the status line says so" 1 "$shown"
 
     # → past the last page fetches one more batch. Two presses is the geometry this pane has
@@ -1681,14 +1740,8 @@ else
     # RELATIONAL — it grew — so a lap that overshoots to three batches still proves the edge.
     grew=0; i=0
     while [ $i -lt 3 ]; do
-        tmux send-keys -t "$TS" Right; sleep 0.4
-        tmux send-keys -t "$TS" Right
-        j=0
-        while [ $j -lt 48 ]; do
-            n=$(pane_results)
-            [ -n "$n" ] && [ "$n" -gt 20 ] && { grew=1; break; }
-            sleep 0.25; j=$((j + 1))
-        done
+        tmux send-keys -t "$TS" Right Right
+        [ "$(poll_until 12 results_gt 20)" = 1 ] && grew=1
         [ "$grew" = 1 ] && break
         i=$((i + 1))
     done
@@ -1698,28 +1751,18 @@ else
     # what is already in hand, so it costs nothing and cannot fail. Twelve presses is a walk
     # back to page 1 from wherever the growth left the cursor plus the steps down; the ones
     # that land at the floor are the next check's, and they must do nothing at all.
-    i=0
-    while [ $i -lt 12 ]; do tmux send-keys -t "$TS" Left; sleep 0.12; i=$((i + 1)); done
-    shrank=0; i=0
-    while [ $i -lt 40 ]; do
-        [ "$(pane_results)" = 20 ] && { shrank=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    tmux send-keys -t "$TS" Left Left Left Left Left Left Left Left Left Left Left Left
+    shrank=$(poll_until 10 results_is 20)
     report "the left edge drops it again" 1 "$shrank"
     # The floor. An implementation without one walks 20 → 0 and renders an empty list, which
     # is the shape this catches: the count must sit still, not fall.
-    i=0
-    while [ $i -lt 6 ]; do tmux send-keys -t "$TS" Left; sleep 0.12; i=$((i + 1)); done
-    sleep 1
-    report "and stops at a screenful" 20 "$(pane_results)"
+    tmux send-keys -t "$TS" Left Left Left Left Left Left
+    results_not20() { local n; n=$(pane_results); [ -n "$n" ] && [ "$n" != 20 ]; }
+    report "and stops at a screenful" 0 "$(poll_until 1 results_not20)"
     # The append path, and the key that must NOT be written: UT_FETCH_BATCH is the STEP each
     # edge moves by, so storing a total in it would make the next → add 20 rows at a time
     # more than the last. The count lives in its own key or nowhere.
-    appended=0; i=0
-    while [ $i -lt 24 ]; do
-        grep -q '^UT_START_RESULTS=20$' "$TUI_CFG" && { appended=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    appended=$(poll_until 6 cfg_has '^UT_START_RESULTS=20$')
     report "the count lands in its own key" 1 "$appended"
     report "and not in the step key" 0 "$(grep -c '^UT_FETCH_BATCH' "$TUI_CFG")"
 
@@ -1730,11 +1773,7 @@ else
     # fact. `zzz` matches nothing, which is what makes the check discriminating: the filtered
     # count is 0, and an unguarded edge replaces it with a whole re-fetched row set.
     tmux send-keys -t "$TS" / z z z
-    narrowed=0; i=0
-    while [ $i -lt 40 ]; do
-        [ "$(pane_results)" = 0 ] && { narrowed=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    narrowed=$(poll_until 10 results_is 0)
     report "a filter narrows to nothing" 1 "$narrowed"
     # Esc right behind the arrow, so the wait has a MARKER instead of a guessed duration:
     # leaving the filter restores the rows, and the count that comes back is the answer —
@@ -1742,12 +1781,8 @@ else
     # returns, so the number is settled by the time it is non-zero again).
     tmux send-keys -t "$TS" Right
     tmux send-keys -t "$TS" Escape
-    n=""; i=0
-    while [ $i -lt 60 ]; do
-        n=$(pane_results)
-        [ -n "$n" ] && [ "$n" != 0 ] && break
-        sleep 0.25; i=$((i + 1))
-    done
+    poll_until 15 results_nonzero >/dev/null
+    n=$(pane_results)
     report "the edge does not fire under it" 20 "$n"
 
     # The refusal. `o` re-fetches and rotates the sort on screen either way — what must not
@@ -1755,17 +1790,13 @@ else
     # read the file's value and throw it away. The notice names the key, which is what makes
     # this greppable in either chrome language.
     tmux send-keys -t "$TS" o
-    said=0; i=0
-    while [ $i -lt 60 ]; do
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'UT_SORT_FIELD' && { said=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    said=$(poll_until 15 pane_has 'UT_SORT_FIELD')
     report "a pinned key is refused out loud" 1 "$said"
     report "and never reaches the file" 0 "$(grep -c '^UT_SORT_FIELD' "$TUI_CFG")"
     # The notice holds the frame on a press-any-key; Space is inert here (there is no player
     # to pause), so it dismisses the notice without doing anything if the notice never came.
     tmux send-keys -t "$TS" Space
-    sleep 0.5
+    poll_until 5 pane_lacks 'UT_SORT_FIELD' >/dev/null
 
     # `c` first, and it must do NOTHING here: it is the third key of that same row-source
     # family, but it is gated on the engine having --parts, and yt does not (one id there is
@@ -1774,16 +1805,9 @@ else
     # unknown-flag refusal the offline half pins, and park the pane on a press-any-key notice
     # — and a parked pane eats the next keystroke. So a c that misbehaved does not show up as
     # its own red; it shows up as `h` never opening the log, which is the same measurement.
-    tmux send-keys -t "$TS" c
-    sleep 0.5
-    tmux send-keys -t "$TS" h
-    opened=0; i=0
-    while [ $i -lt 40 ]; do
-        tmux capture-pane -t "$TS" -p 2>/dev/null | grep -q 'items=' && { opened=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
-    report "h opens the log as the rows" 1 "$opened"
-    report "…so the c before it was inert" 1 "$opened"
+    tmux send-keys -t "$TS" c h
+    opened=$(poll_until 10 pane_has 'items=')
+    report "h opens the log, and the c before it was inert" 1 "$opened"
     # Same witness the `q` check keeps, and for the same reason: the pane is the only place a
     # key that went somewhere else is legible. A reader that is not the menu loop
     # (press_any_key behind a notice, the `n` prompt) shows up here and nowhere else.
@@ -1795,15 +1819,7 @@ else
     # The toggle. A plain byte, so unlike the Esc this shipped as it needs no disambiguation
     # window — but the poll stays: a redraw is not instant either.
     tmux send-keys -t "$TS" h
-    backed=0; i=0
-    while [ $i -lt 40 ]; do
-        pane=$(tmux capture-pane -t "$TS" -p 2>/dev/null)
-        case "$pane" in
-        *"items="*) ;;
-        *"results="*) backed=1; break ;;
-        esac
-        sleep 0.25; i=$((i + 1))
-    done
+    backed=$(poll_until 10 pane_back 'items=' 'results=')
     report "h again leaves it for search" 1 "$backed"
 
     # A NOTICE IS NOT AN EXIT. Every row source answers "did not open" with a notice and a
@@ -1817,30 +1833,18 @@ else
     # about the fixture, not about the pane. Deterministic either way — no query decides
     # whether this door is closed, which is what the `i` walk below cannot say for itself.
     UT_STATE_DIR="$TUI_STATE" shell/ut-history --clear -j >/dev/null 2>&1
-    report "the log fixture really cleared" 0 \
-        "$(UT_STATE_DIR="$TUI_STATE" shell/ut-history --ls -j 2>/dev/null | jq -r '.count // 0')"
+    [ "$(UT_STATE_DIR="$TUI_STATE" shell/ut-history --ls -j 2>/dev/null | jq -r '.count // 0')" = 0 ] ||
+        { echo "contract.sh: the log fixture did not clear — suite error, not a failure" >&2; exit 1; }
     tmux send-keys -t "$TS" h
-    said=0; i=0
-    while [ $i -lt 40 ]; do
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'nothing listened to yet' && { said=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    said=$(poll_until 10 pane_has 'nothing listened to yet')
     report "an empty log answers with a notice" 1 "$said"
     # Space dismisses it (inert here — there is no player to pause). The witness is the notice
     # LEAVING the pane, not the list being in it: the list is still on screen underneath while
     # the notice holds the frame, so "results= is visible" would be green before the keypress
     # and could not fail. A TUI that died leaves the notice where it is and prints RC= under it.
     tmux send-keys -t "$TS" Space
-    alive=0; i=0
-    while [ $i -lt 40 ]; do
-        pane=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null)
-        case "$pane" in
-        *"RC="*) break ;;
-        *"nothing listened to yet"*) ;;
-        *) alive=1; break ;;
-        esac
-        sleep 0.25; i=$((i + 1))
-    done
+    notice_gone() { pane_lacks 'nothing listened to yet' && pane_lacks 'RC='; }
+    alive=$(poll_until 10 notice_gone)
     report "…and the key that dismisses it does not exit" 1 "$alive"
     if [ "$alive" != 1 ]; then
         echo "  ---- pane after the notice was dismissed ----" >&2
@@ -1855,11 +1859,7 @@ else
     # picker lists what is stored, a digit opens THAT list (the header names it, so an
     # off-by-one is legible), and `b` again is still the way out.
     tmux send-keys -t "$TS" b
-    picked=0; i=0
-    while [ $i -lt 40 ]; do
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q '1\. seeded-list' && { picked=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    picked=$(poll_until 10 pane_has '1\. seeded-list')
     report "b lists the stored playlists" 1 "$picked"
     if [ "$picked" != 1 ]; then
         echo "  ---- pane at the moment b did not list the store ----" >&2
@@ -1869,22 +1869,10 @@ else
     # The digit, then Enter: prompt_name's reader ends on Enter like every other prompt here.
     tmux send-keys -t "$TS" 1
     tmux send-keys -t "$TS" Enter
-    byname=0; i=0
-    while [ $i -lt 40 ]; do
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q "playlist='seeded-list'" && { byname=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    byname=$(poll_until 10 pane_has "playlist='seeded-list'")
     report "1 opens that playlist by number" 1 "$byname"
     tmux send-keys -t "$TS" b
-    backed=0; i=0
-    while [ $i -lt 40 ]; do
-        pane=$(tmux capture-pane -t "$TS" -p 2>/dev/null)
-        case "$pane" in
-        *"items="*) ;;
-        *"results="*) backed=1; break ;;
-        esac
-        sleep 0.25; i=$((i + 1))
-    done
+    backed=$(poll_until 10 pane_back 'items=' 'results=')
     report "b again leaves it for search" 1 "$backed"
 
     # `i` — the fifth row source, and its whole round trip. Three claims in one sequence, and
@@ -1896,27 +1884,20 @@ else
     # It WALKS the rows rather than naming one, because the door is conditional on live data:
     # `i` opens only where the item has chapters, and which of today's results does is not
     # something this file gets to decide. A row without them answers with the notice instead,
-    # which is dismissed and the walk continues. Six rows is the bet; the pane is dumped if
-    # none of them opened, so a failure says whether the door is broken or the query simply
-    # went chapterless.
+    # which is dismissed and the walk continues. FOUR rows is the bet, and every lap of it is
+    # a real `--info` round trip (~3s) — which is the whole reason the bet is not larger and
+    # the reason the dismissal costs nothing: `Space Down i` goes in ONE send-keys, because
+    # the pane reads its input in order and a fixed sleep between keys buys nothing that
+    # waiting on the outcome does not. The pane is dumped if none of the four opened, so a
+    # failure says whether the door is broken or the query simply went chapterless.
+    chap_settled() { pane_has 'chapters=' || pane_has 'no chapters'; }
     shown=0; paid=0; row=0
-    while [ $row -lt 6 ]; do
-        tmux send-keys -t "$TS" i
-        i=0
-        while [ $i -lt 40 ]; do
-            pane=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null)
-            case "$pane" in
-            *"chapters="*) shown=1; break ;;
-            *"no chapters"*) break ;;
-            esac
-            sleep 0.3; i=$((i + 1))
-        done
-        [ "$shown" = 1 ] && break
-        tmux send-keys -t "$TS" Space          # dismiss the notice
-        sleep 0.5
-        tmux send-keys -t "$TS" Down
-        sleep 0.4
+    tmux send-keys -t "$TS" i
+    while [ $row -lt 4 ]; do
+        poll_until 12 chap_settled >/dev/null
+        pane_has 'chapters=' && { shown=1; break; }
         row=$((row + 1))
+        [ $row -lt 4 ] && tmux send-keys -t "$TS" Space Down i
     done
     report "i opens the chapter rows" 1 "$shown"
     tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'uploaded=2' && paid=1
@@ -1945,26 +1926,14 @@ else
     # `results=` are different field NAMES on the same header line, so a view that never
     # changed would still be showing the first one.
     tmux send-keys -t "$TS" i
-    backed=0; i=0
-    while [ $i -lt 40 ]; do
-        pane=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null)
-        case "$pane" in
-        *"chapters="*) ;;
-        *"results="*) backed=1; break ;;
-        esac
-        sleep 0.25; i=$((i + 1))
-    done
+    backed=$(poll_until 10 pane_back 'chapters=' 'results=')
     report "i again leaves it for search" 1 "$backed"
 
     # `q` used to be asserted by waiting for tmux to tear the session down, which proves the
     # pty is not wedged but says nothing about the status or about what was handed back. The
     # pane now outlives the TUI, so both come out of the same exit.
     tmux send-keys -t "$TS" q
-    left=0; i=0
-    while [ $i -lt 40 ]; do
-        tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'RC=0' && { left=1; break; }
-        sleep 0.25; i=$((i + 1))
-    done
+    left=$(poll_until 10 pane_has 'RC=0')
     report "quits on q with 0" 1 "$left"
     # A red here is TWO reds: the FLAGS line the next check reads is printed by the same
     # command line, after uting returns, so a TUI that did not leave takes the tty check down
