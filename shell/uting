@@ -2838,7 +2838,7 @@ build_all_rows() {
         ] | join("\u001f")')
 }
 
-# The same seven-field record, built from a PLAYLIST envelope instead of a search one. A
+# The same ten-field record, built from a PLAYLIST envelope instead of a search one. A
 # playlist is engine-agnostic — its items can come from different sources — which is why
 # the engine is a per-ROW field rather than one session-wide variable: play_selected reads
 # the row's own engine, so a list mixing yt and bili plays either one correctly.
@@ -2894,7 +2894,7 @@ handle_key() {
 
 # The row url for one chapter: the item's own handle carrying `t=SEC`. This is what makes a
 # chapter row a CALL and not a reference — the offset rides in the handle, where both engines
-# already read it, so Enter, `+` and `a` inherit it with no eighth field in the record and no
+# already read it, so Enter, `+` and `a` inherit it with no new field in the record and no
 # new state parallel to the rows (which the live filter would desynchronise anyway). An
 # existing `t=` is dropped first: a handle carrying two of them starts wherever the engine's
 # parser happens to look.
@@ -4089,7 +4089,7 @@ reload_playlist() {
 }
 
 # Load a playlist as the row source. The list view is unchanged — same renderer, same
-# filter, same keys — because a playlist envelope produces the same seven-field row a
+# filter, same keys — because a playlist envelope produces the same ten-field row a
 # search does (build_playlist_rows). What changes is LIST_SOURCE, which is what the
 # search-only keys (o / e) test before re-fetching a query that is no longer on screen.
 open_playlist() {
@@ -4442,7 +4442,7 @@ open_parts() {
 # ── The focused row's chapters as the row source (key: i) ───────────────────────────────
 # Fourth of the row-source family — b, h, c and i all do one job, replace the rows — and
 # built like the other three: no new renderer, no new keys, no new item shape. The chapter
-# table `--info` already returns becomes the same seven-field row a search does, so every key
+# table `--info` already returns becomes the same ten-field row a search does, so every key
 # that works on a stored row works here, and a chapter row is a CALL (chapter_url).
 #
 # One fetch, on the KEY — never on the selection moving, the constraint `c` and the ←/→ edge
