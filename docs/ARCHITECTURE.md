@@ -10,7 +10,7 @@
    ├── ARCHITECTURE.md          ← 你在这里。伞：定位与非目标、六条发现、
    │                              设计决定（按模块与接口）、拓扑与接缝、控制流、
    │                              四条工作流、已知约束、bash 3.2 契约
-   ├── AS-BUILT-contract.md       冻结面的 why 与 semver 边界（形状在 usage() 与测试里）
+   ├── AS-BUILT-contract.md       面向 agent 的冻结面：why 与 semver 边界（形状在 usage() 与测试里）
    ├── AS-BUILT-engine.md         站点那一半：搜索、解析、登录/PO-token 探测、句柄文法
    ├── AS-BUILT-player.md         播放器、队列，与两个持久存储
    ├── AS-BUILT-tui.md            人机面：一个视图五个行源、宽度层、重排、三个播放态
@@ -647,7 +647,8 @@ AS-BUILT-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
        决定画不画，而一个章节行是一次带偏移的调用：Enter 从那一章起播（在播的就是这一条
        则 seek），`+` 入队、`a` 存进播放列表都带着那个偏移。
        Space 暂停 · s 停止 · ? 键位提示换档（core↔full）· q 退出（回收它的播放器）
-     完整键位面：AS-BUILT-contract.md「命令规格」（命令面与按键清单）、AS-BUILT-tui.md（行为）
+     完整键位面：`uting --help`（键表本身）、AS-BUILT-tui.md（行为与 why）；
+     命令面与那道 TTY 门在 AS-BUILT-contract.md「命令规格」
 ```
 
 ## Agent —— 先搜，再播
