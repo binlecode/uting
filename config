@@ -74,6 +74,11 @@ UT_PLAY_QUALITY=auto                # the --quality default: auto | low | medium
 # ── scope: player (ut-play) ─────────────────────────────────────────────────────────────
 UT_DEAD_KEEP=8                      # dead player records retained (also bounded to 1 hour)
 YT_ASCII_VO=tct                     # mpv --vo for ASCII video
+UT_VIZ_STYLE=bars                   # what -f viz draws: bars = log-scaled spectrum bars,
+                                    # one per terminal column | wave = the waveform. Both
+                                    # cost the same to within 5% of one core at terminal
+                                    # size; bars is the default because it is the legible
+                                    # one there. AS-BUILT-player.md「终端可视化」
 YT_MPV_INPUT_CONF=                  # path to an mpv input.conf for detached players
 
 # ── scope: terminal UI (uting) ──────────────────────────────────────────────────────────

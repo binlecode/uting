@@ -214,7 +214,7 @@ Options:
   -f MODE     Playback mode (default: audio)
               audio|ba  audio-only          video|bv  high-quality video+audio
               fast|fst  progressive video   ascii|asc terminal video (mpv terminal VO)
-              viz|waves live audio spectrum wave visualizer
+              viz|waves live audio visualizer (UT_VIZ_STYLE picks the picture)
               (-d rejects ascii/viz: a detached player has no terminal to draw on)
   --volume N  mpv startup volume, 0-100 (default: mpv's own). For -d this is the STARTING
               volume; change it live with --set-volume.
@@ -291,6 +291,8 @@ Environment:
   config > the shipped defaults. See AS-BUILT-contract.md「配置面」.
   UT_DEFAULT_ENGINE    Engine used when --engine is not given (default: $UT_DEFAULT_ENGINE)
   UT_HISTORY           0 stops a detached player writing to the listening log (default: on)
+  UT_VIZ_STYLE         -f viz picture: bars (log-scaled spectrum) | wave (waveform)
+                       (default: $UT_VIZ_STYLE)
   YT_ASCII_VO          mpv terminal video output driver (default: tct)
   YT_MPV_INPUT_CONF    Path to an optional custom mpv input.conf
 EOF
@@ -743,12 +745,39 @@ play_viz_url() {
     # Cap size to prevent terminal lag
     if ((width > 120)); then width=120; fi
     if ((height > 30)); then height=30; fi
-    size="${width}x${height}"
+    # HEIGHT IS DOUBLED because --vo=tct draws in HALF BLOCKS (its default --vo-tct-algo):
+    # one text row carries two pixel rows via ▄ with a foreground and a background colour.
+    # Asking the filter for `rows` pixels hands mpv a frame it then upscales 2x vertically,
+    # which cost the visualiser half its vertical detail for nothing. `rows * 2` is 1:1 with
+    # what the pane can actually show. Verified in a real 120x30 tmux pane, not reasoned:
+    # the glyph mpv emits is ▄. AS-BUILT-player.md「终端可视化」
+    size="${width}x$((height * 2))"
 
-    # Use showwaves filter with TCT terminal output
+    # WHICH picture is taste, so it is a config key and not a flag (UT_VIZ_STYLE) — nobody
+    # picks a visualiser style per track. Both chains were measured at this geometry
+    # (120x30 @ 15fps, 2026-08): mpv burns 0.5s of CPU per 10s of audio for the waveform and
+    # 0.9s for the bars, against a 0.5s floor for decode alone, and --vo=tct itself costs
+    # 0.02s — the terminal emulator eats the other end, ~300KB/s of truecolor escapes. So
+    # the two differ by under 5% of one core and the choice is legibility, not price.
+    # showcqt — the visualiser the ffmpeg community reaches for — is deliberately NOT here:
+    # it lays out a fixed bar + axis + sonogram band sized for 1080p, and in 30 rows it
+    # collapses to a black smear even when rendered large and downscaled. showspectrum is
+    # out for a second reason: its default slide=scroll ignores r= and runs at the audio
+    # frame rate, which measured 202MB of escape sequences for 10s against 3MB here.
+    # AS-BUILT-player.md「终端可视化」
+    # One colour, and bars are fed a MONO downmix. Both filters draw every channel into the
+    # same frame, and the overlap is additive: two channels in two colours came out white
+    # wherever they agreed, which for a stereo mix is most of the picture. Downmixing before
+    # showfreqs also makes the reading honest — one bar per terminal column, not two summed.
+    local filter
+    case "$UT_VIZ_STYLE" in
+    bars) filter="aformat=channel_layouts=mono,showfreqs=s=${size}:mode=bar:ascale=log:fscale=log:colors=cyan:r=15" ;;
+    *) filter="showwaves=s=${size}:mode=cline:colors=cyan:r=15" ;;
+    esac
+
     run_mpv \
         --vo=tct \
-        --lavfi-complex="[aid1]asplit[ao][v];[v]showwaves=s=${size}:mode=line:colors=cyan|yellow:r=15[vo]"
+        --lavfi-complex="[aid1]asplit[ao][v];[v]${filter}[vo]"
 }
 
 # Single mode-dispatch table for playback, shared by play_url_directly() (prose
@@ -2703,6 +2732,10 @@ if [[ "$PLAYBACK_MODE" == "ascii" ]]; then
     if ! mpv_supports_vo "$YT_ASCII_VO"; then
         die "mpv does not support --vo=$YT_ASCII_VO (run 'mpv --vo=help' to choose a supported terminal VO)"
     fi
+fi
+
+if [[ "$PLAYBACK_MODE" == "viz" ]] && ! validate_enum "$UT_VIZ_STYLE" bars wave; then
+    die "UT_VIZ_STYLE must be one of: bars, wave"
 fi
 
 # =-----------------------------------------------------------------------------
