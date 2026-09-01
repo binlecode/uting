@@ -1,14 +1,35 @@
 # AS-BUILT-player —— 播放器、队列与两个持久存储的实现
 
-## 结构
+## 模块功能和结构
 
-`shell/ut-play`、`ut-playlist` 与 `ut-history` 的实现 why。开头三节定界（结构 / 模块 /
+`shell/ut-play`、`ut-playlist` 与 `ut-history` 的实现 why。开头两节定界（模块功能和结构 /
 接口），随后三章：播放子系统（模式→格式→mpv 的落点、终端噪声、错误分类、起播偏移）、
 detached 生命周期（进程组、状态机与死亡记录、运行时 IPC、队列）、两个持久存储。两个存储
 写在这里而不是另开一份，因为它们与生命周期是同一个故事 —— 围着一个播放器的那些状态。
 **代码是唯一权威**：点名的函数是 soft ref（文件 + 函数名），伪码是形状，不是源码的副本。
 
-## 模块
+```
+   调用方 ──► ut-play（父进程：门 → 路由；reap_dead_players 在每个动词进门时先扫一遍）
+               │ 播放路径                                   │ 生命周期动词
+               │  resolve_media → <engine>-resolve -j       │  --status --stop
+               │  run_mpv —— 唯一的 mpv 接缝                │  --set-volume --pause/--resume --seek/--seek-to
+               │  （mpv --no-ytdl <直链> + http_headers）    │  --enqueue --next
+               │                                            │  do_* ── 读 players/*.json · nc -U <sock> · 信号
+               ▼ -d / --queue（set -m：子进程成为进程组长）  ▼
+   ┌ detached 进程组 ──────────────────────────┐   ┌ $TMPDIR/uting-<uid>/ —— 运行时状态 ───────────┐
+   │ detached_child_loop（队列循环）           │   │ players/<id>.json        播放器记录（--status 读它）│
+   │   └─ mpv --input-ipc-server=<sock>        │◄─►│ players/dead/<id>.json   死亡记录（墓碑）          │
+   │      一首结束 → detached_epitaph          │   │ mpv-<id>.sock · mpv-<id>.log（有界）              │
+   │                → history_record           │   │ queue-<id>.json · lock-<id>/ · lock-queue-<id>/   │
+   └───────────────┬───────────────────────────┘   └───────────────────────────────────────────────────┘
+                   │ ut-history --record -（按名字调，与调引擎同一种方式；UT_HISTORY=0 关掉）
+                   ▼
+   ┌ $UT_STATE_DIR/ —— 持久存储（用户级；既不认站点也不认播放）──────────────────────────────┐
+   │ playlists/<name>.json    ut-playlist：mkdir 锁 + temp+mv，六个动词，stdin 只收 JSON       │
+   │ history/<YYYY-MM>.jsonl  ut-history：无锁 O_APPEND，一行 < 4096 字节，三个动词            │
+   │ 一条记录 = {engine, url, …} = 一次 ut-play --engine E -- URL 的调用 —— 所以两边互相能管进去 │
+   └────────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 播放器拥有播放、detached 生命周期、队列与 `players/`，**不拥有任何站点知识** ——
 没有 yt-dlp 调用、没有 cookie 决定、没有格式字符串、没有 id 形状；站点那一半在

@@ -1,12 +1,32 @@
 # AS-BUILT-tui —— 人机面 `uting` 的实现
 
-## 结构
+## 模块功能和结构
 
 `shell/uting` 的实现 why：引擎发现、**唯一那个视图**的渲染、防闪烁的原地重绘、reflow
 与分页、键位与输入层、主题与中英 chrome，以及所有被实测钉死的规矩。
 **代码是唯一权威**：点名的函数是 soft ref（文件 + 函数名），不复制实现。
 
-## 模块
+```
+   TTY（人）── 键位 ──► uting（scan_engines：<name>-search + <name>-resolve 成对才算一个引擎）
+                          │
+   ┌ 行源 —— 换掉列表里的行，再按一次就回去 ────────────────────────────────────────────┐
+   │  搜索    <engine>-search -j          b 播放列表  ut-playlist --show -j            │
+   │  h 历史  ut-history --ls -j          c 分 P  <engine>-resolve --parts             │
+   │  i 章节  <engine>-resolve --info     （能力靠"有没有这个动词"发现，不靠注册表）    │
+   └───────────────────────────────────┬─────────────────────────────────────────────┘
+                                       ▼ fetch_json（spinner 夹着它）→ load_rows / build_*_rows
+   ┌ 唯一的视图 ─────────────────────────────────────────────────────────────────────┐
+   │ 宽度层 char_w / disp_w / truncate_disp → layout_cols → display_list_menu（原地重绘）│
+   │ 实时过滤 apply_filter · 重排分页 on_winch · 主题与中英 chrome · ASCII 兜底         │
+   │ 输入层 read_nav_input → utf8_complete（字节重组成字）→ handle_key（派发表）        │
+   └───────────────────────────────────┬─────────────────────────────────────────────┘
+                                       ▼ Enter
+   ut-play -d -j --engine <该行的引擎> ──► 播放器记录 ──► 三个播放态 Starting / Playing / Paused
+   nc -U <播放器在 -d -j 信封里公布的 sock>（唯一批准的直连：进度、暂停、音量）
+   写回：用户 config 的八个偏好键（write_prefs，temp+mv）—— 那份文件就是偏好的 agent 面
+
+   不在这张图里的：任何一条 YouTube / Bilibili 的事实，任何一次 yt-dlp 或 mpv 调用
+```
 
 这个面持有渲染，且**不持有任何站点知识** —— 一条 YouTube 或 Bilibili 的事实出现在这个
 文件里，就是分层违规（ARCHITECTURE.md「命令拓扑」的支配原则）。它也不持有播放与存储：

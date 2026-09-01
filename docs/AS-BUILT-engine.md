@@ -1,14 +1,35 @@
 # AS-BUILT-engine —— 什么是一个引擎：`<name>-search` + `<name>-resolve`
 
-## 结构
+## 模块功能和结构
 
 那两个认识**站点**的半边的实现 why：`yt-search` / `yt-resolve` 与 `bili-search` /
-`bili-resolve`。开头三节定界（结构 / 模块 / 接口），随后按章：搜索（含 Bilibili 的 HTTP
+`bili-resolve`。开头两节定界（模块功能和结构 / 接口），随后按章：搜索（含 Bilibili 的 HTTP
 传输与 `kind`/`access` 的实测由来）、「先探后播」的客户端选择、解析与它的只读动词、起播偏移。
 **这是第三个引擎的作者要读的那份文档**，与 `AS-BUILT-contract.md`「加一个引擎」并排看。
 **代码是唯一权威**：点名的函数是 soft ref（文件 + 函数名），伪码是形状，不是源码的副本。
 
-## 模块
+```
+            query                                          handle（URL / id / BV… —— 文法是引擎的）
+              │                                                  │
+   ┌──────────▼───────────────────────┐            ┌─────────────▼───────────────────────────┐
+   │ <name>-search                    │            │ <name>-resolve                          │
+   │  门 → fetch_results              │            │  门 → normalize_target → is_own_host     │
+   │      → emit_search_json          │            │      → dump_once ──► emit_stream         │
+   │  kind / access 的判断落在这里    │            │  只读动词：--info · --auth（探登录）    │
+   └──────────┬───────────────────────┘            │  yt 独有 --transcript；probe_raw 探 PO   │
+   yt:   yt-dlp（flat，一次调用）                  │  bili 独有 --parts（fetch_view_once，    │
+   bili: curl + jq（fetch_page_once，              │            一个 HTTP 请求，不走 yt-dlp） │
+         手工拼请求的两处之一）                    └─────────────┬───────────────────────────┘
+              │                                    yt-dlp（dump_once）· curl（probe_raw，仅 yt）
+              ▼                                                  ▼
+   search 信封 {items[]: {engine, url, title, …}}   resolve 信封 {stream_urls[], http_headers{},
+              │                                                   title, duration, format, start_seconds}
+              │                                                  ▲
+              ▼                                                  │ 接缝是信封，不是背后的工具
+   uting 渲染 / ut-playlist --add（stdin）              ut-play --engine <name>（名字靠拼接找到它）
+
+   两个引擎各带一份副本（jq 前奏、时长规矩、reason 枚举）—— 没有共享库，所以播放器不必认识它
+```
 
 **这套套件里每一个与站点相关的事实，要么住在一对引擎里，要么就是一次分层违规** ——
 播放器与站点无关，TUI 是纯编排。引擎刻意**不**拥有：播放、生命周期、`players/`。

@@ -251,17 +251,21 @@ the family honest is the one that already governs a single file: one fact, one p
 everything else points at it. **The taxonomy is closed**: work in flight is a `PLAN-`, work
 landed is as-built — no further doc class is introduced.
 
-**Every `AS-BUILT-<scope>.md` opens with the same three sections, in this order, then the why
-chapters:** 「结构」 (Structure — what the scope is made of, and the map of this doc),
-「模块」 (Module — boundary and isolation: what this module owns, what it deliberately does
-not, and the layering rule it enforces), 「接口与 API」 (Interface and API — its surface, its
-shape, and how it is actually CALLED: the verbs and envelopes by name, pointing at
-`usage()` / `tests/contract.sh` / `AS-BUILT-contract.md` for the shapes rather than
-restating them, plus the calling surface hard rule 2 carves out — worked invocations, the
-options that combine, and the combinations that are refused with their exit code, each one
-backed by a check in `tests/contract.sh`). `ARCHITECTURE.md`'s first three
-sections are the suite-level mirror: the mission and design goals, the system panorama, and
-the design decisions grouped by module — the hub whose spokes are the per-scope docs.
+**Every `AS-BUILT-<scope>.md` opens with the same two sections, in this order, then the why
+chapters:** 「模块功能和结构」 (Module function and structure — what the scope is made of and
+the map of this doc, together with its boundary and isolation: what this module owns, what it
+deliberately does not, and the layering rule it enforces. **This section MUST carry one
+diagram**: an ASCII block in the style `ARCHITECTURE.md` already uses, showing the scope's
+parts — files, processes, stores, seams — and the edges between them, so a reader sees the
+shape before reading the why. A rendered terminal frame is not that diagram; it belongs to
+`capture-pane`), 「接口与 API」 (Interface and API —
+its surface, its shape, and how it is actually CALLED: the verbs and envelopes by name,
+pointing at `usage()` / `tests/contract.sh` / `AS-BUILT-contract.md` for the shapes rather
+than restating them, plus the calling surface hard rule 2 carves out — worked invocations,
+the options that combine, and the combinations that are refused with their exit code, each
+one backed by a check in `tests/contract.sh`). `ARCHITECTURE.md`'s first three sections are
+the suite-level mirror: the mission and design goals, the system panorama, and the design
+decisions grouped by module — the hub whose spokes are the per-scope docs.
 
 **`docs/` is FLAT — the prefix is the only grouping, and no subfolder is ever created.** The
 stage is already encoded in the filename (`RESEARCH-` / `PLAN-` / `AS-BUILT-`), so a
