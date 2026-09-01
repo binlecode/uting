@@ -1234,6 +1234,7 @@ spawn bili-zh      shell/bili-search  -j -n 20 -M 600 -- 周杰伦
 spawn bili-offset  shell/bili-resolve -j -- "https://www.bilibili.com/video/$BILI_PARTS_ID?p=2&t=601"
 spawn bili-parts   shell/bili-resolve --parts -j -- "$BILI_PARTS_ID"
 spawn bili-part1   shell/bili-resolve --parts -j -- "$BILI_ID"
+spawn bili-nopart  shell/bili-resolve --parts -j -- av999999999999
 spawn bili-route   shell/ut-play      --engine bili -j -- BV1111111111
 spawn_once net-j   env http_proxy="$NOPROXY" https_proxy="$NOPROXY" shell/yt-search -j -n 2 -- lofi
 spawn_once net-t   env http_proxy="$NOPROXY" https_proxy="$NOPROXY" shell/yt-search    -n 2 -- lofi
@@ -1529,9 +1530,19 @@ report "bili --parts is one line"    1 "$(lines "$BILI_P")"
 # or a base URL that kept the caller's own query string shows up on element two onwards. The
 # base is taken from the envelope's OWN top-level url, so the claim is internal consistency
 # — the thing a caller relies on when it pipes .parts straight into the player.
+#
+# THE TITLE IS ASSERTED AS string-or-null, and that is not a weakening for its own sake. The
+# verb has two endpoints since 2026-09-01 — `view` preferred, `player/pagelist` as fallback
+# once `view` began answering 412 to every request — and only `view` carries the collection
+# title, so the field's honest domain is now both. Both spellings are still pinned: a string
+# must be non-empty, and null is the only other member. What this check does NOT do is pick
+# which endpoint answered, because the caller cannot either — the envelope is the contract,
+# not the route to it. Everything the verb exists FOR is asserted below at full strength on
+# either path: per-part titles are non-empty strings whichever endpoint filled them.
 report "bili --parts envelope"       0 \
     "$(jqv '.status=="ok" and .engine=="bili" and (.id|startswith("BV"))
-              and (.title|type)=="string" and (.title|length)>0
+              and ((.title|type)=="null"
+                   or ((.title|type)=="string" and (.title|length)>0))
               and (.count|type)=="number" and .count>=2 and .count==(.parts|length)
               and (.total_duration|type)=="number"
               and (.total_duration_fmt|type)=="string"
@@ -1548,6 +1559,17 @@ report "bili --parts envelope"       0 \
 report "one part is still a list"    0 \
     "$(jqv '.status=="ok" and .count==1 and (.parts|length)==1
                 and .parts[0].url==(.url + "?p=1")' "$(out bili-part1)")"
+# A HANDLE THAT WILL NEVER RESOLVE MUST NOT BE REPORTED AS RETRYABLE, and since 2026-09-01
+# that is a claim about the verb's TWO endpoints rather than one. `view` answers 412 to
+# everything now, and 412 is `network` — so a fallback that simply reported the preferred
+# endpoint's verdict would tell an agent to keep asking about a video that does not exist.
+# The engine spends the second request, reads `pagelist`'s 200/-404, and lets that verdict
+# win precisely because `unavailable` is a statement about the HANDLE. This is the check
+# that separates the two: the wrong implementation answers `network` and stays exit 2, so
+# the exit code alone cannot see it — the reason is the whole discriminator.
+report "a nonexistent id is not retryable" 0 \
+    "$(jqv '.status=="error" and .reason=="unavailable"' "$(out bili-nopart)")"
+report "…and it is still a tool failure" 2 "$(src bili-nopart)"
 
 # The player routes by NAME, and the name is the command prefix — the whole reason the
 # lookup is a string concatenation instead of a registry.

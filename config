@@ -128,7 +128,7 @@ BILI_VIDEO_FORMAT=bv*+ba/b
 BILI_VIDEO_FORMAT_FAST=b[height<=720]/bv*[height<=720]+ba/b
 # A browser User-Agent; must not contain curl or python — the site refuses those.
 BILI_UA=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Safari/537.36
-BILI_BUVID=                         # a device id; generated per process when unset
+BILI_BUVID=                         # a device id; bili-search only, generated per process when unset
 BILI_RETRY_PAUSE=1                  # seconds before the one retry of a 412 burst
 
 # ── not settable here ───────────────────────────────────────────────────────────────────

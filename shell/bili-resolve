@@ -103,22 +103,45 @@ ENGINE_NAME="bili"
 # Highest quality video+audio. This can start slower than a progressive stream.
 # Optional fast-start format for interactive playback.
 
-# THE PARTS ENDPOINT — this file's second transport, and the suite's second (and last)
-# hand-built HTTP request; the sibling half's `fetch_page_once` is the first. It is here
+# THE PARTS ENDPOINTS — this file's second transport, and the suite's second and last place
+# where an HTTP request is built by hand; the sibling half's `fetch_page_once` is the first.
+# Two endpoints, one preferred and one fallback, are still one transport. It is here
 # rather than behind yt-dlp because yt-dlp cannot answer the question: `--flat-playlist`
 # returns {ie_key,_type,url} per part and NO title and NO duration (measured 2026-08-29),
 # which is an envelope with nothing in it. One GET answers the whole thing in 0.38-0.43s.
 #
-# `view` rather than `/x/player/pagelist`: the two return a byte-identical `pages[]`/`data[]`
-# for the same cost, and only `view` also carries `.data.title` and `.data.duration` — the
-# two top-level fields of the envelope below. Sending UA and Referer is not strictly
-# required by this endpoint today (measured: a bare request answers 200) and is sent anyway,
-# for the reason bili-search states about a stale UA. Nothing else is sent: no cookie, no
-# buvid, no signature. AS-BUILT-engine.md.
+# `view` is PREFERRED, `/x/player/pagelist` is the FALLBACK: the two return the same per-part
+# rows for the same cost, and only `view` also carries `.data.bvid`, `.data.title` and
+# `.data.duration` — the canonical id and two top-level fields of the envelope below. Sending
+# UA and Referer is not strictly required and is sent anyway, for the reason bili-search
+# states about a stale UA. Nothing else is sent: no cookie, no buvid, no signature.
+#
+# WHY THERE IS A FALLBACK AT ALL — measured 2026-09-01, from two different networks, and it
+# is the whole reason this verb has two endpoints instead of one:
+#
+#     view      bare / + buvid3 / + an spi-issued buvid3+buvid4 / + a full browser header
+#               set / either Referer / bvid or aid   ->  412, every combination
+#     pagelist  bare                                 ->  200, code 0, all 200 parts
+#     search/type  bare -> 412,  + buvid3 -> 200     (the sibling half is unaffected)
+#
+# So `view` began refusing this client outright — three days after the 2026-08-29 run that
+# recorded it answering a bare request with 200 — while `pagelist` and the sibling engine's
+# endpoint both still answer. Two networks give the same answer, so this is the endpoint's
+# own change and not an address that got itself flagged.
+#
+# The buvid3 that rescues `search/type` does NOT rescue this one, which is the measurement
+# that decided against sending one here: it would be a header added on a hunch, and the row
+# above is what a hunch looks like when it is tested. A device id stays out of this request.
+#
+# `view` is still ATTEMPTED FIRST rather than retired: it is the endpoint with the better
+# answer, the refusal is the site's current posture rather than a law, and a host where it
+# still answers should still get the richer envelope. The second request is only ever spent
+# where the first has already been refused.
 #
 # UNPREFIXED, like bili-search's SEARCH_ENDPOINT/SEARCH_REFERER and for the same reason:
 # since ARCHITECTURE.md「两个根数据文件」 the prefix IS config reachability, so a constant must not wear a settable name.
 VIEW_ENDPOINT="https://api.bilibili.com/x/web-interface/view"
+PAGELIST_ENDPOINT="https://api.bilibili.com/x/player/pagelist"
 VIEW_REFERER="https://www.bilibili.com/"
 
 # Cookies (login) are ON by default (browser: chrome). On this site they buy AUDIO QUALITY
@@ -824,6 +847,38 @@ fetch_view_once() {
     ((VIEW_CURL_RC == 0)) && [[ "$VIEW_HTTP" == "200" && "$VIEW_CODE" == "0" ]]
 }
 
+# The fallback attempt, spent only after `view` has already refused (see THE PARTS ENDPOINTS
+# above for the measurement). Same shape, same three success conditions, and it writes the
+# SAME three globals — so one `classify_view_error` reads either attempt and this file grows
+# no second error table for a second spelling of one question.
+#
+# Its body is a FLAT `data[]` of parts rather than `view`'s `.data.pages[]`, and it carries
+# no `.data.bvid` / `.data.title` / `.data.duration`, which is what `JQ_PARTS_PAGELIST` below
+# exists to project and what the envelope loses when this path is taken.
+fetch_pagelist_once() {
+    local id=$1 body=$2
+    local cmd=(
+        curl -sS --compressed
+        --max-time 15 --retry 0
+        -o "$body" -w '%{http_code}'
+        -G "$PAGELIST_ENDPOINT"
+        -H "User-Agent: $BILI_UA"
+        -H "Referer: $VIEW_REFERER"
+    )
+    case "$id" in
+    av*) cmd+=(--data-urlencode "aid=${id#av}") ;;
+    *) cmd+=(--data-urlencode "bvid=$id") ;;
+    esac
+
+    VIEW_CURL_RC=0
+    VIEW_HTTP=$("${cmd[@]}" 2>/dev/null) || VIEW_CURL_RC=$?
+    VIEW_CODE=""
+    if [[ -s "$body" ]]; then
+        VIEW_CODE=$(jq -r '.code // empty' "$body" 2>/dev/null) || VIEW_CODE=""
+    fi
+    ((VIEW_CURL_RC == 0)) && [[ "$VIEW_HTTP" == "200" && "$VIEW_CODE" == "0" ]]
+}
+
 # HTTP status + body code -> the suite's shared reason enum (AS-BUILT-contract.md「数据契约」). The
 # same two tables bili-search classifies with, because they describe the same host — and
 # separate from `classify_yt_dlp_error` above, which reads an extractor's prose. The
@@ -907,6 +962,36 @@ JQ_PARTS='
                duration_fmt: ((.duration | fmt_dur) // null)} ]}
 '
 
+# The same envelope off `pagelist`'s thinner body, and the three fields it cannot fill:
+#
+#   id / url   the TYPED handle, because this endpoint returns no `.data.bvid`. An av handle
+#              therefore stays in its av spelling here where `view` would have canonicalised
+#              it to BV — the records still name the same video and still resolve, they just
+#              do not agree letter-for-letter with a search row's url.
+#   title      null. That is an ALREADY-LEGAL value of this field (`view` emits it for a
+#              record with no title), so nothing downstream learns a new shape — and it is
+#              the honest answer, not a guessed one. The part titles are all present.
+#   total_dur  summed from the parts, which `JQ_PARTS` already does whenever `view` omits it.
+#
+# Everything the verb is actually FOR — the part list, each part's number, title, duration
+# and its own playable url — comes through whole.
+JQ_PARTS_PAGELIST='
+$fallback as $id
+| ("https://www.bilibili.com/video/" + $id) as $base
+| ([.data[].duration] | add) as $total
+| {status: "ok", engine: $engine, id: $id, url: $base,
+   title: null,
+   count: (.data | length),
+   total_duration: ($total // null),
+   total_duration_fmt: (($total | fmt_dur) // null),
+   parts: [ .data[]
+            | {n: .page, engine: $engine,
+               url: ($base + "?p=" + (.page | tostring)),
+               title: (.part // null),
+               duration: (.duration // null),
+               duration_fmt: ((.duration | fmt_dur) // null)} ]}
+'
+
 resolve_parts() {
     ensure_scratch
 
@@ -916,14 +1001,46 @@ resolve_parts() {
         die "--parts needs a BV or av id and '$TARGET' carries none (a b23.tv link is a redirect, not an id — open it once, or pass the BV id bili-search returns)"
 
     local body="$SCRATCH_DIR/view.json"
-    fetch_view_once "$id" "$body" ||
-        parts_fail "$(classify_view_error "$VIEW_CURL_RC" "$VIEW_HTTP" "$VIEW_CODE")"
+    local shape jq_parts
+    shape='(.data.pages | type) == "array" and (.data.pages | length) > 0'
+    jq_parts="$JQ_PARTS"
+
+    if ! fetch_view_once "$id" "$body"; then
+        # THE VIEW REASON IS THE REPORTED ONE, decided here and carried past the second
+        # attempt: `view` has the richer error vocabulary of the two (a bogus id is 200 with
+        # body code -400 there), and a fallback that also fails should not downgrade a
+        # verdict the preferred endpoint already gave.
+        local reason
+        reason=$(classify_view_error "$VIEW_CURL_RC" "$VIEW_HTTP" "$VIEW_CODE")
+
+        # `unavailable` is the one class that is a statement about the HANDLE rather than
+        # about the request — a deleted or nonexistent video answers the same way at every
+        # endpoint, so a second request buys nothing. That is the same argument this file
+        # already makes for not retrying, applied to not falling back.
+        [[ "$reason" == "unavailable" ]] && parts_fail "$reason"
+
+        body="$SCRATCH_DIR/pagelist.json"
+        shape='(.data | type) == "array" and (.data | length) > 0'
+        jq_parts="$JQ_PARTS_PAGELIST"
+        if ! fetch_pagelist_once "$id" "$body"; then
+            # …with one exception, and it is the same distinction: whichever endpoint
+            # manages to say `unavailable` is making a statement about the HANDLE, and that
+            # outranks a blanket refusal of the REQUEST. While `view` answers 412 to
+            # everything, this is the only path by which a nonexistent id is still reported
+            # as nonexistent (pagelist answers 200/-404 for it) instead of as a retryable
+            # network fault an agent would go on asking about.
+            local fb_reason
+            fb_reason=$(classify_view_error "$VIEW_CURL_RC" "$VIEW_HTTP" "$VIEW_CODE")
+            [[ "$fb_reason" == "unavailable" ]] && reason="$fb_reason"
+            parts_fail "$reason"
+        fi
+    fi
 
     # A 200/code:0 whose record has no parts is not a video this verb can describe. Checked
     # before the projection rather than after: `.data.pages[]` on a missing key would emit an
     # envelope with count 0 and an empty list, which reads as "this video has no parts" —
     # and every video here has at least one.
-    jq -e '(.data.pages | type) == "array" and (.data.pages | length) > 0' "$body" >/dev/null 2>&1 ||
+    jq -e "$shape" "$body" >/dev/null 2>&1 ||
         parts_fail "unavailable"
 
     if [[ "$OUTPUT_MODE" == "json_full" ]]; then
@@ -933,7 +1050,7 @@ resolve_parts() {
 
     local env_json
     env_json=$(jq -c --arg engine "$ENGINE_NAME" --arg fallback "$id" \
-        "$JQ_PRELUDE $JQ_PARTS" "$body") ||
+        "$JQ_PRELUDE $jq_parts" "$body") ||
         parts_fail "unknown"
 
     if [[ "$OUTPUT_MODE" == "json" ]]; then
@@ -1026,7 +1143,8 @@ Options:
   -j       JSON envelope (see below)
   -J       Full raw yt-dlp record
   --info   Metadata only (title, channel, description) — nothing is resolved
-  --parts  List the parts (?p=N) of a multi-part video — one HTTP request, no yt-dlp.
+  --parts  List the parts (?p=N) of a multi-part video — one HTTP request, no yt-dlp
+           (a second one only when the preferred endpoint refuses; see `title` below).
            Every element is an item record, so the list pipes into ut-playlist --add and
            ut-play --queue unmapped. A single-part video lists one part, not an error
   --auth   Report the cookie decision: which browser profile playback will read, and
@@ -1052,6 +1170,9 @@ Parts JSON (--parts -j): {status,engine,id,title,url,count,total_duration,
                           total_duration_fmt,parts:[{n,engine,url,title,duration,
                                                      duration_fmt}]}
   parts[] elements ARE item records:  --parts -j | jq '{items:.parts}' | ut-playlist --add …
+  Top-level `title` is null when the fallback endpoint answered — it does not carry the
+  collection title. Every part's own title, number, duration and url are there either way,
+  and an av handle keeps its av spelling in `id`/`url` instead of being canonicalised to BV.
   The verb needs an id, so a b23.tv short link (a redirect) is refused — pass the BV id.
   There is no --parts on yt-resolve: one id there is one file, and its many-item form is a
   playlist under its own URL. A caller probes for the verb by invoking it with no handle.
@@ -1080,7 +1201,7 @@ Environment:
   BILI_AUDIO_FORMAT        Format for audio/viz modes (default: ba/b)
   BILI_VIDEO_FORMAT        Format for video/ascii modes (default: bv*+ba/b)
   BILI_VIDEO_FORMAT_FAST   Format for fast mode
-  BILI_UA                  User-Agent sent with the --parts request (a browser UA; the
+  BILI_UA                  User-Agent sent with the --parts requests (a browser UA; the
                            site is known to start refusing one that has gone stale). It is
                            the ONLY verb here that sends a request of its own making —
                            every other one goes through yt-dlp, which carries its own.
@@ -1254,8 +1375,9 @@ fi
 
 normalize_target "$TARGET"
 
-# --parts runs NO yt-dlp — it is one HTTP request — so requiring the extractor for it would
-# be the same backwards gate --auth refuses above. curl is this verb's dependency and jq
+# --parts runs NO yt-dlp — it is one HTTP request, or two when the first is refused — so
+# requiring the extractor for it would be the same backwards gate --auth refuses above.
+# curl is this verb's dependency and jq
 # parses what comes back; both are already required elsewhere in the engine pair.
 if [[ "$ACTION" == "parts" ]]; then
     require_deps curl jq

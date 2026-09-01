@@ -810,15 +810,19 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                       BILI_COOKIE_BROWSER (chrome)  BILI_AUDIO_FORMAT (ba/b)
                       BILI_VIDEO_FORMAT (bv*+ba/b)  BILI_VIDEO_FORMAT_FAST
                         —— bili 引擎自己的那组，与上面 yt 组逐一对应（bili-resolve 读）。
-                      BILI_UA  BILI_BUVID  —— bili-search 的 HTTP 传输旋钮
-                        （AS-BUILT-engine.md「Bilibili 的传输」）。`BILI_UA` 的**出厂值是一个真的
+                      BILI_UA  BILI_BUVID  —— bili 这一侧手搭 HTTP 请求的传输旋钮
+                        （AS-BUILT-engine.md「Bilibili 的传输」「多 P」）。`BILI_UA` 被**两半都读**
+                        （搜索的分页请求，与 `bili-resolve --parts` 的取数）；`BILI_BUVID`
+                        只有 `bili-search` 读 —— 实测它救不了 `--parts` 那个端点，
+                        所以那里刻意不发设备标识。`BILI_UA` 的**出厂值是一个真的
                         浏览器 UA 串**，和别的默认值一样只声明在 `config` 里：空值不是
                         "发一个空头"，curl 对空值的语义是**根本不发这个头**。
                         `BILI_BUVID` 空是对的 —— 那一个是每进程现生成的。
                       BILI_RETRY_PAUSE (1) —— 412 突发之后那**一次**重试前等几秒。
                         刻意是引擎专属的：这个停顿是为**这台**主机的突发限流存在的，
-                        而这个文件是套件里唯一一处手搭 HTTP 请求的地方；`yt-search`
+                        而手搭 HTTP 请求在套件里只有 bili 这一侧有；`yt-search`
                         走 yt-dlp，根本没有一条重试路径给一个共享旋钮去管。
+                        它只管**搜索**那半的突发：`--parts` 不重试，它换端点。
                       YT_SUB_LANG_CHAIN (en,zh-Hans,zh,ja) —— `--transcript` 的字幕语言
                         优先链。**引擎专属，而且必须是**：`bili-resolve` 根本没有
                         `--transcript`（它点名那个标志只为说这个站点没有字幕轨）。

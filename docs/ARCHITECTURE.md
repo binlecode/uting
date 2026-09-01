@@ -392,7 +392,7 @@ AS-BUILT-engine.md「搜索子系统」（一个引擎自己的时长规矩住�
 |---|---|---|---|
 | **yt-dlp** | 抽取 | 只有引擎 | `fetch_results`（`yt-search`）；`dump_once`、`resolve_info`、`resolve_transcript`（`yt-resolve`）；`dump_once`、`resolve_info`（`bili-resolve`） |
 | **mpv** | 播放 | 只有播放器 | `run_mpv()`（唯一的播放接缝）+ `mpv_supports_vo()` 能力探测 |
-| **curl** | HTTP 传输 | `bili-search`（它的传输层）；`bili-resolve`（仅 `--parts`）；`yt-resolve`（仅探测） | `fetch_page_once`（`bili-search`）与 `fetch_view_once`（`bili-resolve` 的 `--parts`）—— 全套件仅有的两处手工拼请求，都对着 B 站的公开端点；`probe_raw`（`yt-resolve`，可取性探测） |
+| **curl** | HTTP 传输 | `bili-search`（它的传输层）；`bili-resolve`（仅 `--parts`）；`yt-resolve`（仅探测） | `fetch_page_once`（`bili-search`）与 `fetch_view_once` / `fetch_pagelist_once`（`bili-resolve` 的 `--parts`，首选与回落两个端点，AS-BUILT-engine.md「多 P」）—— 全套件仅有的两处手工拼请求，都对着 B 站的公开端点；`probe_raw`（`yt-resolve`，可取性探测） |
 | **nc** | mpv JSON-IPC | 播放器，以及作为客户端的 `uting` | `live_props`（读）与 `ipc_command`（命令 —— 五个 socket 动词共用）（`ut-play`）；TUI 自己的客户端（`AS-BUILT-tui.md`） |
 | jq | JSON 整形 | 所有人 | 无处不在 |
 
@@ -615,7 +615,7 @@ AS-BUILT-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
 | 4 | `probe_raw`（`yt-resolve`） | `curl` 取 1 字节，失败则第二次解析 | 引擎 | 挑客户端；置 `retried`（AS-BUILT-engine.md「先探后播」） |
 | 5 | `resolve_info` | `yt-dlp --dump-single-json --skip-download` | 引擎 | `--info` 信封 |
 | 6 | `resolve_transcript`（`yt-resolve`） | `yt-dlp --skip-download --no-simulate` | 引擎 | 字幕文件 → 文本 |
-| 7 | `fetch_view_once`（`bili-resolve`） | 对 view 端点的 `curl`（无 yt-dlp） | 引擎 | `--parts` 信封（分 P 列表） |
+| 7 | `fetch_view_once` / `fetch_pagelist_once`（`bili-resolve`） | 对 view 端点的 `curl`，被拒则改打 pagelist（无 yt-dlp） | 引擎 | `--parts` 信封（分 P 列表） |
 
 **三个值得明说的后果**
 
