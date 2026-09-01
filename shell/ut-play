@@ -321,6 +321,23 @@ is_non_negative_int() {
     [[ "$1" =~ ^[0-9]+$ ]]
 }
 
+# Does the CTYPE locale encode UTF-8? `--vo=tct` draws in HALF BLOCKS — one text row carries
+# two pixel rows via U+2584 — so under a C/POSIX locale the terminal-rendering modes emit a
+# character the encoding cannot carry, and the picture arrives as mojibake or as nothing.
+#
+# Read from the ENVIRONMENT rather than from `locale charmap`: mpv resolves its own CTYPE by
+# the same three variables in the same order, so the answer is already here, and running one
+# more command to learn what three variables say would be a dependency bought for nothing.
+# Unset counts as not-UTF-8 — that is the C locale, which is exactly the cron/launchd case
+# where this breaks. Spellings are enumerated rather than case-folded: the 3.2 floor has no
+# lowercasing parameter expansion at all (docs/ARCHITECTURE.md「可移植性契约」 lists it).
+locale_is_utf8() {
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *UTF-8* | *utf-8* | *UTF8* | *utf8*) return 0 ;;
+    *) return 1 ;;
+    esac
+}
+
 # A SIGNED integer, sign REQUIRED. --seek is relative and mpv's own seek defaults to
 # relative too, so a bare `--seek 30` reads as "+30" to every caller who did not check —
 # and would be an absolute jump to second 30 if we guessed the other way. Neither guess is
@@ -2749,6 +2766,33 @@ fi
 
 if [[ "$PLAYBACK_MODE" == "viz" ]] && ! validate_enum "$UT_VIZ_STYLE" bars wave; then
     die "UT_VIZ_STYLE must be one of: bars, wave"
+fi
+
+# A TERMINAL-RENDERING MODE UNDER A NON-UTF-8 LOCALE REFUSES; it does not degrade. tct draws
+# with U+2584, so under the C locale the picture was mojibake or an empty pane and nothing
+# said why — the same silent shape `-j -f viz` had, arriving from the environment instead of
+# from argv.
+#
+# REFUSE rather than fall back, decided 2026-09-01. The two candidates were an ASCII canvas
+# (drop the half-block algo and shrink the filter to match) and this. Degrading loses the
+# vertical half of the resolution the doubled canvas exists to buy (AS-BUILT-player.md
+# 「终端可视化」) and hands back a picture bad enough to read as a bug, which is worse than a
+# sentence saying what to change — and `--vo-tct-algo=plain`, the obvious lever, is already a
+# recorded NO in ROADMAP.md for exactly that reason. A refusal the caller can act on beats a
+# picture they cannot trust.
+#
+# NOT read from YT_ASCII: that is `uting`'s chrome switch for its own renderer, the player
+# does not read it, and it must not start — a UI's knowledge does not descend into the player
+# (CLAUDE.md's governing principle). The locale is the fact; YT_ASCII is one surface's opinion
+# about it.
+#
+# Scoped to the modes that actually draw half blocks: viz hardcodes --vo=tct, ascii takes
+# YT_ASCII_VO, so a user who pointed that at sixel or kitty is not affected and is not asked
+# about a glyph their VO never emits.
+if { [[ "$PLAYBACK_MODE" == "viz" ]] ||
+    [[ "$PLAYBACK_MODE" == "ascii" && "$YT_ASCII_VO" == "tct" ]]; } &&
+    ! locale_is_utf8; then
+    die "-f $PLAYBACK_MODE needs a UTF-8 locale: --vo=tct draws in half blocks (U+2584), which '${LC_ALL:-${LC_CTYPE:-${LANG:-unset}}}' cannot encode (re-run as 'LC_ALL=en_US.UTF-8 ut-play …', or use -f audio, video or fast)"
 fi
 
 # =-----------------------------------------------------------------------------

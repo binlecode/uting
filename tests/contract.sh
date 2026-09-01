@@ -22,7 +22,7 @@
 # Cost, measured 2026-09-01 and broken down because a number at the door is what a reader
 # decides on: ~55-65s in full (runs minutes apart came back 55s, 60s, 63s and 64s — the live half is
 # roughly 21 engine round trips and the spread is the sites'), of which `--offline` is the
-# first ~20s: 222 of the 320 checks, no packet sent. That 20 is dominated by one deliberate
+# first ~20s: 224 of the 322 checks, no packet sent. That 20 is dominated by one deliberate
 # 5.5s lock spin — a FRESH held lock has to be waited out, that being what the spin is for;
 # the stale-lock steal beside it costs 0.1s because staleness is tested before the spin, not
 # after (shell/ut-playlist:lock_playlist).
@@ -802,10 +802,17 @@ report "UT_VIZ_STYLE: silent outside -f viz" "no" "$(viz_says_key UT_VIZ_STYLE=b
 # (the engine's host gate answers before yt-dlp is reached; measured at 0.05s) while still
 # proving the call got past ut-play entirely. Reaching the ENGINE is the pass, and the engine
 # NAME in the message is what makes the --engine line more than a repeat of the first.
+#
+# LC_ALL is PINNED, and that is not decoration: -f viz refuses a non-UTF-8 locale (tct draws
+# in half blocks), so on a machine running under LC_ALL=C every line below would come back red
+# for a reason that is the environment's and not the subject's — the worst failure a suite can
+# have. Pinning also costs nothing to make honest: the gate reads the variable, it does not
+# require the locale to be installed, so this works on a host that has no en_US at all. The
+# locale gate gets its own check further down, where refusing IS the claim.
 viz_reaches_engine() { # <engine> <env assignments and argv…> — yes if it got as far as <engine>
     local want=$1
     shift
-    case "$(env "$@" 2>&1 </dev/null || true)" in
+    case "$(env LC_ALL=en_US.UTF-8 "$@" 2>&1 </dev/null || true)" in
     *"$want-resolve could not resolve"*) echo yes ;;
     *) echo no ;;
     esac
@@ -846,6 +853,22 @@ for _m in ascii viz; do
     *) _jhit=no ;;
     esac
     report "-j refuses -f $_m" yes "$_jhit"
+    # The fourth arm, and the only one that comes from the ENVIRONMENT rather than argv: tct
+    # draws in half blocks (U+2584), so under a C locale the pane used to fill with mojibake
+    # or stay empty with nothing said. Refusing was chosen over degrading to an ASCII canvas
+    # (AS-BUILT-player.md「终端可视化」), which makes it checkable at all — the degraded picture
+    # would have been another 「实测」 row. Message again, not exit code: every gate here is 1.
+    #
+    # LC_ALL=C rather than an unset environment: `env -u` is not portable to the 3.2 floor's
+    # macOS env, and C is the locale the real reports came from (cron, launchd, a bare CI
+    # shell). Its partner is viz_reaches_engine above, which pins a UTF-8 locale and asserts
+    # the call goes THROUGH — a gate that fired unconditionally would be green here and red
+    # there, so neither check alone can pass by accident.
+    case "$(env LC_ALL=C shell/ut-play -f "$_m" -- "$VIZ_URL" </dev/null 2>&1 || true)" in
+    *"needs a UTF-8 locale"*) _lhit=yes ;;
+    *) _lhit=no ;;
+    esac
+    report "a C locale refuses -f $_m" yes "$_lhit"
     # The TUI states the same impossibility from its own side — its playback IS detached, so
     # the mode could never reach a terminal — and there the claim has to be the MESSAGE: the
     # TTY gate a few lines further into `uting` also exits 1, so an exit code cannot separate

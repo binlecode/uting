@@ -39,7 +39,7 @@ UT_HISTORY=0 shell/ut-play -d -- URL                          # …and the switc
 shell/uting --version                                        # answers before any dependency gate
 
 tests/contract.sh --offline                                   # the hermetic half: ~20s, no packet sent
-tests/contract.sh                                             # …and the live half too: ~60s, 320 checks
+tests/contract.sh                                             # …and the live half too: ~60s, 322 checks
 tests/playback.sh                                             # real detached players; silent, ~82s
 tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
 tests/drive.sh -k Enter -w Playing                            # …including a real detached play
@@ -143,7 +143,7 @@ Two files, one rule:
 
 | File | Drives | Gate |
 |---|---|---|
-| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the `--parts`/`--quality`/`--start` gates (capability by absence, the stream-format gate, bogus tiers and a non-second offset at the door); the idle lifecycle and the death record; three of the four cross-command pipelines `docs/AS-BUILT-contract.md`「调用面」 prints, run rather than printed (the search half replaced by a fixture envelope, which is data a real command reads — not a stand-in that runs in place of one); the TUI's boot / resize / quit under tmux, and that it left no player behind when it went | none — `--offline` before every commit (~20s, 222 of 320 checks, hermetic), the whole thing before every push (~60s) |
+| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the `--parts`/`--quality`/`--start` gates (capability by absence, the stream-format gate, bogus tiers and a non-second offset at the door); the idle lifecycle and the death record; three of the four cross-command pipelines `docs/AS-BUILT-contract.md`「调用面」 prints, run rather than printed (the search half replaced by a fixture envelope, which is data a real command reads — not a stand-in that runs in place of one); the TUI's boot / resize / quit under tmux, and that it left no player behind when it went | none — `--offline` before every commit (~20s, 224 of 322 checks, hermetic), the whole thing before every push (~60s) |
 | `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), that an engine's `http_headers` actually reach mpv, the two claims the offline half can never reach (`status:"ambiguous"`, which needs two live players, and the fourth documented pipeline — a real `ut-playlist --show -j` envelope launching a real `--queue`), and the listening log's **wiring** — only here does a real track really end | none — it starts real players, but in a `TMPDIR` and a `UT_STATE_DIR` of its own; ~82s and needs the network, so run it when the player changed |
 
 `tests/drive.sh` is the only other file, and it is not a suite — it asserts nothing. It is a
