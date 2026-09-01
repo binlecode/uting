@@ -5,9 +5,10 @@
 # What it covers: the search envelope's shape, every documented rejection (a flag on the
 # wrong verb, a bare query where a URL belongs, two actions at once, a selector with no
 # action), the read-only --transcript verb both ways, the idle lifecycle, the tombstone
-# record for a player that died unasked, --version, the non-TTY refusal, and the failure
+# record for a player that died unasked, --version, the non-TTY refusal, the failure
 # taxonomy — 1 is usage, 2 is a tool that failed, and the two engines' envelopes agreeing
-# key for key.
+# key for key — and the documented PIPELINES between commands, run rather than printed
+# (AS-BUILT-contract.md「调用面」; the one that launches a player is playback.sh's).
 #
 # This replaced a skill that carried the same commands as prose for an agent to copy out by
 # hand. That version rotted silently: it listed a resident socket server as a check (it hangs
@@ -19,9 +20,9 @@
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md「可移植性契约」.
 #
 # Cost, measured 2026-09-01 and broken down because a number at the door is what a reader
-# decides on: ~55s in full (two runs minutes apart came back 55s and 63s — the live half is
+# decides on: ~55-65s in full (runs minutes apart came back 55s, 63s and 64s — the live half is
 # roughly 21 engine round trips and the spread is the sites'), of which `--offline` is the
-# first ~20s: 207 of the 305 checks, no packet sent. That 20 is dominated by one deliberate
+# first ~20s: 210 of the 308 checks, no packet sent. That 20 is dominated by one deliberate
 # 5.5s lock spin — a FRESH held lock has to be waited out, that being what the spin is for;
 # the stale-lock steal beside it costs 0.1s because staleness is tested before the spin, not
 # after (shell/ut-playlist:lock_playlist).
@@ -436,7 +437,21 @@ PL=shell/ut-playlist
 ENV_JSON='{"status":"ok","engine":"yt","query":"q","count":2,"results":[{"id":"a1","title":"One","url":"https://www.youtube.com/watch?v=a1","channel":"c","duration":213,"duration_fmt":"00h:03m:33s","view_count":5,"live_status":"not_live"},{"id":"a2","title":"Two","url":"https://www.youtube.com/watch?v=a2","channel":"c","duration":null,"duration_fmt":null,"view_count":null,"live_status":"is_live"}]}'
 
 report "empty store: ok, exit 0"      0 "$(jq_ok '.status=="ok" and .count==0 and .playlists==[]' $PL --ls -j)"
-printf '%s' "$ENV_JSON" | $PL --add chill -j >/dev/null 2>&1
+# ── AS-BUILT-contract.md「调用面」's first pipeline, RUN rather than printed:
+#     yt-search -j -n 20 -- "lofi hip hop" | ut-playlist --add chill
+# That block is the one place the suite documents commands COMPOSING, and until now nothing
+# executed a line of it: the storage side had checks, the pipeline did not, so a flag
+# misspelled there, an argument reordered, or a combination that stopped being legal would sit
+# in the doc being wrong. The direction is fixed — the CHECK is the authority and the doc is
+# its reader's view; when the two disagree, the doc moves.
+#
+# The left half is a real search, which this hermetic half may not make, so it is a FIXTURE:
+# a search envelope is DATA the real ut-playlist really reads, not something that RUNS in
+# place of yt-search (CLAUDE.md's testing rules). The right half is the doc's argv verbatim,
+# `-j` and all — prose mode, because that is what the documented line says, and the prose
+# writer is a different exit path from the -j one.
+printf '%s' "$ENV_JSON" | $PL --add chill >/dev/null 2>&1
+report "search envelope | --add: 0"    0 "$?"
 report "a search envelope tags engine" 0 "$(jq_ok '.count==2 and ([.items[].engine]|unique==["yt"])' $PL --show chill -j)"
 # An ITEM carries no engine — the envelope does. An engine tag that survived the store is
 # the only thing that makes a stored record a callable `ut-play --engine E -- URL`.
@@ -462,6 +477,18 @@ report "…with reason exists"            0 "$(jq_ok '.reason=="exists"' $PL --r
 # one list into another is.
 $PL --show mellow -j | $PL --add copy -j >/dev/null 2>&1
 report "a playlist envelope re-adds"    0 "$(jq_ok '.count==2' $PL --show copy -j)"
+# ── AS-BUILT-contract.md「调用面」's last pipeline, minus the player it needs:
+#     ut-playlist --show chill -j | ut-play --enqueue -
+# "a --show envelope parses" further up proves ut-play accepts the SHAPE, but it is a
+# hand-written object and so cannot notice --show drifting away from it. This one can: a real
+# --show on the left, the real player's gate on the right. 4 is the whole claim — the payload
+# got past the parser and only a player to receive it was missing. The 1s beside it (bad JSON,
+# empty queue, a shapeless object) are what make a 4 here mean "shape accepted"; a --show that
+# stopped emitting `items` would come back 1.
+#
+# --enqueue rather than the doc's `-d --queue -` on purpose: --queue would LAUNCH a player and
+# this file starts none. The launch off a real --show envelope is proved in playback.sh.
+report "a real --show reaches the gate" 4 "$($PL --show mellow -j | shell/ut-play --enqueue - -j >/dev/null 2>&1; echo $?)"
 # An unreadable file on disk. Before this, jq's parse error escaped as exit 5 with no
 # envelope at all under -j — the failure yt-search was fixed for, reintroduced in a second
 # command. --show fails (the question was about that list); --ls still answers (the question
@@ -547,8 +574,24 @@ report "--ls is newest first"          0 "$(jq_ok '.items[0].id=="a2" and .items
 report "-n bounds what is printed"     0 "$(jq_ok '.count==1 and .items[0].id=="a2"' $HL --ls -n 1 -j)"
 # THE CLAIM THE ROW SHAPE EXISTS FOR: a listening is a CALL, so --ls drops into --add with no
 # field mapping in between. If the two envelopes ever drift, this is what says so.
-$HL --ls -j | shell/ut-playlist --add rediscover -j >/dev/null 2>&1
+#
+# The argv is AS-BUILT-contract.md「调用面」's third pipeline verbatim — `-n 20` on the left, no
+# `-j` on the right — for the reason the playlist section states at its own first pipeline:
+# that block documents commands COMPOSING, and a documented composition nothing runs is a
+# claim that reports green by default. Both halves here are the real commands; nothing offline
+# about this one is a substitute.
+$HL --ls -n 20 -j | shell/ut-playlist --add rediscover >/dev/null 2>&1
 report "--ls feeds ut-playlist --add"  0 "$(jq_ok '.count==2 and ([.items[].engine]|unique==["yt"])' shell/ut-playlist --show rediscover -j)"
+# …and the fourth pipeline, `ut-history --ls -n 20 -j | ut-play -d --queue -`, at the SHAPE
+# level only — --queue launches, and this file starts nothing. A distinct producer from the
+# --show envelope the playlist section pipes in: both land on read_queue_items' `.items` arm,
+# but this one is emitted by a different command, so a --ls that renamed its array or dropped
+# `url` off a row would come back 1 here and nowhere else. What the 4 does NOT say is that the
+# per-item engine tag survived: read_queue_items falls back to ut-play's default engine for an
+# untagged item, so both spellings pass this gate. That claim is the store's own
+# ("an unknown key never lands" above reads the row; "--ls feeds ut-playlist --add" reads the
+# engine), and it is not restated here.
+report "--ls reaches the queue gate"   4 "$($HL --ls -n 20 -j | shell/ut-play --enqueue - -j >/dev/null 2>&1; echo $?)"
 
 # THE 4096-BYTE PREMISE. The lock-free append is only atomic while one line fits under
 # PIPE_BUF, so the title is truncated to 200 bytes and the whole row is measured after. A

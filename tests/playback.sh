@@ -9,12 +9,21 @@
 # dir below removes that, and what is left is a run that needs the network — a reason to run it
 # when the player changed, not a reason for an env var to guard it.
 #
-# Cost, measured 2026-08-26: **62s / 42 ok**, and it is real work rather than waiting. Roughly
-# 30s is seven live engine resolves (ut-play:530 records the measured median between tracks at
-# 4.3s) and ~19s is the listening-log section playing a 19-second track out to its own end
-# rather than seeking there — that section cannot seek, because `duration` is null on a live
-# stream and a check must not go green or red on whether the fixture was streaming that
-# afternoon. Neither half is reducible without a stand-in, and this file has none.
+# It also owns two claims contract.sh's offline half can never reach, both for the same
+# reason — they need players that are really running: that a mutation with no `--id` and two
+# players answers `status:"ambiguous"` (4 alone does not separate it from an idle call), and
+# AS-BUILT-contract.md「调用面」's `ut-playlist --show … -j | ut-play -d --queue -`, run
+# verbatim — contract.sh proves that envelope reaches the gate, this is where it launches.
+#
+# Cost: **~82s / 51 ok** (2026-09-01, three runs at 81s, 82s and 83s), and it is real work
+# rather than waiting. The breakdown is the older 62s run's (2026-08-26) and still names where
+# the time goes: roughly 30s is seven live engine resolves (ut-play:530 records the measured
+# median between tracks at 4.3s) and ~19s is the listening-log section playing a 19-second
+# track out to its own end rather than seeking there — that section cannot seek, because
+# `duration` is null on a live stream and a check must not go green or red on whether the
+# fixture was streaming that afternoon. Neither half is reducible without a stand-in, and this
+# file has none. The rest is the sites', which is why the total is quoted as a range and the
+# parts are not re-attributed without being re-measured.
 #
 # EVERY WAIT HERE IS A BOUNDED POLL. There are exactly two fixed sleeps left and neither is a
 # wait — both are SETUP, and both say so where they sit. Three others were `sleep 1`/`sleep 2`
@@ -164,6 +173,16 @@ report "--status sees 2"   2 "$(shell/ut-play --status -j | jq '.players | lengt
 
 echo "── a selector-less mutation on 2 players is ambiguous -> exit 4 ───"
 report "--set-volume no --id" 4 "$(shell/ut-play --set-volume 40 -j >/dev/null 2>&1; echo $?)"
+# The exit code alone leaves the third row of AS-BUILT-contract.md「调用面」's 1-vs-4 table
+# unproved: 4 is also what an IDLE mutation answers, so a caller told only "4" cannot tell
+# "nothing to act on" from "say which one". `status` is the field that separates them, and it
+# has no check anywhere else — contract.sh reaches the not_playing side and can never reach
+# this one, ambiguity needing two live players.
+# Captured FIRST, never piped straight from the command: under `set -o pipefail` the pipeline
+# carries ut-play's own 4 and jq's verdict is thrown away — this line read FAIL/4 that way on
+# its first run, against correct behaviour. Same trap contract.sh's jq_ok exists to close.
+amb=$(shell/ut-play --set-volume 40 -j 2>/dev/null)
+report "…and says ambiguous"  0 "$(printf '%s' "$amb" | jq -e '.status=="ambiguous" and .reason=="multiple_players" and (.players|length)==2' >/dev/null 2>&1; echo $?)"
 # --stop takes the same ambiguity rule (AS-BUILT-contract.md「数据契约」): with 2 players and no
 # selector it must refuse with 4 AND stop nothing — a --stop that guessed would kill the
 # wrong listener's audio, which no exit code repairs.
@@ -374,8 +393,18 @@ echo "── a queue is a player consuming a playlist ────────�
 #
 # One player, so no --id is needed anywhere below (exactly-one is the zero-friction case).
 shell/ut-play --stop --all -j >/dev/null 2>&1
-qout=$(jq -nc --arg a "$U1" --arg b "$U2" \
-    '[{engine:"yt",url:$a},{engine:"yt",url:$b}]' | shell/ut-play -d --queue - -j --volume 0 2>/dev/null)
+# The list is STORED first and read back out, so what launches the player is
+# AS-BUILT-contract.md「调用面」's second pipeline run verbatim:
+#     ut-playlist --show chill -j | ut-play -d --queue -
+# It used to be a `jq -nc` array inlined here, which proved the array arm and left the arm the
+# doc actually advertises unexecuted — and that arm is the one carrying the claim: a stored
+# record IS a call, so the two commands need no jq mapping between them. contract.sh proves
+# the same envelope reaches the gate offline (4, no player); this is the half where it really
+# starts one. UT_STATE_DIR is this file's own (top of file), so the list is disposable.
+jq -nc --arg a "$U1" --arg b "$U2" '[{engine:"yt",url:$a},{engine:"yt",url:$b}]' |
+    shell/ut-playlist --add chill -j >/dev/null 2>&1
+report "the list stored 2" 2 "$(shell/ut-playlist --show chill -j 2>/dev/null | jq -r '.count // 0')"
+qout=$(shell/ut-playlist --show chill -j 2>/dev/null | shell/ut-play -d --queue - -j --volume 0 2>/dev/null)
 report "--queue - launches" 0 "$(printf '%s' "$qout" | jq -e '.status=="started" and .id' >/dev/null 2>&1; echo $?)"
 # The queue is visible from the moment the player exists, not once the first track decodes:
 # a caller that asks what is queued must not have to wait for mpv. `upcoming` is asserted

@@ -38,9 +38,9 @@ shell/ut-history --ls -n 20 -j                                # the log: what a 
 UT_HISTORY=0 shell/ut-play -d -- URL                          # …and the switch that stops it being written
 shell/uting --version                                        # answers before any dependency gate
 
-tests/contract.sh --offline                                   # the hermetic half: ~17s, no packet sent
-tests/contract.sh                                             # …and the live half too: ~49s, 295 checks
-tests/playback.sh                                             # real detached players; silent, ~79s
+tests/contract.sh --offline                                   # the hermetic half: ~20s, no packet sent
+tests/contract.sh                                             # …and the live half too: ~60s, 308 checks
+tests/playback.sh                                             # real detached players; silent, ~82s
 tests/drive.sh -x 62 -y 20                                    # drive the TUI, reap the player after
 tests/drive.sh -k Enter -w Playing                            # …including a real detached play
 ```
@@ -143,8 +143,8 @@ Two files, one rule:
 
 | File | Drives | Gate |
 |---|---|---|
-| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the `--parts`/`--quality`/`--start` gates (capability by absence, the stream-format gate, bogus tiers and a non-second offset at the door); the idle lifecycle and the death record; the TUI's boot / resize / quit under tmux, and that it left no player behind when it went | none — `--offline` before every commit (~17s, 199 of 295 checks, hermetic), the whole thing before every push (~49s) |
-| `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), that an engine's `http_headers` actually reach mpv, and the listening log's **wiring** — only here does a real track really end | none — it starts real players, but in a `TMPDIR` and a `UT_STATE_DIR` of its own; ~79s and needs the network, so run it when the player changed |
+| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the `--parts`/`--quality`/`--start` gates (capability by absence, the stream-format gate, bogus tiers and a non-second offset at the door); the idle lifecycle and the death record; three of the four cross-command pipelines `docs/AS-BUILT-contract.md`「调用面」 prints, run rather than printed (the search half replaced by a fixture envelope, which is data a real command reads — not a stand-in that runs in place of one); the TUI's boot / resize / quit under tmux, and that it left no player behind when it went | none — `--offline` before every commit (~20s, 210 of 308 checks, hermetic), the whole thing before every push (~60s) |
+| `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), that an engine's `http_headers` actually reach mpv, the two claims the offline half can never reach (`status:"ambiguous"`, which needs two live players, and the fourth documented pipeline — a real `ut-playlist --show -j` envelope launching a real `--queue`), and the listening log's **wiring** — only here does a real track really end | none — it starts real players, but in a `TMPDIR` and a `UT_STATE_DIR` of its own; ~82s and needs the network, so run it when the player changed |
 
 `tests/drive.sh` is the only other file, and it is not a suite — it asserts nothing. It is a
 **driver**: it launches the TUI in tmux at a declared geometry, waits on the ready marker, optionally sends keys, and **always reaps the detached player** — which killing the tmux session does not do. Use it whenever a TUI change has to be driven rather than reasoned about.
@@ -171,7 +171,7 @@ The default move on a gap is to make an **existing** check stronger, not to add 
 **The two suites in `tests/` ARE these checks.** A check that exists only as prose for someone to copy out reports green by default. A new check goes in the suite, never in a doc — and a fixed command sequence goes in a script, never in prose.
 
 - `/bin/bash -n shell/*` — enforced by `.githooks/pre-commit` on staged content and by `pre-push` on the worktree, so this is a backstop for a `--no-verify`, not a habit.
-- **Any change at all:** `tests/contract.sh --offline` (it also drives the empty-argument paths on the 3.2 floor) — every gate, both stores, the lifecycle and the death record, in ~17s with nothing fetched, because a gate that cannot run without YouTube is a gate that gets skipped. **Before every push, the same file with no flag**: `--offline` is a prefix of that run, never a substitute for it. It starts no process it did not have to and talks to no peer — every live claim is `playback.sh`'s.
+- **Any change at all:** `tests/contract.sh --offline` (it also drives the empty-argument paths on the 3.2 floor) — every gate, both stores, the lifecycle and the death record, in ~20s with nothing fetched, because a gate that cannot run without YouTube is a gate that gets skipped. **Before every push, the same file with no flag**: `--offline` is a prefix of that run, never a substitute for it. It starts no process it did not have to and talks to no peer — every live claim is `playback.sh`'s.
 - **Any change to the detached player:** `tests/playback.sh`. It starts real players (silent, `--volume 0`, in a state dir of its own) and does not pass until `pgrep` finds none of them left.
 - The shellcheck baseline is a tracked count, not a clean bill — `docs/RESEARCH-tui-player.md`.
 

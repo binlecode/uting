@@ -51,24 +51,37 @@ detached 生命周期语义，以及那条四层配置链。
 `AS-BUILT-tui.md` 的同名段）。这里是**跨命令的那一层**——真正让这八个东西成为一套 API 的
 不是任何一个 flag，而是**它们的 stdin 都认同一组形状**：
 
+下面这些行不是示意：标**「已证」**的每一条，套件都以同样的 argv、同样的顺序真的跑过一遍
+（列表名与查询词是检查自己的）—— 所以 flag 拼错、参数换序、某个组合以后不再合法，都会先红。
+
 ```sh
 # 搜索信封 → 存起来
-yt-search -j -n 20 -- "lofi hip hop" | ut-playlist --add chill
+yt-search -j -n 20 -- "lofi hip hop" | ut-playlist --add chill   # 已证 · 左半用固定信封
 
 # 存起来的 → 直接变成一个队列（记录就是调用，不需要映射）
-ut-playlist --show chill -j | ut-play -d --queue -
+ut-playlist --show chill -j | ut-play -d --queue -               # 已证 · 真起播放器
 
 # 听过的 → 存起来，或者再放一遍
-ut-history --ls -n 20 -j | ut-playlist --add rediscover
-ut-history --ls -n 20 -j | ut-play -d --queue -
+ut-history --ls -n 20 -j | ut-playlist --add rediscover          # 已证 · 两半都是真命令
+ut-history --ls -n 20 -j | ut-play -d --queue -                  # 形状已证 · 起播那半同上一条
 
 # 往正在跑的播放器后面追加
-ut-playlist --show chill -j | ut-play --enqueue -
+ut-playlist --show chill -j | ut-play --enqueue -                # 已证 · 形状离线，落地在真播放器上
 ```
+
+**谁证的，以及各自付了什么代价。** 三条落在 `tests/contract.sh` 的离线段：第一条的左半是一次
+真搜索，离线段发不出包，所以那一半换成一份**固定信封**——它是数据，是真 `ut-playlist` 真读的
+东西，不是替在 `yt-search` 位置上跑的替身（CLAUDE.md 的测试规矩）；另两条两半都是真命令。
+第二条要真起一个 detached 播放器，所以它在 `tests/playback.sh`：那个队列的条目先被
+`ut-playlist --add` 存进去，再由 `--show -j` 读出来喂给 `--queue`，跑的就是上面那一行。
+标**「形状已证」**的第四条只证到 stdin 被收下（离线段用 `--enqueue` 问同一个
+`read_queue_items`，空闲答 4）；它真起播的那一半与第二条是同一段代码，不另证。
 
 三种形状都收：**item 数组**、`--show -j` 信封、**搜索信封**。这就是为什么中间不需要一个
 `jq` 映射——一条存储记录 `{engine, url, …}` 本身就是 `ut-play --engine E -- URL` 这个
-**调用**，不是一个需要翻译的引用。
+**调用**，不是一个需要翻译的引用。这三条管道存在的理由也在这里：把一份手写的信封喂给
+`ut-play` 只证得了它认那个**形状**，证不了 `--show` 或 `--ls` 今天还在发那个形状 ——
+所以每条检查的左半都是真的那个命令，而不是一个照它抄出来的对象。
 
 **1 和 4 的分界是这一层最重要的一条**，也是 agent 唯一需要分支的地方：
 
@@ -80,6 +93,11 @@ ut-playlist --show chill -j | ut-play --enqueue -
 
 **4 不是失败，是「没生效」。** 一个把 4 读成 2+ 的调用方会去重试；一个把 4 读成 1 的调用方
 会去改自己的 argv。两个都错，所以这一位单独占一个码。
+
+**每一行都指得到一条检查**，前两行在 `tests/contract.sh` 的离线段（每个例子一条，退出码与
+`status` 分开断言 —— 只断言 4 分不出这两行）；第三行只能在 `tests/playback.sh`：歧义要两个
+真在跑的播放器，而离线段一个都不起。这也是这一行为什么值得单独证 `status:"ambiguous"` ——
+它与上一行**同样退 4**，把它们分开的只有那个字段。
 
 **动作彼此排斥**，都退 1：`--status --stop`（两个动作）、`--status --id X`（只有选择器没有
 动作）、`-d --stop`（`-d` 是播放，不是动作）、`--queue -` 不带 `-d`（它本身就启动一个

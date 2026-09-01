@@ -2,7 +2,7 @@
 
 **实现的 roadmap 条目：** `ROADMAP.md`「还没做的事」→ **让「调用面」里的示例真的被执行**。
 
-**状态：** §1 已落地（2026-09-01）。§2 / §3 / §4 未开工。前一个单元（「调用面」段本身）已落地并提交，见下面「已落地的前置」。
+**状态：** §1 / §2 已落地（2026-09-01）。§3 / §4 未开工。前一个单元（「调用面」段本身）已落地并提交，见下面「已落地的前置」。
 
 ---
 
@@ -64,7 +64,7 @@ prose 立刻变成假的，没有任何检查发现，是事后 grep 全树抓�
 
 `contract.sh --offline` **207 ok / 0 failed**；完整 **305 ok / 0 failed**。
 
-### 2. contract —— 三种 stdin 形状的整条管道（离线）
+### 2. contract —— 三种 stdin 形状的整条管道（离线） · **已落地**
 
 `AS-BUILT-contract.md`「调用面」的四条管道，除了最后那条 `--enqueue` 需要一个在跑的播放器，
 其余三条在一次性 `UT_STATE_DIR` 下完全离线。已有检查覆盖了**存储侧**
@@ -85,6 +85,44 @@ ut-history --ls -n N -j           | ut-playlist --add NAME     # 离线
 - `ut-history` 那条：完全离线，直接落 `contract.sh`。
 
 **done_when：** 三条管道各有一条检查跑过，且 `1 vs 4` 那张表的每一行都指得到一条现有检查。
+**已达成：**
+
+- **管道一（搜索 → `--add`）**：`contract.sh` 离线段，playlist 那一节开头。原来那行就是固定
+  信封喂 `--add`，但带着 `-j`；改成文档那行的 argv（prose 模式，是另一条出口），并把管道
+  自己的退出码单独断言成一条 —— `search envelope | --add: 0`。
+- **管道二（`--show -j` → `-d --queue -`）**：**`playback.sh`**，不是 `contract.sh`：它真起
+  播放器。原来那一节用 `jq -nc` 现搭一个数组，证的是数组那条臂，而文档登的是 `--show` 那条。
+  现在条目先 `ut-playlist --add` 存进去、再 `--show -j` 读出来喂 `--queue`，跑的就是文档那行
+  （`the list stored 2` + `--queue - launches`）。
+- **管道三（`ut-history --ls` → `--add`）**：`contract.sh`，把既有的
+  `--ls feeds ut-playlist --add` 硬化到文档 argv（左半加 `-n 20`，右半去掉 `-j`）。
+- **管道四（`ut-history --ls` → `-d --queue -`）**：只证形状 —— 离线段用 `--enqueue` 问同一个
+  `read_queue_items`，空闲答 4（`--ls reaches the queue gate`）。起播那半与管道二同一段代码，
+  不另证，注释里写明这条 4 **不**证明 per-item engine tag 活着（未标 engine 的条目会落到
+  播放器的默认引擎，两种写法都过这道门）。
+- **管道五（`--show -j` → `--enqueue -`）**：`a real --show reaches the gate`，4。它与既有的
+  `a --show envelope parses` 的区别就是本节存在的理由：那条喂的是**手写**对象，只证得了
+  ut-play 认那个形状；这条左半是真 `--show`，`--show` 一旦漂移就红。
+- 判别输入（不改任何在产文件，2026-09-01 跑过）：`{"status":"playlist","rows":[…]}`（把
+  `items` 改名）→ **1**；`{"status":"playlist","items":[{"engine":"yt"}]}`（条目缺 url）→
+  **1**；`{"status":"ok","engine":"yt","hits":[…]}`（把 `results` 改名）喂 `--add` → **1**。
+  三条新检查各自要的那个值（4 / 4 / 0）都被分开了，都不是不可能红的检查。
+- **`1 vs 4` 那张表**：前两行每个例子都指得到离线段的一条（不是 JSON / 空队列 / url 带空格 /
+  engine 名可疑 / 没形状的对象；空闲 `--set-volume` `--pause` `--seek` `--next` `--enqueue`
+  的 4 与 `not_playing`）。第三行原来**只有退出码**：`playback.sh` 的 `--set-volume no --id`
+  答 4，而空闲调用**也**答 4 —— 把两者分开的只有 `status`，而它当时没有任何检查。补了
+  `…and says ambiguous`（`status`/`reason`/`players` 三个字段一次断言）。它第一次跑是红的，
+  原因是 `set -o pipefail` 下管道带的是 ut-play 自己的 4 而不是 jq 的判定 —— 正是
+  `contract.sh` 的 `jq_ok` 为之存在的那个坑；改成先捕获再判。
+- 「动作彼此排斥」那四条（`--status --stop`、`--status --id X`、`-d --stop`、
+  `--queue -` 不带 `-d`）本来就各有一条，无需新增。
+- 文档侧：`AS-BUILT-contract.md`「调用面」的五行加了「已证 / 形状已证」标注（照
+  `AS-BUILT-engine.md` 同名段的写法），并补了一段说明**谁证的、各自付了什么代价**，以及
+  1 vs 4 表第三行为什么只能在 `playback.sh`。顺带 resync 了两个套件的成本声明与
+  `README.md`／`CLAUDE.md` 里过期的计数（README 还停在 278/193、~100s）。
+
+`contract.sh --offline` **210 ok / 0 failed**；完整 **308 ok / 0 failed**；
+`playback.sh` **51 ok / 0 failed**。
 
 ### 3. player —— viz 的五条示例（大部分要网络）
 
