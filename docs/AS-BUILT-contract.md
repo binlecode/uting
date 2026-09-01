@@ -309,10 +309,13 @@ ARCHITECTURE.md §3.7 唯一被批准的例外是那个 mpv socket（AS-BUILT-pl
 { "status":"ok", "engine":"yt", "query": "lofi", "count": 25,
   "results": [ { "id":"…", "title":"…", "url":"https://www.youtube.com/watch?v=…",
     "channel":"…", "duration":213, "duration_fmt":"00h:03m:33s",
-    "view_count":12345, "live_status":"not_live",
+    "view_count":12345, "live_status":"not_live", "description":"…",
     "kind":"track", "access":"full" } ] }
 ```
-`-j` = 上面那 10 个结果字段（高信噪比，比原始那条约 23 字段的 yt-dlp 记录小约 4 倍）。
+`-j` = 上面那 11 个结果字段（高信噪比，比原始那条约 23 字段的 yt-dlp 记录小约 4 倍）。
+`description` 是**两个引擎本来就收到、从前直接扔掉**的那一段：yt 的 flat 搜索给的是站方
+自己截断的摘要（约 150 字），bili 的搜索接口给的是简介本身，两边都过同一道折空白与去标记。
+它不多花一次请求，也不是 `--info` 的那一份（那一份是完整简介，而这里只有搜索给的那点）。
 `-J`/`--json-full` = 同一个信封，`results` 里装每一个原始字段。
 时长未知时（一路直播）`duration` 与 `duration_fmt` **一起是 `null`**；`view_count` 也可以是 `null`。
 失败时信封改为 `{status:"error", engine, query, count:0, results:[], reason}`，

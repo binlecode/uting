@@ -2036,7 +2036,14 @@ render_prog_bar() {
 # reason print_hints measures through its own packing code).
 WRAP_LINES=0
 WRAP_MEASURE=0
+# A ceiling on how many lines one wrap may spend, 0 for none. It lives HERE, at the single
+# emit point, for the reason WRAP_LINES does: a caller that stopped feeding the wrapper early
+# would be a second wrapper, free to disagree with this one about where the lines fall. The
+# description is the one caller that sets it; the title deliberately does not, because
+# "the full title" is the whole reason this block exists.
+WRAP_MAX=0
 wrap_emit() {
+    ((WRAP_MAX > 0 && WRAP_LINES >= WRAP_MAX)) && return 0
     ((WRAP_MEASURE)) || printf '%s%s\033[K\n' "$1" "$2"
     WRAP_LINES=$((WRAP_LINES + 1))
 }
@@ -2171,21 +2178,53 @@ print_details() {
     wrap_print "${R_TITLE[$i]}" $((width - 2)) "  " "  "
     WRAP_MEASURE=0
     DETAIL_LINES=$((DETAIL_LINES + WRAP_LINES))
-    # The id is DERIVED from the url rather than carried as a seventh field. The '?' below is
-    # a glob metacharacter in this expansion and matches the literal '?' of "watch?v=".
+    # The id is DERIVED from the url rather than carried as a field of its own. The '?' below
+    # is a glob metacharacter in this expansion and matches the literal '?' of "watch?v=".
+    # The OFFSET comes off it: a chapter row's url ends `&t=961`, and `CLeZyIID9Bo&t=961` is
+    # not an id — it is the id with this row's seek target stapled on, in the one place a
+    # reader goes to copy an id out. The span above already says where the chapter starts.
     vid="${urls[$i]}"
     vid="${vid#*watch?v=}"
+    vid="${vid%%[?&]t=*}"
+    # Where this row sits in its SOURCE, for the two sources that have an order of their own
+    # — a chapter and a part are numbered BY the item, and the number on screen is the
+    # filter's, not the item's (filter to three chapters and they are rows 1-3). Gated on the
+    # view rather than on the field, so a store that ever grew an `n` cannot borrow the word.
+    meta=""
+    case "$LIST_SOURCE" in
+    chapters) [[ -n "${R_N[$i]}" && -n "$SOURCE_TOTAL" ]] &&
+        meta="$S_CHAP_KEY ${R_N[$i]}/$SOURCE_TOTAL $GL_SEP " ;;
+    parts) [[ -n "${R_N[$i]}" && -n "$SOURCE_TOTAL" ]] &&
+        meta="$S_PARTS_KEY ${R_N[$i]}/$SOURCE_TOTAL $GL_SEP " ;;
+    esac
     # A playlist row has no channel (not stored — it expires), so the field is dropped
     # rather than printed as an empty cell with a separator hanging off it, the same way an
     # absent view count is dropped above.
-    meta=""
-    [[ -n "${R_CHAN[$i]}" ]] && meta="${R_CHAN[$i]} $GL_SEP "
+    [[ -n "${R_CHAN[$i]}" ]] && meta+="${R_CHAN[$i]} $GL_SEP "
     meta+="$dur"
     [[ -n "$views" ]] && meta+=" $GL_SEP $views"
     meta+=" $GL_SEP $vid"
     truncate_disp "$meta" $((width - 2))
     ((DETAIL_MEASURE)) || printf '  %s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
     DETAIL_LINES=$((DETAIL_LINES + 1))
+    # THE DESCRIPTION, and it is the only line here that is not already on the row in some
+    # form. It arrives with the search envelope — both engines had it in the response they
+    # were already making and threw it away — so it costs no request: the block used to
+    # restate the row's title and its rail, which is what "details" that detail nothing look
+    # like. Two lines at most, capped TWICE: pre-cut to what two lines can hold (that is
+    # where the ellipsis comes from, since a wrap has no way to say "and more") and WRAP_MAX
+    # as the fuse, because word wrapping can spend a line on less than it fits.
+    if [[ -n "${R_DESC[$i]}" ]]; then
+        truncate_disp "${R_DESC[$i]}" $(( (width - 2) * 2 - 2 ))
+        WRAP_MEASURE=$DETAIL_MEASURE
+        WRAP_MAX=2
+        ((DETAIL_MEASURE)) || printf '%s' "$C_DIM"
+        wrap_print "$TRUNC_TEXT" $((width - 2)) "  " "  "
+        ((DETAIL_MEASURE)) || printf '%s' "$C_RESET"
+        WRAP_MAX=0
+        WRAP_MEASURE=0
+        DETAIL_LINES=$((DETAIL_LINES + WRAP_LINES))
+    fi
 }
 
 # The WRITE side of playback goes through ut-play's verbs, not through this file's socket.
@@ -2575,7 +2614,13 @@ fetch_json() {
 # name as a view count. US is not IFS whitespace, so empty fields survive the split.
 # `oneline` on the channel for the same reason `clean` collapses the title: a newline in a
 # field would split one record into two.
+# How many rows the SOURCE holds, as opposed to how many are on screen: `chapters 7/53` is
+# a fact about the item, and NUM_ENTRIES is a fact about the current filter. Set in the two
+# builders rather than at each of the six call sites that open a source — a total that is
+# assigned by whoever remembers is a total that goes stale on the seventh source.
+SOURCE_TOTAL=""
 build_all_rows() {
+    SOURCE_TOTAL=""
     ALL_ROWS=$(printf '%s' "$json" | jq -r "$JQ_TEXT_DEFS"'
       .engine as $e
       | .results[]
@@ -2586,6 +2631,8 @@ build_all_rows() {
           (.channel // "?" | oneline),
           (.live_status // ""),
           ($e // ""),
+          "",
+          (.description // "" | clean),
           ""
         ] | join("\u001f")')
 }
@@ -2602,6 +2649,7 @@ build_all_rows() {
 # and a parts list all leave it absent and get short_dur on the duration, which is what the
 # column means for them.
 build_playlist_rows() {
+    SOURCE_TOTAL=$(printf '%s' "$json" | jq -r '.count // ""' 2>/dev/null) || SOURCE_TOTAL=""
     ALL_ROWS=$(printf '%s' "$json" | jq -r "$JQ_TEXT_DEFS"'
       .items[]
       | [ .url,
@@ -2614,7 +2662,9 @@ build_playlist_rows() {
           "",
           "",
           (.engine // ""),
-          (.rail // "")
+          (.rail // ""),
+          (.description // "" | clean),
+          (if .n == null then "" else (.n | tostring) end)
         ] | join("\u001f")')
 }
 
@@ -2744,15 +2794,16 @@ build_chapter_rows() {
         len=""
         [[ -n "${ends[$i]}" ]] && len=$(( ITEM_CHAP_END[i] - ITEM_CHAP_SEC[i] ))
         chapter_url "$ITEM_URL" "${ITEM_CHAP_SEC[$i]}"
-        printf -v out '%s%s%s%s%s%s%s%s%s' \
-            "$CHAP_URL" "$US" "${ITEM_CHAP_TITLE[$i]}" "$US" "${dfmts[$i]}" "$US" "${len}" "$US" "$rail"
+        printf -v out '%s%s%s%s%s%s%s%s%s%s%s' \
+            "$CHAP_URL" "$US" "${ITEM_CHAP_TITLE[$i]}" "$US" "${dfmts[$i]}" "$US" "${len}" \
+            "$US" "$rail" "$US" "$((i + 1))"
         lines="$lines$out"$'\n'
     done
     CHAP_JSON=$(printf '%s' "$lines" | jq -Rsc --arg eng "$ITEM_ENGINE" '
         [ split("\n")[] | select(length > 0) | split("\u001f")
           | {url: .[0], title: .[1], duration_fmt: .[2],
              duration: (if .[3] == "" then null else (.[3] | tonumber) end),
-             rail: .[4], engine: $eng} ]
+             rail: .[4], n: (.[5] | tonumber), engine: $eng} ]
         | {status: "ok", count: length, items: .}' 2>/dev/null) || CHAP_JSON=""
     [[ -n "$CHAP_JSON" ]] || return 1
     return 0
@@ -2775,8 +2826,9 @@ apply_search_results() {
 load_rows() {
     urls=()
     R_TITLE=(); R_DUR=(); R_VIEWS=(); R_CHAN=(); R_LIVE=(); R_ENGINE=(); R_RAIL=()
-    local url title dur views chan live engine rail
-    while IFS="$US" read -r url title dur views chan live engine rail; do
+    R_DESC=(); R_N=()
+    local url title dur views chan live engine rail desc n
+    while IFS="$US" read -r url title dur views chan live engine rail desc n; do
         [[ -n "$url" ]] || continue
         urls+=("$url")
         R_TITLE+=("$title")
@@ -2786,6 +2838,8 @@ load_rows() {
         R_LIVE+=("$live")
         R_ENGINE+=("$engine")
         R_RAIL+=("$rail")
+        R_DESC+=("$desc")
+        R_N+=("$n")
     done <<<"$1"
     NUM_ENTRIES=${#urls[@]}
     NUM_PAGES=$(( (NUM_ENTRIES + PAGE_SIZE - 1) / PAGE_SIZE ))
@@ -4563,7 +4617,7 @@ cycle_sort() {
 
 # ── FILTER action (key: /) — LIVE incremental narrow ─────────────────────────────────────
 apply_filter() {
-    local q="$1" url title dur views chan live engine rail hay tok ok matched="" tokens=()
+    local q="$1" url title dur views chan live engine rail desc n hay tok ok matched="" tokens=()
     selected=0
     page_index=1
     if [[ "$q" != *[![:space:]]* ]]; then
@@ -4579,7 +4633,7 @@ apply_filter() {
     # below could never be true — the LIVE token matched nothing for as long as the engine
     # field was the unnamed one. The re-emit hid it: pasting that trailing variable back
     # produced a byte-identical row, so every row survived and only the haystack was wrong.
-    while IFS="$US" read -r url title dur views chan live engine rail; do
+    while IFS="$US" read -r url title dur views chan live engine rail desc n; do
         [[ -n "$url" ]] || continue
         # The haystack is SYNTHESIZED here, not carried as a seventh field: the row already
         # has the pieces, it is never printed, and a stored key would be one more thing to
@@ -4591,6 +4645,12 @@ apply_filter() {
         # rendered "● LIVE" string to match against.
         # A row that names its own rail contributes THAT — the chapter span is what is on
         # screen, and the rule this haystack follows is "match what is shown".
+        #
+        # THE DESCRIPTION IS DELIBERATELY NOT IN IT, and this is the one place the rule bends
+        # on purpose: a description is shown for the FOCUSED row only, so matching it would
+        # drop rows whose visible text does not hold the word and keep rows that show no
+        # reason for being kept. The field is carried through the re-emit all the same — a
+        # filter must never degrade a row.
         short_dur "$dur"
         hay="$title $chan $dur $SHORT_DUR $views $rail"
         [[ "$live" == "is_live" ]] && hay+=" LIVE"
@@ -4600,7 +4660,7 @@ apply_filter() {
         done
         # Re-emitted unchanged, so ALL_ROWS stays the one source and a filter never
         # degrades a row.
-        ((ok)) && matched+="${url}${US}${title}${US}${dur}${US}${views}${US}${chan}${US}${live}${US}${engine}${US}${rail}"$'\n'
+        ((ok)) && matched+="${url}${US}${title}${US}${dur}${US}${views}${US}${chan}${US}${live}${US}${engine}${US}${rail}${US}${desc}${US}${n}"$'\n'
     done <<<"$ALL_ROWS"
     shopt -u nocasematch
     load_rows "$matched"

@@ -262,6 +262,7 @@ def fmt_dur:
     | ($t % 60) as $s
     | (if $d > 0 then "\($d)d " else "" end) + "\($h | p2)h:\($m | p2)m:\($s | p2)s"
   end;
+def oneline: if type != "string" then "" else gsub("\\s+"; " ") | sub("^ "; "") | sub(" $"; "") end;
 '
 
 # Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
@@ -405,7 +406,8 @@ fetch_results() {
     FILTERED_JSON=$(printf '%s' "$result_json" | jq "$JQ_PRELUDE
         [ (.entries // [])[]
           | select($bounds)
-          | . + {duration_fmt: (.duration | fmt_dur), kind: \"track\", access: \"full\"} ]$sort_expr")
+          | . + {duration_fmt: (.duration | fmt_dur), description: (.description | oneline),
+                 kind: \"track\", access: \"full\"} ]$sort_expr")
 }
 
 # Prose list. One jq program (it used to fork five jq per row — 125 for -n 25 — and
@@ -442,7 +444,7 @@ emit_search_json() {
         printf '%s' "$FILTERED_JSON" | jq -c --arg e "$ENGINE_NAME" --arg q "$QUERY" \
             '{status: "ok", engine: $e, query: $q, count: length,
               results: map({id, title, url, channel, duration, duration_fmt, view_count,
-                            live_status, kind, access})}'
+                            live_status, description, kind, access})}'
     fi
 }
 
@@ -470,7 +472,7 @@ Options:
   -V       Print the suite version
 
 Output (JSON, -j): {"status","engine","query","count","results":[{id,title,url,channel,
-                    duration,duration_fmt,view_count,live_status,kind,access}, ...]}
+                    duration,duration_fmt,view_count,live_status,description,kind,access}, ...]}
   results[].id is this engine's media id — the input to `yt-resolve`.
   kind (track|collection|multipart) and access (full|preview|paywalled) are always
   track/full on this site: a row IS one video, and anonymous extraction returns the
