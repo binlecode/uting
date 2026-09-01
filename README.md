@@ -146,7 +146,7 @@ reach `PATH`, `TMPDIR` or `LD_PRELOAD`. Nothing in the suite ever writes either 
 absent from the shipped defaults because their unset state *is* an auto-detection that a
 value would defeat: `YT_LANG` (zh under a zh\* locale), `YT_ASCII` (on under a non-UTF-8
 locale) and `UT_STATE_DIR` (its default chains through `XDG_STATE_HOME`). Set those in your
-own config or the environment. Every key is listed in `docs/AS-BUILT-contract.md`「配置面」.
+own config or the environment. Every key is listed in `docs/AS-BUILT-cli-contract.md`「配置面」.
 
 ## Try it
 
@@ -245,7 +245,7 @@ The row count lives on the two page EDGES rather than on a key of its own: `→`
 page fetches one batch more, and `←` on page 1 drops one again — a local truncation, no
 re-fetch, with a screenful as the floor. Seven of these keys — engine, sort, mode, quality
 tier, theme, language and that count — are written back to your own config file, in place, so the next
-session opens where this one left off (`docs/AS-BUILT-contract.md`「配置面」). With a
+session opens where this one left off (`docs/AS-BUILT-cli-contract.md`「配置面」). With a
 playlist or the log on screen the two keys that re-fetch a query — `o`, `e` — say so and
 do nothing, and the two edges are a silent no-op there; both can mix sources, and each row plays under the engine that produced it. `+` and `>` appear only while
 something is playing: the queue belongs to the player, so with no player there is nothing to
@@ -264,7 +264,7 @@ one runs, or it is not claimed. Each file's header says what it proves; run eith
 |---|---|
 | `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the idle lifecycle verbs (including the queue verbs, where a
 payload this process cannot use is a usage error and a well-formed one with nothing playing is
-"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. It also runs three of the four pipelines `docs/AS-BUILT-contract.md`「调用面」 prints, rather than leaving them as prose nothing executes — the fourth launches a player and belongs below. ~60s and 322 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 224 of those checks in ~20s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
+"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. It also runs three of the four pipelines `docs/AS-BUILT-cli-contract.md`「调用面」 prints, rather than leaving them as prose nothing executes — the fourth launches a player and belongs below. ~60s and 322 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 224 of those checks in ~20s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
 | `tests/playback.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4 *and* `status:"ambiguous"` (4 alone is also what an idle call answers, so the field is the half that separates them), a targeted one moves only its target, and zero orphan mpv at the end. It also owns the **live read** — the `--status` fields off a real mpv socket, `paused:false` distinguished from `paused:null`, and a really-running player whose socket is really removed degrading to nulls with volume off the record — because the peer has no stand-in and never will. It drives a **queue** end to end for the same reason — a mock engine would skip the
 resolve between two tracks, which is the thing most likely to break: `--queue` launches —
 from a real `ut-playlist --show -j` envelope, so the documented pipeline is what starts the
@@ -318,7 +318,7 @@ surface.
   be and what it deliberately is not, topology, seams, the control-flow diagrams, every
   non-obvious decision, and the risk register — the known ways this can go wrong and what
   defends each one. Diagrams, flows and decisions; the detail is in the per-scope docs below.
-- [`docs/AS-BUILT-contract.md`](docs/AS-BUILT-contract.md) — the frozen CLI contract: envelopes, exit codes,
+- [`docs/AS-BUILT-cli-contract.md`](docs/AS-BUILT-cli-contract.md) — the frozen CLI contract: envelopes, exit codes,
   lifecycle semantics, and the checklist for adding an engine.
 - [`docs/AS-BUILT-engine.md`](docs/AS-BUILT-engine.md) — the site half: query shaping, the Bilibili
   transport, the login / PO-token probe, handle grammar, `--info` / `--transcript`.

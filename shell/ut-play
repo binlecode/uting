@@ -78,7 +78,7 @@ fi
 # default chains through XDG_STATE_HOME, which a flat file cannot express), YT_LANG (unset
 # IS the locale probe) and YT_ASCII (it falls back through the legacy alias YT_TUI_ASCII).
 #
-# The key list is AS-BUILT-contract.md「配置面」. This block is duplicated VERBATIM in all eight
+# The key list is AS-BUILT-cli-contract.md「配置面」. This block is duplicated VERBATIM in all eight
 # entry points: eight independent executables share no library, and a byte-for-byte copy is
 # greppable for drift where a sourced file would invert the dependency direction the VERSION
 # data file exists to keep straight.
@@ -132,7 +132,7 @@ SELF="${BASH_SOURCE[0]}"
 # and only by that name — it carries no table of sites, no URL sniffing, and no idea what a
 # format string looks like. Name == command prefix is what keeps the lookup a string
 # concatenation instead of a registry the player and the TUI would both have to hold.
-# Per-call override: --engine. AS-BUILT-contract.md「命令规格」
+# Per-call override: --engine. AS-BUILT-cli-contract.md「命令规格」
 
 # THE LISTENING LOG, on by default; `UT_HISTORY=0` turns it off. A history that ships off is
 # not a history — nobody finds the knob that has to be found before the feature has ever
@@ -140,7 +140,7 @@ SELF="${BASH_SOURCE[0]}"
 # file, on this machine, with a --clear verb of its own. The reopen condition is a SHARED
 # account, where "what this login listened to" stops being one person's record.
 # The writing happens here (the child is the only process that knows a track ended and why);
-# the storing is ut-history's, called by name like an engine. AS-BUILT-contract.md「配置面」
+# the storing is ut-history's, called by name like an engine. AS-BUILT-cli-contract.md「配置面」
 
 MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar --no-video)
 # Keep video output auto-selected by mpv for compatibility across terminals/displays.
@@ -243,7 +243,7 @@ Long-only flags: --engine --detach --status --stop --set-volume --pause --resume
                  --seek-to --queue --enqueue --next --id --all --json --list --color
                  --volume  (--help and --version also have short forms: -h, -V)
 
-Output contracts (one line of JSON each; the why behind each shape: AS-BUILT-contract.md):
+Output contracts (one line of JSON each; the why behind each shape: AS-BUILT-cli-contract.md):
   play -j   {status, url, mode, exit_code, reason, retried}
             reason: forbidden|unavailable|format_unavailable|network|stopped_by_user|
                     unknown|null(ok)   (network also covers HTTP 429 rate limiting)
@@ -288,7 +288,7 @@ Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
   suite. Override per user in \${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
-  config > the shipped defaults. See AS-BUILT-contract.md「配置面」.
+  config > the shipped defaults. See AS-BUILT-cli-contract.md「配置面」.
   UT_DEFAULT_ENGINE    Engine used when --engine is not given (default: $UT_DEFAULT_ENGINE)
   UT_HISTORY           0 stops a detached player writing to the listening log (default: on)
   UT_VIZ_STYLE         -f viz picture: bars (log-scaled spectrum) | wave (waveform)
@@ -532,7 +532,7 @@ resolve_media() {
     RESOLVED_SELECTED=$(printf '%s' "$out" | jq -r '.selected // ""' 2>/dev/null) || RESOLVED_SELECTED=""
     RESOLVED_SELECTED_RES=$(printf '%s' "$out" | jq -r '.selected_resolution // ""' 2>/dev/null) || RESOLVED_SELECTED_RES=""
     # The anonymous-client fallback is now the ENGINE's decision, so `retried` is relayed
-    # rather than observed — but it is still the playback envelope's field (AS-BUILT-contract.md「数据契约」).
+    # rather than observed — but it is still the playback envelope's field (AS-BUILT-cli-contract.md「数据契约」).
     if printf '%s' "$out" | jq -e '.retried == true' >/dev/null 2>&1; then
         PLAYBACK_RETRIED=1
     fi
@@ -651,7 +651,7 @@ run_mpv() {
     #
     # These land on mpv's argv and are therefore visible in `ps`. An engine must not return
     # a credential header (Cookie / Authorization) here; the YouTube engine returns only
-    # User-Agent / Accept / Accept-Language / Sec-Fetch-Mode. AS-BUILT-contract.md「数据契约」
+    # User-Agent / Accept / Accept-Language / Sec-Fetch-Mode. AS-BUILT-cli-contract.md「数据契约」
     if ((${#RESOLVED_HEADER_ARGS[@]})); then
         mpv_cmd+=("${RESOLVED_HEADER_ARGS[@]}")
     fi
@@ -850,7 +850,7 @@ play_url_directly() {
 # This is the PLAYER's half of that job and it only knows mpv. The yt-dlp wordings — video
 # unavailable, requested format, sign in to confirm — left with the extraction; they reach a
 # caller as the ENGINE's own reason, replayed here from the marker play_url_directly logs
-# rather than re-derived from prose. The ENUM is the shared fact (AS-BUILT-contract.md「数据契约」),
+# rather than re-derived from prose. The ENUM is the shared fact (AS-BUILT-cli-contract.md「数据契约」),
 # and no member may appear here that it does not already have. `unknown` is the conservative
 # default — we never guess a specific cause we didn't positively identify.
 classify_playback_error() {
@@ -873,7 +873,7 @@ classify_playback_error() {
     fi
     # 429 lands in `network`, not `unknown`: it is a transport-level, RETRYABLE refusal, and
     # `network` is the enum member that already means "try again later". Adding a
-    # `rate_limited` member instead would grow a contract three verbs publish (AS-BUILT-contract.md「数据契约」) for no
+    # `rate_limited` member instead would grow a contract three verbs publish (AS-BUILT-cli-contract.md「数据契约」) for no
     # branch a caller would take differently. It is grouped here rather than with `forbidden`
     # (403) deliberately — 403 means these credentials never work, 429 means not right now.
     if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out|HTTP Error 429|Too Many Requests' <<<"$text"; then
@@ -1025,7 +1025,7 @@ ensure_state_dir() {
 # not four calls: --status pays the same single round trip it always did (~10ms measured; a
 # healthy mpv closes as soon as the reader breaks, so the -w1 timeout is never reached).
 # Soft-gated on the socket client so --status keeps working with jq alone
-# (AS-BUILT-contract.md「退出码」): no capable nc/ncat, no socket, no output, and the caller
+# (AS-BUILT-cli-contract.md「退出码」): no capable nc/ncat, no socket, no output, and the caller
 # reports nulls.
 #
 # Emits one "<request_id><US><value>" line per answer, in whatever order mpv sent them —
@@ -1238,7 +1238,7 @@ detached_epitaph() {
     local rc=$1 reason ended_at
     [[ -n "${YT_DETACHED_LOG:-}" ]] || return 0
     ((rc == 0 || rc == 130)) && return 0
-    # Same taxonomy every other surface publishes (AS-BUILT-contract.md「数据契约」) — the reason a caller branches on
+    # Same taxonomy every other surface publishes (AS-BUILT-cli-contract.md「数据契约」) — the reason a caller branches on
     # must not depend on which verb produced it. The tail bound keeps a long mpv log from
     # becoming an argument the classifier has to grep in full.
     reason=$(classify_playback_error "$(tail -c 4000 "$YT_DETACHED_LOG" 2>/dev/null)" "$rc")
@@ -2149,7 +2149,7 @@ ipc_failed() {
 # Adjust volume on a detached player via mpv's per-instance JSON IPC socket. One-shot:
 # open, send, read the matching ack, close, exit (stateless-per-call). Exit 4 for any
 # "did not take effect" (no such/no player, ambiguous, or IPC failure); the -j
-# status/reason carries the why. See AS-BUILT-contract.md「数据契约」/AS-BUILT-contract.md「退出码」.
+# status/reason carries the why. See AS-BUILT-cli-contract.md「数据契约」/AS-BUILT-cli-contract.md「退出码」.
 do_set_volume() {
     local n=$1 want_id=$2
     is_non_negative_int "$n" || die "--set-volume must be a non-negative integer"
@@ -2313,7 +2313,7 @@ do_next() {
 # ==============================================================================
 
 # The `-f` and `--volume` defaults, both cross-engine: set-once choices about how this user
-# listens, not about where the bytes came from. AS-BUILT-contract.md「配置面」.
+# listens, not about where the bytes came from. AS-BUILT-cli-contract.md「配置面」.
 PLAYBACK_MODE="$UT_PLAY_MODE"
 FORMAT_SORT=""
 PLAY_QUALITY="$UT_PLAY_QUALITY" # --quality flag overrides; the engine maps (mode, tier)

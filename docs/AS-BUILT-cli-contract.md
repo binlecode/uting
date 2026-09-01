@@ -1,4 +1,4 @@
-# AS-BUILT-contract —— uting 的 CLI 契约
+# AS-BUILT-cli-contract —— uting 的 CLI 契约
 
 ## 模块功能和结构
 

@@ -147,7 +147,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 **这条所有权的线划在哪（「八个平级动词」）。** 拥有的是**接缝**，不是一个内核。
 站点知识归自己所有，并被关在一对引擎里；播放与生命周期归自己所有，
 并被关在播放器里；在两者之间穿过去的，是这份文档规定的一个 JSON 信封
-（AS-BUILT-contract.md「数据契约」），而不是一次函数调用。
+（AS-BUILT-cli-contract.md「数据契约」），而不是一次函数调用。
 
 ## 设计决定（按模块与接口）
 
@@ -186,12 +186,12 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 - **引擎名就是命令前缀**：`--engine yt` 靠字符串拼接找到 `yt-resolve`，
   加一个源不会在播放器或 TUI 的任何地方加出注册表。（「命令拓扑」）
 - **一个引擎靠有没有那个动词声明能力** —— 不给一个永远答"没有"的动词，
-  那种东西调用方分不清它与"今天不走运"。（AS-BUILT-contract.md「命令规格」）
+  那种东西调用方分不清它与"今天不走运"。（AS-BUILT-cli-contract.md「命令规格」）
 - **resolve 只解自己站的 host**，别的一律退 1：`engine` 字段的全部意义是路由，
   通配让它说谎。（AS-BUILT-engine.md「解析」）
 - **登录状态只报到"发不发"这层**：`--auth` 印 cookie 决定，不是鉴权裁决；
   升级路径是 `--auth --probe`、不改 `auth` 键的语义。
-  （AS-BUILT-engine.md「先探后播」、AS-BUILT-contract.md「命令规格」与「数据契约」）
+  （AS-BUILT-engine.md「先探后播」、AS-BUILT-cli-contract.md「命令规格」与「数据契约」）
 - **引擎内部按「操作」选原语**（B 站搜索走 curl，解流走 yt-dlp）：接缝是**信封**，
   不是它背后的工具。（「原语与接缝」、AS-BUILT-engine.md「搜索子系统」）
 - **按 site 切不按 stack 切**：stack 会变、site 不会（`engine` 是被持久化的路由键）；
@@ -210,14 +210,14 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 
 - **默认值声明一次**：根上的 `config`，**当数据读、绝不 source**；链是
   标志 > 环境 > 用户配置 > 出厂。出厂那份没有命令会写；用户那份由 `uting` 写回八个偏好键。
-  （「命令拓扑」；键表与写回：AS-BUILT-contract.md「配置面」）
+  （「命令拓扑」；键表与写回：AS-BUILT-cli-contract.md「配置面」）
 
 ### 人机面 —— `uting`（接口：键位 + 自绘渲染，对下只调那些动词；AS-BUILT-tui.md）
 
 - **`uting` 画自己的菜单**（不用 picker/TUI 框架）并把活委派给动词。（AS-BUILT-tui.md）
 - **套件里任何地方都不用 fzf / 交互式依赖。**（AS-BUILT-tui.md）
 - **`uting` 只组合那些动词** —— 不碰引擎的内部，也不碰 mpv，
-  除非经由播放器已经公布出来的那个 socket。（AS-BUILT-contract.md「门模型」）
+  除非经由播放器已经公布出来的那个 socket。（AS-BUILT-cli-contract.md「门模型」）
 - **TUI 里不用 emoji**：17 个字形的封闭库存，全部文本呈现，宽度表因此**精确**
   而不只是保守。（AS-BUILT-tui.md）
 - **一个渲染器，五个行源。** 屏上永远是同一张列表；`b`/`h`/`c`/`i` 各自**换掉那些行**
@@ -232,11 +232,11 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
   一个起始偏移字段推进播放列表、队列与历史；`0.4.0` 落地 `start_seconds` 之后那条理由失效。
   （AS-BUILT-tui.md、AS-BUILT-engine.md「起播偏移」）
 
-### 冻结面 —— 契约本身（接口：整份 AS-BUILT-contract.md）
+### 冻结面 —— 契约本身（接口：整份 AS-BUILT-cli-contract.md）
 
 - **契约（含引擎契约）是被冻结、被版本化的那个面** —— 唯一完整活过重写的东西，
   也是任何一次移植的验收规格；semver 2.0.0 版本化它、不是代码（0.y.z 期间：破坏性 → y，
-  其余 → z），**1.0.0 = ROADMAP 的打包 NO 反转那一天**。（边界表与 bump 判法：AS-BUILT-contract.md 开头）
+  其余 → z），**1.0.0 = ROADMAP 的打包 NO 反转那一天**。（边界表与 bump 判法：AS-BUILT-cli-contract.md 开头）
 
 ## 命令拓扑与文件布局
 
@@ -320,7 +320,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 
 **根上有两个数据文件，不是一个 —— `VERSION` 与 `config`，而第二个在这里的理由就是第一个的
 理由。** 默认值曾经是各脚本内联的 `: "${KEY:=值}"` —— 一个**没有东西会发现的漂移面**
-（收拢当场抓出两处已经漂移的键，AS-BUILT-contract.md「配置面」）。所以配置走的是 `VERSION` 那条路
+（收拢当场抓出两处已经漂移的键，AS-BUILT-cli-contract.md「配置面」）。所以配置走的是 `VERSION` 那条路
 ——一个根上的数据文件，八个入口点各自读它——而**不是**一个 source 进来的库：
 一个共享库会让另外七个反过来向持有它的那一个要值，正是这一节开头那条依赖方向的规矩
 所要消掉的耦合。代价是老实的：读它的那段块在八个入口点里**逐字重复**，
@@ -330,7 +330,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 而这套套件的整个安全故事就是它的输入是数据 —— 与"任何 shell 出去的参数都走数组、
 绝不走一条重新引号化的字符串"是同一条规矩的另一面。
 
-其余全是契约面，只住 `AS-BUILT-contract.md`「配置面」：这个文件为什么**不可选**（缺了退 2，
+其余全是契约面，只住 `AS-BUILT-cli-contract.md`「配置面」：这个文件为什么**不可选**（缺了退 2，
 不给 `--version` 留后门）、命名空间白名单与拒收名单、刻意不进出厂文件的那几个旋钮、
 键表、优先级链，与 `uting` 的七键写回。
 
@@ -339,7 +339,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 而原来住在包装层里的那些分支，变成了各动词自己**点名正确动词**的门臂。
 **一扇能说出正确动词的门，比一扇只会说不的门值钱。**
 门表、每个动词的门臂措辞，与"消息里的 `<engine>` 是拼出来的、不是写死的 `yt`"这条规矩：
-AS-BUILT-contract.md「门模型」与「命令规格」。
+AS-BUILT-cli-contract.md「门模型」与「命令规格」。
 
 **自定位的兄弟，而不是 PATH 查找。** 以 `~/bin/uting` 被调用时，脚本的 `$0` 是那条**符号链接**，
 不是代码本身 —— 所以每个脚本先解析自己的符号链接链，再拿真实文件所在的目录去找兄弟。
@@ -371,7 +371,7 @@ AS-BUILT-engine.md「搜索子系统」（一个引擎自己的时长规矩住�
 会在下一对引擎落地时**无声地**过期。一个共享库会是第九个文件，
 而每个引擎 —— 因而传递地，还有那个去找引擎的播放器 —— 都得知道它；
 而这次拆分的全部主张就是"**一个引擎是一对可以直接丢进来的自足文件**"。
-**不得**分歧的是**信封**，而钉住它的是 AS-BUILT-contract.md「数据契约」，
+**不得**分歧的是**信封**，而钉住它的是 AS-BUILT-cli-contract.md「数据契约」，
 以及 `tests/contract.sh` 对两个引擎跑同样的断言 —— 不是靠共享代码。
 
 **源流。** 这套套件源自一个大一统的 `yt-search-n-play.sh`：它的非交互内核变成了
@@ -411,7 +411,7 @@ AS-BUILT-engine.md「搜索子系统」（一个引擎自己的时长规矩住�
 
 **一个引擎的两半不必用同一种原语。** `bili-search` 用 `curl` 说 HTTP，
 而 `bili-resolve` 外壳调用 `yt-dlp`；YouTube 那一对两半都用 `yt-dlp`。
-一半与它的调用方之间的接缝是**信封**（AS-BUILT-contract.md「数据契约」），不是背后那件工具 ——
+一半与它的调用方之间的接缝是**信封**（AS-BUILT-cli-contract.md「数据契约」），不是背后那件工具 ——
 这也是为什么拆分是按*操作*而不是按站点（「站点知识的边界」）。
 
 **yt-dlp 是在表里那些点上被调用的，而不是收在单一接缝后** —— 但它是每个客户端都依赖的
@@ -427,7 +427,7 @@ AS-BUILT-engine.md「搜索子系统」（一个引擎自己的时长规矩住�
 
 每个动词解析自己的 argv；没有任何一个会 exec 成另一个。播放器的解析是最大的一份，
 这里展示的就是它 —— 引擎用的是同一套三段形状（长选项归一化 → `getopts` → 校验），
-只是各自的 flag 集不同（AS-BUILT-contract.md「命令规格」）。
+只是各自的 flag 集不同（AS-BUILT-cli-contract.md「命令规格」）。
 
 ```
    $ ut-play -d -j --engine yt -- "https://youtu.be/ID"
@@ -449,7 +449,7 @@ AS-BUILT-engine.md「搜索子系统」（一个引擎自己的时长规矩住�
    │  (c) **校验**  值域（--color 枚举、--volume 0-100、--start 非负整数秒）与组合规矩：
    │      只许一个动作，--start 是播放路径的 flag 所以与任何动作互斥（AS-BUILT-player.md「起播偏移」），
    │      --id/--all/-d/--queue 各自能配什么（完整清单是契约面，
-   │      AS-BUILT-contract.md「命令规格」）。--queue 的条目在**父进程**里从 stdin 读好，
+   │      AS-BUILT-cli-contract.md「命令规格」）。--queue 的条目在**父进程**里从 stdin 读好，
    │      于是坏队列是调用方 shell 里的用法错误 1，不是 detached 日志里的一行
    │  (d) IS_HANDLE？非空**且**不含空白
    │      （整个判断就这么多 —— 见下）
@@ -489,17 +489,17 @@ mpv 依赖检查**之前**，于是消息讲的是缺输入，而不是缺播放
 没有这一条，一条仅仅**长得像**长 flag 的查询就会变成一个动作：
 `-l -- --status` 会去列播放器而不是搜那段文字，而一个以单个短横开头的句柄会被 `getopts` 吃掉。
 这道守卫归每个动词自己 —— 没有一个层替它们守（`--` 之后位置参数检查要**重新施加**的
-那半课在 AS-BUILT-contract.md「门模型」）。
+那半课在 AS-BUILT-cli-contract.md「门模型」）。
 
 **一次调用一个动作。** `set_action` 记下是哪个 flag 认领了这次调用，并拒绝第二个不同的
 （`--status --stop` → "conflicting actions"），而一个"最后一个 flag 赢"的解析会静默丢掉第一个。
-组合之外的 `--id`/`--all`/`-d` 同样硬拒（清单在 AS-BUILT-contract.md「命令规格」）——
+组合之外的 `--id`/`--all`/`-d` 同样硬拒（清单在 AS-BUILT-cli-contract.md「命令规格」）——
 被接受然后忽略是最难看见的那种失败。
 
 **为什么在 getopts 之前要有一个归一化循环：** bash 的 `getopts` 只认单字母。
 这个循环把**有**短形式的长选项映射过去，并把没有短形式的那些 —— 动作与带值的长选项 ——
 直接吃进全局量，于是 getopts 从来看不见它们（哪个长选项有哪个短形式、哪些刻意没有：
-AS-BUILT-contract.md「命令规格」）。
+AS-BUILT-cli-contract.md「命令规格」）。
 
 **为什么一个未知的长 flag 死在这个循环里。** 每一个长 flag 都在那里被处理，
 所以一个没匹配上的永远不可能合法 —— 而放它掉下去的话，它会以 `-` 的身份到达 `getopts`，
@@ -529,7 +529,7 @@ AS-BUILT-contract.md「命令规格」）。
 ```
 
 `yt-resolve --transcript` 是同样的形状（一次 `yt-dlp --skip-download --no-simulate`，
-AS-BUILT-contract.md「数据契约」）。`bili-resolve` 根本没有 `--transcript` 那一半（「站点知识的边界」）。
+AS-BUILT-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--transcript` 那一半（「站点知识的边界」）。
 
 **B. 播放 —— 播放器问一个引擎，然后播一条直链**
 
@@ -551,7 +551,7 @@ AS-BUILT-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
    │  │    jq ──► {stream_urls[], http_headers{}, title, duration, …}
    │  └───────────────────────────────────────────────────────────
    │    读那个信封；失败按引擎给的 `reason` 分类，
-   │    绝不靠重读 yt-dlp 的散文（AS-BUILT-contract.md「数据契约」）
+   │    绝不靠重读 yt-dlp 的散文（AS-BUILT-cli-contract.md「数据契约」）
    │         ▼
    │    run_mpv:  mpv --no-ytdl <stream_urls[0]>
    │              [--audio-file=<stream_urls[1]> 当格式是合并的]
@@ -626,7 +626,7 @@ AS-BUILT-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
 2. **请求头是契约，不是运气。** `http_headers` 是解析信封的必需键，而播放器把它放上 mpv 的 argv。
    旧的 `--get-url` 交出去的是一条光秃秃的 URL、没有放头的字段，
    于是同一个视频可以在这边播得好好的、同时交给调用方一条 CDN 会用 403 拒掉的 URL ——
-   这是在 Bilibili 上量到的，也正是这个键承重而非理论的原因（AS-BUILT-contract.md「数据契约」）。
+   这是在 Bilibili 上量到的，也正是这个键承重而非理论的原因（AS-BUILT-cli-contract.md「数据契约」）。
 3. **一次 detached 播放跑一次 yt-dlp，最坏两次**（#3，加上带 cookie 的客户端探测失败时的 #4′）
    —— 从四次降下来。mpv 一次都不贡献。
 
@@ -641,14 +641,14 @@ AS-BUILT-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
      → 自绘菜单，**一个视图**：浏览 / 翻页 / 实时过滤 / 新搜索；Enter 播放是
        **detached、非阻塞**的 —— 菜单保住它的终端，音乐在后续每一步操作之间继续放。
        轮换键改源 / 排序 / 模式 / 质量档 / 语言 / 主题（改的设置写回用户配置 ——
-       AS-BUILT-contract.md「配置面」「写回」，「两个根数据文件」）。
+       AS-BUILT-cli-contract.md「配置面」「写回」，「两个根数据文件」）。
        行源有五个，四个键各管一个来回：播放列表（b）、收听历史（h）、
        聚焦行的多 P 列表（c）、聚焦行的**章节**（i，一次 `--info`）—— 后两个由能力探测
        决定画不画，而一个章节行是一次带偏移的调用：Enter 从那一章起播（在播的就是这一条
        则 seek），`+` 入队、`a` 存进播放列表都带着那个偏移。
        Space 暂停 · s 停止 · ? 键位提示换档（core↔full）· q 退出（回收它的播放器）
      完整键位面：`uting --help`（键表本身）、AS-BUILT-tui.md（行为与 why）；
-     命令面与那道 TTY 门在 AS-BUILT-contract.md「命令规格」
+     命令面与那道 TTY 门在 AS-BUILT-cli-contract.md「命令规格」
 ```
 
 ## Agent —— 先搜，再播
@@ -665,7 +665,7 @@ AS-BUILT-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
 ```
 
 换一个源就是把这三行里的 `yt-search` 换成 `bili-search`，别的什么都不变 ——
-而这正是 `engine` 这个字段的用处（AS-BUILT-contract.md「数据契约」）。搞错了会**吵**而不是**静**：
+而这正是 `engine` 这个字段的用处（AS-BUILT-cli-contract.md「数据契约」）。搞错了会**吵**而不是**静**：
 一条 Bilibili URL 送去 `yt-resolve` 会退 1 并说明（AS-BUILT-engine.md「解析」）。
 
 ## Agent —— 不播放地组合（解析）
@@ -681,7 +681,7 @@ AS-BUILT-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
 **取 URL 时把请求头一起取走。** 在一个会检查 `Referer` 或钉住 `User-Agent` 的站点上，
 一条光秃秃的流 URL 不够 —— 实测：Bilibili 的 CDN 对单独的 URL 答 403，
 对同一条带上这些头的 URL 答 206。旧的 `--get-url` 没有放它们的字段，
-而这正是这个信封堵上的那个洞（AS-BUILT-contract.md「数据契约」）。
+而这正是这个信封堵上的那个洞（AS-BUILT-cli-contract.md「数据契约」）。
 
 ```
    # 只读的元数据与字幕也是引擎动词：
@@ -706,7 +706,7 @@ AS-BUILT-contract.md「数据契约」）。`bili-resolve` 根本没有 `--trans
 
 为什么是这个形状：一个只会阻塞的播放器对 agent 不可组合。`<engine>-resolve`（解析而不播放）、
 `-d` 加生命周期 / 运行时 / 队列动词（后台 + 轮询 + 实时控制；动词清单是契约面，
-AS-BUILT-contract.md「命令规格」）与 `-j`（结构化结果），
+AS-BUILT-cli-contract.md「命令规格」）与 `-j`（结构化结果），
 就是"只在视频结束时才返回"的那些逃生口；而 `--status`（永远）与 `--stop`
 （除了目标歧义那一种，那是退 4）都退 0，于是一个轮询循环永远不会把一个正常状态误读成失败。
 
@@ -719,8 +719,8 @@ AS-BUILT-contract.md「命令规格」）与 `-j`（结构化结果），
 - 阻塞式播放（`ut-play -- <handle>` / `-j`）只在播放结束时才返回；非阻塞的 agent 流程请用
   `--detach` + `--status`/`--stop`，或者 `<engine>-resolve`。
 - **范围说明（「两个存储」）：三个收听功能全部已落地**，在 shell 版里，
-  按它们彼此依赖的顺序 —— 播放列表管理（AS-BUILT-player.md「持久状态层」、AS-BUILT-contract.md「命令规格」）、
-  队列（AS-BUILT-player.md「队列」）、收听日志（AS-BUILT-player.md「收听日志」）——三者的命令面都在 AS-BUILT-contract.md「命令规格」。每一个都与它的键位在**同一个提交**里
+  按它们彼此依赖的顺序 —— 播放列表管理（AS-BUILT-player.md「持久状态层」、AS-BUILT-cli-contract.md「命令规格」）、
+  队列（AS-BUILT-player.md「队列」）、收听日志（AS-BUILT-player.md「收听日志」）——三者的命令面都在 AS-BUILT-cli-contract.md「命令规格」。每一个都与它的键位在**同一个提交**里
   带着自己的 agent 动词与 `-j` 信封一起到达，而这正是它们共同继承的那条约束：
   **一个只有键位、没有动词的功能只做了一半。**
   收藏刻意不是一个功能（它是一个名字固定的播放列表）；下载器与频道订阅未排期。
@@ -730,12 +730,12 @@ AS-BUILT-contract.md「命令规格」）与 `-j`（结构化结果），
 - `uting` 的行是每次搜索对缓存结果的一次 jq —— 小 N 没问题；不是为几千条结果设计的。
 - **播放器里的 URL 嗅探** —— `ut-play` 从不猜一条光秃秃的 URL 属于哪个引擎；
   调用方说（`--engine`），而 `uting` 永远知道，因为搜索是它做的。
-  推迟到第三个引擎让一张模式注册表值那个重量时再说（AS-BUILT-contract.md「命令规格」）。
+  推迟到第三个引擎让一张模式注册表值那个重量时再说（AS-BUILT-cli-contract.md「命令规格」）。
 - **一个共享的引擎库** —— 刻意不建；那份重复是"一个引擎是一对自足文件"的代价（「命令拓扑」）。
 - 不套 MCP 包装（「定位与设计目标」）。不依赖第三方媒体客户端（「系统全景」）。
 - **对一个 detached 播放器的运行时控制是一组动词**（`--set-volume N`、`--pause`、
   `--resume`、`--seek ±N`、`--seek-to N`，每个都可带 `[--id ID]` ——
-  AS-BUILT-player.md「运行时 IPC」 / AS-BUILT-contract.md「命令规格」与「数据契约」）：机制 —— 每实例 socket、`ipc_command`、
+  AS-BUILT-player.md「运行时 IPC」 / AS-BUILT-cli-contract.md「命令规格」与「数据契约」）：机制 —— 每实例 socket、`ipc_command`、
   惰性的 `nc` 门 —— 全在 AS-BUILT-player.md「运行时 IPC」；`--volume N` 仍然是启动时的**起始**音量，
   `--start N` 同理是启动时的**起始位置** —— 它刻意**不是**一个动词：移动一个已经在跑的
   播放头是 `--seek-to` 的活，而链接里带的那个 `t=` 在引擎那一侧就被读成了信封的
@@ -760,7 +760,7 @@ AS-BUILT-contract.md「命令规格」）与 `-j`（结构化结果），
     - 这一节事先写下的两条约束原样发出了：`--seek` 带符号、绝对定位另有 `--seek-to`；
       没有 `--toggle-pause`（mpv 的 `cycle pause` 不回值，信封只能猜结果状态）。
       动词面与"信封报**读回**的属性、绝不报被要求的值"这条机制：
-      AS-BUILT-contract.md「命令规格」、AS-BUILT-player.md「运行时 IPC」。
+      AS-BUILT-cli-contract.md「命令规格」、AS-BUILT-player.md「运行时 IPC」。
     - **什么**没有**搬，以及决定它的那个数字。** `uting` 每拍一次的**读**
       （`fetch_play_times`，一条连接四个属性）留在 socket 上：每 1 秒一拍付一条进程链是真代价 ——
       这一半是那条判据里唯一站得住的部分。按住不放的 `9`/`0` 音量键也一样 ——
@@ -787,8 +787,8 @@ AS-BUILT-contract.md「命令规格」）与 `-j`（结构化结果），
 | 风险 | 防线 | 详见 |
 |---|---|---|
 | 一个引擎的 URL 被送去另一个的 resolver（`engine` 字段静默说谎） | 每引擎一份**显式** host 白名单，非本站退 1，绝不返回一条解好的流 | AS-BUILT-engine.md「解析」 |
-| 某个引擎发明一个新的 `reason` 值 | 枚举是封闭的，三个分类器实现它、谁都不许扩展 | AS-BUILT-contract.md「数据契约」 |
-| 一条长得像 flag 的查询变成一个动作 | `--` 在**每一个**动词里结束选项解析，之后各自重新施加位置参数检查 | AS-BUILT-contract.md「门模型」 |
+| 某个引擎发明一个新的 `reason` 值 | 枚举是封闭的，三个分类器实现它、谁都不许扩展 | AS-BUILT-cli-contract.md「数据契约」 |
+| 一条长得像 flag 的查询变成一个动作 | `--` 在**每一个**动词里结束选项解析，之后各自重新施加位置参数检查 | AS-BUILT-cli-contract.md「门模型」 |
 | 一次工具失败在 `-j` 下把 jq 解析错误交给 agent | 捕获 stderr → 分类 → `status:"error"` 信封，退 2+ | AS-BUILT-engine.md「搜索子系统」 |
 | 一次风控挑战被报成一次零结果的**成功** | HTTP 状态、响应体 `.code`、风控券三层都查（**无自动覆盖**：一张券没法按需产生，唯一能产生它的东西是替身） | AS-BUILT-engine.md「Bilibili 的传输」 |
 | 服务端的粗桶剪掉了 `-m/-M` 本会留下的行（筛选改了**答案**而不只是**代价**） | 只在整个窗口落进一个桶时才下推，且本地那对精确边界无论如何都照跑 | AS-BUILT-engine.md「Bilibili 的传输」 |
@@ -801,10 +801,10 @@ AS-BUILT-contract.md「命令规格」）与 `-j`（结构化结果），
 | 并发的元数据回填与 `--set-volume` 互相覆盖同一份记录 | 按 id 的 `mkdir` 锁串行化两次 temp+mv，回填另加 pid 守卫 | AS-BUILT-player.md「运行时 IPC」 |
 | 客户端在 `--status` 背后经 socket 改了音量，记录从此说谎 | `--status` 从 socket **活读**，记录值只作兜底 | AS-BUILT-player.md「运行时 IPC」 |
 | 一个被 `SIGKILL` 的 mpv 留下陈旧 socket，调用方挂住 | `[[ -S sock ]]` 测的是"它是不是 socket" → `ipc_failed`，绝不挂起 | AS-BUILT-player.md「运行时 IPC」 |
-| 写回把用户手写的配置改坏（丢注释、写下一个读不回来的值、架空一条 symlink） | 就地只改匹配行 `=` 右边的值 + round-trip 闸 + `mv` 到**解析后**的真实路径 | AS-BUILT-contract.md「配置面」 |
-| 一个被环境压住的键被写进文件，此后每次启动读到又扔掉 | 读配置**之前**记下哪些键已在环境中，对它们写回是 no-op 加一行提示 | AS-BUILT-contract.md「配置面」 |
+| 写回把用户手写的配置改坏（丢注释、写下一个读不回来的值、架空一条 symlink） | 就地只改匹配行 `=` 右边的值 + round-trip 闸 + `mv` 到**解析后**的真实路径 | AS-BUILT-cli-contract.md「配置面」 |
+| 一个被环境压住的键被写进文件，此后每次启动读到又扔掉 | 读配置**之前**记下哪些键已在环境中，对它们写回是 no-op 加一行提示 | AS-BUILT-cli-contract.md「配置面」 |
 | 跑一次测试套件改掉开发者自己的配置、历史或正在听的播放器 | `tests/` 下每个入口点各自 export `TMPDIR`/`UT_STATE_DIR`/`UT_CONFIG`，外加 `contract.sh` 在两个出口断言用户真实配置的 `cksum` 没变 | `tests/contract.sh` 门口 |
-| `uting` 在没有 TTY 时被跑起来（agent、管道） | 要求 `-t 0 && -t 1`，否则 `die` —— 绝不挂起等一个不会来的按键 | AS-BUILT-contract.md「退出码、TTY、依赖」 |
+| `uting` 在没有 TTY 时被跑起来（agent、管道） | 要求 `-t 0 && -t 1`，否则 `die` —— 绝不挂起等一个不会来的按键 | AS-BUILT-cli-contract.md「退出码、TTY、依赖」 |
 | 标题里的 tab / 换行 / glob 撑破一行或撑破过滤 | 字段用 US 切分；过滤是纯 bash 的 `nocasematch` + 加引号的词元 | AS-BUILT-tui.md |
 | 一个自己画输入的 UI 让终端亮起 Secure Input / 锁图标 | `-echo` 必须连着 `-icanon`（终端反应的是这一对），并从恢复光标的同一个 trap 里恢复 | 「可移植性契约」 |
 | `set -u` 下的空数组展开在 3.2 上中止 | 展开前先守卫 | 「可移植性契约」 |

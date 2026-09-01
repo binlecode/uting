@@ -11,7 +11,7 @@
 #
 # THIS FILE IS NEVER WRITTEN BY ANY COMMAND. Your file is: `uting` writes eight keys back to
 # it when you change one at runtime (engine, sort, mode, quality, theme, language, result
-# count, key-hint tier) — in place, comments and layout kept. AS-BUILT-contract.md「配置面」
+# count, key-hint tier) — in place, comments and layout kept. AS-BUILT-cli-contract.md「配置面」
 # (write-back), ARCHITECTURE.md「两个根数据文件」.
 #
 #   Precedence:  flag  >  environment  >  your config  >  this file
@@ -40,7 +40,7 @@
 #   NOT HERE, deliberately: UT_STATE_DIR and UT_START_RESULTS. Both defaults are a chain
 #   through ANOTHER variable, which a flat KEY=value file cannot express:
 #     UT_STATE_DIR      ${XDG_STATE_HOME:-$HOME/.local/state}/uting — flattening it to a
-#                       literal path would silently drop the XDG support AS-BUILT-contract.md「配置面」 promises. It
+#                       literal path would silently drop the XDG support AS-BUILT-cli-contract.md「配置面」 promises. It
 #                       stays inline in ut-playlist and ut-history.
 #     UT_START_RESULTS  unset = follow UT_FETCH_BATCH below. How many rows a query STARTS
 #                       from, as opposed to the step each edge moves by. It stays inline in

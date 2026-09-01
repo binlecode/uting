@@ -38,7 +38,7 @@ mpv socket（AS-BUILT-player.md「运行时 IPC」）。
 一个 TTY 上的键位面（键表由 `uting --help` 陈述、由 `tests/contract.sh` 的 tmux 段证明），
 对下组合动词：`<engine>-search -j`、`ut-playlist` / `ut-history`、
 `<engine>-resolve --info/--parts -j`、`ut-play -d -j --engine <行自己的引擎>`。
-契约面在 `AS-BUILT-contract.md`。
+契约面在 `AS-BUILT-cli-contract.md`。
 
 ### 调用面 —— 选项的乘积
 
@@ -140,7 +140,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
 `ut-play --quality`，与它交 `-f` 的方式一字不差。没有对应的 `uting` 旗标 —— 一个档位是
 设一次的调音，它的入口是配置键、这个键、以及 agent 面上的 `ut-play --quality`。
 
-**单 P 不开视图。** 引擎答 `count: 1` 不是错（AS-BUILT-contract.md 的 `--parts` 一节），
+**单 P 不开视图。** 引擎答 `count: 1` 不是错（AS-BUILT-cli-contract.md 的 `--parts` 一节），
 但在 TUI 里开一个单行列表是拿一次按键和一次重绘换一句废话 —— 屏幕上那一行**本来就是**
 那唯一的 P。所以 `c` 在那里出的是提示（`分P: 这个视频只有一 P`），回答的正是这个键真正
 在问的"这条还有别的吗"。
@@ -241,7 +241,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     与这个键从前在第 1 页的 no-op 一模一样。存的是 `RESULT_N`（要了多少）而不是
     `NUM_ENTRIES`（拿到多少）：一次只有 37 条结果的查询不该把下一次查询的起点钉在 37。
 - **八个键改的设置会写回用户配置**（`mark_pref` / `flush_prefs`；机制、键表与那三条
-  硬约束在 `AS-BUILT-contract.md`「配置面」「写回」，决定在 ARCHITECTURE.md「两个根数据文件」）。TUI 这一侧只有三件事
+  硬约束在 `AS-BUILT-cli-contract.md`「配置面」「写回」，决定在 ARCHITECTURE.md「两个根数据文件」）。TUI 这一侧只有三件事
   值得记在这里：① **置脏点全都在成功路径之后** —— `cycle_engine` / `cycle_sort` 有一个
   取数失败就回滚的窗口，屏幕上是旧值，文件里就必须是旧值；② **写是延后的**，真正落盘发生在
   `nav_tick` 与 `cleanup_on_exit` 这两个现成的地方，所以连按 `t`/`l` 只付**一次**重写，
@@ -315,7 +315,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     没了，屏幕上的行是过去的照片；空列表说的还是 `b` 开空列表时的那句话，因为那是同一个事实。
 
 - **播放是异步、非阻塞的，走 `ut-play -d -j --engine`。** 引擎取自搜索信封，绝不留给播放器的
-  默认值（AS-BUILT-contract.md「门模型」）。`play_selected` 用一次 `jq` 从那个信封里读出
+  默认值（AS-BUILT-cli-contract.md「门模型」）。`play_selected` 用一次 `jq` 从那个信封里读出
   `id`/`pid`/**`sock`**，从不自己重建 socket 路径（AS-BUILT-player.md「运行时 IPC」）。
   播放在一个独立的 detached 进程组里启动，于是 `uting` 保有对终端的完全控制。
   用户浏览结果、翻页、发起新搜索（`n`）时音频不中断。在任何一行上按一次 `Enter`，
@@ -391,7 +391,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
   - **`Enter` 在章节行上的两个分支，是同一件事。** `play_chapter`：播放器手上已经是**这一条**
     （engine 与去掉 `t=` 的句柄都相等）就走 `ut-play --seek-to <秒>` —— 章节是**已经打开的那个
     文件里的一个偏移**，所以是一次 seek，永远不是一次 re-resolve（这正是这条轴与 `--parts`、
-    `--quality` 的分界，AS-BUILT-contract.md「命令规格」）；否则照常 `play_selected`，偏移在 url 里。
+    `--quality` 的分界，AS-BUILT-cli-contract.md「命令规格」）；否则照常 `play_selected`，偏移在 url 里。
   - **仍然没有第三个渲染器，理由没变。** 一个 "mini player" —— 用三行渲染同样那几个事实 ——
     会是一个状态两个渲染器，也就是会漂移的重复。今天这个数是**一个**，而不是两个。
 
@@ -856,7 +856,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     - **`？`（全角）与 `?` 同绑。** 这是一个双语 TUI，zh 输入法下 shift-/ 出的是全角问号，
       `utf8_complete` 本来就会把它拼成一个键，所以这是多一个 case 模式，不是第二条代码路径。
       case 模式里那个 `?` **必须带引号**：裸 `?` 是"任意单字符"的 glob，会把它下面每一个键吞掉。
-    - **它是第八个写回键**（`UT_KEYS=core|full`，机制见 `AS-BUILT-contract.md`「配置面」「写回」）：
+    - **它是第八个写回键**（`UT_KEYS=core|full`，机制见 `AS-BUILT-cli-contract.md`「配置面」「写回」）：
       一个每次开会话都要重按的偏好不是偏好。也因此它在出厂 `config` 里有一个值，
       而一个拼错的值**当场就死**，与 `UT_PLAY_QUALITY` 走同一道闸。
     - **它藏的是提示，不是键。** core 档下 `i`、`a`、`b`、`h`、`c`、`v`、`f`、`o`、`e`、
@@ -908,7 +908,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     是一件新事都没有（`1:47 · CLeZyIID9Bo&t=0`，连 id 都被 `t=` 拼坏了）。原因不在这个块：
     搜索信封里当时就只有这些字段。**两个引擎的搜索响应里本来都带着 `description`，两边都把它
     扔了** —— yt 的 flat 搜索给的是站方自己截断的那段摘要，bili 的搜索接口给的是简介本身 ——
-    所以它现在是信封的一个字段（`AS-BUILT-contract.md`「数据契约」），不多花一次请求。块里最多两行，
+    所以它现在是信封的一个字段（`AS-BUILT-cli-contract.md`「数据契约」），不多花一次请求。块里最多两行，
     **截两次**：先按两行能装的宽度 `truncate_disp`（省略号从这里来，因为折行没有办法说"还有"），
     再由 `WRAP_MAX` 兜底，因为按词折行可能把一行花在更少的字上。
     - **`WRAP_MAX` 住在 `wrap_emit` 那一个出口上**，理由与 `WRAP_LINES` 一样：一个提前停止

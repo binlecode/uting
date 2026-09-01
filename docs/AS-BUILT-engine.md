@@ -5,7 +5,7 @@
 那两个认识**站点**的半边的实现 why：`yt-search` / `yt-resolve` 与 `bili-search` /
 `bili-resolve`。开头两节定界（模块功能和结构 / 接口），随后按章：搜索（含 Bilibili 的 HTTP
 传输与 `kind`/`access` 的实测由来）、「先探后播」的客户端选择、解析与它的只读动词、起播偏移。
-**这是第三个引擎的作者要读的那份文档**，与 `AS-BUILT-contract.md`「加一个引擎」并排看。
+**这是第三个引擎的作者要读的那份文档**，与 `AS-BUILT-cli-contract.md`「加一个引擎」并排看。
 **代码是唯一权威**：点名的函数是 soft ref（文件 + 函数名），伪码是形状，不是源码的副本。
 
 ```
@@ -45,7 +45,7 @@ mpv 选项集旁边（`AS-BUILT-player.md`「模式 → 格式 → mpv」）。
 
 一个引擎 = `<name>-search`（查询 → 结果信封）+ `<name>-resolve`（句柄 → 解析信封 +
 该站点自己的只读动词）。argv、信封字段与退出码由各命令的 `--help` 陈述、由
-`tests/contract.sh` 证明；形状的 why 与 semver 边界在 `AS-BUILT-contract.md`。
+`tests/contract.sh` 证明；形状的 why 与 semver 边界在 `AS-BUILT-cli-contract.md`。
 
 **能力靠"有没有那个动词"声明。** `--transcript` 只在 `yt-resolve` 有，`--parts` 只在
 `bili-resolve` 有；一个永远答"没有"的动词会让调用方分不清"这个站没有"与"今天不走运/被限流了"。
@@ -109,7 +109,7 @@ yt-resolve: unknown flag '--nope' (resolve flags: -f -S --quality -j -J --info -
 `yt-search` 用 yt-dlp、`bili-search` 用 curl（「Bilibili 的传输」）—— 传输不同，信封相同。
 
 **`engine` 在信封里，是因为一个拿着结果的调用方必须能把它路由回懂它的那个 resolver** ——
-`ut-play --engine <那个值>`（AS-BUILT-contract.md「数据契约」）。它正是 host 白名单（「解析」）
+`ut-play --engine <那个值>`（AS-BUILT-cli-contract.md「数据契约」）。它正是 host 白名单（「解析」）
 存在要保其诚实的那个字段。
 
 **整形只发生一次，在一个 jq 程序里。** 上下界 select、`duration_fmt`/`kind`/`access` 的合并、
@@ -136,7 +136,7 @@ yt-resolve: unknown flag '--nope' (resolve flags: -f -S --quality -j -J --info -
 中止 —— 哪怕在 `-j` 下，交给 agent 的也是一个 jq 解析错误。所以捕获 stderr、用引擎自己的
 分类器（`classify_yt_dlp_error` / `classify_http_error` —— **枚举是共享的，分类器不是**）
 判 reason，发出 `status:"error"` 的信封，退 **2+ 而绝不是 1**（1 归用法/校验，
-AS-BUILT-contract.md「退出码」）。
+AS-BUILT-cli-contract.md「退出码」）。
 
 ### Bilibili 的传输 —— 同一个信封，架在一个手工拼出来的请求上
 
@@ -229,7 +229,7 @@ yt-dlp、只在解析那一半、只经由 `--cookies-from-browser`。正是它�
 规范的 BV URL 才是调用方要交回给 `bili-resolve` 的东西；以及 `live_status` 是 **`null`，不是
 那个原始的 `0`** —— 在 `search_type=video` 下那个字段根本不是这套套件 is_live/was_live 的概念，
 把那个 0 带过去会让某个渲染器画出一个站点从没声称过的直播状态。**一个引擎不知道的字段是
-null，而那个键仍然在**（AS-BUILT-contract.md「数据契约」）。
+null，而那个键仍然在**（AS-BUILT-cli-contract.md「数据契约」）。
 
 ### `kind` 与 `access` —— 引擎的判断落在哪里，以及 B 站为什么两个都是默认值
 
@@ -251,7 +251,7 @@ null，而那个键仍然在**（AS-BUILT-contract.md「数据契约」）。
   付费内容不在 `search_type=video` 这张表里。
 
 于是 B 站两个字段都如实印默认值。**引擎说它知道的，不猜它没有的信号** —— 恒为默认值是合法状态
-（AS-BUILT-contract.md「数据契约」），而一个猜出来的 `kind` 会以事实的面目发货。补上的条件：
+（AS-BUILT-cli-contract.md「数据契约」），而一个猜出来的 `kind` 会以事实的面目发货。补上的条件：
 出现**不加请求**就能拿到的分 P / 付费信号，或搜索端点本身开始携带它。
 
 **`ketang` 行不进信封。** 同一次实测发现的现役缺陷：`search_type=video` 会混进课堂记录，它们
@@ -349,7 +349,7 @@ URL，或本引擎自己的媒体 id 形状，用的是**显式清单，不是�
 —— 只有当选中的格式合并了两条流时才有 —— 是它单独的音轨；`http_headers` 是**必需的，但可以是
 `{}`**。`format` 是发出去的那个选择串（`format_for_mode()` 的产物）也就是**问**，
 `selected`/`selected_resolution` 是同一次调用**答**的那一半 —— 直接取自那份原始记录，所以
-**不多花一次网络**：这两个值一直都在，从前被丢掉。完整 schema：AS-BUILT-contract.md「数据契约」。
+**不多花一次网络**：这两个值一直都在，从前被丢掉。完整 schema：AS-BUILT-cli-contract.md「数据契约」。
 
 ### 只要元数据（`--info`）
 
@@ -367,7 +367,7 @@ extractor 的方差原样发布出去。**
 ### 字幕（`--transcript`）—— 一个 `bili-resolve` 没有的动词
 
 `yt-resolve --transcript` 取一条字幕轨，并把它清洗成可以直接丢进 prompt 的文本。信封、
-`-j`/`-J` 的分工，以及"只许一次 yt-dlp 调用"的约束：AS-BUILT-contract.md「数据契约」，
+`-j`/`-J` 的分工，以及"只许一次 yt-dlp 调用"的约束：AS-BUILT-cli-contract.md「数据契约」，
 `no_subtitles_available` 这个 reason 也规定在那里。Bilibili 不供字幕，所以这个 flag 在
 `bili-resolve` 上不被接受、帮助里也不列 —— 「接口」那条能力规矩的一个实例。
 
@@ -456,4 +456,4 @@ CLAUDE.md）。
 
 **推论给第三个引擎作者**：先跑 `yt-dlp -J '<带时间戳的本站 URL>' | jq .start_time`。有值就白拿，
 没有就照 bili 那样自己解，站点根本没有这种语法就恒填 `null` —— 与 `kind`/`access` 恒填默认值是
-合法状态同理（「`kind` 与 `access`」）。清单：AS-BUILT-contract.md「加一个引擎」。
+合法状态同理（「`kind` 与 `access`」）。清单：AS-BUILT-cli-contract.md「加一个引擎」。

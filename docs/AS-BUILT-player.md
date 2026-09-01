@@ -40,7 +40,7 @@ detached 生命周期（进程组、状态机与死亡记录、运行时 IPC、�
 
 `ut-play` 的动词面（播放、`-d` 生命周期、五个 socket 动词、三个队列动词）与两个存储的
 动词面，argv、信封与退出码由各命令的 `--help` 陈述、由 `tests/contract.sh` 证明；
-形状的 why 在 `AS-BUILT-contract.md`。`-d -j` 信封把 `sock`/`log` 交给客户端 ——
+形状的 why 在 `AS-BUILT-cli-contract.md`。`-d -j` 信封把 `sock`/`log` 交给客户端 ——
 那个 mpv socket 是契约的公开部分（「运行时 IPC」）。
 
 ### 调用面 —— 选项的乘积
@@ -155,7 +155,7 @@ resolve` —— 也就是每个 flag 都被收下了、这个组合合法、调�
 
 **请求头的值落在 mpv 的 argv 上，因此在 `ps` 里看得见。** 引擎**不得**在 `http_headers` 里
 返回任何凭据类的头（`Cookie`、`Authorization`）。这是一条**对引擎的契约**，在这里说一次，
-在 AS-BUILT-contract.md「数据契约」说一次。**cookie 完全不是 mpv 的事**：mpv 自己抽取时 cookie
+在 AS-BUILT-cli-contract.md「数据契约」说一次。**cookie 完全不是 mpv 的事**：mpv 自己抽取时 cookie
 要经 `--ytdl-raw-options` 传进去，而这里 cookie 的决定完全归发起 yt-dlp 调用的那个引擎
 （AS-BUILT-engine.md「先探后播」）—— 播放器没有 cookie 代码、不读 `YT_COOKIE_BROWSER`、
 也没有任何一条能把它泄出去的路径。
@@ -226,7 +226,7 @@ user+sys）：整张表都落在单核的 5–10%，所以**取舍从来不是 C
 `classify_playback_error` 自己判的只有"URL 已经在手时 mpv 还能怎么失败"：传输类措辞、以及
 rc 130（`stopped_by_user`），其余一切保守落到 `unknown`。`forbidden` 在两边都仍然可达，因为
 一个签名过的媒体 URL 可能在解析与打开之间过期或被拒。它绝不用 mpv 的原话 —— 那不是契约 ——
-而**任何一边都不得新增 AS-BUILT-contract.md「数据契约」未列出的成员**。
+而**任何一边都不得新增 AS-BUILT-cli-contract.md「数据契约」未列出的成员**。
 
 `exit_code` 是 mpv 真实的退出状态；进程退出码保持诚实（130 归一为 0 —— 那是一次有意的停止）。
 
@@ -563,7 +563,7 @@ bash 3.2 的数组过不了 `$(...)` 捕获这一关，而调用方也不能把�
 
 **JIT 解析，一次一首。** 一个流 URL 几小时就过期，所以一条预先全解析的队列播到一半就会 403；
 每个条目都在轮到它时才解析。代价是两首之间的空档，而这笔账是有意付的。两个后果是契约性的
-（AS-BUILT-contract.md「数据契约」）：一次解析失败**推进**队列而不是杀掉播放器 —— 否则上游一分钟
+（AS-BUILT-cli-contract.md「数据契约」）：一次解析失败**推进**队列而不是杀掉播放器 —— 否则上游一分钟
 不顺就被焊死在播放器的寿命上 —— 而失败的那一首在 `failed[]` 里拿到自己的墓碑，键是 `<id>-q<pos>`。
 **推进发生在墓碑写下之前**：当队列耗尽时，死的是**播放器**，那条记录归父进程、来自日志里的墓志铭。
 反过来写的话，一次失败会被记两遍 —— 实测过，一个坏句柄同时留下 `<id>` 与 `<id>-q0`。

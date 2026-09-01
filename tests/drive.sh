@@ -19,7 +19,7 @@
 #      lives there.
 #
 # The keymap it can send lives in README.md (Keys) and the YT_* knobs in
-# AS-BUILT-contract.md「配置面」 — this file restates neither.
+# AS-BUILT-cli-contract.md「配置面」 — this file restates neither.
 #
 # Portability: bash 3.2 (macOS system bash). Needs tmux; jq only for the cleanup report.
 #

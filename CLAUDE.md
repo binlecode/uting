@@ -133,7 +133,7 @@ Each fact lives in exactly ONE place; everything else points at it. **The durabl
 
 ### 4. The contract is frozen surface
 
-The single-line JSON envelope, the player record, the exit-code table (0 ok / 1 usage / 2+ propagated tool failure / 4 didn't take effect), and the lifecycle semantics (launch → status → stop, idempotent stop, ambiguity → 4) are the one thing that survives any rewrite. The surface's normative statement is the code itself — each command's `usage()` — and `tests/contract.sh`, which proves it; `docs/AS-BUILT-contract.md` holds only the *why* of the surface's shape and the semver boundary (what counts as public API). Changing the surface is a deliberate, documented act — never a side effect of a feature.
+The single-line JSON envelope, the player record, the exit-code table (0 ok / 1 usage / 2+ propagated tool failure / 4 didn't take effect), and the lifecycle semantics (launch → status → stop, idempotent stop, ambiguity → 4) are the one thing that survives any rewrite. The surface's normative statement is the code itself — each command's `usage()` — and `tests/contract.sh`, which proves it; `docs/AS-BUILT-cli-contract.md` holds only the *why* of the surface's shape and the semver boundary (what counts as public API). Changing the surface is a deliberate, documented act — never a side effect of a feature.
 
 ## Testing Guidelines (HARD RULE — enforced at review)
 
@@ -143,7 +143,7 @@ Two files, one rule:
 
 | File | Drives | Gate |
 |---|---|---|
-| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the `--parts`/`--quality`/`--start` gates (capability by absence, the stream-format gate, bogus tiers and a non-second offset at the door); the idle lifecycle and the death record; three of the four cross-command pipelines `docs/AS-BUILT-contract.md`「调用面」 prints, run rather than printed (the search half replaced by a fixture envelope, which is data a real command reads — not a stand-in that runs in place of one); the TUI's boot / resize / quit under tmux, and that it left no player behind when it went | none — `--offline` before every commit (~20s, 224 of 322 checks, hermetic), the whole thing before every push (~60s) |
+| `tests/contract.sh` | every command's argv, exit codes and `-j` envelopes; the playlist store AND the listening log under a disposable `UT_STATE_DIR` (including an 8KB title, because the 4096-byte line is the premise the lock-free append rests on); the host gate across every discovered engine; the `--parts`/`--quality`/`--start` gates (capability by absence, the stream-format gate, bogus tiers and a non-second offset at the door); the idle lifecycle and the death record; three of the four cross-command pipelines `docs/AS-BUILT-cli-contract.md`「调用面」 prints, run rather than printed (the search half replaced by a fixture envelope, which is data a real command reads — not a stand-in that runs in place of one); the TUI's boot / resize / quit under tmux, and that it left no player behind when it went | none — `--offline` before every commit (~20s, 224 of 322 checks, hermetic), the whole thing before every push (~60s) |
 | `tests/playback.sh` | detached players end to end (launch → status → mutate → stop → stop again), the **live read off a real mpv socket** (the peer has no stand-in, so the claim lives here), that an engine's `http_headers` actually reach mpv, the two claims the offline half can never reach (`status:"ambiguous"`, which needs two live players, and the fourth documented pipeline — a real `ut-playlist --show -j` envelope launching a real `--queue`), and the listening log's **wiring** — only here does a real track really end | none — it starts real players, but in a `TMPDIR` and a `UT_STATE_DIR` of its own; ~82s and needs the network, so run it when the player changed |
 
 `tests/drive.sh` is the only other file, and it is not a suite — it asserts nothing. It is a
@@ -260,7 +260,7 @@ parts — files, processes, stores, seams — and the edges between them, so a r
 shape before reading the why. A rendered terminal frame is not that diagram; it belongs to
 `capture-pane`), 「接口与 API」 (Interface and API —
 its surface, its shape, and how it is actually CALLED: the verbs and envelopes by name,
-pointing at `usage()` / `tests/contract.sh` / `AS-BUILT-contract.md` for the shapes rather
+pointing at `usage()` / `tests/contract.sh` / `AS-BUILT-cli-contract.md` for the shapes rather
 than restating them, plus the calling surface hard rule 2 carves out — worked invocations,
 the options that combine, and the combinations that are refused with their exit code, each
 one backed by a check in `tests/contract.sh`). `ARCHITECTURE.md`'s first three sections are
@@ -319,7 +319,7 @@ A skill may propose a *structural detector as a manual aid*; it may never propos
 - One logical change per commit. Renderer changes come with the proved capture (`capture-pane`) that shows them.
 - `bash -n` on every script in `shell/` before every commit; `tests/contract.sh --offline` with it, and the full `tests/contract.sh` before every push.
 - **Always ask before `git push`.** Never force-push `main`.
-- **Versioning is semver 2.0.0 over the CLI contract, not over the code** (`docs/AS-BUILT-contract.md` opens with what counts as the public API). While the suite is `0.y.z`: a breaking change bumps **y**, an addition or a fix bumps **z**. `VERSION` is bumped deliberately, **alone, in its own commit**, and never once per commit. There is no release process to run and no CHANGELOG: the suite is not packaged (`docs/ROADMAP.md`), so a `v<VERSION>` tag is for a real release only — `1.0.0` waits for the packaging NO to reverse.
+- **Versioning is semver 2.0.0 over the CLI contract, not over the code** (`docs/AS-BUILT-cli-contract.md` opens with what counts as the public API). While the suite is `0.y.z`: a breaking change bumps **y**, an addition or a fix bumps **z**. `VERSION` is bumped deliberately, **alone, in its own commit**, and never once per commit. There is no release process to run and no CHANGELOG: the suite is not packaged (`docs/ROADMAP.md`), so a `v<VERSION>` tag is for a real release only — `1.0.0` waits for the packaging NO to reverse.
 
 ## Security & Configuration Tips
 

@@ -9,7 +9,7 @@
 #
 # It used to be a gating wrapper that exec'd the core. The gate and the implementation
 # are merged here because after the engine/player split there is no longer a second
-# caller to gate against: this file IS the search verb. AS-BUILT-contract.md「门模型」
+# caller to gate against: this file IS the search verb. AS-BUILT-cli-contract.md「门模型」
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
 # expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md「可移植性契约」.
@@ -46,7 +46,7 @@ fi
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
 # Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
-# AS-BUILT-contract.md「配置面」 for the keys.
+# AS-BUILT-cli-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
@@ -169,7 +169,7 @@ fi
 # knob a fat `-n` was bounded only by what the site would eventually stop sending.
 
 # The `-n` default. Cross-engine: a caller who wants a different result count by default
-# wants it from whichever source they asked. AS-BUILT-contract.md「配置面」.
+# wants it from whichever source they asked. AS-BUILT-cli-contract.md「配置面」.
 NUM_RESULTS=$UT_SEARCH_RESULTS
 MIN_DURATION=0
 MAX_DURATION=0
@@ -268,7 +268,7 @@ def oneline: if type != "string" then "" else gsub("\\s+"; " ") | sub("^ "; "") 
 # Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
 # caller can branch on `reason` instead of string-matching raw extractor wording (which is
 # not a contract and drifts across versions). The ENUM is the shared fact and lives in
-# AS-BUILT-contract.md「数据契约」 — this is the yt-dlp-side reader of it; the player carries its own
+# AS-BUILT-cli-contract.md「数据契约」 — this is the yt-dlp-side reader of it; the player carries its own
 # mpv-side reader. No member may be added here that the enum does not already have.
 # `unknown` is the conservative default — never guess a cause we did not positively identify.
 classify_yt_dlp_error() {
@@ -376,7 +376,7 @@ fetch_results() {
             cat "$err" >&2 2>/dev/null || true
             echo "Error: search failed for '$QUERY' ($reason)" >&2
         fi
-        # AS-BUILT-contract.md「退出码」 reserves 1 for usage/validation, so a propagated extractor failure reports
+        # AS-BUILT-cli-contract.md「退出码」 reserves 1 for usage/validation, so a propagated extractor failure reports
         # 2+ even when yt-dlp itself exited 1; -j callers branch on .status instead.
         exit $((rc <= 1 ? 2 : rc))
     fi
@@ -396,7 +396,7 @@ fetch_results() {
     ((MIN_DURATION > 0)) && bounds+=" and (.duration != null and .duration > $MIN_DURATION)"
     ((MAX_DURATION > 0)) && bounds+=" and (.duration != null and .duration < $MAX_DURATION)"
 
-    # `kind` and `access` (AS-BUILT-contract.md「数据契约」) are the ENGINE'S JUDGEMENT about a row,
+    # `kind` and `access` (AS-BUILT-cli-contract.md「数据契约」) are the ENGINE'S JUDGEMENT about a row,
     # not a site field carried over, so they are merged LAST and win over any raw entry key of
     # the same name. Both are constants on this site and that is the whole answer, not a stub:
     # a YouTube search row IS one video, and anonymous extraction returns the whole timeline or
@@ -484,7 +484,7 @@ Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
   suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
-  config > the shipped defaults. See AS-BUILT-contract.md「配置面」.
+  config > the shipped defaults. See AS-BUILT-cli-contract.md「配置面」.
   YT_COOKIE_BROWSER  Browser profile cookies are read from (default: chrome; "none" for
                      anonymous). A login makes age-restricted videos searchable; a profile
                      absent from this machine degrades to anonymous rather than failing
@@ -496,7 +496,7 @@ EOF
 # Value-taking flags (consume the next token) vs boolean flags, restricted to the search
 # surface. Anything outside these is rejected — playback/lifecycle flags get a pointer to
 # ut-play so the caller learns the right tool instead of a bare error. This gate is the
-# whole reason a narrow verb exists (AS-BUILT-contract.md「门模型」); it used to live in a separate
+# whole reason a narrow verb exists (AS-BUILT-cli-contract.md「门模型」); it used to live in a separate
 # wrapper file and now sits directly in front of the implementation it guards.
 has_format=0
 query=()

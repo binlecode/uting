@@ -63,7 +63,7 @@ unset _pk
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
 # Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
-# AS-BUILT-contract.md「配置面」 for the keys.
+# AS-BUILT-cli-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
@@ -109,7 +109,7 @@ ut_read_config "$UT_DEFAULTS"
 # The eight keys above are the ones this TUI changes at runtime, and they are written back to
 # the USER's config file in place. A preference that has to be re-pressed every session is not
 # a preference; the reasoning is ARCHITECTURE.md「两个根数据文件」 (reopen triggers: ROADMAP), the key table is
-# AS-BUILT-contract.md「配置面」. What the code below is:
+# AS-BUILT-cli-contract.md「配置面」. What the code below is:
 #
 #   WHICH FILE  the user's own ($UT_CONFIG). The shipped `config` is NEVER written — it is
 #               this checkout's declared defaults, not anybody's preferences.
@@ -319,7 +319,7 @@ fi
 
 # The listening log, located the same way and just as optionally. HISTORY_BIN, not
 # UT_HISTORY: that name is already the player's set-once switch for whether a row is
-# written at all (AS-BUILT-contract.md「配置面」) — and like its two siblings above, an internal
+# written at all (AS-BUILT-cli-contract.md「配置面」) — and like its two siblings above, an internal
 # does not wear the UT_/YT_/BILI_ prefix, which ut_read_config accepts as settable.
 # This file only READS it, and only when h is pressed — the writing is the player's, where
 # the fact "a track ended, and why" exists.
@@ -444,7 +444,7 @@ refresh_engine_auth() {
 }
 
 # Does this engine have `--parts`? Asked the way the suite says an engine declares a
-# capability — by whether the VERB exists (AS-BUILT-contract.md「命令规格」) — and asked without
+# capability — by whether the VERB exists (AS-BUILT-cli-contract.md「命令规格」) — and asked without
 # spending a request: the probe is a HANDLE-LESS call, so an engine that HAS the verb dies in
 # its own argv gate ("a BV id … is required") while one that does not dies in the flag gate,
 # with the wording every gate in this suite shares. Both exit 1; the stderr is the answer.
@@ -654,13 +654,13 @@ SEARCH_ARGS=()
 # re-fetch — an exact page count. Cross-engine: this is the TUI's appetite, not a site's page
 # size. Separate from UT_SEARCH_RESULTS even though that is 20 too: that one is a TOTAL an
 # engine returns once, this one is the STEP each press moves by, so widening one must not
-# widen the other. AS-BUILT-contract.md「配置面」.
+# widen the other. AS-BUILT-cli-contract.md「配置面」.
 #
 # WHERE THE FIRST FETCH STARTS is a different question from how big a step is, which is why
 # UT_START_RESULTS exists and why its unset state means "follow the step". It is the one key
 # uting writes back that is NOT in the shipped `config`: a default whose meaning is "the
 # value of another key" is a chain a flat KEY=value file cannot express (the same judgement
-# that keeps UT_STATE_DIR out of it). AS-BUILT-contract.md「配置面」.
+# that keeps UT_STATE_DIR out of it). AS-BUILT-cli-contract.md「配置面」.
 RESULT_N=${UT_START_RESULTS:-$UT_FETCH_BATCH}  # -n overrides; → grows it, ← shrinks it
 # The order the v key steps through. Space- or comma-separated; a user who never wants video
 # drops it here rather than pressing past it every session.
@@ -3628,7 +3628,7 @@ press_any_key() {
 #
 # The reason exists ONLY on the core's stderr. `die` writes prose there and exits 1 whatever -j
 # asked for, so a synchronous -d failure puts nothing on stdout — there is no envelope field to
-# read it out of. AS-BUILT-contract.md「数据契约」's `reason` taxonomy belongs to the BLOCKING play path, which uting never
+# read it out of. AS-BUILT-cli-contract.md「数据契约」's `reason` taxonomy belongs to the BLOCKING play path, which uting never
 # takes. Not colored: the chrome carries ONE accent (see the palette block), and the n/m/o failures next
 # to it print plain too.
 play_failed_notice() {
@@ -4256,7 +4256,7 @@ open_history() {
 # SEARCH ROWS ONLY, through search_only — the guard o and e already use, not a new one.
 # stash_search has a single slot, so opening a part list from a playlist row would either
 # lose the way back to the search or need a stack, and a stack is its own change on its own
-# day (the one-deep return stack is AS-BUILT-contract.md「命令规格」).
+# day (the one-deep return stack is AS-BUILT-cli-contract.md「命令规格」).
 #
 # ONE fork on the KEY, never on the selection moving. Whether the key is offered at all was
 # answered at the last source switch (refresh_engine_parts), so this costs nothing per redraw.
@@ -4348,7 +4348,7 @@ open_parts() {
 # SEARCH ROWS ONLY, through search_only — the guard o, e and c already use, not a new one.
 # stash_search has a single slot, so opening a chapter list from a playlist row would either
 # lose the way back to the search or need a stack, and a stack is its own change on its own
-# day (the one-deep return stack is AS-BUILT-contract.md「命令规格」).
+# day (the one-deep return stack is AS-BUILT-cli-contract.md「命令规格」).
 open_chapters() {
     # The toggle, tested literally for the reason open_history and open_parts give: with a
     # chapter list on screen `i` is the way back, and a chapter list is the only thing `i`

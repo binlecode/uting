@@ -12,7 +12,7 @@
 # It also owns two claims contract.sh's offline half can never reach, both for the same
 # reason — they need players that are really running: that a mutation with no `--id` and two
 # players answers `status:"ambiguous"` (4 alone does not separate it from an idle call), and
-# AS-BUILT-contract.md「调用面」's `ut-playlist --show … -j | ut-play -d --queue -`, run
+# AS-BUILT-cli-contract.md「调用面」's `ut-playlist --show … -j | ut-play -d --queue -`, run
 # verbatim — contract.sh proves that envelope reaches the gate, this is where it launches.
 #
 # Cost: **~82s / 51 ok** (2026-09-01, three runs at 81s, 82s and 83s), and it is real work
@@ -173,7 +173,7 @@ report "--status sees 2"   2 "$(shell/ut-play --status -j | jq '.players | lengt
 
 echo "── a selector-less mutation on 2 players is ambiguous -> exit 4 ───"
 report "--set-volume no --id" 4 "$(shell/ut-play --set-volume 40 -j >/dev/null 2>&1; echo $?)"
-# The exit code alone leaves the third row of AS-BUILT-contract.md「调用面」's 1-vs-4 table
+# The exit code alone leaves the third row of AS-BUILT-cli-contract.md「调用面」's 1-vs-4 table
 # unproved: 4 is also what an IDLE mutation answers, so a caller told only "4" cannot tell
 # "nothing to act on" from "say which one". `status` is the field that separates them, and it
 # has no check anywhere else — contract.sh reaches the not_playing side and can never reach
@@ -183,7 +183,7 @@ report "--set-volume no --id" 4 "$(shell/ut-play --set-volume 40 -j >/dev/null 2
 # its first run, against correct behaviour. Same trap contract.sh's jq_ok exists to close.
 amb=$(shell/ut-play --set-volume 40 -j 2>/dev/null)
 report "…and says ambiguous"  0 "$(printf '%s' "$amb" | jq -e '.status=="ambiguous" and .reason=="multiple_players" and (.players|length)==2' >/dev/null 2>&1; echo $?)"
-# --stop takes the same ambiguity rule (AS-BUILT-contract.md「数据契约」): with 2 players and no
+# --stop takes the same ambiguity rule (AS-BUILT-cli-contract.md「数据契约」): with 2 players and no
 # selector it must refuse with 4 AND stop nothing — a --stop that guessed would kill the
 # wrong listener's audio, which no exit code repairs.
 report "--stop no --id"       4 "$(shell/ut-play --stop -j >/dev/null 2>&1; echo $?)"
@@ -394,7 +394,7 @@ echo "── a queue is a player consuming a playlist ────────�
 # One player, so no --id is needed anywhere below (exactly-one is the zero-friction case).
 shell/ut-play --stop --all -j >/dev/null 2>&1
 # The list is STORED first and read back out, so what launches the player is
-# AS-BUILT-contract.md「调用面」's second pipeline run verbatim:
+# AS-BUILT-cli-contract.md「调用面」's second pipeline run verbatim:
 #     ut-playlist --show chill -j | ut-play -d --queue -
 # It used to be a `jq -nc` array inlined here, which proved the array arm and left the arm the
 # doc actually advertises unexecuted — and that arm is the one carrying the claim: a stored
