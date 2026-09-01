@@ -15,12 +15,46 @@ detached 生命周期（进程组、状态机与死亡记录、运行时 IPC、�
 `AS-BUILT-engine.md`。两个存储既不认站点也不认播放：一条记录是 `{engine, url, …}`，
 也就是一次**调用**，不是一个引用。
 
-## 接口
+## 接口与 API
 
 `ut-play` 的动词面（播放、`-d` 生命周期、五个 socket 动词、三个队列动词）与两个存储的
 动词面，argv、信封与退出码由各命令的 `--help` 陈述、由 `tests/contract.sh` 证明；
 形状的 why 在 `AS-BUILT-contract.md`。`-d -j` 信封把 `sock`/`log` 交给客户端 ——
 那个 mpv socket 是契约的公开部分（「运行时 IPC」）。
+
+### 调用面 —— 选项的乘积
+
+`usage()` 逐个说明每个 flag 的含义，但对**它们的乘积**一个字都没说：哪些能同时给、哪些
+组合在门口就被拒。下面这些不是文档抄的，每一条都对应 `tests/contract.sh` 里的一条检查 ——
+prose 会腐烂，检查会红。
+
+**终端可视化（`-f viz`，别名 `waves` / `wave`）** —— 前台阻塞，占满整个 pane：
+
+```sh
+ut-play -f viz -- URL                              # 最小调用
+UT_VIZ_STYLE=wave ut-play -f viz -- URL            # 这一次换风格（默认 bars）
+ut-play -f viz --volume 0 -- URL                   # 只要画面
+ut-play -f viz --start 90 --quality low -- URL     # 起播偏移 + 低码率（可视化不看画质）
+ut-play --engine bili -f viz -- BV…                # 换引擎，同一个 mode
+```
+
+被拒的三种，都是**用法错误（退 1）而不是工具失败（2+）**：一个 agent 把 2+ 读成「稍后重试」，
+会去重试一个永远不成立的组合。
+
+| 组合 | 退出码 | 为什么 |
+|---|---|---|
+| `-d -f viz` / `-d -f ascii` | 1 | detached 播放器没有控制终端——那正是它能活过调用者的原因 |
+| `--queue -f viz` / `--queue -f ascii` | 1 | `--queue` 本身就启动一个 detached 播放器，继承同一个不可能 |
+| `-f viz -j` | 不报错，但**画面全无** | `-j` 那条路把 stdout 整个抓进临时文件再只吐一行 JSON，tct 的转义流跟着被吞 |
+
+最后一条是唯一一个**不报错**的陷阱，也是这张表存在的理由：它不在任何 flag 的说明里，只在
+两个 flag 的交叉处。它也是这张表里唯一**没有**检查兜底的一条 —— 实测的（2026-09-01，真
+120×30 pane 跑满 30 秒，字形行数 0，整个 pane 空的），但证明它要一次前台阻塞播放，而前台
+播放没有 `--length` 之类的边界，把一首歌放完不是这套件愿意付的时间；而边界要靠替身，这套件
+没有替身。所以这一行标着「实测」，不标「已证」—— 说清楚比green 一个假检查诚实。
+
+`-f viz` 另外要求**真 TTY**（`stty size </dev/tty`），所以管进 `cat`、塞进 `$(...)`、
+跑在没有 pty 的 CI 里都不行。
 
 ---
 

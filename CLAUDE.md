@@ -125,7 +125,7 @@ If a feature genuinely needs bash 4+, the honest move is `((BASH_VERSINFO[0] >= 
 
 ### 2. One fact, one place — and docs hold why/how, never what
 
-Each fact lives in exactly ONE place; everything else points at it. **The durable docs — `ARCHITECTURE.md` and the as-built files — are for human engineers and hold *why* and *how* — never *what***: flags, envelopes, defaults, key tables and function inventories are already stated by the source, by `usage()`, and proved by the test suites, and restating them there is a violation — no exceptions (a `PLAN-` is different; see the SDLC section). Cite a doc by **filename, plus a heading name when the file is large** — plain greppable headings, no section-number scheme, no index to maintain. The version is declared once, in `VERSION`; each entry point reads that file and prints its own name, so the entry points can never disagree.
+Each fact lives in exactly ONE place; everything else points at it. **The durable docs — `ARCHITECTURE.md` and the as-built files — are for human engineers and hold *why* and *how* — never *what***: flags, envelopes, defaults, key tables and function inventories are already stated by the source, by `usage()`, and proved by the test suites, and restating them there is a violation (a `PLAN-` is different; see the SDLC section). **One carve-out, and it is narrow: the 「接口与 API」 section of an as-built doc carries the CALLING SURFACE** — worked invocations, which options combine, and which combinations are refused and with what exit code. That is the one *what* a reader cannot assemble from `usage()`, because a flag list states each flag's meaning and says nothing about the product of them. It is bounded: the calling surface, not the flag list, not the envelope fields, not the defaults, not a function inventory — those stay out. And it is bounded a second way: **every refusal written there must be a check in `tests/contract.sh` first.** Prose that no suite holds reports green by default; the section is a reader's view of a claim the suite already proves, never the only place the claim lives. Cite a doc by **filename, plus a heading name when the file is large** — plain greppable headings, no section-number scheme, no index to maintain. The version is declared once, in `VERSION`; each entry point reads that file and prints its own name, so the entry points can never disagree.
 
 ### 3. Scratch stays under `tmp/`
 
@@ -220,7 +220,7 @@ conveniences the checkout does not depend on.
 
 ## SDLC & Architectural Documentation
 
-**The durable docs — `ARCHITECTURE.md` and the as-built files — are for human engineers, and they hold *why* and *how* — never *what*.** The what — argv, envelopes, exit codes, defaults, key tables, function inventories — is already stated by the source, by each command's `usage()`, and proved by the test suites; restating it in a durable doc is a violation, no exceptions. A paragraph earns its place only by saying something the code cannot: a decision and the alternative it rejected, a rule forced by a dated measurement, an invariant that spans files, a pitfall that cost a debugging session. When a doc and the code disagree, the code is right and the doc is the bug.
+**The durable docs — `ARCHITECTURE.md` and the as-built files — are for human engineers, and they hold *why* and *how* — never *what*.** The what — argv, envelopes, exit codes, defaults, key tables, function inventories — is already stated by the source, by each command's `usage()`, and proved by the test suites; restating it in a durable doc is a violation, with the single 「接口与 API」 carve-out hard rule 2 defines (the calling surface — worked invocations and refused combinations, each backed by a check). A paragraph earns its place only by saying something the code cannot: a decision and the alternative it rejected, a rule forced by a dated measurement, an invariant that spans files, a pitfall that cost a debugging session. When a doc and the code disagree, the code is right and the doc is the bug.
 
 **`PLAN-` is different — it serves both human engineers and coding agents.** A plan is the bridge from design all the way down to implementation specs, written so a coding agent can write the source with minimal confusion and ambiguity: core processing logic, API contracts, envelope fields, logic specs, edge cases, the verification matrix. It **tracks the real source-code implementation and its validation** as they land. That precision is its job, and it never becomes a duplication liability because the plan is **deleted at land** — what survives into the durable docs is only the why.
 
@@ -254,9 +254,12 @@ landed is as-built — no further doc class is introduced.
 **Every `AS-BUILT-<scope>.md` opens with the same three sections, in this order, then the why
 chapters:** 「结构」 (Structure — what the scope is made of, and the map of this doc),
 「模块」 (Module — boundary and isolation: what this module owns, what it deliberately does
-not, and the layering rule it enforces), 「接口」 (Interface — its surface and shape: the
-verbs and envelopes by name, pointing at `usage()` / `tests/contract.sh` /
-`AS-BUILT-contract.md` for the shapes, never restating them). `ARCHITECTURE.md`'s first three
+not, and the layering rule it enforces), 「接口与 API」 (Interface and API — its surface, its
+shape, and how it is actually CALLED: the verbs and envelopes by name, pointing at
+`usage()` / `tests/contract.sh` / `AS-BUILT-contract.md` for the shapes rather than
+restating them, plus the calling surface hard rule 2 carves out — worked invocations, the
+options that combine, and the combinations that are refused with their exit code, each one
+backed by a check in `tests/contract.sh`). `ARCHITECTURE.md`'s first three
 sections are the suite-level mirror: the mission and design goals, the system panorama, and
 the design decisions grouped by module — the hub whose spokes are the per-scope docs.
 

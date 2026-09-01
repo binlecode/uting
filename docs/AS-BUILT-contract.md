@@ -27,7 +27,7 @@ detached 生命周期语义，以及那条四层配置链。
 **第三个引擎的作者** —— 他的全部义务（「命令规格」的引擎两节、「门模型」、「数据契约」
 与「加一个引擎」）。理由在 `ARCHITECTURE.md`；流程在 `CLAUDE.md`。
 
-## 接口（semver 的版本化对象）
+## 接口与 API（semver 的版本化对象）
 
 **公共 API 的边界**（版本化的对象，位数怎么判由此而来）：
 
@@ -44,6 +44,46 @@ detached 生命周期语义，以及那条四层配置链。
 
 判一次 bump：把一批变更按这张表过一遍 —— 命中一条"在里面"且是破坏性的就走 y
 （0.y.z 期间），否则加法与修复走 z；同批的加法项跟着走、不额外计。判据是表，不是感觉。
+
+### 调用面 —— 命令之间怎么接
+
+单个命令的 flag 乘积在各自的 as-built 里（`AS-BUILT-player.md`、`AS-BUILT-engine.md`、
+`AS-BUILT-tui.md` 的同名段）。这里是**跨命令的那一层**——真正让这八个东西成为一套 API 的
+不是任何一个 flag，而是**它们的 stdin 都认同一组形状**：
+
+```sh
+# 搜索信封 → 存起来
+yt-search -j -n 20 -- "lofi hip hop" | ut-playlist --add chill
+
+# 存起来的 → 直接变成一个队列（记录就是调用，不需要映射）
+ut-playlist --show chill -j | ut-play -d --queue -
+
+# 听过的 → 存起来，或者再放一遍
+ut-history --ls -n 20 -j | ut-playlist --add rediscover
+ut-history --ls -n 20 -j | ut-play -d --queue -
+
+# 往正在跑的播放器后面追加
+ut-playlist --show chill -j | ut-play --enqueue -
+```
+
+三种形状都收：**item 数组**、`--show -j` 信封、**搜索信封**。这就是为什么中间不需要一个
+`jq` 映射——一条存储记录 `{engine, url, …}` 本身就是 `ut-play --engine E -- URL` 这个
+**调用**，不是一个需要翻译的引用。
+
+**1 和 4 的分界是这一层最重要的一条**，也是 agent 唯一需要分支的地方：
+
+| 情况 | 退出码 | 例子 |
+|---|---|---|
+| 形状不对 / 用法错 | **1** | 不是 JSON、空队列、url 带空格、engine 名可疑、`{"status":"ok"}` 这种没形状的对象 |
+| 形状对，但没有可作用的对象 | **4** | 空闲时 `--set-volume` / `--pause` / `--seek` / `--next` / `--enqueue` —— 信封里 `status:"not_playing"` |
+| 对象有歧义 | **4** | 多个播放器且没给 `--id` —— `status:"ambiguous"` |
+
+**4 不是失败，是「没生效」。** 一个把 4 读成 2+ 的调用方会去重试；一个把 4 读成 1 的调用方
+会去改自己的 argv。两个都错，所以这一位单独占一个码。
+
+**动作彼此排斥**，都退 1：`--status --stop`（两个动作）、`--status --id X`（只有选择器没有
+动作）、`-d --stop`（`-d` 是播放，不是动作）、`--queue -` 不带 `-d`（它本身就启动一个
+detached 播放器）。
 
 ---
 

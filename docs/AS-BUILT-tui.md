@@ -13,12 +13,43 @@
 **纯编排**，对下只调那些动词；唯一被批准的例外是播放器在 `-d -j` 信封里公布出来的那个
 mpv socket（AS-BUILT-player.md「运行时 IPC」）。
 
-## 接口
+## 接口与 API
 
 一个 TTY 上的键位面（键表由 `uting --help` 陈述、由 `tests/contract.sh` 的 tmux 段证明），
 对下组合动词：`<engine>-search -j`、`ut-playlist` / `ut-history`、
 `<engine>-resolve --info/--parts -j`、`ut-play -d -j --engine <行自己的引擎>`。
 契约面在 `AS-BUILT-contract.md`。
+
+### 调用面 —— 选项的乘积
+
+`uting` 的 argv 面很窄（搜索参数转发给引擎，菜单参数留给自己），但它有一个别的命令没有的
+前提：**它要真 TTY，stdin 和 stdout 都要**。下面每一条都对应 `tests/contract.sh` 的检查。
+
+```sh
+uting                                  # 无 query，交互式问
+uting "lofi hip hop"                   # 直接搜
+uting --engine bili -n 40 "周杰伦"      # 转发给 bili-search
+uting -f video --volume 60 "…"          # 菜单参数：起播 mode 与起播音量
+uting --theme nord --lang zh "…"        # chrome
+```
+
+**两道门，都退 1，而且顺序是固定的**：flag 门在前，TTY 门在后。
+
+| 组合 | 报什么 |
+|---|---|
+| `-f ascii` / `-f viz` | `-f must be one of: audio, video, fast` —— 它的播放**一律 detached**，终端渲染模式永远到不了一个终端 |
+| 管道 / 无 pty（`</dev/null`、CI） | `requires a terminal (interactive menu)` |
+| `UT_*_CYCLE` 里有未知成员 | 点名那个键 |
+| `--theme` / 标量旋钮值非法 | 点名那个键，不是笼统的用法错误 |
+
+**这两道门必须靠文案分辨，不能靠退出码** —— 两道都是 1。一个只看退出码的检查，在「拒了这个
+值」和「拒了这根管道」之间是分不开的，也就等于**不会失败**。套件里 uting 这一段的每条断言
+都是匹配文案的，原因就是这个。
+
+顺带一条不对称：**cycle 被收窄后仍然必须能启动**。`-f` 与 `-s` 的默认值是拿 cycle 校验的，
+所以如果默认写成字面量 `audio`，`UT_MODE_CYCLE=video` 就成了一个「跑不起来的配置」——用户
+收窄了 cycle，却被告知自己的 flag 错了。检查里「能走到 TTY 门」就是那一条的通过条件：那是
+它后面紧邻的那道门。
 
 ---
 

@@ -20,7 +20,7 @@ mpv 选项集旁边（`AS-BUILT-player.md`「模式 → 格式 → mpv」）。
 这是有意的：一个与另一个引擎共享库的引擎，那个库最终会变成播放器不得不知道的东西
 （`ARCHITECTURE.md`「命令拓扑」，份数与理由都在那儿，这里不复述一个会过期的数字）。
 
-## 接口
+## 接口与 API
 
 一个引擎 = `<name>-search`（查询 → 结果信封）+ `<name>-resolve`（句柄 → 解析信封 +
 该站点自己的只读动词）。argv、信封字段与退出码由各命令的 `--help` 陈述、由
@@ -29,6 +29,50 @@ mpv 选项集旁边（`AS-BUILT-player.md`「模式 → 格式 → mpv」）。
 **能力靠"有没有那个动词"声明。** `--transcript` 只在 `yt-resolve` 有，`--parts` 只在
 `bili-resolve` 有；一个永远答"没有"的动词会让调用方分不清"这个站没有"与"今天不走运/被限流了"。
 调用方**探**一个动词的办法，就是无句柄地调用它 —— 退 1 且点名它要什么，或者根本不被接受。
+
+### 调用面 —— 选项的乘积
+
+`usage()` 逐个说明每个 flag，对**它们的乘积**没有说：哪些能同时给、哪些在门口就被拒。
+下面每一条都对应 `tests/contract.sh` 里的一条检查。
+
+```sh
+yt-search   -j -n 5 -- "lofi hip hop"              # 查询 → 结果信封
+bili-search -j -n 5 -- "周杰伦"                     # 同一个信封，底下是 curl 不是 yt-dlp
+yt-resolve  -j -f audio -- <11 位 id | URL>         # 句柄 → 流 URL + headers
+yt-resolve  -j -f video --quality high -- URL      # (mode, tier) → format-sort 在这里翻译
+yt-resolve  -j -f video -S 'res:720,fps' -- URL    # -S 覆盖 tier
+yt-resolve  -j --info -- URL                       # 只要元数据，什么都不解析
+yt-resolve  -j --transcript --sub-lang zh-Hans -- URL   # yt 独有
+bili-resolve -j --parts -- BV1…                    # bili 独有，一次 HTTP，不经 yt-dlp
+yt-resolve  -j --auth                              # cookie 决策：无句柄、无请求、无 yt-dlp
+```
+
+**被拒的组合**，全部退 1（用法错误），而且**都在网络之前**——flag 门比 host 门先答，所以
+这些检查一个包都不发：
+
+| 组合 | 为什么 |
+|---|---|
+| `<engine>-search` + `-f` / `-S` / `--quality` | 搜索半边不解析任何格式，这些值它无从作用 |
+| `<engine>-search` + `-d` / `--detach` | 引擎不播放 |
+| `<engine>-resolve` + `-d` / `-n` | 同上；`-n` 是搜索半边的 |
+| `--info` / `--transcript` / `--parts` + `-f` / `-S` / `--quality` | 这三个动词都不解析流 |
+| `--auth` + 句柄 / `-f` / `-J` | 它不接句柄也不发请求 |
+| `--parts` + 两个句柄 | 一次一个 |
+| 句柄属于**别的**站点 | host allowlist：一个引擎一个站，否则 `engine` 字段会说谎 |
+| `bili-resolve --transcript` | 能力靠「没有那个动词」声明 |
+
+**探一个引擎有哪些动词，别读 `-h`，给它一个不存在的 flag。** 它会把自己接受的那一套列出来：
+
+```
+$ yt-resolve --nope
+yt-resolve: unknown flag '--nope' (resolve flags: -f -S --quality -j -J --info --transcript --auth)
+```
+
+那是唯一权威的枚举。两条更近的路都会骗人，而且都真骗过（2026-09-01）：**错误文案**——缺失
+动词有两种报法（`yt-resolve --parts` 说 unknown flag，`bili-resolve --transcript` 说这个
+站没有字幕轨），按任一种去判都会对另一个引擎得出反的结论；**`-h`**——`bili-resolve -h` 里
+写着「There is no --transcript」，能力靠缺席声明的说明本身会让朴素的 grep 命中它**没有**的
+动词。两种错法的下场一样：把「动词不存在导致的退 1」当成「flag 被拒」的证据。
 
 ---
 
