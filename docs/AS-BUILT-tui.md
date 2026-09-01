@@ -466,7 +466,8 @@ uting --theme nord --lang zh "…"        # chrome
     ncurses 可能错过窗口尺寸 ioctl，转而按 terminfo 的默认答 80x24 —— 实测：
     一个 60 列的 pane 报了 80，于是那时的卡片画出 80 宽的 rail，每一行（rail、标题、进度条）都折了。
     `term_size()` 通过这个 UI 本来就要求的那个 TTY 读真正的 ioctl，
-    再依次以 `tput`、80x24 兜底。（`ut-play` 的 `viz` 模式用同样的方式给它的 showwaves 滤镜定尺寸。）
+    再依次以 `tput`、80x24 兜底。（`ut-play` 的 `viz` 模式用同样的方式给它的滤镜定尺寸 ——
+    只是宽度照抄、**高度乘二**，因为 `--vo=tct` 画的是半格：`AS-BUILT-player.md`「终端可视化」。）
   - **chrome 一次运行只说一种语言。** 把标签写成中文字面量、而帮助、错误与字段标签留在英文，
     会让这个工具读起来像同时在说两种语言。`init_ui_strings` 把每一个标签**一次性**解析进全局量
     —— bash 3.2 没有关联数组，而每次绘制查一次表会在每次重绘时 fork 或重新分支 ——

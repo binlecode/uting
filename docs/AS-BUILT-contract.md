@@ -825,6 +825,10 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                         一个跨引擎的拼法会是一个半个套件必须忽略的旋钮，
                         那比没有旋钮更糟 —— 调用方分不出是哪一半。
                       YT_ASCII_VO (tct)  YT_MPV_INPUT_CONF  —— 播放器侧的 mpv 旋钮。
+                      UT_VIZ_STYLE (bars) —— `-f viz` 画哪张图：bars = 对数频谱，
+                        wave = 波形。**一个键而不是一个标志**，因为没人为每首歌换一次
+                        可视化风格；值在门口校验（非法值退 1 并点名这个键），而且只在
+                        `-f viz` 下校验（`AS-BUILT-player.md`「终端可视化」）。
                       YT_ASCII （1 = ASCII 字形回落；非 UTF-8 locale 下自动开；
                         由 uting 与全部四个引擎脚本读，播放器不读它 —— 遗留别名 YT_TUI_ASCII）。
                         它覆盖**整个**字形集：♫ ● ○ ❯ · ▶ ❚❚ • … → — ↑/↓ ←/→ ↵ ▘▝▗▖

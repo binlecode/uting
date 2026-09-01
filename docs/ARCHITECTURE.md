@@ -400,7 +400,8 @@ AS-BUILT-engine.md「搜索子系统」（一个引擎自己的时长规矩住�
 （fast 复用 `play_video_url` —— 它的差别在引擎的格式表里，不在 mpv 的选项里），所以换掉它
 （mpv→vlc）基本是一处局部改动；有两个 mpv 专有的细节出于必要待在它外面 ——
 `mpv_supports_vo()` 去问 mpv 它有哪些终端 VO，而 `play_viz_url` 把 mpv 的
-`--lavfi-complex` showwaves 滤镜穿过 `run_mpv` 传进去。
+`--lavfi-complex` 滤镜链穿过 `run_mpv` 传进去（哪条链、为什么只有这两条、画布高度为什么是
+终端行数的两倍：`AS-BUILT-player.md`「终端可视化」）。
 
 **mpv 不运行 yt-dlp。** `run_mpv` 传的是 `--no-ytdl` 加一个引擎已经解出来的直链。
 让 mpv 自己抽取，就意味着任何一次播放里**最后**那次抽取不是我们发起的：分类不了它，

@@ -79,7 +79,7 @@ ut-play --engine bili -f viz -- BV…                # 换引擎，同一个 mod
   video                YT_VIDEO_FORMAT (bv*+ba/b)             默认 VO
   fast                 YT_VIDEO_FORMAT_FAST                   默认 VO（渐进式）
   ascii                YT_VIDEO_FORMAT                        --vo=<YT_ASCII_VO> --profile=sw-fast
-  viz                  YT_AUDIO_FORMAT                        --vo=tct + showwaves lavfi 滤镜
+  viz                  YT_AUDIO_FORMAT                        --vo=tct + 一条 lavfi 链（UT_VIZ_STYLE 选）
                        （给了 -S SORT 时原样转发为 --format-sort）
 ```
 
