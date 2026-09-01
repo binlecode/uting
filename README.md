@@ -84,7 +84,7 @@ Not a general-purpose terminal music player: that layer is full and well maintai
 ncmpcpp, rmpc, musikcube, kew, termusic — and this is not a replacement for it. What plays here
 comes from an engine, not from `~/Music`.
 
-**All three listening features have landed** (`docs/ARCHITECTURE.md` §3.5): playlist
+**All three listening features have landed** (`docs/ARCHITECTURE.md`「两个存储」): playlist
 management (`ut-playlist`, the `a` and `b` keys), the queue (`ut-play
 --queue/--enqueue/--next`, `+` and `>`), and the listening history (`ut-history`, the `h` key).
 Each shipped with the rule they all carry: an agent surface — a verb and a `-j` envelope —
@@ -103,7 +103,7 @@ a playlist with a fixed name. A downloader and channel subscriptions are unsched
   to the player, `jq` to both. **`curl` is required by `bili-search`** — it IS that engine's transport —
   and optional everywhere else (the YouTube engine's play-time client probe).
 - bash 3.2 — the version macOS ships. The suite is written to that floor on purpose; see
-  `docs/ARCHITECTURE.md` §28.
+  `docs/ARCHITECTURE.md`「可移植性契约」.
 
 Nothing is vendored. Install yt-dlp and mpv however you normally would.
 
@@ -146,7 +146,7 @@ reach `PATH`, `TMPDIR` or `LD_PRELOAD`. Nothing in the suite ever writes either 
 absent from the shipped defaults because their unset state *is* an auto-detection that a
 value would defeat: `YT_LANG` (zh under a zh\* locale), `YT_ASCII` (on under a non-UTF-8
 locale) and `UT_STATE_DIR` (its default chains through `XDG_STATE_HOME`). Set those in your
-own config or the environment. Every key is listed in `docs/AS-BUILT-contract.md` §5.
+own config or the environment. Every key is listed in `docs/AS-BUILT-contract.md`「配置面」.
 
 ## Try it
 
@@ -178,7 +178,7 @@ The human face carries the project's own name, so `~/bin/uting` is a plain symli
 `shell/uting` — same word at both ends, no alias in between. Want something shorter to type?
 Make one — `alias ut=uting`, or a symlink of your own. Nothing reads its own `argv[0]`, so any
 name works. The suite ships no short form itself, because a second official spelling is a second
-thing to keep in sync (`docs/ARCHITECTURE.md` §3.1).
+thing to keep in sync (`docs/ARCHITECTURE.md`「八个平级动词」).
 
 `uting --version` (or `-V`) answers before any dependency check, so it works on a machine that
 has not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. Every
@@ -188,7 +188,7 @@ That number is **semver over the CLI contract, not over the code**: the command 
 flags, the exit-code table, the JSON envelopes, and the player lifecycle are the public API — a
 renderer or a comment is not. While the suite is `0.y.z`, a breaking change bumps `y` and an
 addition bumps `z`; `1.0.0` is a promise this reference implementation does not make yet, and
-`docs/ROADMAP.md` D2 says what would change that.
+the packaging NO in `docs/ROADMAP.md` says what would change that.
 
 ## Keys
 
@@ -239,7 +239,7 @@ The row count lives on the two page EDGES rather than on a key of its own: `→`
 page fetches one batch more, and `←` on page 1 drops one again — a local truncation, no
 re-fetch, with a screenful as the floor. Seven of these keys — engine, sort, mode, quality
 tier, theme, language and that count — are written back to your own config file, in place, so the next
-session opens where this one left off (`docs/AS-BUILT-contract.md` §5). With a
+session opens where this one left off (`docs/AS-BUILT-contract.md`「配置面」). With a
 playlist or the log on screen the two keys that re-fetch a query — `o`, `e` — say so and
 do nothing, and the two edges are a silent no-op there; both can mix sources, and each row plays under the engine that produced it. `+` and `>` appear only while
 something is playing: the queue belongs to the player, so with no player there is nothing to
@@ -307,8 +307,8 @@ Lessons these paid for, every one of which produced a wrong result first:
 surface.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — the umbrella: what this suite is positioned to
-  be and what it deliberately is not (§1), topology, seams, the control-flow diagrams, the
-  function map and every non-obvious decision. Diagrams, flows and decisions; the detail is in
+  be and what it deliberately is not, topology, seams, the control-flow diagrams and every
+  non-obvious decision. Diagrams, flows and decisions; the detail is in
   the per-scope docs below.
 - [`docs/AS-BUILT-contract.md`](docs/AS-BUILT-contract.md) — the frozen CLI contract: envelopes, exit codes,
   lifecycle semantics, and the checklist for adding an engine.
@@ -316,20 +316,20 @@ surface.
   transport, the login / PO-token probe, handle grammar, `--info` / `--transcript`.
 - [`docs/AS-BUILT-player.md`](docs/AS-BUILT-player.md) — the player, the queue and the two durable
   stores: the detached lifecycle, runtime IPC, `ut-playlist` and `ut-history`.
-- [`docs/AS-BUILT-tui.md`](docs/AS-BUILT-tui.md) — the human face: the two views, in-place rendering,
+- [`docs/AS-BUILT-tui.md`](docs/AS-BUILT-tui.md) — the human face: one view with five row sources, in-place rendering,
   the width layer, the reflow and the three play states.
 - [`docs/AS-BUILT-verification.md`](docs/AS-BUILT-verification.md) — the risk register and the
   verification matrix: what each check proves, and what is deliberately not covered.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — the recorded NOs with their reopen conditions, the
   reopen triggers for settled decisions, and what is not built yet. No changelog, no survey
-  data, and no landed decisions — those are §3 of the architecture doc, positioning is its §1.
+  data, and no landed decisions — those live in the architecture doc's decisions chapter; positioning is its opening chapter.
 - [`docs/RESEARCH-tui-player.md`](docs/RESEARCH-tui-player.md) — the survey those decisions rest
-  on, kept separate so the decision records hold decisions rather than data. Two halves, and §1 says
-  which is which: **§2–§5 are measured** — the name screening, what comparable projects do by
-  GitHub API, what publishing this shell version costs, and how ready it is. **§6–§11 are read,
-  not run** — how other terminal players are built along five orthogonal design axes, the five
-  playback architectures they pick from, and the four routes to a playable URL on the Chinese
-  side. It labels its own gaps in §12.
+  on, kept separate so the decision records hold decisions rather than data. Two halves, and it opens
+  by saying which is which: **one half is measured** — the name screening, what comparable
+  projects do by GitHub API, what publishing this shell version costs, and how ready it is;
+  **the other is read, not run** — how other terminal players are built along five orthogonal
+  design axes, the five playback architectures they pick from, and the four routes to a
+  playable URL on the Chinese side. It labels its own gaps.
 
 ## License
 

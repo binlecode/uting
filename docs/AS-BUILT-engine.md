@@ -1,35 +1,38 @@
 # AS-BUILT-engine —— 什么是一个引擎：`<name>-search` + `<name>-resolve`
 
-那两个认识**站点**的半边的实现：`yt-search` / `yt-resolve` 与 `bili-search` / `bili-resolve`。
-查询整形与搜索的错误契约、Bilibili 的 HTTP 传输、登录 / PO-token 探测、句柄文法与 host 白名单、
-解析信封、`--info` 与 `--transcript`。**这套套件里每一个与站点相关的事实，要么写在这里，
-要么就是一次分层违规** —— 播放器与站点无关，TUI 是纯编排。
+## 结构
 
-**这是第三个引擎的作者要读的那份文档**，与 `AS-BUILT-contract.md` §6 的清单并排看。
+那两个认识**站点**的半边的实现 why：`yt-search` / `yt-resolve` 与 `bili-search` /
+`bili-resolve`。开头三节定界（结构 / 模块 / 接口），随后按章：查询整形与搜索的错误契约、
+Bilibili 的 HTTP 传输（「Bilibili 的传输」）、登录 / PO-token 探测（「先探后播」）、
+句柄文法与 host 白名单、解析与只读动词（「解析」）。
+**这是第三个引擎的作者要读的那份文档**，与 `AS-BUILT-contract.md`「加一个引擎」并排看。
+**代码是唯一权威**：点名的函数是 soft ref（文件 + 函数名），伪码是形状，不是源码的副本。
 
-**分工。** `ARCHITECTURE.md` 留图、拓扑、接缝与决定；契约面（argv、信封、退出码）在
-`AS-BUILT-contract.md`；而一个引擎**实际是怎么落地的** —— 哪一条规矩是被一次测量逼出来的、
-哪里有坑以及为什么 —— 在这里。播放子系统与 detached 生命周期归 `AS-BUILT-player.md`。
+## 模块
 
-**节号是继承来的**，沿用 `ARCHITECTURE.md` 原有的编号（§7、§8.2、§10 及其子节），
-于是一条既有的 `§10.1` 引用只换文件名，编号从不变。这也是为什么这里有 §8.2 却没有 §8：
-§8 是播放子系统、留在播放器那边，而 8.2 本来就是引擎知识。
+**这套套件里每一个与站点相关的事实，要么住在一对引擎里，要么就是一次分层违规** ——
+播放器与站点无关，TUI 是纯编排。引擎刻意**不**拥有：播放、生命周期、`players/`。
+一件被划走的事：`-f MODE` 作为格式字符串*意味着什么*是引擎知识（`format_for_mode()`
+住在每个 `<engine>-resolve` 里），但模式→格式→mpv 那张表只陈述一次，放在播放器的
+mpv 选项集旁边（`AS-BUILT-player.md`「模式 → 格式 → mpv」）。
 
-**代码是唯一权威。** 这里点名的函数是 soft ref（文件 + 函数名）；伪码是形状，不是源码的副本。
+## 接口
 
-**这份文档刻意不拥有的一件事**：一个 `-f MODE` 作为格式字符串*意味着什么*是引擎知识
-（`format_for_mode()` 住在每个 `<engine>-resolve` 里），但 模式→格式→mpv 那张表只陈述一次，
-就放在播放器的 mpv 选项集旁边，见 `AS-BUILT-player.md` §8.1。
+一个引擎 = `<name>-search`（查询 → 结果信封）+ `<name>-resolve`（句柄 → 解析信封 +
+该站点自己的只读动词），能力以**有没有那个动词**声明。argv、信封字段与退出码由各命令的
+`--help` 陈述、由 `tests/contract.sh` 证明；形状的 why 与 semver 边界在
+`AS-BUILT-contract.md`。
 
 ---
 
-## 7. 搜索子系统 —— 引擎的一个动词
+## 搜索子系统 —— 引擎的一个动词
 
-搜索是一个引擎的一半（`ARCHITECTURE.md` §4），所以这一节描述的是 `yt-search`；
-`bili-search` 是同一个信封架在不同传输之上（§7.1），它的 argv 规定在
-AS-BUILT-contract.md §1。下面的一切 —— 那**一个** jq 程序、内部的 `FILTERED_JSON` 形状、
+搜索是一个引擎的一半（`ARCHITECTURE.md`「命令拓扑」），所以这一节描述的是 `yt-search`；
+`bili-search` 是同一个信封架在不同传输之上（「Bilibili 的传输」），它的 argv 规定在
+AS-BUILT-contract.md「命令规格」。下面的一切 —— 那**一个** jq 程序、内部的 `FILTERED_JSON` 形状、
 时长规则、错误契约 —— 是**两半都要实现**的东西，而两个文件**各自带一份自己的副本**是有意的：
-一个与另一个引擎共享库的引擎，那个库最终会变成播放器不得不知道的东西（`ARCHITECTURE.md` §4）。
+一个与另一个引擎共享库的引擎，那个库最终会变成播放器不得不知道的东西（`ARCHITECTURE.md`「命令拓扑」）。
 
 ```
   QUERY、NUM_RESULTS、MIN/MAX_DURATION、SORT_FIELD、cookies
@@ -56,20 +59,20 @@ AS-BUILT-contract.md §1。下面的一切 —— 那**一个** jq 程序、内�
 ```
 
 `engine` 之所以在信封里，是因为一个拿着结果的调用方必须能把它**路由回**懂它的那个 resolver ——
-`ut-play --engine <那个值>`（AS-BUILT-contract.md §3、ARCHITECTURE.md §3.4）。它正是 host 白名单
-（ARCHITECTURE.md §3.4）存在要保其诚实的那个字段。
+`ut-play --engine <那个值>`（AS-BUILT-contract.md「数据契约」、ARCHITECTURE.md「站点知识的边界」）。它正是 host 白名单
+（ARCHITECTURE.md「站点知识的边界」）存在要保其诚实的那个字段。
 
 `print_list()` 读的是 **`FILTERED_JSON` 这个变量**，不是发出去的 `-j` 流。
-投影只发生在发射点，所以 JSON 契约可以改而不必碰那个消费者。（schema → AS-BUILT-contract.md §3。）
+投影只发生在发射点，所以 JSON 契约可以改而不必碰那个消费者。（schema → AS-BUILT-contract.md「数据契约」。）
 
 **一个 jq 程序，不是每条一遍的循环。** 换成一个 bash `while read` 循环 —— 每条 fork 两次 jq、
 `print_list` 每行再 fork 五次，`-n 25` 就是 175 个进程 —— 实测比这一个程序慢约 **40×**，
 而且会把 `FILTERED_JSON` 里本来就带着的 `duration_fmt` 再推导一遍。
 
 **在一个引擎内部，时长格式化只住在一个地方：`JQ_PRELUDE` 里那个 jq 函数**（`fmt_dur`），
-搜索整形与 `--info` 共用它 —— §10.1 说 `--info` 与搜索不可能格式漂移，靠的就是这一句。
+搜索整形与 `--info` 共用它 —— 「--info」 说 `--info` 与搜索不可能格式漂移，靠的就是这一句。
 跨文件那几份是另一回事：套件没有库，所以这六行在不止一个文件里各有一份 ——
-份数与理由都由 ARCHITECTURE.md §4 拿着，这里不复述一个会过期的数字。用 jq 而不用 bash，是因为每一个消费者本来就在用 jq 整形 JSON，
+份数与理由都由 ARCHITECTURE.md「命令拓扑」 拿着，这里不复述一个会过期的数字。用 jq 而不用 bash，是因为每一个消费者本来就在用 jq 整形 JSON，
 所以一个 bash 实现存在的唯一意义就是每行被 fork 一次。一个未知的时长产出 **`null`**，
 而不是一个假的 `00h:00m:00s`，再由每个面自己决定怎么渲染它：
 `print_list` 对直播打 `LIVE`、其余打 `--`，而 `uting` 显示 `● LIVE` ——
@@ -85,20 +88,20 @@ yt-dlp 把条目标记为"不完整"，于是一个作用在"扁平条目并不�
 **搜索像其他每一个面一样有错误契约。** 没有它，一次 yt-dlp 失败会在 `set -e` 上带着原始
 stderr 中止 —— 哪怕在 `-j` 下，交给 agent 的也是一个 jq 解析错误。`fetch_results` 捕获 stderr，
 用引擎自己的 `classify_yt_dlp_error` 分类（**枚举是共享的，分类器不是** ——
-AS-BUILT-contract.md §3），并为 `-j`/`-J` 发出
+AS-BUILT-contract.md「数据契约」），并为 `-j`/`-J` 发出
 `{status:"error", engine, query, count:0, results:[], reason}`（散文路径：捕获到的 stderr 加一次
-`die`）。退出码是 2+ —— **绝不是 1**，那个被 AS-BUILT-contract.md §4 留给用法/校验错误。
+`die`）。退出码是 2+ —— **绝不是 1**，那个被 AS-BUILT-contract.md「退出码」 留给用法/校验错误。
 
-### 7.1 Bilibili 的传输 —— 同一个信封，架在一个手工拼出来的请求上（ARCHITECTURE.md §3.1）
+### Bilibili 的传输 —— 同一个信封，架在一个手工拼出来的请求上（ARCHITECTURE.md「八个平级动词」）
 
 `bili-search` 用 `curl` + `jq` 而不是 yt-dlp 实现了上面的一切。这个拆法不是偏好，
-它是**唯一**行得通的组合（实测，ARCHITECTURE.md §3.4）：yt-dlp 的 `--flat-playlist` 用 0.9s 作答，
+它是**唯一**行得通的组合（实测，ARCHITECTURE.md「站点知识的边界」）：yt-dlp 的 `--flat-playlist` 用 0.9s 作答，
 却**一个元数据都没有**（`BiliBiliSearchIE` 产出 `url_result(arcurl, aid)`，
 把它刚刚解析出来的响应里的 标题/作者/时长/播放量 全丢掉了），而一次完整抽取会递归进
 **每一个合集的每一个分 P** —— 这个站点的音乐结果压倒性地是多 P 的 ——
 于是 `bilisearch10:` 在 120s 内根本跑不完。**一个手工拼的请求 0.71s 就答出信封需要的每一个字段。**
 
-`fetch_page_once` 是**全套件唯一一处手工构造 HTTP 请求的地方**（`ARCHITECTURE.md` §5）。
+`fetch_page_once` 是**全套件唯一一处手工构造 HTTP 请求的地方**（`ARCHITECTURE.md`「原语与接缝」）。
 参数以**数组**到达 curl，查询值经 `--data-urlencode` 送出，
 于是一条含 `&`、空格或引号的查询是一个**值**，而绝不会变成第二个参数：
 
@@ -119,7 +122,7 @@ AS-BUILT-contract.md §3），并为 `-j`/`-J` 发出
   不带就是 412（2026-08-23 实测）。它是一个公开常量，不是一种认证机制 ——
   yt-dlp 里每一个 Bilibili extractor 发的都是同一个。所以它在代码里叫
   `SEARCH_REFERER` 而**不带** `BILI_` 前缀，与它旁边的 `SEARCH_ENDPOINT` 一组：
-  ARCHITECTURE.md §3.6 之后前缀**就是** config 可达性（`ut_read_config` 收下每一个
+  ARCHITECTURE.md「两个根数据文件」 之后前缀**就是** config 可达性（`ut_read_config` 收下每一个
   `UT_`/`YT_`/`BILI_` 名字），而一个常量不该顶着一个可设置的名字 ——
   否则用户在 config 里写的那个值会被静默覆盖掉。
 - **`buvid3` 是一个**设备**标识，不是凭据**：没有账号、没有 token、不从任何浏览器 profile 读东西
@@ -140,7 +143,7 @@ AS-BUILT-contract.md §3），并为 `-j`/`-J` 发出
 
 **这条手写的 HTTP 路径从不碰任何凭据**，而这就是穿过这个引擎中间的那条线：
 登录状态只到达 yt-dlp、只在解析那一半、只经由 `--cookies-from-browser`。
-正是它让 ARCHITECTURE.md §3.1 对"为什么不做一个完整客户端"的回答（"那整块归 yt-dlp"）
+正是它让 ARCHITECTURE.md「八个平级动词」 对"为什么不做一个完整客户端"的回答（"那整块归 yt-dlp"）
 对搜索这一半也同样为真。
 
 **能让站点筛的就让站点筛 —— 这是请求数的问题，不是一个功能。** 这个端点每页固定 20 条、
@@ -158,7 +161,7 @@ AS-BUILT-contract.md §3），并为 `-j`/`-J` 发出
 而多翻页（对这个主机，请求才是稀缺的那一样）。同一条查询，实测（2026-08-26）：
 默认的一次请求（`-n 20`）进桶回来 **20** 行可用、跨桶 **1** 行；两次请求（`-n 25`）
 进桶回来 **25** 行、跨桶 **6** 行，两者都是 1.4–1.8s。这也是它在 `contract.sh` 里被
-`-M 600`/`-M 601` 那对输入钉住的原因（AS-BUILT-verification.md §27）。
+`-M 600`/`-M 601` 那对输入钉住的原因（AS-BUILT-verification.md「验证矩阵」）。
 
 **`order` 同理，但只有一个字段对得上。** `-s view_count` 要的是播放最多的那些，
 而站点有 `order=click`：**问它**意味着到手的 20 行是整个结果集里播放最多的，
@@ -183,7 +186,7 @@ AS-BUILT-contract.md §3），并为 `-j`/`-J` 发出
 reason 枚举上，而**只有** `network` 那一类值得在 `RETRY_PAUSE` 之后再试一次；
 一个 `forbidden` 或 `unavailable` 的回答一秒之后还会说同样的话，
 而再问一次是对着一个**会计数**的主机多发一次请求。其余一切直接失败到 `search_fail` ——
-退 **2**，绝不是 1（AS-BUILT-contract.md §4）。
+退 **2**，绝不是 1（AS-BUILT-contract.md「退出码」）。
 
 **翻页在两个条件之一成立时停。** 只有当调用方**还想要**更多行**且**站点**还在给**时才请求下一页
 （`MAX_PAGES` 给其余部分封顶），于是一条短尾巴不必付 `MAX_PAGES` 次往返。
@@ -200,12 +203,12 @@ reason 枚举上，而**只有** `network` 那一类值得在 `RETRY_PAUSE` 之�
 以及 `live_status` 是 **`null`，不是那个原始的 `0`** ——
 在 `search_type=video` 下那个字段根本不是这套套件 is_live/was_live 的概念，
 把那个 0 带过去会让某个渲染器画出一个站点从没声称过的直播状态。
-**一个引擎不知道的字段是 null，而那个键仍然在**（AS-BUILT-contract.md §3）。
-那十个字段里的 `kind`/`access` 是新来的两个，见 §7.2。
+**一个引擎不知道的字段是 null，而那个键仍然在**（AS-BUILT-contract.md「数据契约」）。
+那十个字段里的 `kind`/`access` 是新来的两个，见 「`kind` 与 `access`」。
 
-### 7.2 `kind` 与 `access` —— 引擎的判断落在哪里，以及 B 站为什么两个都是默认值
+### `kind` 与 `access` —— 引擎的判断落在哪里，以及 B 站为什么两个都是默认值
 
-契约（AS-BUILT-contract.md §3）要求每一行都带 `kind` 与 `access`。两处实现事实：
+契约（AS-BUILT-contract.md「数据契约」）要求每一行都带 `kind` 与 `access`。两处实现事实：
 
 **注入点在 `FILTERED_JSON`，不在 lean 投影里。** 它们是**引擎的判断**，不是站点的原始记录，
 所以在整形那一步就合并**盖在**记录之上：`-j` 与 `-J` 由此一起拿到它们，且引擎的判断压过
@@ -225,18 +228,18 @@ B 站这一侧曾以为 `episode_count_text` 与 `is_pay` 就是那两个信号�
   付费内容不在 `search_type=video` 这张表里。
 
 于是 B 站两个字段都如实印默认值。**引擎说它知道的，不猜它没有的信号** ——
-恒为默认值是合法状态（AS-BUILT-contract.md §3），而一个猜出来的 `kind` 会以事实的面目发货。
+恒为默认值是合法状态（AS-BUILT-contract.md「数据契约」），而一个猜出来的 `kind` 会以事实的面目发货。
 补上的条件：出现**不加请求**就能拿到的分 P / 付费信号，或搜索端点本身开始携带它。
 
 **`ketang` 行不进信封。** 同一次实测发现的现役缺陷：`search_type=video` 会混进课堂记录，
 它们**没有 `bvid`**，而**空串在 jq 里为真** —— 于是 `select(.id != null)` 把它们放了过去，
 发出去的是 `id:""` / `url:null`，一条 `ut-play` 不可能消费的行（实测"钢琴" 20 行里 3 条）。
 判据因此改为 **`select(.url != null)`：一行结果是一次调用，否则不是一行**
-（AS-BUILT-contract.md §3）。这条判据同时覆盖将来任何"handle 建不出来"的形状，
+（AS-BUILT-contract.md「数据契约」）。这条判据同时覆盖将来任何"handle 建不出来"的形状，
 而不只是今天漏进来的这一种；代价是 `-n 20` 可能答 17 行 —— 与 `-m`/`-M` 早已如此，
 `-n` 说的是取多少，从来不是保证发多少。
 
-## 8.2 登录、PO token，与"先探后播"的客户端选择 —— **在 `yt-resolve` 内部**
+## 登录、PO token，与"先探后播"的客户端选择 —— **在 `yt-resolve` 内部**
 
 整个这一小节都是 YouTube 引擎的知识，住在 `shell/yt-resolve` 里。把它写在这儿，
 是因为它正是解析信封为什么要带 `retried` 的原因，也因为"先探**后**播"如今是字面意义上的真：
@@ -283,20 +286,20 @@ soft ref：`shell/yt-resolve` 的 `resolve_stream()` / `dump_once()` / `probe_ra
 
 实现要点：`local COOKIE_ARGS=()` 借 bash 的动态作用域遮住全局量，
 于是那一次解析可以丢掉 cookie 而不碰真正的设置；裁决以 `retried` 出现在**解析**信封里，
-`ut-play` 把它**转述**进播放信封的 `retried`，而不是自己去观察（AS-BUILT-contract.md §3）。
+`ut-play` 把它**转述**进播放信封的 `retried`，而不是自己去观察（AS-BUILT-contract.md「数据契约」）。
 代价：每次播放多一次解析 + 一个 1 字节 GET（cookie-403 的视频是两次）。
 `curl` 是软依赖 —— 没有它就跳过探测、走回老的"播-失败-重播"（错误糊屏的回归也只在那条路上出现）。
 `YT_COOKIE_BROWSER=none` 强制只走匿名（不读钥匙串、不探测）；
 配了浏览器但本机没有 profile 时自动降级为匿名，而不是报错。
 
-**这个决定是可查询的，靠 `--auth`（AS-BUILT-contract.md §3）。** 上面那两句里藏着一件
+**这个决定是可查询的，靠 `--auth`（AS-BUILT-contract.md「数据契约」）。** 上面那两句里藏着一件
 调用方看不见的事：cookie 究竟会不会被送出去，取决于**两个**条件 —— 变量不是 `none`，
 **并且**那个 profile 目录真的在这台机器上。降级是静默的（那是对的：一个公开视频照样能放），
 于是"我以为我登录着"和"这次是匿名的"在外面长得一模一样。`--auth` 就是把这两个条件的合成
 结果印出来的那个动词，不吃句柄、不发包、不跑 yt-dlp。
 这个动词归 resolve 半边，也**只**归它 —— cookie 决定本来就住在那儿。被否掉的另一个位置
 是给搜索信封加 `auth` 字段：两个引擎不对称（`bili-search` 一个凭据都不发），要报出
-`chrome` 就得在搜索半边抄第 4 份 profile 判断副本（ARCHITECTURE.md §3.4）。
+`chrome` 就得在搜索半边抄第 4 份 profile 判断副本（ARCHITECTURE.md「站点知识的边界」）。
 
 **它报的是"发不发"，此外什么都不报 —— 而"此外"是两件事，不是一件。**
 `auth:"cookie"` 之后还有两个独立的问号：站点**认不认**这份会话（过期登录照样报 `cookie`），
@@ -313,9 +316,9 @@ format 表里），视频 format 表两边逐项相同，`1080P 高码率`（301
 
 这条测量的用处正在这里：**音质永远不能用来反推这个字段，这个字段也永远不能用来预测音质。**
 第一个问号（过期会话）是真实的设计关切，但**上面这组数字没有量到它** ——
-量到它需要一次鉴权往返，这个套件刻意不做（ARCHITECTURE.md §3.4）。
+量到它需要一次鉴权往返，这个套件刻意不做（ARCHITECTURE.md「站点知识的边界」）。
 
-## 10. 解析 —— 引擎的第二半
+## 解析 —— 引擎的第二半
 
 `<engine>-resolve` 把一个**句柄**变成播放它所需的一切，并承载该站点的只读动词。
 它从不播放：没有 mpv、没有生命周期、没有 `players/`。
@@ -336,7 +339,7 @@ yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality
 `--quality` 是流格式选择器，撞上 `--info` / `--parts` / `--transcript` 就退 1
 （门语直说它不适用于那些动词）。
 
-**句柄文法是每引擎自己的，host 白名单也是（ARCHITECTURE.md §3.4）。** `normalize_target` 接受
+**句柄文法是每引擎自己的，host 白名单也是（ARCHITECTURE.md「站点知识的边界」）。** `normalize_target` 接受
 **本**引擎某个 host 上的 URL，或者本引擎自己的媒体 id 形状：
 
 | 引擎 | 接受的 host | 裸 id 形状 |
@@ -359,7 +362,7 @@ yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality
    resolve_stream(handle)                       # 光秃秃的那个动词 —— ut-play 调的就是它
       yt-dlp --dump-single-json --no-playlist -f <format_for_mode(MODE)>
              [--format-sort SORT] [--cookies-from-browser B]
-      → 探测（仅 yt，§8.2 是它完整的形状）可能匿名重解一次并把 retried 置上
+      → 探测（仅 yt，「先探后播」 是它完整的形状）可能匿名重解一次并把 retried 置上
       prose: 打印流 URL
       -j:    {status,engine,id,url,title,duration,mode,format,
               selected,selected_resolution,stream_urls[],http_headers{},retried}
@@ -372,16 +375,16 @@ yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality
 `format` 是**发出去**的那个选择串（`format_for_mode()` 的产物），
 `selected`/`selected_resolution` 是同一次调用**回答**的那一半 —— 直接取自那份原始记录的
 `.format` / `.resolution`，所以**不多花一次网络**：这两个值一直都在，从前被丢掉。
-完整 schema 与这几条的理由：AS-BUILT-contract.md §3。
+完整 schema 与这几条的理由：AS-BUILT-contract.md「数据契约」。
 
-### 10.1 只要元数据（`--info`）
+### 只要元数据（`--info`）
 
 只读、不阻塞、无副作用；要 yt-dlp+jq，但永远不要 mpv。**两个引擎都有它。** 它存在的理由：
 没有它的话，一个想知道某个视频*是什么*（描述、章节、上传者、日期、点赞数）的 agent，
 就得离开这套生态、掉回原始的 `yt-dlp --dump-json` —— 与 JSON 搜索面当初消除的是同一种
 "逃生口"失败。这是 LLM 优先而不是人体工学（对照被否掉的 `--url-only`，那个是**剥掉**接地信号）：
 `--info` 是**增加** agent 推理所依据的接地。`duration_fmt` 来自引擎自己 `JQ_PRELUDE` 里的
-`fmt_dur`（§7），所以在一个引擎内部，`--info` 与搜索在格式上不可能漂移 ——
+`fmt_dur`（「搜索子系统」），所以在一个引擎内部，`--info` 与搜索在格式上不可能漂移 ——
 而且时长未知时它是 `null`，不是 `"00h:00m:00s"`。
 
 ```
@@ -403,21 +406,21 @@ yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality
 只填其中之一 —— **信封的形状不得取决于是哪一个**。这是对一个引擎的通则：
 **归一化到契约，绝不把 extractor 的方差原样发布出去。**
 
-### 10.2 字幕（`--transcript`）—— 一个 `bili-resolve` 没有的动词（ARCHITECTURE.md §3.4）
+### 字幕（`--transcript`）—— 一个 `bili-resolve` 没有的动词（ARCHITECTURE.md「站点知识的边界」）
 
 `yt-resolve --transcript` 取一条字幕轨，并把它清洗成可以直接丢进 prompt 的文本。信封、
-`-j`/`-J` 的分工，以及"只许一次 yt-dlp 调用"的约束：AS-BUILT-contract.md §3，
+`-j`/`-J` 的分工，以及"只许一次 yt-dlp 调用"的约束：AS-BUILT-contract.md「数据契约」，
 `no_subtitles_available` 这个 reason 也规定在那里。
 
 **Bilibili 不供字幕，所以 `bili-resolve` 根本没有 `--transcript`** —— 这个 flag 不被接受，
 帮助里也不列它。这是"能力规矩"的微观版：**一个引擎靠"没有那个动词"来说明自己做不到什么**，
 而不是发布一个永远答"没有"的动词 —— 后者让调用方分不清它与"今天不走运"或"被限流了"。
 
-### 10.3 多 P（`--parts`）—— 一个 `yt-resolve` 没有的动词（ARCHITECTURE.md §3.4）
+### 多 P（`--parts`）—— 一个 `yt-resolve` 没有的动词（ARCHITECTURE.md「站点知识的边界」）
 
 `bili-resolve --parts` 列出多 P 视频的各 P（`?p=N`）—— **一次 HTTP 请求，没有 yt-dlp**
 （`fetch_view_once`，与 `--info` 共用那一次 view 抓取）。信封与
-`-j`/`-J` 的分工：AS-BUILT-contract.md §3。`parts[]` 的元素**就是条目记录**，
+`-j`/`-J` 的分工：AS-BUILT-contract.md「数据契约」。`parts[]` 的元素**就是条目记录**，
 所以 `--parts -j | jq '{items:.parts}'` 原样管进 `ut-playlist --add` 与 `ut-play --queue`。
 
 **YouTube 没有这个动词。** 一个 yt id 恰好就是一个文件；它"多条目"的形态（播放列表）
@@ -433,12 +436,12 @@ yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality
 而 `--info` 的"取数失败"是引擎对**已有**取数的再解释。单 P 视频不是错误：
 它列出 count 1，说这就是那一个 P。
 
-### 10.4 起播偏移（`start_seconds`）—— 一个键，两个来源
+### 起播偏移（`start_seconds`）—— 一个键，两个来源
 
 一条链接可以说"从这里开始"（`…&t=601s`）。**认得那种写法是站点知识，所以它住在这里；
-执行偏移是 mpv 的一个 flag，所以那半在播放器里**（AS-BUILT-player.md §9.7）。
+执行偏移是 mpv 的一个 flag，所以那半在播放器里**（AS-BUILT-player.md「起播偏移」）。
 中间那道缝还是信封：`start_seconds`，必需键，`null` 或非负整数秒
-（形状与可空约定：AS-BUILT-contract.md §3）。
+（形状与可空约定：AS-BUILT-contract.md「数据契约」）。
 
 **两个引擎从相反的两侧把它填出来，这是量出来的，不是风格选择**
 （2026-08-30，yt-dlp `2026.08.19`）：
@@ -472,4 +475,4 @@ yt-dlp 的 sort —— 那张 (mode, tier) → `--format-sort` 的表（`quality
 
 **推论给第三个引擎作者**：先跑 `yt-dlp -J '<带时间戳的本站 URL>' | jq .start_time`。
 有值就白拿，没有就照 bili 那样自己解，站点根本没有这种语法就恒填 `null` ——
-与 `kind`/`access` 恒填默认值是合法状态同理（§7.2）。清单：AS-BUILT-contract.md §6。
+与 `kind`/`access` 恒填默认值是合法状态同理（「`kind` 与 `access`」）。清单：AS-BUILT-contract.md「加一个引擎」。

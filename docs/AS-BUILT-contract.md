@@ -1,42 +1,48 @@
 # AS-BUILT-contract —— uting 的 CLI 契约
 
-那个**冻结面**（ARCHITECTURE.md §3.8）：任何一次重写之后仍然活着的东西，也是一次移植的验收规格。
-这里写的全都是 as-built —— 对着八个脚本核过 —— 并按 ARCHITECTURE.md §3.8 的 semver 规则由 `VERSION` 定版。
-**改动这份文件里的任何一条，都是一次刻意的、有记录的行为**（CLAUDE.md 硬规则 4），
-从来不是某个功能的副作用。
+## 结构
 
-写给两类读者，他们谁都不该需要去翻源码：
+那个**冻结面**（ARCHITECTURE.md「冻结面」）的 why 与边界：任何一次重写之后仍然活着的
+东西，也是一次移植的验收规格，按 semver 由 `VERSION` 定版。本文按章：命令规格、门模型、
+数据契约、退出码、配置面、加一个引擎的清单。
+**改动这个面是一次刻意的、有记录的行为**（CLAUDE.md 硬规则 4），从来不是某个功能的副作用。
 
-- **一个测试作者** —— 要对这八个命令中的任何一个写 JSON diff 测试，所需要的每一个信封、
-  每一个退出码、每一种错误形状，都在 §1–§5；
-- **第三个引擎的作者** —— §1.2/§1.3（引擎的两个命令面）、§2（它的门）、§3（它的信封）
-  与 §6（清单）就是全部义务；`bili-search` / `bili-resolve` 没有满足任何这里没写的东西。
+## 模块
 
-理由在 `ARCHITECTURE.md`（全文各处指过去）；流程在 `CLAUDE.md`。
-一个事实一个地方：这里的 schema 别处一律不再陈述。
+写给两类读者，他们谁都不该需要去翻源码：**一个测试作者** —— 对这八个命令写 JSON diff
+检查所需要的每一种信封与错误形状的 why；**第三个引擎的作者** —— 他的全部义务
+（「命令规格」的引擎两节、「门模型」、「数据契约」与「加一个引擎」）。
+理由在 `ARCHITECTURE.md`；流程在 `CLAUDE.md`。**形状本身的规范陈述是代码** ——
+各命令的 `usage()` 陈述它、`tests/contract.sh` 证明它 —— 本文解释形状为什么长这样，
+不与它们竞争。
 
-**公共 API 的边界**（semver 的版本化对象，ARCHITECTURE.md §3.8 由此选位数）：
+## 接口（semver 的版本化对象）
+
+**公共 API 的边界**（版本化的对象，位数怎么判由此而来）：
 
 ```
   在里面：八个命令名本身 · 各自的 argv 与 flag 面 · 退出码表(0/1/2+/4) ·
           单行 JSON envelope 的字段与形状 · player record · 生命周期语义 ·
           引擎契约（<engine>-search / <engine>-resolve 两张 envelope） ·
           YT_* / UT_* / BILI_* 环境变量 · 配置面（四层链、两个文件的位置、
-          键的前缀命名空间、缺出厂文件 = 2，§5）
+          键的前缀命名空间、缺出厂文件 = 2，「配置面」）
   不在里面：内部函数名 · 渲染细节与主题 · 注释 · docs/ · tests/ · .claude/skills/ ·
-          引擎背后用哪个原语（curl 还是 yt-dlp —— seam 是 envelope，ARCHITECTURE.md §3.4）
+          引擎背后用哪个原语（curl 还是 yt-dlp —— seam 是 envelope，
+          ARCHITECTURE.md「站点知识的边界」）
 ```
 
-判一次 bump：把一批变更按这张表过一遍 —— 命中一条"在里面"且是破坏性的就走 y（0.y.z 期间），
-否则加法与修复走 z；同批的加法项跟着走、不额外计。判据是表，不是感觉。
+判一次 bump：把一批变更按这张表过一遍 —— 命中一条"在里面"且是破坏性的就走 y
+（0.y.z 期间），否则加法与修复走 z；同批的加法项跟着走、不额外计。判据是表，不是感觉。
 
-## 1. 命令规格
+---
+
+## 命令规格
 
 八个平级，四种形状：播放器、一个引擎的两半、UI，以及两个存储。
-它们每一个都自己解析自己的 argv、自己拿着自己的门（ARCHITECTURE.md §4）——
+它们每一个都自己解析自己的 argv、自己拿着自己的门（ARCHITECTURE.md「命令拓扑」）——
 没有一个可以委托过去的 core。
 
-### 1.1 `ut-play` —— 播放器（与站点无关，非交互）
+### `ut-play` —— 播放器（与站点无关，非交互）
 
 - **它拥有：** 播放、detached 生命周期、播放信封、退出码分类学、`players/`。
   **它不拥有任何站点知识：** 没有 yt-dlp 调用，没有 cookie 决定，没有格式字符串，没有 id 形状。
@@ -45,16 +51,16 @@
   --id --all --color --quality --help --version`。颜色只有 `--color`（没有 `-c`）；
   `-S` 是格式排序覆盖（没有 `-F`），原样转发给引擎；`--quality` 同理（没有短旗），
   `auto|low|medium|high` 四档在**门口**校验（bogus 档退出 1），档位原样转发给引擎 ——
-  （mode, tier）→ yt-dlp sort 的映射表住在引擎里（§1.3），不在播放器里。
+  （mode, tier）→ yt-dlp sort 的映射表住在引擎里（「命令规格」），不在播放器里。
   `--start SEC` 是**启动时**的播放位置，只收非负整数秒（负数、`hh:mm:ss`、小数、非数字
   一律在门口退出 1）：**刻意不透传 mpv 自己的 `--start` 语法**（`-60` 从末尾算、`50%` 是分数），
   那会把 mpv 的语法发布到冻结面上，从此换不掉播放器；套件里的时间一律是秒
   （`duration`、`position`、`--seek-to`、收听行的 `seconds`）。它属于**播放路径**，
   与任何生命周期动词互斥 —— 移动一个已经在跑的播放头是 `--seek-to` 的活。
-  它压过句柄自己带的偏移（§1.3 的 `start_seconds`），
-  在一个队列里**只作用于第一条**（AS-BUILT-player.md §9.5）。
+  它压过句柄自己带的偏移（「命令规格」 的 `start_seconds`），
+  在一个队列里**只作用于第一条**（AS-BUILT-player.md「队列」）。
   `--` 结束选项解析：它之后的一切都是句柄
-  （ARCHITECTURE.md §6）。一次调用至多一个动作；`--id` 属于每一个**寻址**某个在跑的播放器的动词
+  （ARCHITECTURE.md「端到端控制流」）。一次调用至多一个动作；`--id` 属于每一个**寻址**某个在跑的播放器的动词
   （`--stop`、`--set-volume`、`--pause`、`--resume`、`--seek`、`--seek-to`、`--enqueue`、`--next`），
   而 `--all` 只属于 `--stop`；`-d` 既不与动作组合，也不与 `-f ascii|viz` 组合。
   `--queue` 不是一个动作，而是一个**启动修饰符**：它要求 `-d`、拒绝 argv 上的句柄、
@@ -73,16 +79,16 @@
    ut-play --next [--id ID]                       丢掉这一条，开始下一条（4：没有下一条）
    ut-play --start 601 -- <handle>                从第 601 秒开始；压过句柄自带的偏移
    ut-play --quality high -- <handle>             质量档：auto|low|medium|high（默认 auto）
-   ut-play                      → 用法错误，点名 <engine>-search / uting（ARCHITECTURE.md §3.2）
+   ut-play                      → 用法错误，点名 <engine>-search / uting（ARCHITECTURE.md「调用形状」）
    ut-play -- "some query"      → 用法错误，点名 <engine>-search（有空白 ⇒ 不是句柄）
   ```
-- **它写收听日志。** 一个 **detached** 播放器通过 `ut-history --record`（§1.6）每条曲目记一行 ——
+- **它写收听日志。** 一个 **detached** 播放器通过 `ut-history --record`（「命令规格」）每条曲目记一行 ——
   在曲目结束时记，一次 `--stop` 或一次 `--next` 结束了它时同样记，
   因为一份只记录未被打断的曲目的日志，是一份系统性偏斜的记录。尽力而为：`UT_HISTORY=0` 关掉它，
   `ut-history` 不在就静默，它的任何失败都不得让一条曲目付出代价。
   一条从未开始、也不是失败的曲目（一次 stop 正好落在两条曲目之间的缝里）不是一次收听，不得一行。
 - **引擎选择：** `--engine NAME`，默认取 `UT_DEFAULT_ENGINE`（默认 `yt`）。
-  这个名字就是命令前缀；一个不认识的名字退出 1 并点名它（ARCHITECTURE.md §4）。
+  这个名字就是命令前缀；一个不认识的名字退出 1 并点名它（ARCHITECTURE.md「命令拓扑」）。
   **v1 不做 URL 嗅探** —— `uting` 永远知道引擎，因为搜索是它做的；
   而一个 agent 播放一个裸 URL 时会说出它是哪个引擎。嗅探（引擎声明自己的 URL 模式）推迟到
   第三个引擎让一份注册表变得值得为止。
@@ -94,27 +100,27 @@
   `UT_DEFAULT_ENGINE`），所以在第二个引擎下这些门臂点的是那个引擎的命令，而不是 `yt-`。
   **一处已知且接受的顺序依赖**：`--get-url` 与那三个抽取动词的 die 就在长选项归一化循环
   **里面**，所以 `--engine` 只有排在它们**前面**时才已被吃掉 ——
-  `ut-play --transcript --engine bili` 仍会说 `yt-resolve`（§2 的门表同此）。
+  `ut-play --transcript --engine bili` 仍会说 `yt-resolve`（「门模型」 的门表同此）。
 
-### 1.2 `<engine>-search` —— 一个引擎的第一半
+### `<engine>-search` —— 一个引擎的第一半
 
 - **它拥有：** 一个站点的查询路径、它自己的传输、它自己的 cookie 决定、它自己的结果整形
   与时长格式化器、它自己的门。**零播放、零生命周期逻辑。**
 - **标志：** `-n -m -M -s -l -j -J --color -h -V`。位置参数：一个 QUERY。一个 URL 会被拒绝，
   并指向 `ut-play` —— 包括在 `--` 之后，那正是这项检查必须**重新施加**一次的地方，
   因为 `--` 停掉的是标志解析，不是参数校验。
-- **信封：** `{status, engine, query, count, results[]}`，一行（§3）。
+- **信封：** `{status, engine, query, count, results[]}`，一行（「数据契约」）。
 - **今天：** `yt-search`（yt-dlp）与 `bili-search`（curl + jq）。同一个信封，不同的传输 ——
-  接缝是信封，不是它背后的工具（ARCHITECTURE.md §3.4）。
+  接缝是信封，不是它背后的工具（ARCHITECTURE.md「站点知识的边界」）。
 
-### 1.3 `<engine>-resolve` —— 一个引擎的第二半
+### `<engine>-resolve` —— 一个引擎的第二半
 
 - **它拥有：** 句柄文法与 host 白名单、模式→格式表、cookie 决定、这个站点的只读动词、
   yt-dlp 错误词汇表。**cookie 决定同时是可查询的** —— 它是这一半里唯一一件调用方
   在没有句柄的情况下也想知道的事（`--auth`，见下）。
 - **标志：** `-f -S -l -j -J --color -h -V`（`-l` = 散文，且是**默认**输出模式）加上它**有**的那些动词：`--info`（两个引擎都有）、
-  `--auth`（两个引擎都有）、`--transcript --sub-lang`（只有 `yt-resolve`，ARCHITECTURE.md §3.4）、
-  `--parts`（只有 `bili-resolve`，ARCHITECTURE.md §3.4 同一条能力规矩）—— 以及流格式选择器 `--quality TIER`
+  `--auth`（两个引擎都有）、`--transcript --sub-lang`（只有 `yt-resolve`，ARCHITECTURE.md「站点知识的边界」）、
+  `--parts`（只有 `bili-resolve`，ARCHITECTURE.md「站点知识的边界」 同一条能力规矩）—— 以及流格式选择器 `--quality TIER`
   （`auto|low|medium|high`，两个引擎都有）。
 - **`--quality` 是流格式选择器，只配 `resolve_stream` 用。** 它撞上 `--info` / `--parts` /
   `--transcript` 就退出 1（门语直说"它选择流格式，不适用于那个动词"）；它也不配 `--auth`。
@@ -131,65 +137,65 @@
   `-f`/`-S` 同样是（它不解析流），`-J` 也是（`-J` 是 yt-dlp 的原始记录，而它根本不跑
   yt-dlp）。它在**依赖门之前**作答，和 `-V` 一样 —— 一个报告"我怎么配的"的动词，
   不该需要它正在报告的那个工具装在机器上；散文形态连 `jq` 都不需要。
-  信封见 §3。
-- **行为：** AS-BUILT-engine.md §10。非本站 host → 用法错误（1）。
-- **以"有没有"声明能力（ARCHITECTURE.md §3.4）：** 一个引擎做不到的事，它就不为它准备动词。
+  信封见 「数据契约」。
+- **行为：** AS-BUILT-engine.md「解析」。非本站 host → 用法错误（1）。
+- **以"有没有"声明能力（ARCHITECTURE.md「站点知识的边界」）：** 一个引擎做不到的事，它就不为它准备动词。
 
-### 1.4 `uting` —— 交互式终端 UI
+### `uting` —— 交互式终端 UI
 
 - 命令面：`uting [--engine NAME] [-n N] [-m S] [-M S] [-s field] [-f audio|video|fast]
   [--volume N] [-p ROWS] [--color auto|always|never] [query]` —— 搜索整形的标志转发给
   `<engine>-search`；`-f`/`--volume` 是播放设置，每次播放都转发给 `ut-play`；`-p` 是每页行数；
   其余一律拒绝。`--volume` 只在启动时生效（没有运行时循环键，不像 `-f` 有 `v` ——
-  见 ARCHITECTURE.md §26）。查询可选（缺了就提问）。要求 stdin 与 stdout 双双是 TTY，
+  见 ARCHITECTURE.md「已知约束」）。查询可选（缺了就提问）。要求 stdin 与 stdout 双双是 TTY，
   要求 `jq`，要求那些同级动词。
   `-f` 对着 `audio|video|fast` 校验：播放是 detached 的，而 `ascii`/`viz` 需要一个终端
-  （AS-BUILT-player.md §9.2）。
+  （AS-BUILT-player.md「状态机」）。
   按键：方向键导航/翻页（`j`/`k` 是 `↓`/`↑` 的别名；`/` 开着时它们是正在打的字）·
   Enter 非阻塞播放（章节行上是"从这一章起播"，见下）· `Space` 暂停 ·
   `[`/`]` 快退/快进 ∓10s · `9`/`0` 音量 · `s` 停止 ·
   **`Tab` 无绑定**（只有一个视图，没有可切的第二个；`Esc` 在列表里是清过滤）·
   `v` 循环模式（audio→video→fast）· `f` 循环质量档（UT_QUALITY_CYCLE 的顺序，出厂
-  auto→medium→high；档位是**规范拼写**，翻成 format-sort 是引擎的事，见 §1.4）·
+  auto→medium→high；档位是**规范拼写**，翻成 format-sort 是引擎的事，见 「命令规格」）·
   `e` 切换来源（只有一个引擎时隐藏）·
   `l` 切换界面语言（en↔zh）· `t` 循环配色家族 ·
-  `n` 新搜索 · `o` 排序 · `c` 多 P 部分（§1.3）· `i` 聚焦行的**章节**（§1.3 的 `--info`）·
+  `n` 新搜索 · `o` 排序 · `c` 多 P 部分（「命令规格」）· `i` 聚焦行的**章节**（「命令规格」 的 `--info`）·
   `/` 过滤 · `?` 键位提示两档切换（`core`↔`full`；`？` 全角同绑）· `q` 退出 ·
   章节行上的 `Enter` 是"从这一章起播"：播放器手上已经是这一条（engine 与去掉 `t=` 的句柄
-  都相等）就走 `ut-play --seek-to <start_time>`（§1.1）—— 一次 seek，不重新 resolve；
+  都相等）就走 `ut-play --seek-to <start_time>`（「命令规格」）—— 一次 seek，不重新 resolve；
   否则照常起播，偏移由行自己的 url 带着（见下）。这不是新能力：`.chapters[].start_time`、
   `--seek-to` 与句柄上的 `?t=` 本来就都在这份契约里。
   行数由两条**边**管，不由一个键管：`→` 越过最后一页**追加**一批（一次取数），
   `←` 在第 1 页**砍掉**一批（纯本地截断，不取数，地板是一屏）。
-  这八个键改的设置会写回用户配置（§5「写回」）。
+  这八个键改的设置会写回用户配置（「配置面」「写回」）。
   `a` 把当前聚焦行加入一个播放列表 · `b` 把一个已存播放列表打开为行来源 ·
-  `h` 把收听日志打开为行来源 · `c` 把聚焦行的多 P 部分打开为一个列表（§1.3 的 `--parts`；
+  `h` 把收听日志打开为行来源 · `c` 把聚焦行的多 P 部分打开为一个列表（「命令规格」 的 `--parts`；
   引擎没有那个动词时按键沉默 —— 同一个"以有没有声明能力"的降级；再按一次 `c` 回到搜索）。
   `c` 打开的部分列表是搜索行专用的：播放列表与历史的行上它走与 `o`/`e` 同一条拒绝路径
   （返回栈只有一层，存储的行上不打开第二个来源）。**这三个键在非搜索视图里连提示格都不占** ——
-  一个量宽度的块不能拿一格去说"这里不行"（`AS-BUILT-tui.md` §11）。
+  一个量宽度的块不能拿一格去说"这里不行"（`AS-BUILT-tui.md`）。
   `i` 把聚焦行的**章节**打开为行来源（一次 `<engine>-resolve --info`，按 `engine:url`
   单槽缓存；引擎没有那个动词时按键沉默；没有章节时出一条提示、原地不动）。它与 `c` 一样是
   **toggle**、一样只在搜索行上可用（返回栈只有一层），一样在非搜索视图里连提示格都不占。
   一个章节行**就是一次调用**：url 是那一行自己的句柄加 `t=<秒>`，两个引擎都从句柄读它并放进
-  resolve 信封的 `start_seconds`（§1.2、AS-BUILT-engine.md §10.4），所以 `Enter` 从那一章起播、
+  resolve 信封的 `start_seconds`（「命令规格」、AS-BUILT-engine.md「起播偏移」），所以 `Enter` 从那一章起播、
   `+` 从那一章入队、`a` 存下的也是从那一章起播的一行 —— 条目记录仍是七字段，没有新字段。
   那次取数买到而行装不下的两格（`uploaded=`、`likes=`）落在状态行上。
-  `a`/`b` 只在 `ut-playlist` 装了时出现（§1.5），`h` 只在 `ut-history` 装了时出现（§1.6）——
+  `a`/`b` 只在 `ut-playlist` 装了时出现（「命令规格」），`h` 只在 `ut-history` 装了时出现（「命令规格」）——
   跟单引擎安装下隐藏 `e` 是同一条规则。两者都**替换**屏幕上的行，且两者都是 **toggle**：
   打开一个存储的那个键把它关掉（再按一次 `h`、再按一次 `b`），
   从暂存的信封还原那次搜索而不是重跑那个查询，所以用户回去时看到的行就是他离开时的那些行。
   这个键在它自己的存储开着时会给自己换标签 —— 不印第二个键，`Esc` 不参与其中
-  （AS-BUILT-tui.md §11 有这条规则，以及它背后那次一秒的测量）。
+  （AS-BUILT-tui.md 有这条规则，以及它背后那次一秒的测量）。
   `h` 不取名字 —— 日志只有一份 —— 并显示最新的 50 行。
   播放列表或日志在屏幕上时，那两个会**重新取数**的键 —— `o` `e` —— 会说一声然后什么也不做，
   而两条边（`→` `←`）在那里是**不出声的** no-op：存储没有"更多"可谈；
   一切作用在行本身上的东西照旧。行各自带着自己的 `engine`，
   所以一份混了来源的清单，每一行都在产出它的那个引擎下播放。
 
-### 1.5 `ut-playlist` —— 播放列表存储（durable，用户级，与引擎无关）
+### `ut-playlist` —— 播放列表存储（durable，用户级，与引擎无关）
 
-- **它拥有：** 用户级状态目录、播放列表文件布局、锁与原子写、条目记录（§3），以及状态错误枚举。
+- **它拥有：** 用户级状态目录、播放列表文件布局、锁与原子写、条目记录（「数据契约」），以及状态错误枚举。
   **别的它一概不拥有：** 没有站点知识，没有播放，没有 `players/`，没有队列。
 - **动词（每次调用恰好一个）：** `--ls` · `--show NAME` · `--add NAME` · `--rm NAME
   --index N` · `--del NAME` · `--rename NAME NEWNAME`。共享：`-l -j --color -h -V`。
@@ -209,9 +215,9 @@
   接受并写进文档，而不是做归一化。
 - **不是播放器的状态。** `players/` 在 `$TMPDIR` 里，随重启一起死；这个不会。
   队列（一个正在被消费的播放列表）留在播放器那边 —— 一个能挺过重启的队列**就是**一个播放列表
-  （AS-BUILT-player.md §9.4）。
+  （AS-BUILT-player.md「持久状态层」）。
 
-### 1.6 `ut-history` —— 收听日志（durable，用户级，与引擎无关）
+### `ut-history` —— 收听日志（durable，用户级，与引擎无关）
 
 - **它拥有：** 日志的文件布局、行的形状与它的长度上界。**别的它一概不拥有：**
   没有站点知识，没有播放，没有 `players/`，没有播放列表。它是用户级存储的第二半，
@@ -225,19 +231,19 @@
   下面那个免锁的追加只对**一次**写成立。字段是一个一个取的，从不合并，
   所以调用方碰巧带着的某个键（一条搜索结果的 `channel`）到不了磁盘。
   `engine` 与一个不含空白的 `url` 是必须的，`played_at` 必须是一个 ISO 时间戳，
-  而 `reason` 必须是 PLAYBACK 枚举（§3）的成员或 null。
+  而 `reason` 必须是 PLAYBACK 枚举（「数据契约」）的成员或 null。
 - **存储：** `$UT_STATE_DIR/history/<YYYY-MM>.jsonl`，只追加，一次收听一行。
   **这是整套套件里唯一一个不取锁的写** —— `>>` 是 `O_APPEND`，而一行在 `PIPE_BUF` 以内就整行落地 ——
   这也正是为什么**每一行都必须待在 4096 字节以内**：标题在 UTF-8 边界上截到 200 字节，
   然后整行被**量一遍**，字段按顺序丢（title、id、url）直到装得下。信封里的 `truncated` 报告这件事。
   按月分片让"清掉旧的东西"是一次 `rm` 而不是一次重写。
 - **谁写它：** 一个 detached 的 `ut-play` 子进程，每条曲目一次，无论是什么结束了这条曲目
-  （§1.1，`UT_HISTORY`）。`ut-history` 从不播放，`ut-play` 从不打开日志文件。
+  （「命令规格」，`UT_HISTORY`）。`ut-history` 从不播放，`ut-play` 从不打开日志文件。
 - **不是死亡记录。** `players/dead/` 只装失败、有界、在 `$TMPDIR` 里、重启即无；
   这一个是每一条曲目、无界、且 durable。两者在同一瞬间被写下，是同一条规则的两面
-  （AS-BUILT-player.md §9.2）。
+  （AS-BUILT-player.md「状态机」）。
 
-## 2. 门模型 —— 一层，八个自己把门的动词
+## 门模型 —— 一层，八个自己把门的动词
 
 **没有 wrapper 层。** 每个动词只接受它自己的命令面，遇到跨界标志就把调用方指向正确的那把工具；
 既然调用方与实现之间已经不再坐着任何东西，这就是让那些契约互不重叠的东西。
@@ -287,22 +293,22 @@
 所以 `ut-play` 对 `--` 之后的任何东西施加空白测试，
 而 `<engine>-search` 对它之后的每一个 token 施加 `reject_url`。
 
-**为什么门不是一个层（ARCHITECTURE.md §3.1）。** 一个 core 加几个 wrapper 的模型里，门就是 wrapper 存在的理由：
+**为什么门不是一个层（ARCHITECTURE.md「八个平级动词」）。** 一个 core 加几个 wrapper 的模型里，门就是 wrapper 存在的理由：
 core 实现一个宽的多态命令面（一个词是搜索、一个 URL 是播放），wrapper 的活是保证调用方
 到达的是哪一半。搜索归 `<engine>-search`、抽取归 `<engine>-resolve` 之后，
 播放器只剩下恰好一个动词 —— 没有别的操作可供一次绕过去够到，也就没剩下什么好让一个层去守。
-留下来的是那些**错误文本**：它们如今是这个动词自己的门臂（§1.1）。
+留下来的是那些**错误文本**：它们如今是这个动词自己的门臂（「命令规格」）。
 
-**为什么 `uting` 组合这些动词，而从不碰它们的内部（ARCHITECTURE.md §3.7）。** `fetch_json` 解析搜索信封，
+**为什么 `uting` 组合这些动词，而从不碰它们的内部（ARCHITECTURE.md「人机面」）。** `fetch_json` 解析搜索信封，
 而 `<engine>-search` 的 URL 拒绝正是让"`-j` = 搜索信封"这件事无条件成立的东西 ——
 一个粘进 TUI 的 `n`（新搜索）提示里的 URL，除了变成一次被拒绝的搜索之外不能变成任何东西。
 TUI 还**显式**传 `--engine`，**取自信封自己的 `engine` 字段**，从不让 `ut-play` 的默认值来决定：
 装了两个引擎时，那个默认值会把第二个引擎的 URL 送给第一个引擎的 resolver，
-而按 ARCHITECTURE.md §3.4 那是一个硬用法错误，不是一次悄无声息的贴错标签。
-ARCHITECTURE.md §3.7 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md §9.3），
+而按 ARCHITECTURE.md「站点知识的边界」 那是一个硬用法错误，不是一次悄无声息的贴错标签。
+ARCHITECTURE.md「人机面」 唯一被批准的例外是那个 mpv socket（AS-BUILT-player.md「运行时 IPC」），
 播放器把它的路径发布在 `-d -j` 信封里，正是为了让一个客户端可以用它。
 
-## 3. 数据契约（JSON schema）
+## 数据契约（JSON schema）
 
 搜索信封（`<engine>-search -j`）：
 ```json
@@ -319,13 +325,13 @@ ARCHITECTURE.md §3.7 唯一被批准的例外是那个 mpv socket（AS-BUILT-pl
 `-J`/`--json-full` = 同一个信封，`results` 里装每一个原始字段。
 时长未知时（一路直播）`duration` 与 `duration_fmt` **一起是 `null`**；`view_count` 也可以是 `null`。
 失败时信封改为 `{status:"error", engine, query, count:0, results:[], reason}`，
-`reason` 用的是与播放相同的那个枚举，退出码是 2+（AS-BUILT-engine.md §7 / 本文 §4）。
+`reason` 用的是与播放相同的那个枚举，退出码是 2+（AS-BUILT-engine.md「搜索子系统」 / 本文 「退出码」）。
 
 - **`engine` 是每一个引擎信封的必需键** —— search、resolve、`--info`、`--transcript`，
   以及它们各自的错误形状。它是那个同时也是命令前缀的 token，
   于是一个手里拿着结果的调用方靠字符串拼接就够到了对应的 resolver（`yt` → `yt-resolve`），
   而 `uting` 不需要一张映射表就能传 `ut-play --engine <那个值>`。
-  **这就是 host 白名单保护的那个字段**（AS-BUILT-engine.md §10，ARCHITECTURE.md §3.4）：
+  **这就是 host 白名单保护的那个字段**（AS-BUILT-engine.md「解析」，ARCHITECTURE.md「站点知识的边界」）：
   一个接受了别的站点的 URL 的 resolver，会在这里印出它自己的名字，那条路由声明就成了假的。
   每个引擎都从**一个常量**（`ENGINE_NAME`）印出自己的名字，而不是推导出来，
   所以信封和文件名不可能互相矛盾。
@@ -340,16 +346,16 @@ ARCHITECTURE.md §3.7 唯一被批准的例外是那个 mpv socket（AS-BUILT-pl
   - **`kind`** —— `ut-play --engine E -- <本行 url>` 会发生什么？恰好播**一个** = `track`；
     一个 handle 出**多个 part** = `multipart`；本行是**多个 handle 的容器** = `collection`。
   - **`access`** —— 匿名解出来的**时间轴**完整吗？完整 = `full`（**码率/音质降级仍是 `full`**）；
-    被截断 = `preview`；解不出流 = `paywalled`。报的是站点事实，不是登录裁决（ARCHITECTURE.md §3.4）。
+    被截断 = `preview`；解不出流 = `paywalled`。报的是站点事实，不是登录裁决（ARCHITECTURE.md「站点知识的边界」）。
 
   **枚举装不下的新形态，按这两问映射到最近的值，映射记进 AS-BUILT-engine.md —— 枚举不为它长大。**
   两个字段是**引擎的判断**而不是站点的原始记录，所以 **`-J` 的行同样携带它们**，
   并且压过任何同名的原始字段：要更多数据的那个调用方，不该恰好是丢掉路由字段的那个。
   站点没有对应形态时就如实印默认值（`track`/`full`）——
-  **恒为默认值是合法状态**，今天两个引擎都是（AS-BUILT-engine.md §7、§7.2）。
+  **恒为默认值是合法状态**，今天两个引擎都是（AS-BUILT-engine.md「搜索子系统」与「`kind` 与 `access`」）。
 - **一行结果是一次调用。** 一行的存在意义就是 `ut-play --engine <engine> -- <url>`，
   所以 `url` 建不出来的记录**在信封之前**就被引擎丢掉，而不是带着 `url:null` 发货
-  （AS-BUILT-engine.md §7.2 是这条规矩的实测由来）。`tests/contract.sh` 把它连同上面的
+  （AS-BUILT-engine.md「`kind` 与 `access`」 是这条规矩的实测由来）。`tests/contract.sh` 把它连同上面的
   封闭枚举一起，当作对**每一个被发现的**引擎 × `-j`/`-J` 两种形状的不变量来断言。
 
 解析信封（`<engine>-resolve -j -f MODE -- <handle>`）：
@@ -366,7 +372,7 @@ ARCHITECTURE.md §3.7 唯一被批准的例外是那个 mpv socket（AS-BUILT-pl
 
 - **`stream_urls` 是一个数组，视频在前。** 单流时一个元素；引擎的格式把一条纯视频轨与一条纯音频轨
   合并时是两个，此时第 1 个元素是音频。播放器用 mpv 的 `--audio-file` 把它们接起来 ——
-  那正是 mpv 的 `ytdl_hook` 会用一份合成 EDL 顺手做掉的事（AS-BUILT-player.md §8.1）。
+  那正是 mpv 的 `ytdl_hook` 会用一份合成 EDL 顺手做掉的事（AS-BUILT-player.md「模式 → 格式 → mpv」）。
 - **`http_headers` 是必需键**，可以是 `{}`。它堵上了"只交一个流 URL"留下的那个洞：
   在一个检查 `Referer` 或钉死 `User-Agent` 的 host 上，一个光秃秃的流 URL 不足以取到东西，
   而播放器无从把它们发明出来。一个引擎**不得**在这里返回凭据头 ——
@@ -379,7 +385,7 @@ ARCHITECTURE.md §3.7 唯一被批准的例外是那个 mpv socket（AS-BUILT-pl
   偏移搭在里面就意味着一首收藏的曲子从此每次都从 10:01 开始放。
   yt 那边是白拿的（`webpage_url` 本来就不带 `t`），
   bili 那边必须动手剥，因为那个站的 `webpage_url` 保留整个 query —— `?p=N` 就在里面
-  （AS-BUILT-engine.md §10.4）。解析不出来的值（`?t=banana`）是 `null`，**不是错误**：
+  （AS-BUILT-engine.md「起播偏移」）。解析不出来的值（`?t=banana`）是 `null`，**不是错误**：
   它没有回答一个必须被回答的问题。小数向下取整（`601.5` → `601`）：这个键数的是
   "已经过去了多少秒"，四舍五入会把播放头推过调用方指的那一刻。
   `--info` 信封带同一个键，两个信封说同一件事。
@@ -393,7 +399,7 @@ ARCHITECTURE.md §3.7 唯一被批准的例外是那个 mpv socket（AS-BUILT-pl
   一个把请求回声进 `selected` 的引擎能过掉其余每一条检查。
   **零额外网络**：这两个值本来就在那份已经取回的原始记录里（`.format` / `.resolution`），
   从前被丢掉。取不到时是 `null`，与 `title`/`duration` 同一套可空约定。
-- **`retried`** = 引擎回落到了一个匿名 client（AS-BUILT-engine.md §8.2）。
+- **`retried`** = 引擎回落到了一个匿名 client（AS-BUILT-engine.md「先探后播」）。
   播放器把它转手进播放信封的 `retried`；它不再自己观察这件事。
   **它不是一个登录裁决**：`retried:false` 只说明带 cookie 那次调用没有出错，
   不说明那份登录被站点认了 —— 见下面 `--auth` 那条同样的界线。
@@ -410,20 +416,20 @@ auth 信封（`<engine>-resolve --auth -j`）—— 一行，不发包，也不�
 - **`auth`** ∈ `cookie | anonymous` —— 调用方要渲染的那个摘要。
   它 `== "cookie"` 当且仅当 `cookie_browser != "none"` **且** `profile_found`。
 - **`cookie_browser`** = `<ENGINE>_COOKIE_BROWSER` 的原值（`chrome`、`safari`、`none`…），
-  引擎名大写就是那个变量名（§5、§6）。
+  引擎名大写就是那个变量名（「配置面」、「加一个引擎」）。
 - **`profile_found`** = 那个浏览器的 profile 目录在这台机器上在不在。
 - **这个信封承诺的是"发不发"，此外什么都不承诺 —— 而"此外"是两件事。**
   站点**认不认**（过期登录照样报 `cookie`），以及认了之后这个账号**够到什么**。
   第二件是量过的：本机实测 2026-08-26 —— 从 chrome 提取到 3159 个 cookie，
   profile 经浏览器确认**是登录状态**，B 站依然只供匿名音频档，
-  因为那个账号不是大会员（AS-BUILT-engine.md §8.2）。
+  因为那个账号不是大会员（AS-BUILT-engine.md「先探后播」）。
   所以 `auth:"cookie"` 与"更好的音质"之间**没有**蕴含关系，两个方向都没有。
   第一件（会话有效性）需要一次鉴权往返 —— 刻意不在这个动词里，也刻意不在这个信封里
-  （ARCHITECTURE.md §3.4）。要那个的话，升级路径是把网络调用放到一个 `--auth --probe` 后面，
+  （ARCHITECTURE.md「站点知识的边界」）。要那个的话，升级路径是把网络调用放到一个 `--auth --probe` 后面，
   让这个信封的含义保持不变。
 
 播放状态（`ut-play -j -- <handle>`）—— 播放器自己的信封，也是唯一一个没有 `engine` 键的：
-播放器与站点无关，它回声出来的那个句柄就是别人给它的那个（ARCHITECTURE.md §4）。
+播放器与站点无关，它回声出来的那个句柄就是别人给它的那个（ARCHITECTURE.md「命令拓扑」）。
 ```json
 { "status":"ok"|"error", "url":"…", "mode":"audio",
   "exit_code":0, "reason":null, "retried":false }
@@ -480,7 +486,7 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
  "played_at":"…","ended_at":"…","seconds":97,"reason":null}
 ```
 `$UT_STATE_DIR/history/<YYYY-MM>.jsonl` 的一行，且**在 4096 字节以内** ——
-那个免锁追加所倚仗的前提（§1.6）。`reason` 是 PLAYBACK 枚举，或者 **null，
+那个免锁追加所倚仗的前提（「命令规格」）。`reason` 是 PLAYBACK 枚举，或者 **null，
 而那正是一条放到自己尽头的曲目长的样子**；一条被跳过或被停掉的是 `stopped_by_user`，
 而 `seconds` 是那个把 0:05 的一次跳过与 3:20 的一次停止区分开来的东西。
 `played_at` 决定分片文件的名字。`added_at` 按设计不存在：一次收听是什么时候发生的，就是 `played_at`。
@@ -523,12 +529,12 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
               请求那一半（`format`）**不在这个投影里**：它是一句 yt-dlp 表达式，
               而 --status 回答的是"现在在放什么"，不是"当初怎么问的"
               volume、paused、position 与 duration 是**一次往返**里从播放器的 socket 上
-              实时读来的（AS-BUILT-player.md §9.3）。volume 回落到记录下来的启动值 /
+              实时读来的（AS-BUILT-player.md「运行时 IPC」）。volume 回落到记录下来的启动值 /
               --set-volume 值；另外三个在 socket 问不到、或播放器答了 null 时是 null ——
               null 是"问不到"，**不是** false/0。position 与 duration 是整数秒，
               在 mpv 开始解码之前是 null（冷启动约 8s）；一路直播的 duration 一直是 null。
               一个活着的播放器上 queue 永远不是 null：每一次 detached 启动都写一个，
-              而一个单独的句柄是一个长度为 1 的队列（AS-BUILT-player.md §9.5）。
+              而一个单独的句柄是一个长度为 1 的队列（AS-BUILT-player.md「队列」）。
               它是从播放器自己的队列文件上读的，不是从 socket 上 —— mpv 一次只被递一个 URL，
               从来不知道有一个列表。`next` 是 pos **之后**的那一条，最后一条曲目上是 `null`。
               `upcoming` 是**同一条队尾的列表形式**，每条带 `duration`（`next` 从来没有过），
@@ -540,15 +546,15 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
               url、engine 与 title 跟着**曲目**走：子进程每解析一次就补一次它自己的记录，
               所以十分钟后取的一次 --status 描述的是**此刻**在放的东西。
               engine 与 url 合起来就是**正在放的那次调用**（`ut-play --engine E -- URL`）——
-              一条记录本来就该是一次调用，与 `ut-playlist` 的记录同一个形状（ARCHITECTURE.md §3.5）。
+              一条记录本来就该是一次调用，与 `ut-playlist` 的记录同一个形状（ARCHITECTURE.md「两个存储」）。
               少了它，一个读 --status 的调用方说得出在放什么、却说不出该找谁再放一遍，
               而一条队列可以混源（`--queue` 的 engine 是**每条**的），所以拿启动那一条去猜，
               恰好在混源队列上是错的。同一笔账，failed[] 也带 engine：
               一条重发不了的调用，在墓碑里同样重发不了。
               failed[] 是墓碑列表 —— 那些**自己**死掉的播放器，最新在前，至多 8 条，
-              不超过一小时（AS-BUILT-player.md §9.2）。reason 是那个共享的播放枚举。
+              不超过一小时（AS-BUILT-player.md「状态机」）。reason 是那个共享的播放枚举。
               一个正常结束或者被 --stop 掉的播放器永远不在里面，
-              所以这个数组是一份**错误记录**，不是收听历史那个功能（ARCHITECTURE.md §3.5）——
+              所以这个数组是一份**错误记录**，不是收听历史那个功能（ARCHITECTURE.md「两个存储」）——
               后者有它自己的 durable 存储；这一个住在 $TMPDIR 里且有界。
    --set-volume : {status:"ok", id, volume}          （经 mpv IPC socket 实时调整）
                 | {status:"not_playing"}             （没有目标；退出 4）
@@ -597,7 +603,7 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
               完整信封是 52,732 字节，其中 `text` 是 16,916、`segments` 是 35,647 ——
               后者带着一模一样的文本外加它的时间戳。-j 是 17,074 字节 —— 小 3.1 倍，
               对这个动词存在的理由（把这个总结一下）没有丢掉任何信息
-              （ARCHITECTURE.md §22，token 效率）。`chars` 与 `segment_count` 让精瘦的那种形式
+              （token 效率）。`chars` 与 `segment_count` 让精瘦的那种形式
               保持自描述：一个调用方能给上下文做预算，并且不必去取就知道 -J 会多出什么。
               原始的 json3 文档刻意**不是** -J 返回的东西：它不带 status/lang/is_auto，
               所以加宽反而会**丢**字段 —— 那是这套套件里 -J 契约在别处从不做的一件事。
@@ -612,19 +618,19 @@ YouTube 的限流器），但播放与搜索一直都够得到它，只是报成
    --parts  : {status:"ok", engine, id, title, url, count, total_duration,
               total_duration_fmt, parts:[{n, engine, url, title, duration, duration_fmt}…]}
               列出多 P 视频的各 P（?p=N）—— 一次 HTTP 请求，没有 yt-dlp。**只有
-              bili-resolve 有它**（ARCHITECTURE.md §3.4）：一个 YouTube id 恰好就是一个文件，
+              bili-resolve 有它**（ARCHITECTURE.md「站点知识的边界」）：一个 YouTube id 恰好就是一个文件，
               它"多条目"的形态是一份自有 URL 的播放列表，不是这个动词。
               parts[] 的元素**就是条目记录** —— `--parts -j | jq '{items:.parts}'`
               原样管进 `ut-playlist --add` 与 `ut-play --queue`，不需要字段映射，
               与 `--show` / `--ls` 的信封遵守同一条可拼接规矩。
               `total_duration` 与 `total_duration_fmt` 是**集合**的时长 ——
-              搜索结果行只报单行的时长（§1.4 的 `total=` 字段显示的就是这个数字），
-              两个数字不同不是错误，是"这一行代表什么"不同（P8）。
+              搜索结果行只报单行的时长（「命令规格」 的 `total=` 字段显示的就是这个数字），
+              两个数字不同不是错误，是"这一行代表什么"不同。
               单 P 视频**不是错误**：它列出 count 1，不是失败。
               它要求一个 id：b23.tv 短链是重定向不是 id，被拒（1）。
               取数失败（网络 / 记录里没有 parts）→ {status:"error", engine, url, reason}，
               退 **2**（一次工具失败，不是用法错误 —— 与抽取同类）。
-   --quality : 见 §1.3 —— 流格式选择器，不配 --info / --parts / --transcript / --auth。
+   --quality : 见 「命令规格」 —— 流格式选择器，不配 --info / --parts / --transcript / --auth。
 ```
 
 **队列的输入是 stdin，三种形状** —— 跟 `ut-playlist --add` 接受的那三种一样，理由也一样：
@@ -641,7 +647,7 @@ url 的检查不会比 argv 上的一个句柄更进一步 —— 哪些 id 是�
 
 **一个队列是即时解析的，一次一条曲目。** 一个流 URL 几小时就过期，
 所以一个在入队时就解析好的队列会在放到一半时 403；代价是曲目之间的一个空档（那次引擎往返），
-而这个设计决定是 AS-BUILT-player.md §9.5。有一个后果是契约性的：
+而这个设计决定是 AS-BUILT-player.md「队列」。有一个后果是契约性的：
 一个解析失败的排队条目**不会**弄死播放器。队列往前走，那条曲目在 `failed[]` 里拿到它自己的墓碑，
 键是 `<id>-q<pos>` —— 一条没放成的曲目，跟一个没放成的播放器是同一种形状，
 于是一个读 `failed[]` 的调用方看到的是一个有名字的缺口，而不是一个无声的缺口。
@@ -668,7 +674,7 @@ url 的检查不会比 argv 上的一个句柄更进一步 —— 哪些 id 是�
 退出 **1**，往 stderr 写一条消息，且**完全不写信封** —— 什么也没尝试、什么也不可重试，
 所以它跟 `--engine nope` 是同一类，绝不能与一次调用方也许会重试的抽取失败（2+）混为一谈。
 这是对每一个引擎的契约，现在的和将来的：host 白名单是每个引擎一份显式清单
-（AS-BUILT-engine.md §10），从不是子串匹配。裸 id 那条路是同一条规则的另一个方向 ——
+（AS-BUILT-engine.md「解析」），从不是子串匹配。裸 id 那条路是同一条规则的另一个方向 ——
 一个不匹配这个引擎的形状的 id 同样是 1。
 
 **一个信封，一行。** 套件写到 stdout 的每一份 `-j` / `-J` payload 都是单行 JSON ——
@@ -686,29 +692,29 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
 `players/` 下的状态文件**不**受这条规则管，继续保持漂亮 ——
 它们是一份被 jq 读的磁盘记录，不是一个信封。
 
-## 4. 退出码、TTY、依赖
+## 退出码、TTY、依赖
 
 ```
    0    成功；也包括 --status/--stop（永远）；130 被归一化（SIGINT；干净的 q 本来就退 0）
    1    用法/校验错误（die）、一个动词的标志门拒绝、uting 的非 TTY 拒绝、互相冲突的动作、
-        没有句柄（ARCHITECTURE.md §3.2）、一个里面带空白的句柄、--id/--all 用在生命周期动词之外、
+        没有句柄（ARCHITECTURE.md「调用形状」）、一个里面带空白的句柄、--id/--all 用在生命周期动词之外、
         -d 配上一个动作或配上 -f ascii|viz、
         一个不带符号的 `--seek` 值（`--seek 30`）或一个负的 `--seek-to`、
         一份这个进程用不了的队列 payload（`--queue`/`--enqueue`：坏 JSON、三种 stdin 形状
         都不是、没有条目、url 里带空白、坏的引擎名）—— 在**父进程**里就拒了，
         所以一份畸形的队列永远到不了一个播放器，
         `--queue` 而没有 `-d`、或配上一个动作、或 argv 上带了句柄、
-        一个不认识的 --engine、一个 host 不是这个引擎的 URL（AS-BUILT-engine.md §10 / 本文 §3）、
+        一个不认识的 --engine、一个 host 不是这个引擎的 URL（AS-BUILT-engine.md「解析」 / 本文 「数据契约」）、
         --info / --transcript 取数失败（含 no_subtitles_available）、
-        --quality 撞上 --info / --parts / --transcript / --auth（它是流格式选择器，§1.3）、
+        --quality 撞上 --info / --parts / --transcript / --auth（它是流格式选择器，「命令规格」）、
         一个不认识的 --quality 档位、--parts 拿到一个它认不得的句柄形状（b23.tv 短链）
    2+   传播上来的 yt-dlp / mpv / HTTP 失败（播放、resolve -j、**搜索**失败 ——
         搜索即使 yt-dlp 退出 1 也报 2，好让一次工具失败永远不会与 1 混淆）。
         --parts 的取数失败同样落在这里（网络 / 记录里没有 parts —— 一次工具失败，
         与 --info 的"取数失败退 1"不同：--parts 的失败来自它**发起的那次请求**，
-        --info 的失败来自引擎对已有取数的再解释，见 §3）。
+        --info 的失败来自引擎对已有取数的再解释，见 「数据契约」）。
         一个引擎解析不了的句柄落在**这里**，不是落在 1：播放器判断不了一个 id 的形状，
-        所以"坏 id"是一个抽取结果（ARCHITECTURE.md §6）。
+        所以"坏 id"是一个抽取结果（ARCHITECTURE.md「端到端控制流」）。
    4    --set-volume / --pause / --resume / --seek / --seek-to / --enqueue / --next /
         --stop：没有生效 —— 没有那个播放器、没有播放器、目标有歧义，或 mpv IPC 失败；
         对那两个队列动词还包括 `queue_empty`（--next 而当前曲目之后什么也没有）与
@@ -727,8 +733,8 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
         一个越界的 --index）。--del 一个不存在的播放列表是幂等的成功（0，`deleted:false`），
         跟什么也没在放时的 --stop 是同一条规则。
 
-   TTY  ：uting 要求 stdin 与 stdout **双双**是 TTY（AS-BUILT-tui.md §11）。
-          别的动词一律不需要 —— 每一个都在输入为空时报错，而不是提问（ARCHITECTURE.md §3.2/ARCHITECTURE.md §3.2）。
+   TTY  ：uting 要求 stdin 与 stdout **双双**是 TTY（AS-BUILT-tui.md）。
+          别的动词一律不需要 —— 每一个都在输入为空时报错，而不是提问（ARCHITECTURE.md「调用形状」/ARCHITECTURE.md「调用形状」）。
    依赖 ：它们现在是**按文件**分的，这正是那次拆分的意义所在 ——
           ut-play      ：要播放需要 jq + mpv；--status/--stop 只需要 jq
                          （--status 会机会性地用 nc 做那次实时读，没有 nc 就降级成
@@ -739,7 +745,7 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                          一个队列是一个文件，而 --next 是用一个**信号**够到播放器的。
                          它**不**需要 yt-dlp，也不需要 curl。
           yt-search / yt-resolve / bili-resolve ：yt-dlp + jq。curl 是 yt-resolve 的一个
-                         **可选**软依赖，用于那次 client 探测（AS-BUILT-engine.md §8.2）。
+                         **可选**软依赖，用于那次 client 探测（AS-BUILT-engine.md「先探后播」）。
           bili-search  ：curl + jq —— curl 在这里是**必须**的；它就是传输。
           uting        ：jq，加上它组合的那些动词。ut-playlist 是**可选**的 ——
                          它不在，那两个播放列表键就这么说，别的什么也不变。
@@ -749,14 +755,14 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                          uting 的 h 键只在它在时才画出来。
           BSD 的 `nc -U` 在 macOS 上是原装的；Linux 上任何带 `-U` 的变体都被接受 ——
           `netcat-openbsd` 的 nc，或 `ncat` —— 由 `resolve_nc_unix` 按能力探测
-          （ARCHITECTURE.md §26；两个都没有时只有 socket 动词拒，播放与队列不受影响）。
+          （ARCHITECTURE.md「已知约束」；两个都没有时只有 socket 动词拒，播放与队列不受影响）。
    -V   ：每一个入口点都在**任何**依赖门之前回答它，读 VERSION 并印出它自己的名字 ——
           为了知道你的版本号而需要装着 yt-dlp 是本末倒置的，
-          而八个可执行文件不能有互相矛盾的余地（ARCHITECTURE.md §4）。
+          而八个可执行文件不能有互相矛盾的余地（ARCHITECTURE.md「命令拓扑」）。
           断言是对 shell/ 下每一个有 shebang 的文件做的，不是对一份名字清单做的。
 ```
 
-## 5. 配置面
+## 配置面
 
 按次的选择是标志；一次设定的调校是环境变量或**配置文件** —— 刻意留在标志之外，
 好让每个动词的标志面保持窄。
@@ -772,7 +778,7 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
 供八个入口点共用。** 在它之前，每个默认值是各脚本内联的 `: "${KEY:=值}"`，
 于是一个跨引擎的值（`UT_MAX_SEARCH_RESULTS`）要写两遍、可以各自漂移而没有东西会发现 ——
 这次搬迁当场就抓出了两处：`UT_PLAY_MODE` 在四个脚本里不一致、`UT_SORT_FIELD` 在三个里不一致
-（根因是 `uting` 拿**轮换顺序**当**合法值域**用，见 §1.4）。
+（根因是 `uting` 拿**轮换顺序**当**合法值域**用，见 「命令规格」）。
 
 所以这个文件**不是可选的**：缺了它的 checkout 是坏的，并且会这么说 —— 一行话，退 **2**。
 **没有给 `--version` / `--help` 留后门**，那条路试过：放行之后 `set -u` 会在一百行之后
@@ -788,7 +794,7 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
 **出厂那份没有任何命令会写。用户那份由 `uting` 写回八个键** —— 见下面「写回」。
 
 **写回（八个键，只写用户那份）。** `uting` 在运行时会改八个设置，它们**就地写回用户那份
-配置**，让下一次会话从这一次停下的地方开始（一个每次会话都要重按的偏好等于没有偏好 —— ARCHITECTURE.md §3.6；重开触发器在 ROADMAP）。写回的是：
+配置**，让下一次会话从这一次停下的地方开始（一个每次会话都要重按的偏好等于没有偏好 —— ARCHITECTURE.md「两个根数据文件」；重开触发器在 ROADMAP）。写回的是：
 
 ```
    UT_DEFAULT_ENGINE   e 键切来源            UT_SORT_FIELD      o 键换排序字段
@@ -826,7 +832,7 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
   `cp -p`/`>`/`mv -f` 全部对着它做，原子性不变。这一条与 `ut-playlist` 的 temp+mv 不同，
   是因为**所有权不同**：那个存储改写的是它自己在自己目录里造的文件。
 
-**没有第九个命令，刻意的**：ARCHITECTURE.md §3.5 要求每个功能都有 agent 面，而"设一个偏好"的 agent 面
+**没有第九个命令，刻意的**：ARCHITECTURE.md「两个存储」 要求每个功能都有 agent 面，而"设一个偏好"的 agent 面
 早就存在且早就有文档 —— 就是这条链里的那个 `KEY=value` 文件本身。
 
 **格式与安全边界**：`KEY=value`，一行一个，`#` 到行尾是注释，一对匹配的引号会被剥掉，
@@ -906,7 +912,7 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                         播放器与两个 resolve 半边共用一个值。
                       UT_PLAY_QUALITY     （默认 auto；**uting 写回**）= `--quality` 的默认值。
                         auto|low|medium|high 四档；档位的含义只在引擎内部
-                        （quality_sort_for_tier，(mode, tier) → yt-dlp sort，§1.3），
+                        （quality_sort_for_tier，(mode, tier) → yt-dlp sort，「命令规格」），
                         播放器只转发档位、从不翻译它。`uting` 在启动时校验它
                         （bogus 档退 1；空值**归一成 auto** —— `f` 键要轮换这个值，
                         而一个空串谁都不匹配，第一次按下就会跳过 auto 落到第二档）。
@@ -985,17 +991,17 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                       YT_COOKIE_BROWSER   （默认 chrome = 登录开着；"none" = 只匿名）
                         —— 由每个**引擎**读，播放器从不读。变量名是**引擎名大写**加
                         `_COOKIE_BROWSER`（`YT_` / `BILI_` / …），与命令前缀同一条拼接规矩；
-                        当前生效值靠 `<engine>-resolve --auth` 问出来（§3），
+                        当前生效值靠 `<engine>-resolve --auth` 问出来（「数据契约」），
                         而不是靠调用方自己去读环境。
                       YT_AUDIO_FORMAT (ba/b)  YT_VIDEO_FORMAT (bv*+ba/b)
                       YT_VIDEO_FORMAT_FAST  —— **yt** 那张模式→格式表的值；它们跟那张表
-                        住在一起，也就是住在 yt-resolve 里。别的引擎的那张表按 §6 的
+                        住在一起，也就是住在 yt-resolve 里。别的引擎的那张表按 「加一个引擎」 的
                         前缀规矩拼自己的名字，不复用 YT_ 拼写。
                       BILI_COOKIE_BROWSER (chrome)  BILI_AUDIO_FORMAT (ba/b)
                       BILI_VIDEO_FORMAT (bv*+ba/b)  BILI_VIDEO_FORMAT_FAST
                         —— bili 引擎自己的那组，与上面 yt 组逐一对应（bili-resolve 读）。
                       BILI_UA  BILI_BUVID  —— bili-search 的 HTTP 传输旋钮
-                        （AS-BUILT-engine.md §7.1）。`BILI_UA` 的**出厂值是一个真的
+                        （AS-BUILT-engine.md「Bilibili 的传输」）。`BILI_UA` 的**出厂值是一个真的
                         浏览器 UA 串**，和别的默认值一样只声明在 `config` 里：空值不是
                         "发一个空头"，curl 对空值的语义是**根本不发这个头**。
                         `BILI_BUVID` 空是对的 —— 那一个是每进程现生成的。
@@ -1018,7 +1024,7 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                         下默认 zh，否则英文。帮助输出、错误与字段标签两种情况下
                         都保持英文。
                       YT_THEME (minimal|mono|catppuccin|tokyonight|nord|gruvbox|
-                        onedark；**uting 写回**) = uting 的配色家族（AS-BUILT-tui.md §11：
+                        onedark；**uting 写回**) = uting 的配色家族（AS-BUILT-tui.md：
                         一个强调色加一个状态色；社区主题只在 COLORTERM=truecolor 下是 24-bit 的）。
                         --theme 压过环境变量；t 键在运行时实时循环它。
                       YT_BG (auto|light|dark) = 背景模式；auto 的链条：
@@ -1032,16 +1038,16 @@ search、resolve、`--info`、`--transcript`、`-d`、`--status`、`--stop`、`-
                         未设置 = 每次启动掷一次硬币；要一帧出两次一样就钉住它。
                         `YT_ASCII=1` 整个丢掉这个槽，并压过这个旋钮。
                         不认识的值退 1。只有 `uting` 读它。
-                      YT_BRAND （=1：页眉 wordmark 用数学无衬线粗体，AS-BUILT-tui.md §11 字形一节；
+                      YT_BRAND （=1：页眉 wordmark 用数学无衬线粗体，AS-BUILT-tui.md 字形一节；
                         opt-in，ASCII 模式压过它）。
                       YT_AMBIG_WIDE （=1：East-Asian Ambiguous 那批字形（· — • … 箭头 ─ ━
                         ○ ● ▶）量成两格。只在你的终端把 ambiguous 宽度设成双宽时才需要 ——
-                        每个终端出厂都是关的（AS-BUILT-tui.md §11）。）
+                        每个终端出厂都是关的（AS-BUILT-tui.md）。）
                       NO_COLOR （=1：--color auto 渲染成朴素的；显式的 --color 压过它）。
    内部（由播放器为它自己的 detached 子进程设的，不是用户旋钮）：
                       YT_IPC_SOCK （每个播放器一个的 mpv IPC socket）  YT_DETACHED （=1：
                       没有终端，所以 mpv 安静且不过滤 stderr）  YT_PLAYER_ID （子进程把
-                      title/format 补回哪一条记录，AS-BUILT-player.md §9.1）
+                      title/format 补回哪一条记录，AS-BUILT-player.md「进程组模型」）
                       YT_DETACHED_LOG （detached mpv 的日志路径；死亡记录的分类器
                       从它尾部读）
    （颜色**模式**是 --color 这个标志，**不是**一个环境变量 —— 脚本在启动时把
@@ -1058,24 +1064,24 @@ Cookie 处理：`YT_COOKIE_BROWSER` 是按平台做存在性检查的（那个�
 可能得到一次被锁住的读，并悄无声息地降级成未认证的抽取 —— 变通办法是关掉浏览器。
 **只有引擎读它**，所以播放器没有任何 cookie 代码路径可供泄漏一份出去。
 
-## 6. 加一个引擎 —— 清单
+## 加一个引擎 —— 清单
 
 只有指针；每一项义务上面都已经陈述过一次。一个新来源 `foo` 恰好交付两个可执行文件，
-别的什么也不改（ARCHITECTURE.md §3.1）：
+别的什么也不改（ARCHITECTURE.md「八个平级动词」）：
 
-1. **`foo-search`** —— §1.2 那个面：标志 `-n -m -M -s -l -j -J --color -h -V`，
-   一个 QUERY 位置参数（拒绝 URL，`--` 之后重新检查），§3 那个搜索信封且
-   `engine:"foo"`，错误按 §3 且退出 2+（§4）。**每一行还要算出 `kind` 与 `access`**
-   （§3 的两问、封闭枚举、`-j` 与 `-J` 都要；没有信号就如实印默认值，不猜），
+1. **`foo-search`** —— 「命令规格」 那个面：标志 `-n -m -M -s -l -j -J --color -h -V`，
+   一个 QUERY 位置参数（拒绝 URL，`--` 之后重新检查），「数据契约」 那个搜索信封且
+   `engine:"foo"`，错误按 「数据契约」 且退出 2+（「退出码」）。**每一行还要算出 `kind` 与 `access`**
+   （「数据契约」 的两问、封闭枚举、`-j` 与 `-J` 都要；没有信号就如实印默认值，不猜），
    并且**不把 `url` 建不出来的记录放进信封**。
-2. **`foo-resolve`** —— §1.3 那个面：标志 `-f -S -l -j -J --color -h -V`
-   加上**仅仅**这个站点支持的那些动词（§1.3：以"有没有"声明能力）；`-f` 只收那五个
-   规范模式 —— 别名是 `ut-play` 的（§1.3）；§3 那个解析信封
+2. **`foo-resolve`** —— 「命令规格」 那个面：标志 `-f -S -l -j -J --color -h -V`
+   加上**仅仅**这个站点支持的那些动词（「命令规格」：以"有没有"声明能力）；`-f` 只收那五个
+   规范模式 —— 别名是 `ut-play` 的（「命令规格」）；「数据契约」 那个解析信封
    （`stream_urls[]` 视频在前、`http_headers{}` 必需且不含凭据、`format` 不透明、
    `selected`/`selected_resolution` 是提取器**挑中**的那一个而不是请求的回声、`retried`、
    **`start_seconds`**）；
-   一份显式的本站 host 白名单 —— 一个非本站的 URL 或一个畸形的 id 是用法错误，退出 1（§3）。
-3. **`start_seconds`（§3）—— 先量，再决定写不写解析代码。** 第一步是跑一次
+   一份显式的本站 host 白名单 —— 一个非本站的 URL 或一个畸形的 id 是用法错误，退出 1（「数据契约」）。
+3. **`start_seconds`（「数据契约」）—— 先量，再决定写不写解析代码。** 第一步是跑一次
    `yt-dlp -J '<一个带时间戳的本站 URL>' | jq .start_time`。**有值就白拿**：读它，
    归一成 `null` / 非负整数秒即可（`yt-resolve` 就是这样，YouTube 的十种写法一行解析代码都没写）。
    **没有就自己解**，在 `normalize_target` 里、任何网络请求之前，只认这个站**实测存在**的写法
@@ -1083,20 +1089,20 @@ Cookie 处理：`YT_COOKIE_BROWSER` 是按平台做存在性检查的（那个�
    本站根本没有时间戳语法就恒填 `null` —— 那是合法状态，不是缺口。
    同时检查这个站的 `webpage_url` 会不会把偏移带进 `url`；会的话就剥掉它，且**只剥它**。
 4. **`foo-resolve --auth`** —— cookie 决定读自 `FOO_COOKIE_BROWSER`（引擎名大写，
-   §5），信封按 §3，且 `auth=="cookie"` 与 `cookie_browser != "none" and profile_found`
+   「配置面」），信封按 「数据契约」，且 `auth=="cookie"` 与 `cookie_browser != "none" and profile_found`
    等价。不吃位置参数，拒 `-f`/`-S`/`-J`，在依赖门之前作答。
    `tests/contract.sh` 把这几条当作对**每一个被发现的**引擎的不变量来断言，
    所以第三个引擎落地那天它就被覆盖了 —— 不是等谁想起来去加一行。
 5. **旋钮前缀：** 引擎自己的调校一律读 `FOO_*`（引擎名大写 —— cookie、格式、传输，
-   同一条规矩；§5 里 `BILI_*` 那族就是样子）。`UT_*` 是套件级的（`UT_STATE_DIR`、
+   同一条规矩；「配置面」 里 `BILI_*` 那族就是样子）。`UT_*` 是套件级的（`UT_STATE_DIR`、
    `UT_DEFAULT_ENGINE`、`UT_HISTORY`），引擎不得新增；`YT_*` 是 yt 引擎自己的前缀，
-   外加那批冻结的遗留套件级名字（§5 结尾）—— 它不是模板。
+   外加那批冻结的遗留套件级名字（「配置面」 结尾）—— 它不是模板。
 6. **两半都要：** `ENGINE_NAME` 从一个常量印出来；每一个信封（包括错误）里都有 `status` 与
-   `engine`；一个信封一行（§3）；`-V` 在任何依赖门之前回答（§4）；
-   门把跨界标志指向正确的动词（§2）。
+   `engine`；一个信封一行（「数据契约」）；`-V` 在任何依赖门之前回答（「退出码」）；
+   门把跨界标志指向正确的动词（「门模型」）。
 7. **别的什么也没有：** 没有播放，没有生命周期，不写 `players/` —— 播放器靠名字找到
-   `foo-resolve`（§1.1），而 `uting` 靠在 PATH 上和自己旁边扫描 `foo-search` + `foo-resolve`
-   这一对来发现它（AS-BUILT-tui.md §11）。
+   `foo-resolve`（「命令规格」），而 `uting` 靠在 PATH 上和自己旁边扫描 `foo-search` + `foo-resolve`
+   这一对来发现它（AS-BUILT-tui.md）。
 
 引擎按动词自己挑传输（curl 或 yt-dlp 或别的任何东西）—— 接缝是信封，不是它背后的工具
-（ARCHITECTURE.md §3.4）。
+（ARCHITECTURE.md「站点知识的边界」）。
