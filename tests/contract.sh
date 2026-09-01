@@ -676,7 +676,7 @@ report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcrip
 # exists on one engine and must never appear on the other.
 #
 # THE PAIR IS ALSO THE FEASIBILITY PROOF for how `uting` will probe an engine for the verb
-# without spending a request (AS-BUILT-engine.md「--parts」): it invokes `--parts` with NO
+# without spending a request (AS-BUILT-engine.md「接口」): it invokes `--parts` with NO
 # handle. The engine that has the verb answers with a usage error about the missing handle;
 # the engine that
 # does not falls into the unknown-flag arm every gate in this suite shares
