@@ -18,18 +18,23 @@
 #
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md「可移植性契约」.
 #
-# Cost, measured 2026-08-29 and broken down because a number at the door is what a reader
-# decides on: ~95s in full, of which the live half is ~78s (roughly 21 engine round trips) and
-# the tmux section is ~16s of that — it was 4s until the write-back checks landed, and the 12
-# is two re-fetches its own keys ask for. `--offline` stops before the first of them: ~16s,
-# 191 of the 263 checks, no packet sent. That 15 is dominated by one deliberate 5.5s lock
-# spin — a FRESH held lock has to be waited out, that being what the spin is for; the
-# stale-lock steal beside it costs 0.1s
-# because staleness is tested before the spin, not after (shell/ut-playlist:lock_playlist).
+# Cost, measured 2026-09-01 and broken down because a number at the door is what a reader
+# decides on: ~55s in full (two runs minutes apart came back 55s and 63s — the live half is
+# roughly 21 engine round trips and the spread is the sites'), of which `--offline` is the
+# first ~20s: 207 of the 305 checks, no packet sent. That 20 is dominated by one deliberate
+# 5.5s lock spin — a FRESH held lock has to be waited out, that being what the spin is for;
+# the stale-lock steal beside it costs 0.1s because staleness is tested before the spin, not
+# after (shell/ut-playlist:lock_playlist).
 #
-# Three of those numbers were wrong here for a while — the file claimed ~80s, "one 5s lock
-# spin" where three were paid, and "~25s of tmux" for 4s of it — which is its own lesson: a
-# cost comment is a claim, and this file's rule is that a claim gets executed, not read.
+# Per-SECTION figures are deliberately absent: this file's output is block-buffered the moment
+# it is piped or redirected, so timestamping its section headers dates the flush, not the work.
+# The two totals above are wall-clock around the whole command, which is the only shape of
+# this measurement that survives being taken.
+#
+# Numbers in this paragraph have been wrong before, three at once — ~80s for the full run,
+# "one 5s lock spin" where three were paid, "~25s of tmux" for 4s of it — which is its own
+# lesson: a cost comment is a claim, and this file's rule is that a claim gets executed, not
+# read.
 # It starts no process it did not have to and talks to no peer — every live claim is
 # tests/playback.sh's.
 # The TUI section is the near-exception and is held to the same line: the process there is a
@@ -846,6 +851,46 @@ done
 [ "$_ro_n" -ge 6 ] ||
     { echo "contract.sh: fewer than six read-only verb x format-flag cases discovered" >&2; exit 1; }
 report "every read-only resolve verb refuses a format flag" "$_ro_n" "$_ro"
+
+# THE OTHER HALF OF THAT PRODUCT: with no bad flag beside it, each read-only verb must be
+# ACCEPTED. What comes back is still a refusal — the handle belongs to no engine — but it has
+# to be the HOST gate's refusal, and that is the claim: the verb parsed, the argv cleared the
+# flag gate, and only the site was wrong.
+#
+# It exists because AS-BUILT-engine.md「调用面」 prints these exact argv as the way to CALL an
+# engine, and nothing held them. `-j` ahead of the verb, `--` before the handle, a companion
+# flag in its documented place — reorder any of it and the example goes silently wrong, because
+# an absent verb and a refused host both exit 1 and a caller reading the number cannot tell
+# which happened. The check above cannot cover this: it hands every verb a BAD flag, so it
+# proves the flag gate fires, never that the clean line the doc prints gets through it.
+#
+# The message is the discriminator, and it is the host gate's own sentence — engine-agnostic on
+# purpose, so engine #3's copy matches it the day the pair lands. An engine that does not accept
+# the verb answers `unknown flag '<verb>' (resolve flags: …)` and goes red here while its exit
+# code stays exactly 1.
+#
+# What neither check catches, stated so nobody reads more into the count: a verb DELETED from
+# one engine. Discovery adapts — the case simply stops being generated — and pinning it would
+# need the per-engine table of who owns what that this section exists to do without. The floor
+# below catches the collapse, not the retreat.
+_ro_host=0
+_ro_host_n=0
+for n in $ENGINES; do
+    for _v in --info --transcript --parts; do
+        _ro_verb_has "$n" "$_v" || continue
+        # The companion flag rides along where the documented line has one. --sub-lang is
+        # --transcript's and nothing else's, and a check that drops it is not running the example.
+        case "$_v" in --transcript) _with="--sub-lang zh-Hans" ;; *) _with="" ;; esac
+        _ro_host_n=$((_ro_host_n + 1))
+        [ "$(err_has "needs its own engine" "shell/$n-resolve" -j $_v $_with -- "$VIZ_URL")" = 0 ] &&
+            _ro_host=$((_ro_host + 1))
+    done
+done
+# >= NENG, not a literal: --info is the verb EVERY engine has, so one case per discovered
+# engine is the floor and engine #3 raises it.
+[ "$_ro_host_n" -ge "$NENG" ] ||
+    { echo "contract.sh: read-only verbs discovered for fewer than $NENG engines" >&2; exit 1; }
+report "every read-only verb reaches the host gate" "$_ro_host_n" "$_ro_host"
 
 # --auth: the cookie DECISION, stated over every discovered engine. It is the one resolve
 # verb that takes no handle, makes no request and runs no yt-dlp, so all four of those are

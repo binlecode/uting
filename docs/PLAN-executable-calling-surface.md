@@ -2,7 +2,7 @@
 
 **实现的 roadmap 条目：** `ROADMAP.md`「还没做的事」→ **让「调用面」里的示例真的被执行**。
 
-**状态：** 未开工。前一个单元（「调用面」段本身）已落地并提交，见下面「已落地的前置」。
+**状态：** §1 已落地（2026-09-01）。§2 / §3 / §4 未开工。前一个单元（「调用面」段本身）已落地并提交，见下面「已落地的前置」。
 
 ---
 
@@ -31,7 +31,7 @@ prose 立刻变成假的，没有任何检查发现，是事后 grep 全树抓�
 
 ## 逐项
 
-### 1. engine —— 三个只读动词的门（离线）
+### 1. engine —— 三个只读动词的门（离线） · **已落地**
 
 `AS-BUILT-engine.md`「调用面」的示例里，这几条不需要网络，因为门在 host 门之前答：
 
@@ -42,7 +42,27 @@ prose 立刻变成假的，没有任何检查发现，是事后 grep 全树抓�
 - `bili-resolve --parts -j -- <同上>` —— 同理，且 `--parts needs no yt-dlp` 已有检查。
 
 **done_when：** 每条示例的 argv 都被某条检查原样执行过一次；新增的断言是**文案**而不是
-退出码（这三条都退 1）。
+退出码（这三条都退 1）。**已达成：**
+
+- 新检查 `every read-only verb reaches the host gate`：跟在只读动词 × 格式 flag 那条乘积后面，
+  复用它的 `_ro_verb_has` 发现与同一个无人认领的句柄，按文档那行的 argv（`-j` 在动词前、
+  `--` 在句柄前）跑，断言报回来的是 host 门那句 `needs its own engine`。**4 例**
+  （yt 的 `--info`/`--transcript`、bili 的 `--info`/`--parts`），下限写成 `>= NENG` 而不是字面量。
+- 顺带收进**第四个**只读动词 `--transcript` 与它的伴随 flag `--sub-lang zh-Hans` —— 同一个循环，
+  白拿，而且文档那行本来就带着它。
+- 判别输入（不改任何在产文件）：`yt-resolve -j --parts -- <无人认领>` 报的是
+  `unknown flag`，**退的同样是 1**，文案不匹配即红 —— 所以钉的是文案不是退出码。
+- `--auth` 那行改的是**文档**（`-j --auth` → `--auth -j`），与既有检查
+  `every engine answers --auth -j` 实际跑的 argv 对齐，方向按上面「边界」那条。
+- 两条检查都盖不住的事，已在注释里写明：某个引擎**删掉**一个动词 —— 发现会跟着适配，
+  要钉它得有一张"谁有哪个动词"的表，而这一节存在的目的就是不要那张表。
+- 文档那三条要真解析的行（`-f audio`、`--quality high`、`-S`）按「边界」留在 prose 里，
+  标**「实测」**（2026-09-01 手跑验过，三条都 status ok）而不是「已证」。
+- 顺手 resync 了 `contract.sh` 开头那段成本声明（它自己的规矩是"claim 要跑不是读"）：
+  ~55s / ~20s、207 of 305，并写明为什么这里不给分节数字（管道一接输出就块缓冲，
+  给 section header 打时间戳量的是 flush 不是活）。
+
+`contract.sh --offline` **207 ok / 0 failed**；完整 **305 ok / 0 failed**。
 
 ### 2. contract —— 三种 stdin 形状的整条管道（离线）
 
@@ -91,7 +111,7 @@ ut-history --ls -n N -j           | ut-playlist --add NAME     # 离线
 
 | 项 | 怎么证 | 在哪 |
 |---|---|---|
-| 1 engine 只读动词的门 | 真调用 + 文案断言 | `contract.sh` 离线段 |
+| 1 engine 只读动词的门 **已落地** | 真调用 + 文案断言 | `contract.sh` 离线段，4 例 |
 | 2 三种 stdin 形状的管道 | 固定信封 + 一次性 `UT_STATE_DIR` | `contract.sh` 离线段 |
 | 3 viz 的 flag 组合过门 | 文案断言（不是这三个 flag 报的错） | `contract.sh` 离线段 |
 | 4 两道门的顺序 | 同一 stdin，两个 `-f`，两种文案 | `contract.sh` 离线段 |
@@ -116,12 +136,10 @@ c472dd8 docs: 接口 becomes 接口与 API and takes the calling surface
 
 ## 交接时的未结项（不属于本单元）
 
-- **push 门当时过不去。** 完整 `tests/contract.sh` 是 **300 ok / 2 failed**，两条红都是
-  `bili --parts`（`bili --parts envelope`、`one part is still a list`），原因是 Bilibili 的
-  `view` 端点回 **HTTP 412**（直接 curl 复现，四次重试跨约 5 分钟都是 412；同一台主机的
-  `bili-search` 端点正常）。`shell/bili-resolve` 与 `shell/bili-search` 与 HEAD 逐字节相同，
-  所以不是回归。**下一个 session 的第一件事：重跑完整 `tests/contract.sh`。** 若仍是 412，
-  它是环境而非代码；若变成别的红，那就是真回归。
-- 当时 worktree 里还有三处**不属于这批工作**的未提交改动：`README.md`、`shell/uting`、
-  `docs/AS-BUILT-tui.md` 里那段双 rail / 章节视图。它们是同一时间另一条线的在飞工作，
-  刻意没有动 —— 提交时用过滤后的 patch `git apply --cached` 只入了本批的 hunk。
+- ~~push 门当时过不去~~ **已结（2026-09-01）。** 那两条红（`bili --parts envelope`、
+  `one part is still a list`）不是回归，但也不只是环境：`x/web-interface/view` 从两个网络、
+  每一种 header/cookie 组合都回 412。已由 `7b39373` 关掉 —— `--parts` 在 view 被拒后退到
+  `x/player/pagelist`。完整 `tests/contract.sh` 现在 **304 ok / 0 failed**，push 门通。
+- worktree 里仍有三处**不属于本单元**的未提交改动：`README.md`、`shell/uting`、
+  `docs/AS-BUILT-tui.md` 里那段双 rail / 章节视图。它们是另一条线的在飞工作，不要动 ——
+  提交本单元时用过滤后的 patch `git apply --cached` 只入本批的 hunk。

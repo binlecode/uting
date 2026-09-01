@@ -33,19 +33,25 @@ mpv 选项集旁边（`AS-BUILT-player.md`「模式 → 格式 → mpv」）。
 ### 调用面 —— 选项的乘积
 
 `usage()` 逐个说明每个 flag，对**它们的乘积**没有说：哪些能同时给、哪些在门口就被拒。
-下面每一条都对应 `tests/contract.sh` 里的一条检查。
+下面这些行不是示意：标**「已证」**的每一条，`tests/contract.sh` 都以同样的 flag、同样的顺序真的
+跑过一遍（句柄与查询词是检查自己的）—— 所以 flag 拼错、参数换序、某个组合以后不再合法，都会先红。标**「实测」**的三条要一次真解析，
+套件不测网络路径，它们是手跑验过的（2026-09-01），没有检查兜着。
 
 ```sh
-yt-search   -j -n 5 -- "lofi hip hop"              # 查询 → 结果信封
-bili-search -j -n 5 -- "周杰伦"                     # 同一个信封，底下是 curl 不是 yt-dlp
-yt-resolve  -j -f audio -- <11 位 id | URL>         # 句柄 → 流 URL + headers
-yt-resolve  -j -f video --quality high -- URL      # (mode, tier) → format-sort 在这里翻译
-yt-resolve  -j -f video -S 'res:720,fps' -- URL    # -S 覆盖 tier
-yt-resolve  -j --info -- URL                       # 只要元数据，什么都不解析
-yt-resolve  -j --transcript --sub-lang zh-Hans -- URL   # yt 独有
-bili-resolve -j --parts -- BV1…                    # bili 独有，一次 HTTP，不经 yt-dlp
-yt-resolve  -j --auth                              # cookie 决策：无句柄、无请求、无 yt-dlp
+yt-search   -j -n 5 -- "lofi hip hop"              # 已证 · 查询 → 结果信封
+bili-search -j -n 5 -- "周杰伦"                     # 已证 · 同一个信封，底下是 curl 不是 yt-dlp
+yt-resolve  -j -f audio -- <11 位 id | URL>         # 实测 · 句柄 → 流 URL + headers
+yt-resolve  -j -f video --quality high -- URL      # 实测 · (mode, tier) → format-sort 在这里翻译
+yt-resolve  -j -f video -S 'res:720,fps' -- URL    # 实测 · -S 覆盖 tier
+yt-resolve  -j --info -- URL                       # 已证 · 只要元数据，什么都不解析
+yt-resolve  -j --transcript --sub-lang zh-Hans -- URL   # 已证 · yt 独有
+bili-resolve -j --parts -- BV1…                    # 已证 · bili 独有，一次 HTTP，不经 yt-dlp
+yt-resolve  --auth -j                              # 已证 · cookie 决策：无句柄、无请求、无 yt-dlp
 ```
+
+守着那四条只读动词的是 `every read-only verb reaches the host gate`：给一个没有引擎认领的句柄，
+报回来的必须是 host 门那句话，不是 `unknown flag` —— 两种错法退的都是 1，所以钉的是**文案**。
+`--sub-lang` 跟着 `--transcript` 一起给，因为上面那行就是这么写的。
 
 **被拒的组合**，全部退 1（用法错误），而且**都在网络之前**——flag 门比 host 门先答，所以
 这些检查一个包都不发：
