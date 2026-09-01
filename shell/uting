@@ -2135,6 +2135,58 @@ wrap_print() {
     fi
 }
 
+# The playhead INSIDE one chapter, as a percent, or empty for "draw no bar" — the same
+# vocabulary PT_PCT speaks, so the details rail can be drawn by the same render_prog_bar the
+# chrome rail is. The two rails then describe the same instant on two different clocks, on
+# purpose: the one above the rows is the ITEM's timeline (where the track is), the one under
+# them is the SELECTED chapter's (how far through this span the track is). A chapter list
+# whose second rail carried the item's percent would spend a whole line restating a number
+# three lines up.
+#
+# Clamped rather than blanked outside the span: a chapter the playhead has passed IS fully
+# played and one it has not reached is not started, both of which are true, and the clamp is
+# what keeps the line a fixed shape as the selection moves down the table. Empty is reserved
+# for the questions this cannot answer — nothing playing, a live stream, no reading yet, a
+# DIFFERENT item in the player, or a chapter whose engine published no end — and then the
+# rail stays the static divider, exactly as the chrome rail does when PT_PCT is empty.
+#
+# The END comes out of the item's own chapter table BY START, not by row index: the live
+# filter and paging reorder the rows (the reason chapter_sec reads the offset back out of the
+# row's own url), while ITEM_CHAP_* is the whole table as the engine published it — and the
+# row's `duration` never reaches the row arrays, only its wire spelling does, so reading the
+# end here costs no second parser of a format short_dur already owns.
+CHAP_PCT=""
+chapter_pct() {
+    local i=$1 start end cur j
+    CHAP_PCT=""
+    [[ "$LIST_SOURCE" == "chapters" ]] || return 0
+    [[ -n "$CURRENT_PLAY_ID" && -n "$PT_POS_SEC" ]] || return 0
+    # if-form, not an AND-list: house rule for an arithmetic test (see player_check_ready).
+    if ((CURRENT_PLAY_IS_LIVE)); then return 0; fi
+    chapter_sec "${urls[$i]}" || return 0
+    start=$CHAP_SEC
+    # "The player holds THIS item" — the {engine, url} pair, asked exactly as play_chapter
+    # asks it before it decides between a seek and a launch. A percent measured against
+    # another video's clock is not a smaller error than no percent at all.
+    handle_key "$CURRENT_PLAY_URL"; cur="$HANDLE_KEY"
+    handle_key "${urls[$i]}"
+    [[ -n "$cur" && "$cur" == "$HANDLE_KEY" ]] || return 0
+    [[ "${R_ENGINE[$i]:-}" == "$CURRENT_PLAY_ENGINE" ]] || return 0
+    end=""
+    for ((j = 0; j < ITEM_CHAP_N; j++)); do
+        if [[ "${ITEM_CHAP_SEC[$j]}" == "$start" ]]; then
+            end="${ITEM_CHAP_END[$j]:-}"
+            break
+        fi
+    done
+    [[ -n "$end" ]] || return 0
+    if ((end <= start)); then return 0; fi
+    if ((PT_POS_SEC <= start)); then CHAP_PCT=0; return 0; fi
+    if ((PT_POS_SEC >= end)); then CHAP_PCT=100; return 0; fi
+    CHAP_PCT=$(((PT_POS_SEC - start) * 100 / (end - start)))
+    return 0
+}
+
 # print_details <width> <index> — the details section under the list: a rail, the FULL
 # title wrapped over as many lines as it needs, and one dim metadata line. This is the half
 # of a result a single row cannot show: the rows spend their width on titles and a duration
@@ -2169,8 +2221,18 @@ print_details() {
             views=""
         fi
     fi
-    card_divider "$width"
-    ((DETAIL_MEASURE)) || printf '%s%s%s\033[K\n' "$C_CYAN" "$DIV_STR" "$C_RESET"
+    # The rail — and while the player is inside THIS chapter it is a live one: chapter_pct
+    # answers in PT_PCT's vocabulary and render_prog_bar draws it at exactly the width the
+    # divider it replaces would have taken, so the line never changes shape. Every other row
+    # source, and every moment the chapter percent cannot be had, keeps the static divider.
+    chapter_pct "$i"
+    if [[ -n "$CHAP_PCT" ]]; then
+        render_prog_bar "$CHAP_PCT" "$width"
+        ((DETAIL_MEASURE)) || printf '%s%s%s\033[K\n' "$C_CYAN" "$PROG_BAR" "$C_RESET"
+    else
+        card_divider "$width"
+        ((DETAIL_MEASURE)) || printf '%s%s%s\033[K\n' "$C_CYAN" "$DIV_STR" "$C_RESET"
+    fi
     DETAIL_LINES=1
     # The same clean-ed title the row measured, so a row and its details cannot disagree
     # about what the video is called.
@@ -4300,6 +4362,14 @@ open_chapters() {
     selected=0
     page_index=1
     load_rows "$ALL_ROWS"
+    # The view opens ON the chapter that is playing, when the player holds this item — the
+    # same rule chapter_follow enforces from then on, applied once at the door rather than
+    # waited a tick for. Row 1 with the track in chapter 9 is the frozen-view symptom in its
+    # opening frame, and it also parks the cursor where no boundary crossing can reach it.
+    # The anchor is reset HERE, not in chapter_follow's guard: this function is the one place
+    # a chapter list begins, so re-opening the same item cannot inherit the last visit's.
+    CHAP_FOLLOW_SEC=""
+    chapter_follow
     return 0
 }
 
@@ -4322,6 +4392,75 @@ play_chapter() {
         fi
     fi
     play_selected
+}
+
+# The other half of the chapter rail: the CURSOR follows the playhead over a chapter boundary.
+# Without it the second rail is a bar that fills once and then stops — a chapter that ended
+# stays selected, clamps at 100%, and the chapter now playing has nothing on screen at all,
+# which reads as a frozen view rather than as the "selected chapter" the rail is documented to
+# draw (chapter_pct). The rail is right either way; what was missing is that the selection is
+# the thing the item's own clock moves.
+#
+# Follow, not jump: the user's cursor wins the moment they use it. CHAP_FOLLOW_SEC remembers
+# which chapter the playhead was in at the last look, and the selection is moved only when it
+# is still parked on THAT one — browse two chapters down while the track plays and nothing is
+# taken away from you. Held as the start SECOND, never as an index, for the reason chapter_sec
+# exists: the live filter and paging reorder the rows, and an index would point at a different
+# chapter one keystroke later.
+#
+# Anchored on ITEM_URL/ITEM_ENGINE rather than on the selected row, because the question is
+# about the VIEW — every row here is an offset into one item — and the answer must not change
+# as the cursor moves. It is otherwise the same {engine, url} pair chapter_pct and play_chapter
+# ask, so all three agree on what "the player holds this item" means.
+#
+# Called from the menu loop ahead of the page clamp, so page_index is set HERE: a selection the
+# loop then clamps back into the old page is a selection that did not move. The derivation is
+# display_menu's own (`selected / PAGE_SIZE + 1`) — a chapter list long enough to page follows
+# across the page break too.
+CHAP_FOLLOW_SEC=""
+chapter_follow() {
+    local i j sec="" cur
+    [[ "$LIST_SOURCE" == "chapters" ]] || return 0
+    [[ -n "$CURRENT_PLAY_ID" && -n "$PT_POS_SEC" ]] || return 0
+    # if-form, not an AND-list: house rule for an arithmetic test (see player_check_ready).
+    if ((CURRENT_PLAY_IS_LIVE)); then return 0; fi
+    ((ITEM_CHAP_N > 0 && NUM_ENTRIES > 0)) || return 0
+    handle_key "$CURRENT_PLAY_URL"; cur="$HANDLE_KEY"
+    handle_key "$ITEM_URL"
+    [[ -n "$cur" && "$cur" == "$HANDLE_KEY" ]] || return 0
+    [[ "$CURRENT_PLAY_ENGINE" == "$ITEM_ENGINE" ]] || return 0
+    # Where the playhead is: the LAST start at or before it. The table is the engine's own
+    # order, so the walk stops at the first start in the future — and a position before the
+    # first chapter (an engine whose table does not begin at 0) leaves sec empty, which is
+    # "no answer" and not chapter 1.
+    for ((j = 0; j < ITEM_CHAP_N; j++)); do
+        ((${ITEM_CHAP_SEC[$j]} <= PT_POS_SEC)) || break
+        sec="${ITEM_CHAP_SEC[$j]}"
+    done
+    [[ -n "$sec" ]] || return 0
+    [[ "$sec" != "$CHAP_FOLLOW_SEC" ]] || return 0
+    # A boundary was crossed. Whether or not the cursor comes along, the new chapter is what
+    # the next crossing is measured against — a user who wandered off must not be dragged back
+    # by the crossing after this one.
+    if [[ -n "$CHAP_FOLLOW_SEC" ]]; then
+        if ! chapter_sec "${urls[$selected]}" || [[ "$CHAP_SEC" != "$CHAP_FOLLOW_SEC" ]]; then
+            CHAP_FOLLOW_SEC="$sec"
+            return 0
+        fi
+    fi
+    CHAP_FOLLOW_SEC="$sec"
+    for ((i = 0; i < NUM_ENTRIES; i++)); do
+        chapter_sec "${urls[$i]}" || continue
+        if [[ "$CHAP_SEC" == "$sec" ]]; then
+            selected=$i
+            page_index=$(( i / PAGE_SIZE + 1 ))
+            return 0
+        fi
+    done
+    # The row is not on screen — a live filter is up and it does not match. The cursor stays
+    # where the user left it; the line above already moved the anchor, so the filter being
+    # cleared later resumes the follow from wherever the playhead is by then.
+    return 0
 }
 
 # The fetch behind `i`: one `--info`, one single-slot cache, one set of ITEM_* fields. It is
@@ -4679,6 +4818,12 @@ filter_live() {
         # cap and all.
         check_player_alive
         player_check_ready
+        # Third half, same reason: a chapter list is still a chapter list with / open, and a
+        # rail that stopped following the playhead for the length of a filter session is the
+        # same frozen view the key was pressed to search out of. The cursor still only moves
+        # when it is parked on the chapter that was playing — and a filter that hides the new
+        # one simply leaves it where it is (chapter_follow).
+        chapter_follow
         display_menu "$page_index"
         read_nav_input || continue
         case "$READ_NAV_KEY" in
@@ -5067,6 +5212,7 @@ tty_echo_off
 while true; do
     check_player_alive   # a player that ended or crashed must not keep its banner
     player_check_ready   # …and one that has not started yet must not claim it is playing
+    chapter_follow       # …and a chapter list must move with the playhead, not with the keys
     page_min=$(( (page_index - 1) * PAGE_SIZE ))
     page_max=$(( page_min + PAGE_SIZE - 1 ))
     if ((selected < page_min)); then selected=$page_min; fi

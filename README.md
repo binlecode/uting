@@ -231,7 +231,13 @@ an offset inside the file that is open needs no second resolve. An item with no 
 so and stays where it is. A chapter is a SPAN, so its rail prints one — `0:00 → 2:30`, in the
 column a search row uses for how long it is; the length that implies is also what `a` stores
 and `+` queues. Both times are right-aligned in a field sized over the whole table, so the
-arrow is a column and stays one as you page. The header names the source, so it reads `chapters='<the item>'`.
+arrow is a column and stays one as you page. While that item is playing, the two rails read
+two different clocks: the one above the rows stays the ITEM's timeline, and the one under them
+becomes the SELECTED chapter's own progress — filled for a chapter the playhead has passed,
+empty for one it has not reached. The view opens on the chapter that is playing and the cursor
+follows it over each boundary, so the bar under the rows is always the chapter you are hearing
+— until you move the cursor yourself, and then it stays where you put it. The header names the
+source, so it reads `chapters='<the item>'`.
 `h` asks for no name — the log is one thing — and shows the 50 newest listenings. `d` is the
 mirror: it is drawn only with a **playlist** on screen, because a search result is a row of
 nothing and the log has no per-row removal to call. It names the track and defaults to no.
