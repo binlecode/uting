@@ -2631,6 +2631,19 @@ fi
 if ((DETACH)) && [[ "$PLAYBACK_MODE" == "ascii" || "$PLAYBACK_MODE" == "viz" ]]; then
     die "-d/--detach cannot use -f $PLAYBACK_MODE: a detached player has no terminal to render into (use audio, video, or fast)"
 fi
+# …and the same impossibility from the OUTPUT side, which used to be the one arm missing.
+# play_url_json captures the player's whole stdout into a temp file so it can emit exactly one
+# JSON line, and tct's escape stream is stdout — so -f viz -j ran the track to its end and drew
+# nothing, answering with an envelope that looked like a success. That was the suite's only
+# silent trap: a caller (an agent especially) got no exit code, no message, and no picture, and
+# so had no way to learn it had asked for something that cannot work. Documented in
+# AS-BUILT-player.md as 「实测」 precisely because a trap that does not refuse cannot be checked;
+# refusing it is what makes it provable. Guarded on the PLAYBACK path only — with a lifecycle
+# verb, -f is not drawing anything and -j is the normal way to read the answer.
+if [[ "$OUTPUT_MODE" == "json" && -z "$ACTION" ]] &&
+    [[ "$PLAYBACK_MODE" == "ascii" || "$PLAYBACK_MODE" == "viz" ]]; then
+    die "-j cannot use -f $PLAYBACK_MODE: the JSON envelope captures stdout, which is where the picture is drawn (drop -j, or use audio, video, or fast)"
+fi
 
 # --queue turns a LAUNCH into a queued launch: the handles come from stdin, and the first
 # item is what this player starts on. Read here, before the handle rules below, because

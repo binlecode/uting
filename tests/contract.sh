@@ -22,7 +22,7 @@
 # Cost, measured 2026-09-01 and broken down because a number at the door is what a reader
 # decides on: ~55-65s in full (runs minutes apart came back 55s, 60s, 63s and 64s — the live half is
 # roughly 21 engine round trips and the spread is the sites'), of which `--offline` is the
-# first ~20s: 220 of the 318 checks, no packet sent. That 20 is dominated by one deliberate
+# first ~20s: 222 of the 320 checks, no packet sent. That 20 is dominated by one deliberate
 # 5.5s lock spin — a FRESH held lock has to be waited out, that being what the spin is for;
 # the stale-lock steal beside it costs 0.1s because staleness is tested before the spin, not
 # after (shell/ut-playlist:lock_playlist).
@@ -835,6 +835,17 @@ report "…and --engine bili keeps it"  yes "$(viz_reaches_engine bili shell/ut-
 for _m in ascii viz; do
     report "-d refuses -f $_m" 1 "$(rc shell/ut-play -d -f "$_m" -- "$VIZ_URL")"
     report "--queue refuses -f $_m" 1 "$(rc_in '[]' shell/ut-play -f "$_m" --queue - )"
+    # The third arm, and it was missing until 2026-09-01: -j captures the player's whole
+    # stdout to emit one envelope, and stdout is where tct draws — so `-f viz -j` used to be
+    # ACCEPTED, run the track to its end, and answer with a success-shaped envelope having
+    # drawn nothing. The suite's only silent trap, and silent is why it had no check: an
+    # unresolvable handle under -j also exits 1, so the exit code cannot separate "refused the
+    # combination" from "could not resolve". The claim is the MESSAGE, like both siblings.
+    case "$(shell/ut-play -j -f "$_m" -- "$VIZ_URL" </dev/null 2>&1 || true)" in
+    *"-j cannot use -f $_m"*) _jhit=yes ;;
+    *) _jhit=no ;;
+    esac
+    report "-j refuses -f $_m" yes "$_jhit"
     # The TUI states the same impossibility from its own side — its playback IS detached, so
     # the mode could never reach a terminal — and there the claim has to be the MESSAGE: the
     # TTY gate a few lines further into `uting` also exits 1, so an exit code cannot separate
