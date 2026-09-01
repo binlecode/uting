@@ -94,14 +94,6 @@
   语义唯一的家，但条目里转述的默认值与 `config` 是同一个数字的两份事实。把语义搬进 `config`
   注释、剪掉那些转述。前置：无。
 
-- **让「调用面」里的示例真的被执行。** 四个 as-built 的「调用面」段（2026-09-01 落地）里，
-  **被拒的组合**每一条都有 `tests/contract.sh` 的检查兜底，但**可跑的调用**那几行没有任何东西
-  兜底 —— flag 拼错、参数换序、某个组合以后不再合法，它们会一直静静地错着。同一个 session 里
-  就有反例：代码一改，四句指着老实现的 prose 立刻变成假的，是事后 grep 全树才抓到的。
-  离线跑得通的那部分（`--info` / `--auth` / `--parts` 的门、`ut-playlist` 与 `ut-history`
-  的整条管道）应该真的执行一遍；要网络的那几条留在 prose 里，并且照 `AS-BUILT-player.md`
-  的做法标「实测」而不是「已证」。前置：无。展开在 `PLAN-executable-calling-surface.md`。
-
 - **非 UTF-8 locale 下 `-f viz` 画不出来。** `ut-play` 不读 `YT_ASCII`（那是 `uting` 的
   chrome 开关），而 `--vo=tct` 画的是 `▄`。降级路径**不是** `--vo-tct-algo=plain`（见上面
   那条 NO），所以这条今天是开着的：要么 viz 在那种 locale 下自己拒绝并说清楚，要么画布与
