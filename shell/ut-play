@@ -156,7 +156,7 @@ MPV_AUDIO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar
 # STDERR, so filtering stderr never touches the progress bar. audio is immune (--no-video → no
 # OSD); ascii uses --really-quiet. Rejected: --osd-level=0 (kills the noise but also the
 # on-window OSD/OSC); --msg-level=all=error (blanks the status bar); OS_ACTIVITY_MODE=disable
-# (does NOT stop CoreText). See AS-BUILT-player.md「模式 → 格式 → mpv」.
+# (does NOT stop CoreText). See AS-BUILT-player.md「终端噪声压制」.
 MPV_VIDEO_OPTIONS=(--msg-level=display-tags=warn,osd/libass=error --term-osd-bar)
 # mpv docs suggest sw-fast/really-quiet for terminal VOs to reduce glitches and improve speed.
 MPV_ASCII_OPTIONS=(--vo="${YT_ASCII_VO}" --profile=sw-fast --really-quiet --term-osd-bar)

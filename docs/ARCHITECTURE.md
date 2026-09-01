@@ -178,7 +178,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 ### 播放器 —— 播放与 detached 生命周期（接口：`-d` 信封的 id/pid/socket、`--status`/`--stop`；「调用栈」-B/B′/C）
 
 - **detached 句柄 = 一个单调的 mktemp token，不是 pid**：socket 路径启动前已知，
-  且对 pid 复用免疫；pid 只留着做存活判断。（AS-BUILT-player.md「运行时 IPC」）
+  且对 pid 复用免疫；pid 只留着做存活判断。（AS-BUILT-player.md「进程组模型」）
 - **一个 detached 播放器没有键盘**（stdin → /dev/null，`--input-terminal=no`）——
   上一条那个进程组模型的**后果**，不是一个独立的选择。（AS-BUILT-player.md「进程组模型」）
 
