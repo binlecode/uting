@@ -5,14 +5,14 @@
 # (`ut-play`) is source-agnostic and knows neither. This file owns everything that is
 # YouTube-specific about searching: the yt-dlp invocation, the cookie decision, the
 # result shaping, and the duration formatter. It has NO playback, lifecycle, or mpv
-# logic and never starts a process that outlives it. See docs/ARCHITECTURE.md §4.
+# logic and never starts a process that outlives it. See docs/ARCHITECTURE.md「命令拓扑」.
 #
 # It used to be a gating wrapper that exec'd the core. The gate and the implementation
 # are merged here because after the engine/player split there is no longer a second
-# caller to gate against: this file IS the search verb. AS-BUILT-contract.md §2
+# caller to gate against: this file IS the search verb. AS-BUILT-contract.md「门模型」
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
-# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md §28.
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md「可移植性契约」.
 
 # Resolve this script's OWN symlink chain before looking for its siblings. The PATH entry
 # is a symlink into a checkout that can live anywhere, so `dirname $0` is the symlink's
@@ -46,7 +46,7 @@ fi
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
 # Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
-# AS-BUILT-contract.md §5 for the keys.
+# AS-BUILT-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
@@ -91,7 +91,7 @@ ut_read_config "$UT_DEFAULTS"
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
 # executables carry. Name == prefix is deliberate: it lets `ut-play --engine yt` find
 # `yt-resolve` by string concatenation, with no name->command registry to keep in sync in
-# both the player and the TUI. docs/ARCHITECTURE.md §4.
+# both the player and the TUI. docs/ARCHITECTURE.md「命令拓扑」.
 ENGINE_NAME="yt"
 
 # ==============================================================================
@@ -169,7 +169,7 @@ fi
 # knob a fat `-n` was bounded only by what the site would eventually stop sending.
 
 # The `-n` default. Cross-engine: a caller who wants a different result count by default
-# wants it from whichever source they asked. AS-BUILT-contract.md §5.
+# wants it from whichever source they asked. AS-BUILT-contract.md「配置面」.
 NUM_RESULTS=$UT_SEARCH_RESULTS
 MIN_DURATION=0
 MAX_DURATION=0
@@ -250,7 +250,7 @@ require_deps() {
 # a bash version meant forking jq once per row just to read a field back out (25 results =
 # 50+ forks, measured 40x slower than one jq program) and keeping two copies of the same
 # padding logic. An unknown duration yields NULL rather than a fake "00h:00m:00s", so each
-# caller decides how to render it (a live stream has no duration). AS-BUILT-engine.md §7.
+# caller decides how to render it (a live stream has no duration). AS-BUILT-engine.md「搜索子系统」.
 JQ_PRELUDE='
 def p2: tostring | if length < 2 then "0" + . else . end;
 def fmt_dur:
@@ -268,7 +268,7 @@ def oneline: if type != "string" then "" else gsub("\\s+"; " ") | sub("^ "; "") 
 # Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
 # caller can branch on `reason` instead of string-matching raw extractor wording (which is
 # not a contract and drifts across versions). The ENUM is the shared fact and lives in
-# AS-BUILT-contract.md §3 — this is the yt-dlp-side reader of it; the player carries its own
+# AS-BUILT-contract.md「数据契约」 — this is the yt-dlp-side reader of it; the player carries its own
 # mpv-side reader. No member may be added here that the enum does not already have.
 # `unknown` is the conservative default — never guess a cause we did not positively identify.
 classify_yt_dlp_error() {
@@ -376,7 +376,7 @@ fetch_results() {
             cat "$err" >&2 2>/dev/null || true
             echo "Error: search failed for '$QUERY' ($reason)" >&2
         fi
-        # AS-BUILT-contract.md §4 reserves 1 for usage/validation, so a propagated extractor failure reports
+        # AS-BUILT-contract.md「退出码」 reserves 1 for usage/validation, so a propagated extractor failure reports
         # 2+ even when yt-dlp itself exited 1; -j callers branch on .status instead.
         exit $((rc <= 1 ? 2 : rc))
     fi
@@ -396,7 +396,7 @@ fetch_results() {
     ((MIN_DURATION > 0)) && bounds+=" and (.duration != null and .duration > $MIN_DURATION)"
     ((MAX_DURATION > 0)) && bounds+=" and (.duration != null and .duration < $MAX_DURATION)"
 
-    # `kind` and `access` (AS-BUILT-contract.md §3) are the ENGINE'S JUDGEMENT about a row,
+    # `kind` and `access` (AS-BUILT-contract.md「数据契约」) are the ENGINE'S JUDGEMENT about a row,
     # not a site field carried over, so they are merged LAST and win over any raw entry key of
     # the same name. Both are constants on this site and that is the whole answer, not a stub:
     # a YouTube search row IS one video, and anonymous extraction returns the whole timeline or
@@ -435,7 +435,7 @@ print_list() {
 # fidelity is needed. FILTERED_JSON's own shape is left untouched (print_list still reads
 # it), so we project only here.
 # `jq -c`, both arms: every machine envelope in this suite is ONE line, which is the
-# contract the README and ARCHITECTURE.md §1 state as a differentiator.
+# contract the README and ARCHITECTURE.md「定位与设计目标」 state as a differentiator.
 emit_search_json() {
     if [[ "$OUTPUT_MODE" == "json_full" ]]; then
         printf '%s' "$FILTERED_JSON" | jq -c --arg e "$ENGINE_NAME" --arg q "$QUERY" \
@@ -484,7 +484,7 @@ Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
   suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
-  config > the shipped defaults. See AS-BUILT-contract.md §5.
+  config > the shipped defaults. See AS-BUILT-contract.md「配置面」.
   YT_COOKIE_BROWSER  Browser profile cookies are read from (default: chrome; "none" for
                      anonymous). A login makes age-restricted videos searchable; a profile
                      absent from this machine degrades to anonymous rather than failing
@@ -496,7 +496,7 @@ EOF
 # Value-taking flags (consume the next token) vs boolean flags, restricted to the search
 # surface. Anything outside these is rejected — playback/lifecycle flags get a pointer to
 # ut-play so the caller learns the right tool instead of a bare error. This gate is the
-# whole reason a narrow verb exists (AS-BUILT-contract.md §2); it used to live in a separate
+# whole reason a narrow verb exists (AS-BUILT-contract.md「门模型」); it used to live in a separate
 # wrapper file and now sits directly in front of the implementation it guards.
 has_format=0
 query=()
@@ -575,7 +575,7 @@ while (($#)); do
         shift
         # `--` stops FLAG parsing, it does not stop argument validation: a query token
         # that looks like a URL is still the wrong tool, and a query beginning with '-'
-        # must survive as a query. ARCHITECTURE.md §6.
+        # must survive as a query. ARCHITECTURE.md「端到端控制流」.
         while (($#)); do
             case "$1" in
             http://* | https://* | www.* | youtube.com/* | youtu.be/*) reject_url "$1" ;;

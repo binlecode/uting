@@ -15,7 +15,7 @@
 # back. No view toggle, so no Tab.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features (no ${v,,}, no mapfile); guard
-# empty-array expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). §28.
+# empty-array expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md「可移植性契约」.
 
 # Resolve this script's OWN symlink chain before looking for its siblings. The PATH entries
 # (yt-search / ut-play / uting) are symlinks into a checkout that can live anywhere, so
@@ -63,7 +63,7 @@ unset _pk
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
 # Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
-# AS-BUILT-contract.md §5 for the keys.
+# AS-BUILT-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
@@ -108,8 +108,8 @@ ut_read_config "$UT_DEFAULTS"
 # ── PREFERENCE WRITE-BACK ───────────────────────────────────────────────────────────────
 # The eight keys above are the ones this TUI changes at runtime, and they are written back to
 # the USER's config file in place. A preference that has to be re-pressed every session is not
-# a preference; the reasoning is ARCHITECTURE.md §3.6 (reopen triggers: ROADMAP), the key table is
-# AS-BUILT-contract.md §5. What the code below is:
+# a preference; the reasoning is ARCHITECTURE.md「两个根数据文件」 (reopen triggers: ROADMAP), the key table is
+# AS-BUILT-contract.md「配置面」. What the code below is:
 #
 #   WHICH FILE  the user's own ($UT_CONFIG). The shipped `config` is NEVER written — it is
 #               this checkout's declared defaults, not anybody's preferences.
@@ -232,7 +232,7 @@ write_prefs() {
                         # Split the value off its own whitespace so both halves survive:
                         # `lead` is what sits between the = and the value, `gap` is the run
                         # of spaces that aligns the comment. Anchored strips only — pattern
-                        # SUBSTITUTION is quadratic on bash 3.2 (§28).
+                        # SUBSTITUTION is quadratic on bash 3.2 (ARCHITECTURE.md「可移植性契约」).
                         trimmed="$pre"
                         while [[ "$trimmed" == *[[:space:]] ]]; do trimmed="${trimmed%[[:space:]]}"; done
                         gap="${pre#"$trimmed"}"
@@ -285,7 +285,7 @@ flush_prefs() {
     [[ -n "$keys" ]] || return 0
     PREF_DIRTY=""
     # if-form, not `((PREF_WRITE_OFF)) && return 0`: a bare arithmetic list that evaluates to
-    # zero is a FAILED command, and under set -e that would abort the TUI here (§28).
+    # zero is a FAILED command, and under set -e that would abort the TUI here (ARCHITECTURE.md「可移植性契约」).
     if ((PREF_WRITE_OFF)); then return 0; fi
     if ! write_prefs "$keys"; then
         PREF_WRITE_OFF=1
@@ -319,7 +319,7 @@ fi
 
 # The listening log, located the same way and just as optionally. HISTORY_BIN, not
 # UT_HISTORY: that name is already the player's set-once switch for whether a row is
-# written at all (AS-BUILT-contract.md §5) — and like its two siblings above, an internal
+# written at all (AS-BUILT-contract.md「配置面」) — and like its two siblings above, an internal
 # does not wear the UT_/YT_/BILI_ prefix, which ut_read_config accepts as settable.
 # This file only READS it, and only when h is pressed — the writing is the player's, where
 # the fact "a track ended, and why" exists.
@@ -444,7 +444,7 @@ refresh_engine_auth() {
 }
 
 # Does this engine have `--parts`? Asked the way the suite says an engine declares a
-# capability — by whether the VERB exists (AS-BUILT-contract.md §1.3) — and asked without
+# capability — by whether the VERB exists (AS-BUILT-contract.md「命令规格」) — and asked without
 # spending a request: the probe is a HANDLE-LESS call, so an engine that HAS the verb dies in
 # its own argv gate ("a BV id … is required") while one that does not dies in the flag gate,
 # with the wording every gate in this suite shares. Both exit 1; the stderr is the answer.
@@ -588,7 +588,7 @@ Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
   suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
-  config > the shipped defaults. See AS-BUILT-contract.md §5.
+  config > the shipped defaults. See AS-BUILT-contract.md「配置面」.
   YT_ASCII=1       Use ASCII glyphs (♫ ● ○ ❯ · ▶ ❚❚ • … → — arrows → ASCII) for
                    terminals whose font can't draw them. Auto-on for non-UTF-8 locales.
                    Shared with the rest of the suite. Legacy alias: YT_TUI_ASCII.
@@ -653,13 +653,13 @@ SEARCH_ARGS=()
 # re-fetch — an exact page count. Cross-engine: this is the TUI's appetite, not a site's page
 # size. Separate from UT_SEARCH_RESULTS even though that is 20 too: that one is a TOTAL an
 # engine returns once, this one is the STEP each press moves by, so widening one must not
-# widen the other. AS-BUILT-contract.md §5.
+# widen the other. AS-BUILT-contract.md「配置面」.
 #
 # WHERE THE FIRST FETCH STARTS is a different question from how big a step is, which is why
 # UT_START_RESULTS exists and why its unset state means "follow the step". It is the one key
 # uting writes back that is NOT in the shipped `config`: a default whose meaning is "the
 # value of another key" is a chain a flat KEY=value file cannot express (the same judgement
-# that keeps UT_STATE_DIR out of it). AS-BUILT-contract.md §5.
+# that keeps UT_STATE_DIR out of it). AS-BUILT-contract.md「配置面」.
 RESULT_N=${UT_START_RESULTS:-$UT_FETCH_BATCH}  # -n overrides; → grows it, ← shrinks it
 # The order the v key steps through. Space- or comma-separated; a user who never wants video
 # drops it here rather than pressing past it every session.
@@ -674,7 +674,7 @@ PLAY_QUALITY="$UT_PLAY_QUALITY"
 # Which tier of key hints the view prints, rotated live by the ? key (cycle_keys) and
 # written back like the other seven. There is deliberately NO uting flag for it, by the same
 # rule as the quality tier above: how much of the keymap you want written down is set-once
-# tuning, not a per-request choice. AS-BUILT-tui.md §11.
+# tuning, not a per-request choice. AS-BUILT-tui.md.
 KEYS_TIER="$UT_KEYS"
 PLAY_VOLUME="$UT_VOLUME"  # --volume flag overrides
 COLOR_MODE="auto"
@@ -810,7 +810,7 @@ if [[ -n "$PLAY_VOLUME" ]]; then
 fi
 # The quality tier rides the same door: a bogus value in the user's config would otherwise
 # surface as a play that silently defaults. Empty reads as auto (the engine sends no sort
-# for blank or auto alike — AS-BUILT-contract.md §1.3); anything else is a mistyped knob
+# for blank or auto alike — AS-BUILT-contract.md「命令规格」); anything else is a mistyped knob
 # and fails loud.
 # NORMALISED to the spelling rather than left blank, because the f key rotates this value:
 # a blank matches no member of the cycle, so the first press would land on the SECOND tier
@@ -1110,7 +1110,7 @@ keys_full() { [[ "$KEYS_TIER" == "full" ]]; }
 # Rotate the key-hint tier in place (key: ?). Two tiers, not three: `core` is one line of
 # this view's own job — move, act on the row, get back out, quit — and `full` adds the
 # engine / store / tuning / playback family. A third "hidden" state was refused
-# (AS-BUILT-tui.md §11): it saves the one line core already costs and gives up every hint on
+# (AS-BUILT-tui.md): it saves the one line core already costs and gives up every hint on
 # the screen, and
 # the short-terminal fallback already drops the block automatically, which is the reflow's
 # job rather than a tier the user has to choose.
@@ -1244,7 +1244,7 @@ CURRENT_PLAY_PAUSED=0
 # tripwire: media-title rides along in the round trip fetch_play_times already makes, so a
 # track change costs nothing to NOTICE, and only then is one `ut-play --status` spent to
 # re-read the record. Polling --status every tick would be a process chain per second, which
-# is the cost the read path exists to avoid (ARCHITECTURE.md §26).
+# is the cost the read path exists to avoid (ARCHITECTURE.md「已知约束」).
 CURRENT_PLAY_MPV_TITLE=""
 # Where the running player is in its queue. Two numbers, not the tail: the tail had one
 # reader and it was the card's queue-ahead block (D-g). These two stay because they are the
@@ -1262,7 +1262,7 @@ CURRENT_PLAY_ENGINE=""
 # Third state, between "launched" and "playing": the -d envelope comes back as soon as the player
 # has forked, but the detached child still has to ask the engine to resolve the stream and let
 # mpv fill its cache, and that window is seconds long on a cold URL. (The extraction moved into
-# the child when the player started resolving (ARCHITECTURE.md §6.1); the window it opens is the
+# the child when the player started resolving (ARCHITECTURE.md「调用栈」); the window it opens is the
 # same one, so this state still earns its keep.) The banner used to claim "Playing" for all of it.
 CURRENT_PLAY_LOADING=0
 # A live stream has no meaningful position: mpv reports time-pos on the whole
@@ -1869,7 +1869,7 @@ elapsed_since_play() {
 # Pause is read here rather than tracked locally because the local value LIES: toggle_pause
 # flips CURRENT_PLAY_PAUSED, but anything else driving the same socket (ut-play, an agent's
 # own `nc -U`, a second TUI) moves the real state without telling us — the identical reason
-# the core reads `volume` off the socket instead of the state file (AS-BUILT-player.md §9.3).
+# the core reads `volume` off the socket instead of the state file (AS-BUILT-player.md「运行时 IPC」).
 # The local flip STAYS: it is what repaints the banner on the keypress instead of up to a
 # second later (tests/tui_pane.sh counts the repaint), and this read corrects it on the next
 # tick. Optimism, then truth.
@@ -2057,7 +2057,7 @@ wrap_print() {
     local line="" cur_w=0 first=1
     local w w_len i c c_w
 
-    # Guarded like every other array expansion here (§28): `read -ra words <<< ""` leaves
+    # Guarded like every other array expansion here (ARCHITECTURE.md「可移植性契约」): `read -ra words <<< ""` leaves
     # words UNSET, and "${words[@]}" on an unset array is an unbound-variable abort under
     # set -u on bash 3.2. Reachable from print_details, which passes R_TITLE raw: an
     # emoji-only title cleans to "" in build_all_rows, so merely moving the selection onto
@@ -2238,7 +2238,7 @@ print_details() {
 #     10 ms a press over the socket against 60 ms through `ut-play --set-volume` (that verb
 #     also resolves the target and patches the state file under a lock). Above the 50 ms line
 #     this repo set for the choice, so they stay on the socket — the exception is recorded in
-#     docs/ARCHITECTURE.md §26 with the number, because an unexplained inconsistency is the
+#     docs/ARCHITECTURE.md「已知约束」 with the number, because an unexplained inconsistency is the
 #     thing to avoid, not an explained one.
 # $1.. is the verb and its value; --id and -j are this function's business.
 play_verb() {
@@ -2369,7 +2369,7 @@ adjust_volume() {
     [[ -n "$CURRENT_PLAY_ID" ]] || return 0
     # Read-modify-set, not `add volume`: the raw add goes straight to mpv, whose own ceiling
     # is 130, so holding `0` reached a volume the rest of the suite's vocabulary says cannot
-    # exist — the core's --set-volume 0-100 validation does not guard the socket path (§9.3).
+    # exist — the core's --set-volume 0-100 validation does not guard the socket path (AS-BUILT-player.md「运行时 IPC」).
     # Verified: a player launched at --volume 10 and pressed `0` twenty times reads 100 in
     # `ut-play --status`, where the old `add` left it at 110. The extra round trip costs
     # ~16 ms against a live player (see send_mpv_ipc).
@@ -2427,10 +2427,10 @@ clear_play_state() {
 # forever against a stale title, and Space flipping a local paused flag with no IPC peer on
 # the far end.
 #
-# kill -0 is the same truth the core reaps on (§9.3 "process group alive"), reached from the
+# kill -0 is the same truth the core reaps on (AS-BUILT-player.md「运行时 IPC」, "process group alive"), reached from the
 # client side: the -d envelope's pid is the bash WRAPPER's, and the wrapper blocks on mpv, so
 # wrapper alive ⇔ still playing. One builtin, no fork — cheap enough for the 1 s tick.
-# Pid reuse can false-positive it, exactly as §25 records for the core's own group_alive;
+# Pid reuse can false-positive it, exactly as AS-BUILT-verification.md「风险登记」records for the core's own group_alive;
 # narrowed by the monotonic id, not closed, and not worth a second mechanism in the client.
 check_player_alive() {
     [[ -n "$CURRENT_PLAY_ID" ]] || return 0
@@ -2488,7 +2488,7 @@ player_check_ready() {
 # THREE states, and the choice of glyph/label/colour lives here rather than at the print
 # site. It was written for two views and outlived one of them; the glyph that means "playing"
 # still comes in as an argument (▶ for the banner), because the state and the glyph are two
-# facts and only one of them is this function's. Loading takes the fetch spinner's frames (§ GL_SPIN) and the dim accent:
+# facts and only one of them is this function's. Loading takes the fetch spinner's frames (GL_SPIN) and the dim accent:
 # same visual language as the search that got us here, and dim because it is not the steady
 # state. Colour never carries the state (one accent per palette); the glyph does.
 PS_ICON=""; PS_LABEL=""; PS_COLOR=""
@@ -2670,10 +2670,10 @@ build_playlist_rows() {
 
 # A handle with any `t=` taken off it, and no fragment: the KEY that says two handles name
 # the same item. Both engines read `t=` off a handle into the resolve envelope's
-# start_seconds (AS-BUILT-engine.md §10.4), so the same video at two offsets is two urls and
+# start_seconds (AS-BUILT-engine.md「起播偏移」), so the same video at two offsets is two urls and
 # one item — which is exactly the question Enter asks on a chapter row before it decides
 # between a seek and a launch. Written as an anchored walk over the query rather than
-# ${var//t=/}: pattern SUBSTITUTION is quadratic on 3.2 (§28) and there is none left in this
+# ${var//t=/}: pattern SUBSTITUTION is quadratic on 3.2 (ARCHITECTURE.md「可移植性契约」) and there is none left in this
 # file.
 HANDLE_KEY=""
 handle_key() {
@@ -2873,7 +2873,7 @@ display_list_menu() {
     # recomputes and rewrites the whole frame (2413 bytes in 15-24 ms at 100x30 — the same frame
     # an arrow-down writes). What went away is the number of states the terminal shows, not the
     # work. The geometry below is measured per frame rather than fixed, so almost any state
-    # change could move it; AS-BUILT-tui.md §11 records why a banner-only repaint for the one change
+    # change could move it; AS-BUILT-tui.md records why a banner-only repaint for the one change
     # that cannot (pause) was rejected rather than forgotten.
     printf '\033[H'
     # Title. Elided like every other row: a long query used to wrap and push the whole layout
@@ -2987,7 +2987,7 @@ display_list_menu() {
     # what they mean where they land.
     local search_view=0
     [[ "$LIST_SOURCE" == "search" ]] && search_view=1
-    # TWO TIERS, one block (AS-BUILT-tui.md §11). `core` is this view's own job — move, act
+    # TWO TIERS, one block (AS-BUILT-tui.md). `core` is this view's own job — move, act
     # row, change view, filter, quit — and everything else is one press of ? away. The tier
     # is applied cell by cell with keys_full rather than by building a core array and
     # appending a full one, so the ORDER of the full block is byte-identical to the order it
@@ -3532,7 +3532,7 @@ press_any_key() {
 #
 # The reason exists ONLY on the core's stderr. `die` writes prose there and exits 1 whatever -j
 # asked for, so a synchronous -d failure puts nothing on stdout — there is no envelope field to
-# read it out of. AS-BUILT-contract.md §3's `reason` taxonomy belongs to the BLOCKING play path, which uting never
+# read it out of. AS-BUILT-contract.md「数据契约」's `reason` taxonomy belongs to the BLOCKING play path, which uting never
 # takes. Not colored: the chrome carries ONE accent (see the palette block), and the n/m/o failures next
 # to it print plain too.
 play_failed_notice() {
@@ -3554,17 +3554,17 @@ play_selected() {
     errfile=$(mktemp "${TMPDIR:-/tmp}/uting-play-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-play-err.$$"
     # --engine is passed EXPLICITLY and comes from the envelope: ut-play defaults to its own
     # UT_DEFAULT_ENGINE, and letting that default decide would send a second engine's URL to
-    # the first engine's resolver — which since ARCHITECTURE.md §3.4 is a hard usage error rather
+    # the first engine's resolver — which since ARCHITECTURE.md「站点知识的边界」 is a hard usage error rather
     # than the silent mislabel it used to be.
     # The ROW's engine, not the session's: a playlist can mix sources, and passing the
-    # session engine would hand a bili URL to yt-resolve — a hard usage error since ARCHITECTURE.md §3.4.
+    # session engine would hand a bili URL to yt-resolve — a hard usage error since ARCHITECTURE.md「站点知识的边界」.
     # Falls back to the session engine for a row that predates the field (an empty string
     # never reaches ut-play, which would reject it).
     local row_engine="${R_ENGINE[$selected]:-}"
     [[ -n "$row_engine" ]] || row_engine="$CURRENT_ENGINE"
     # --quality rides beside -f because the engine reads the pair: the tier alone selects
     # nothing. Forwarded as the canonical spelling, never as a format-sort string — this file
-    # holds no yt-dlp vocabulary, and ut-play holds none either (AS-BUILT-engine.md §10).
+    # holds no yt-dlp vocabulary, and ut-play holds none either (AS-BUILT-engine.md「解析」).
     out=$("$PLAY_BIN" -d -j --engine "$row_engine" -f "$PLAY_MODE" --quality "$PLAY_QUALITY" \
         ${PLAY_VOLUME:+--volume "$PLAY_VOLUME"} -- "$url" 2>"$errfile") || rc=$?
     msg=$(<"$errfile")
@@ -3584,7 +3584,7 @@ play_selected() {
     # id/pid/sock in one jq pass. The socket path is READ FROM THE ENVELOPE, never rebuilt:
     # it is the core's private state layout, and hardcoding "$TMPDIR/uting-$(id -u)/mpv-
     # $id.sock" here duplicated it in a second script that would break silently if the core
-    # ever moved its state dir. AS-BUILT-player.md §9.3.
+    # ever moved its state dir. AS-BUILT-player.md「运行时 IPC」.
     # US, not tab, for the same reason build_all_rows uses it: all three fields default to
     # "" here, and a run of tabs collapses, so a player that reported no pid would have had
     # its socket path read into `pid` — and then the guard below would reject a play that
@@ -4160,7 +4160,7 @@ open_history() {
 # SEARCH ROWS ONLY, through search_only — the guard o and e already use, not a new one.
 # stash_search has a single slot, so opening a part list from a playlist row would either
 # lose the way back to the search or need a stack, and a stack is its own change on its own
-# day (the one-deep return stack is AS-BUILT-contract.md §1.4).
+# day (the one-deep return stack is AS-BUILT-contract.md「命令规格」).
 #
 # ONE fork on the KEY, never on the selection moving. Whether the key is offered at all was
 # answered at the last source switch (refresh_engine_parts), so this costs nothing per redraw.
@@ -4252,7 +4252,7 @@ open_parts() {
 # SEARCH ROWS ONLY, through search_only — the guard o, e and c already use, not a new one.
 # stash_search has a single slot, so opening a chapter list from a playlist row would either
 # lose the way back to the search or need a stack, and a stack is its own change on its own
-# day (the one-deep return stack is AS-BUILT-contract.md §1.4).
+# day (the one-deep return stack is AS-BUILT-contract.md「命令规格」).
 open_chapters() {
     # The toggle, tested literally for the reason open_history and open_parts give: with a
     # chapter list on screen `i` is the way back, and a chapter list is the only thing `i`
@@ -4306,7 +4306,7 @@ open_chapters() {
 # Enter on a chapter row: "start playing from here". Two branches, one meaning. If the player
 # already holds THIS item, the offset is a seek inside the file it has open — nothing is
 # re-resolved, which is what separates this axis from parts and from quality
-# (AS-BUILT-tui.md §11); otherwise the row plays like any other row, and the `t=` its url
+# (AS-BUILT-tui.md); otherwise the row plays like any other row, and the `t=` its url
 # carries is what the engine turns into start_seconds.
 play_chapter() {
     ((NUM_ENTRIES > 0)) || return 0
@@ -4426,7 +4426,7 @@ cycle_mode() {
 # launch, so nothing on screen has to be re-fetched and the player already running keeps the
 # stream it resolved. What it selects is a (mode, tier) row in the ENGINE's format-sort table
 # — this file never learns a yt-dlp expression, which is the whole point of a named tier
-# (AS-BUILT-engine.md §10). A value not in the cycle (set by config or the environment,
+# (AS-BUILT-engine.md「解析」). A value not in the cycle (set by config or the environment,
 # e.g. `low` under
 # the shipped cycle) leaves cur at 0, so the first press joins the rotation at its head.
 cycle_quality() {
@@ -4943,7 +4943,7 @@ move_selection() {
     # second case would be a second copy of the page-crossing arithmetic, which is the drift
     # every duplicated block in this file has been rewritten to remove. Only the desktop
     # pair, never hjkl entire — `h` is already history, and `g/G` is closed off by binding
-    # case together, so half a vim is worse than none (AS-BUILT-tui.md §11).
+    # case together, so half a vim is worse than none (AS-BUILT-tui.md).
     case "$input" in
     "[A" | "OA" | "["*A | "O"*A | k | K) # up
         if ((selected > 0)); then

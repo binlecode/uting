@@ -41,7 +41,7 @@ REPO=$(cd -P "$(dirname "$0")/.." && pwd -P) || exit 1
 cd "$REPO" || exit 1
 
 # ---- a state dir of this file's own -------------------------------------------------
-# Why, once, for all three files under tests/: contract.sh's header, and §27. Here it earns
+# Why, once, for all three files under tests/: contract.sh's header, and AS-BUILT-verification.md「验证矩阵」. Here it earns
 # the sharpest form of the same sentence — every --stop --all below would reach the player the
 # user is listening to, and every orphan count would be a count of THEIR mpv.
 UT_TEST_TMP=$(mktemp -d "${TMPDIR:-/tmp}/uting-playback.XXXXXX") || exit 1
@@ -82,7 +82,7 @@ wait_for_sock() {
 # wait_live <id> <field>  — poll --status until one LIVE field reports something real, then
 # echo it; 1 on timeout, with whatever it last saw. The fields this waits on come off the mpv
 # socket, not the record, so until mpv is decoding they are legitimately null — null there is
-# an honest READING (§9.3), and what must not happen is null forever. Same rule as
+# an honest READING (AS-BUILT-player.md「运行时 IPC」), and what must not happen is null forever. Same rule as
 # wait_for_sock: bounded poll, never a fixed sleep, because the wait is network-bound.
 #
 # By FIELD rather than one loop per field: position and duration arrive at the same moment for
@@ -164,7 +164,7 @@ report "--status sees 2"   2 "$(shell/ut-play --status -j | jq '.players | lengt
 
 echo "── a selector-less mutation on 2 players is ambiguous -> exit 4 ───"
 report "--set-volume no --id" 4 "$(shell/ut-play --set-volume 40 -j >/dev/null 2>&1; echo $?)"
-# --stop takes the same ambiguity rule (AS-BUILT-contract.md §3): with 2 players and no
+# --stop takes the same ambiguity rule (AS-BUILT-contract.md「数据契约」): with 2 players and no
 # selector it must refuse with 4 AND stop nothing — a --stop that guessed would kill the
 # wrong listener's audio, which no exit code repairs.
 report "--stop no --id"       4 "$(shell/ut-play --stop -j >/dev/null 2>&1; echo $?)"
@@ -189,7 +189,7 @@ if pos=$(wait_live "$id1" position); then
 else
     bad "player 1 never reported a position — the live read is unproved"
 fi
-# false is an ANSWER; null is "the question could not be asked" (§9.3). A playing player that
+# false is an ANSWER; null is "the question could not be asked" (AS-BUILT-player.md「运行时 IPC」). A playing player that
 # reported paused:null would make every consumer's readiness probe read a fabrication, and a
 # playing player that reported it as anything but false would make --pause unobservable.
 report "live paused is false, not null" 0 \
@@ -255,8 +255,8 @@ report "--resume reads back running" "false" \
 report "…and --status agrees"         "false" \
     "$(shell/ut-play --status -j | jq -r --arg i "$id1" '.players[]|select(.id==$i)|.paused')"
 
-# NOT checked here: the `head -n <count>` pipe close in live_props (§9.3). Tried, pulled, and
-# why — with the real peer it cannot go red — is recorded in docs/AS-BUILT-verification.md §27. Do not
+# NOT checked here: the `head -n <count>` pipe close in live_props (AS-BUILT-player.md「运行时 IPC」). Tried, pulled, and
+# why — with the real peer it cannot go red — is recorded in docs/AS-BUILT-verification.md「验证矩阵」. Do not
 # re-add it as a timing assertion.
 # The degradation an agent must be able to tell from a reading — and it is produced by doing
 # it, not by imitating it: the socket of a REALLY running player is really removed, which is
@@ -273,7 +273,7 @@ echo "── a second engine: the envelope's http_headers reach mpv ────
 # contract.sh asserts http_headers is PRESENT in the resolve envelope; nothing asserted that
 # ut-play forwards it into mpv. This site is what makes the difference observable: its CDN
 # answers 403 to a bare stream URL and 206 to the same URL carrying the envelope's Referer
-# (docs/ARCHITECTURE.md §6.1, measured). So a player that dropped the header block would still
+# (docs/ARCHITECTURE.md「调用栈」, measured). So a player that dropped the header block would still
 # play YouTube, and every other check in this file would stay green, while bytes never flowed
 # from here. Position leaving zero IS the proof that they did.
 o3=$(shell/ut-play -d -j --volume 0 --engine bili -- "$BV" 2>/dev/null)
@@ -300,7 +300,7 @@ else
 fi
 
 echo "── the quality tier rides the same path as -f ────────────────────"
-# AS-BUILT-verification.md §27: --quality low must stack with -f and reach the engine
+# AS-BUILT-verification.md「验证矩阵」: --quality low must stack with -f and reach the engine
 # without breaking
 # format selection — a detached player that comes up and reports position proves the
 # tier did not break the stream. auto (the default) sends no sort at all.
@@ -463,7 +463,7 @@ wait_no_players
 report "no players after a queue" 0 "$(shell/ut-play --status -j | jq -e '.players==[]' >/dev/null 2>&1; echo $?)"
 no_orphans "no orphan mpv after a queue"
 # NOT checked here: that a stopped queue files no tombstone. Tried, pulled, and why — it could
-# not be made to go red here — is recorded in docs/AS-BUILT-verification.md §27; contract.sh drives the
+# not be made to go red here — is recorded in docs/AS-BUILT-verification.md「验证矩阵」; contract.sh drives the
 # tombstone boundaries from fixtures instead, which is where a rule about what the REAPER
 # records belongs.
 

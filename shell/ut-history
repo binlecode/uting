@@ -6,7 +6,7 @@
 # nothing about playback (no mpv, no lifecycle, no players/). It knows two things: the row
 # and the file.
 #
-# WHY IT IS NOT THE PLAYER'S `failed[]`. AS-BUILT-player.md §9.2 draws the line this file is
+# WHY IT IS NOT THE PLAYER'S `failed[]`. AS-BUILT-player.md「状态机」 draws the line this file is
 # the other side of: `failed[]` lives in ${TMPDIR}/uting-$(id -u), is bounded, records only
 # failures, and dies with the reboot — correct for a tombstone a caller reads seconds later,
 # useless as a log of what a user listened to. History is written on success AND failure,
@@ -31,7 +31,7 @@
 # with no field mapping in between — the .items envelope is the same shape those two read.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
-# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md §28.
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md「可移植性契约」.
 
 # Resolve this script's OWN symlink chain before looking for its siblings — the PATH entry
 # is a symlink into a checkout that can live anywhere. Physical `cd -P`/`pwd -P`, and a
@@ -57,7 +57,7 @@ fi
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
 # Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
-# AS-BUILT-contract.md §5 for the keys.
+# AS-BUILT-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
@@ -106,7 +106,7 @@ ut_read_config "$UT_DEFAULTS"
 # The same user-level state root ut-playlist uses, and for the same reasons: XDG because the
 # neighbours (yt-dlp, mpv) are there and a Linux port would need no second layout, and an
 # override because without it `tests/contract.sh` would write into the user's real history.
-# AS-BUILT-contract.md §5.
+# AS-BUILT-contract.md「配置面」.
 UT_STATE_DIR="${UT_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/uting}"
 HISTORY_DIR="$UT_STATE_DIR/history"
 
@@ -165,7 +165,7 @@ validate_enum() {
 #   4  corrupt         argv understood, the store could not answer
 #
 # `--clear` on an empty store stays 0 with removed:0: the caller asked for an end state and
-# the end state holds, exactly as `--del` and `--stop` do. AS-BUILT-contract.md §3/§4.
+# the end state holds, exactly as `--del` and `--stop` do. AS-BUILT-contract.md「数据契约」与「退出码」.
 fail() {
     local code=$1 reason=$2 msg=$3
     echo "ut-history: $msg" >&2
@@ -183,7 +183,7 @@ ensure_store() {
 }
 
 # The ONE duration formatter, as a jq prelude — one of the identical copies of these six
-# lines the suite carries because it has no library. ARCHITECTURE.md §4 is where that
+# lines the suite carries because it has no library. ARCHITECTURE.md「命令拓扑」 is where that
 # duplication is decided AND counted, so this comment carries no number of its own: an
 # ordinal here goes stale the next time an engine pair lands, silently. A bash version would
 # fork jq per row.
@@ -335,7 +335,7 @@ do_ls() {
 #
 # The row is CONSTRUCTED field by field rather than merged from the input, so an unknown key
 # a caller happens to carry (a search result's channel, view_count, live_status) cannot land
-# on disk. That is both the AS-BUILT-player.md §9.4 rule about fields that expire into lies, and
+# on disk. That is both the AS-BUILT-player.md「持久状态层」 rule about fields that expire into lies, and
 # the only way the line length stays bounded by this file rather than by its callers.
 do_record() {
     ensure_store
@@ -345,14 +345,14 @@ do_record() {
     # A MATCH, never `${raw//[[:space:]]/}`. That substitution is quadratic on the 3.2 floor
     # once the string holds one space — 17.5s for a 7KB envelope against 4ms here — while
     # bailing fast when nothing matches, which is exactly what made it look free everywhere
-    # it was used. The rule and the numbers are ARCHITECTURE.md §28. The input this command
+    # it was used. The rule and the numbers are ARCHITECTURE.md「可移植性契约」. The input this command
     # is specifically required to survive is a record with a multi-KB title, so the cheap
     # form is not an optimisation: it is the difference between a best-effort write and a
     # stalled track boundary.
     [[ "$raw" == *[![:space:]]* ]] || fail 1 invalid_input "no input on stdin"
 
     # The reason enum is the PLAYBACK one, unchanged and not widened here: a caller branches
-    # on the same member names whichever surface produced them (AS-BUILT-contract.md §3). A
+    # on the same member names whichever surface produced them (AS-BUILT-contract.md「数据契约」). A
     # skipped track is `stopped_by_user` — the user acted, and `seconds` is what tells a skip
     # at 0:05 from a stop at 3:20. Adding a member is a contract change, made in the doc and
     # then here; it is not something the player gets to invent on the way past.
@@ -597,7 +597,7 @@ while (($#)); do
     # The gate arms. ut-play, ut-playlist and ut-history share a prefix and two of them share
     # a --ls, so the likely wrong turns get a sentence naming the right command rather than a
     # bare unknown-flag error — what every other command in this suite does at its edges
-    # (AS-BUILT-contract.md §2).
+    # (AS-BUILT-contract.md「门模型」).
     -d | --detach | --status | --stop | --set-volume | --pause | --resume | --seek | --seek-to | --queue | --enqueue | --next | --id | --all | --engine | -f)
         echo "ut-history: $1 is a playback flag — this command stores what was played, use ut-play to play" >&2
         exit 1

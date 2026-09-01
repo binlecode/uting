@@ -22,10 +22,10 @@
 # through the middle of the engine: the hand-written HTTP path NEVER TOUCHES A CREDENTIAL.
 # The only cookie it sends is a buvid3 it generates itself (see below) — no account, no
 # token, nothing read from a browser profile. Login lives entirely in `bili-resolve`, where
-# yt-dlp owns it. docs/ARCHITECTURE.md §5; ARCHITECTURE.md §3.4.
+# yt-dlp owns it. docs/ARCHITECTURE.md「原语与接缝」; ARCHITECTURE.md「站点知识的边界」.
 set -euo pipefail
 # Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
-# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md §28.
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md「可移植性契约」.
 
 # Resolve this script's OWN symlink chain before looking for its siblings — see the same
 # block in yt-search for why `cd -P`/`pwd -P` and a hand-rolled loop (bash 3.2 has no
@@ -51,7 +51,7 @@ fi
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
 # Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
-# AS-BUILT-contract.md §5 for the keys.
+# AS-BUILT-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
 ut_read_config() {
@@ -95,7 +95,7 @@ ut_read_config "$UT_DEFAULTS"
 
 # The engine's own name, as it appears in the envelope AND as the command prefix its two
 # executables carry. Name == prefix is what lets `ut-play --engine bili` find `bili-resolve`
-# by string concatenation, with no name->command registry. docs/ARCHITECTURE.md §4.
+# by string concatenation, with no name->command registry. docs/ARCHITECTURE.md「命令拓扑」.
 ENGINE_NAME="bili"
 
 # ==============================================================================
@@ -108,7 +108,7 @@ SEARCH_ENDPOINT="https://api.bilibili.com/x/web-interface/search/type"
 # code:0, without it 412 (measured 2026-08-23). It is a public constant, not an
 # authentication mechanism — every Bilibili extractor in yt-dlp sends the same one.
 #
-# UNPREFIXED, like SEARCH_ENDPOINT above and for the same reason: since ARCHITECTURE.md §3.6 the prefix IS
+# UNPREFIXED, like SEARCH_ENDPOINT above and for the same reason: since ARCHITECTURE.md「两个根数据文件」 the prefix IS
 # config reachability — ut_read_config accepts every UT_/YT_/BILI_ name that is not in its
 # refusal list — so a BILI_ spelling would be taken off disk and then silently overwritten
 # by this line 16 lines later. A constant must not wear a settable name.
@@ -144,7 +144,7 @@ BILI_BUVID="${BILI_BUVID:-}"
 #
 # ENGINE-SPECIFIC on purpose: this pause exists for THIS host's burst limiter, and this file
 # is the only place in the suite that builds an HTTP request by hand. `yt-search` shells out
-# to yt-dlp and has no retry path for a shared knob to govern. AS-BUILT-contract.md §5.
+# to yt-dlp and has no retry path for a shared knob to govern. AS-BUILT-contract.md「配置面」.
 
 # The server's page size, not ours: the endpoint returns 20 per page regardless of what we
 # ask. It is a constant here so `-n` can span pages without the caller knowing that.
@@ -157,10 +157,10 @@ PAGE_SIZE=20
 # to bind on. Rows are what the envelope contains, so a row ceiling is a promise both
 # engines can keep — this one converts it to a page plan below, `yt-search` clamps its
 # `ytsearchN`. The default is 200, which is exactly the ten pages this engine spent before,
-# so the measured budget is unchanged. AS-BUILT-contract.md §5.
+# so the measured budget is unchanged. AS-BUILT-contract.md「配置面」.
 
 # The `-n` default. Cross-engine: a caller who wants a different result count by default
-# wants it from whichever source they asked. AS-BUILT-contract.md §5.
+# wants it from whichever source they asked. AS-BUILT-contract.md「配置面」.
 NUM_RESULTS=$UT_SEARCH_RESULTS
 MIN_DURATION=0
 MAX_DURATION=0
@@ -240,7 +240,7 @@ require_deps() {
 # prelude, not a bash function, so a caller already shaping JSON pays one fork instead of
 # one per row. Each engine carries its own copy: they are independent executables sharing
 # no library, and the shared fact is the FORMAT, which is stated once in
-# docs/AS-BUILT-engine.md §7.
+# docs/AS-BUILT-engine.md「搜索子系统」.
 #
 # Bilibili adds the site-specific half: `duration` arrives as "MM:SS" with UNBOUNDED
 # minutes and an UNPADDED seconds field ("222:28", "416:0", "682:4" all measured in one
@@ -291,7 +291,7 @@ def clean_title:
 
 # Map an HTTP status + the response body's own `code` to the suite's stable reason taxonomy
 # so an agent caller can branch on `reason` instead of on Bilibili's numbers. The ENUM is
-# the shared fact and lives in AS-BUILT-contract.md §3 — no member may be added here that
+# the shared fact and lives in AS-BUILT-contract.md「数据契约」 — no member may be added here that
 # it does not already have.
 #
 # THREE LAYERS, ALL CHECKED. This host says "no" in three different places: an HTTP status,
@@ -356,7 +356,7 @@ ensure_scratch() {
 # ==============================================================================
 
 # Report a search that produced nothing usable, in whichever shape the caller asked for.
-# Exit code follows the suite taxonomy: AS-BUILT-contract.md §4 reserves 1 for usage/validation, so a failure
+# Exit code follows the suite taxonomy: AS-BUILT-contract.md「退出码」 reserves 1 for usage/validation, so a failure
 # to reach or parse the site is 2 — a caller branching on the exit code must be able to
 # tell "you called me wrong" from "the site did not answer".
 search_fail() {
@@ -551,9 +551,9 @@ fetch_results() {
     # `live_status` is null, not the raw `live_status: 0`. This search is search_type=video,
     # where that field is not the suite's is_live/was_live notion at all — carrying the 0
     # over would let a renderer draw a liveness state the site never claimed. A field this
-    # engine cannot know is null, and the key is still present (AS-BUILT-contract.md §3).
+    # engine cannot know is null, and the key is still present (AS-BUILT-contract.md「数据契约」).
     #
-    # `kind` and `access` (AS-BUILT-contract.md §3) are the ENGINE'S JUDGEMENT about a row, not
+    # `kind` and `access` (AS-BUILT-contract.md「数据契约」) are the ENGINE'S JUDGEMENT about a row, not
     # site fields carried over, so they are merged LAST and win over any response key of the
     # same name. Both are constants here, and that is a MEASURED fact rather than a stub:
     # search_type=video carries no part-count signal at all — a 200-part video and a single
@@ -670,7 +670,7 @@ Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
   suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
-  config > the shipped defaults. See AS-BUILT-contract.md §5.
+  config > the shipped defaults. See AS-BUILT-contract.md「配置面」.
   BILI_UA     User-Agent sent with the search request (a browser UA; must not contain
               "curl" or "python", which the site refuses)
   BILI_BUVID  Device id to send instead of a freshly generated one
@@ -681,7 +681,7 @@ EOF
 
 # Value-taking flags (consume the next token) vs boolean flags, restricted to the search
 # surface. Anything outside these is rejected — playback/lifecycle flags get a pointer to
-# ut-play so the caller learns the right tool instead of a bare error. AS-BUILT-contract.md §2
+# ut-play so the caller learns the right tool instead of a bare error. AS-BUILT-contract.md「门模型」
 has_format=0
 query=()
 reject_url() {
@@ -754,7 +754,7 @@ while (($#)); do
         shift
         # `--` stops FLAG parsing, it does not stop argument validation: a query token that
         # looks like a URL is still the wrong tool, and a query beginning with '-' must
-        # survive as a query. ARCHITECTURE.md §6.
+        # survive as a query. ARCHITECTURE.md「端到端控制流」.
         while (($#)); do
             case "$1" in
             http://* | https://* | www.* | bilibili.com/* | b23.tv/*) reject_url "$1" ;;

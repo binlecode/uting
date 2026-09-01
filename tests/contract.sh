@@ -16,7 +16,7 @@
 # had no coverage at all for --transcript. A test suite that cannot be executed reports green
 # by default, which is worse than having none.
 #
-# Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md §28.
+# Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md「可移植性契约」.
 #
 # Cost, measured 2026-08-29 and broken down because a number at the door is what a reader
 # decides on: ~95s in full, of which the live half is ~78s (roughly 21 engine round trips) and
@@ -60,7 +60,7 @@ done
 
 # ---- the player's state dir, pointed somewhere disposable ---------------------------
 # THE ARGUMENT FOR THIS LIVES HERE, and the other two files under tests/ point at it rather
-# than restating it (docs/AS-BUILT-verification.md §27 is the doc-level home of the same fact).
+# than restating it (docs/AS-BUILT-verification.md「验证矩阵」 is the doc-level home of the same fact).
 #
 # `ut-play` derives its state dir from TMPDIR ("${TMPDIR:-/tmp}/uting-$(id -u)", shell/ut-play)
 # and takes no override of its own. Left at the user's real TMPDIR, this file --stop --all's a
@@ -291,7 +291,7 @@ report "--stop --all exit"  0 "$(rc shell/ut-play --stop --all -j)"
 report "--stop --all line"  1 "$(shell/ut-play --stop --all -j | wc -l | tr -d ' ')"
 # --stop treats an empty set as idempotent success; --set-volume must NOT — there is no
 # volume it could have set, so this is the did-not-take-effect class (4), and the envelope
-# names the why so a caller can tell it from ambiguity (AS-BUILT-contract.md §3/§4).
+# names the why so a caller can tell it from ambiguity (AS-BUILT-contract.md「数据契约」与「退出码」).
 report "idle --set-volume is 4"   4 "$(rc shell/ut-play --set-volume 50 -j)"
 report "idle --set-volume says why" 0 "$(jq_ok '.status=="not_playing"' shell/ut-play --set-volume 50 -j)"
 # Every socket verb answers the empty set the way --set-volume does — ONE taxonomy, not one
@@ -363,7 +363,7 @@ report "a bad engine name is 1"  1 "$(rc_in '[{"engine":"../evil","url":"x"}]' s
 # The three shapes the verb takes, each proved by the SAME rejection: a payload that parses
 # reaches the player check (4), one that does not is usage (1). A search envelope is accepted
 # because a search result does not carry `engine` — that field is on the envelope, so only
-# taking the whole thing can label an item with its source (AS-BUILT-contract.md §3).
+# taking the whole thing can label an item with its source (AS-BUILT-contract.md「数据契约」).
 report "a --show envelope parses" 4 "$(rc_in '{"status":"playlist","items":[{"engine":"yt","url":"x"}]}' shell/ut-play --enqueue - -j)"
 report "a search envelope parses" 4 "$(rc_in '{"status":"ok","engine":"yt","results":[{"url":"x"}]}' shell/ut-play --enqueue - -j)"
 report "a shapeless object is 1"  1 "$(rc_in '{"status":"ok"}' shell/ut-play --enqueue -)"
@@ -376,8 +376,8 @@ report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - -
 
 # A detached player that dies on its own is the one lifecycle path the caller does not
 # drive, and it used to be silent: --status went empty, which is what a NORMAL finish looks
-# like too (docs/AS-BUILT-player.md §9.2). These checks own the boundary that keeps the tombstone
-# list an error record rather than the listening history ARCHITECTURE.md §1 rules out — a normal
+# like too (docs/AS-BUILT-player.md「状态机」). These checks own the boundary that keeps the tombstone
+# list an error record rather than the listening history ARCHITECTURE.md「定位与设计目标」 rules out — a normal
 # finish must leave nothing, a log with no epitaph must not be read as a death, and the list
 # must stay bounded. The input is a state file + log written by hand — a FIXTURE, which is
 # the only thing this suite is allowed to author: it is data the real reaper really reads, not
@@ -388,7 +388,7 @@ report "--queue rejects an action" 1 "$(rc_in "$Q1" shell/ut-play -d --queue - -
 #
 # ORDER IS LOAD-BEARING: this section must stay AHEAD of the TUI section. The pane's `uting`
 # polls --status once a second, every lifecycle verb reaps, and a reaped fixture is a fixture
-# deleted before the assertion that reads it — the failure docs/AS-BUILT-verification.md §27 already
+# deleted before the assertion that reads it — the failure docs/AS-BUILT-verification.md「验证矩阵」 already
 # has on record. Today the order holds by accident of layout; this comment is what makes it
 # hold on purpose.
 echo "── the death record: failures only, bounded, never inferred ───────"
@@ -611,7 +611,7 @@ done
 report "one version, every entry point" 1 \
     "$(for c in $ENTRY_POINTS; do "$c" --version | awk '{print $NF}'; done | sort -u | wc -l | tr -d ' ')"
 # …and that the one version is the FILE's, asserted through a SYMLINK — the documented
-# install (ROADMAP D2: users symlink these onto their own PATH) and the configuration this
+# install (ROADMAP 的打包 NO: users symlink these onto their own PATH) and the configuration this
 # breaks in. A script that does not resolve its own symlink chain looks for VERSION next to
 # the LINK, finds none, and prints "unknown". Seven entry points all printing "unknown" agree
 # with each other perfectly, so the check above stays green while every one of them is wrong;
@@ -676,11 +676,11 @@ report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcrip
 # exists on one engine and must never appear on the other.
 #
 # THE PAIR IS ALSO THE FEASIBILITY PROOF for how `uting` will probe an engine for the verb
-# without spending a request (AS-BUILT-engine.md §10.3): it invokes `--parts` with NO
+# without spending a request (AS-BUILT-engine.md「--parts」): it invokes `--parts` with NO
 # handle. The engine that has the verb answers with a usage error about the missing handle;
 # the engine that
 # does not falls into the unknown-flag arm every gate in this suite shares
-# (AS-BUILT-contract.md §2). BOTH exit 1 — which is exactly why the exit code cannot be the
+# (AS-BUILT-contract.md「门模型」). BOTH exit 1 — which is exactly why the exit code cannot be the
 # probe, and why what these two pin is the stderr WORDING. An engine that grew --parts and
 # a `c` key that reads the wrong side of this pair are each caught by one of them alone.
 report "bili-resolve has --parts"  1 "$(err_has 'unknown flag' shell/bili-resolve --parts)"
@@ -700,13 +700,13 @@ report "unknown engine is usage"  1 "$(rc shell/ut-play --engine nope -- "$MEDIA
 report "engine name is validated" 1 "$(rc shell/ut-play --engine ../evil -- "$MEDIA_ID")"
 # The quality tier is validated at the door, before any dependency gate: a mistyped tier
 # is a usage error, and a legal one still falls into the gates the handle and the engine
-# own — the tier must not change what a wrong verb is worth (AS-BUILT-contract.md §1.3).
+# own — the tier must not change what a wrong verb is worth (AS-BUILT-contract.md「命令规格」).
 report "ut-play rejects a bogus tier"     1 "$(rc shell/ut-play --quality ultra -- "$MEDIA_ID")"
 report "ut-play --quality needs a handle" 1 "$(rc shell/ut-play --quality low)"
 report "ut-play --quality keeps the engine gate" 1 \
     "$(rc shell/ut-play --quality low --engine nope -- "$MEDIA_ID")"
 # A bogus SCALAR knob in the user's config dies in uting the same way, naming the key the
-# user actually wrote (AS-BUILT-verification.md §27). Stated over every scalar door rather
+# user actually wrote (AS-BUILT-verification.md「验证矩阵」). Stated over every scalar door rather
 # than the tier that
 # happened to be written first: each one is its own `case`, not one loop through one
 # validator the way the four *_CYCLE keys are, so a check driving only the quality tier is
@@ -822,7 +822,7 @@ for n in $ENGINES; do
 done
 report "an unknown browser is anonymous" "$NENG" "$_bogus"
 
-# A flag that cannot act is REJECTED, not ignored (AS-BUILT-contract.md §2). --auth asks
+# A flag that cannot act is REJECTED, not ignored (AS-BUILT-contract.md「门模型」). --auth asks
 # about the engine, so a handle is a usage error; -f selects a stream format and --auth
 # resolves no stream; -J returns the raw yt-dlp record and --auth runs no yt-dlp.
 for _bad in "--auth -- HANDLE" "--auth -f video" "--auth -J"; do
@@ -1238,7 +1238,7 @@ report "dead id keeps its reason" 0 \
 echo "── argv order: a flag-shaped query after -- is SEARCHED ───────────"
 # Not a player list: --status after -- is eight characters of query text. The check lives on
 # yt-search because that is where searching lives now; the player has no search branch left
-# to confuse a flag-shaped token with (AS-BUILT-contract.md §2).
+# to confuse a flag-shaped token with (AS-BUILT-contract.md「门模型」).
 # Asserted POSITIVELY, on the query the engine echoes back. The old form folded stderr into
 # the pipe and asked only "is line one not JSON?", so `Error: search failed (network)` — a
 # yt-search that did not run at all — satisfied it. It was also the one live call in this file
@@ -1282,7 +1282,7 @@ report "search result keys agree" \
 # a real implementation has already been wrong, and neither is caught by the parity check
 # above (two engines agree on a key set they are both missing, and it only ever reads -j).
 #
-#   · `kind`/`access` are the ENGINE'S JUDGEMENT about a row (AS-BUILT-contract.md §3), which
+#   · `kind`/`access` are the ENGINE'S JUDGEMENT about a row (AS-BUILT-contract.md「数据契约」), which
 #     is why they are injected before the lean projection rather than inside it: an engine
 #     that adds them to the projection alone hands the caller who asked for MORE data (-J) an
 #     envelope missing two required fields, and every -j check in this file stays green.
@@ -1382,7 +1382,7 @@ SELECTED_IS_AN_ANSWER='(.selected|type)=="string" and (.selected|length)>0
 report "yt resolve selected is an answer"   0 "$(jqv "$SELECTED_IS_AN_ANSWER" "$YT_R")"
 report "bili resolve selected is an answer" 0 "$(jqv "$SELECTED_IS_AN_ANSWER" "$BILI_R")"
 # --info gets the same parity treatment: it is the third envelope both engines publish
-# (AS-BUILT-contract.md §3), and nothing else here would notice a field renamed on one
+# (AS-BUILT-contract.md「数据契约」), and nothing else here would notice a field renamed on one
 # side. The ok/engine assertion is what keeps the key comparison from passing vacuously —
 # two ERROR envelopes agree on their keys too.
 report "info -j is ok and named" 0 \
@@ -1399,7 +1399,7 @@ report "bili-search -j is one line" 1 "$(lines "$BILI_S")"
 # above would silently mis-sort and mis-render as a string. It is parsed in the engine, so
 # the assertion is that what leaves the engine is a NUMBER — never the raw string.
 #
-# `null` is ALLOWED and is not a miss: §7/AS-BUILT-contract.md §3 make duration/duration_fmt null together when the
+# `null` is ALLOWED and is not a miss: AS-BUILT-engine.md「搜索子系统」and AS-BUILT-contract.md「数据契约」make duration/duration_fmt null together when the
 # row has no duration, and this endpoint does return such rows intermittently (observed: one
 # null among five, on a result set the site swapped in between two identical requests). An
 # earlier `all(type=="number")` here failed on exactly those runs and read as flaky — it was
@@ -1624,7 +1624,7 @@ else
     report "survives 62x20 and 26x24" 1 "$alive"
 
     # A store is a room with a door, not a one-way trip — and the door is the key that opened
-    # it (AS-BUILT-tui.md §11). `h` REPLACES the rows with the log (`items=` in the header,
+    # it (AS-BUILT-tui.md). `h` REPLACES the rows with the log (`items=` in the header,
     # where a search says `results=`) and `h` again puts the search back; until it did, the
     # only exits from that room were retyping a query and quitting. Both halves are asserted:
     # an `h` that quietly did nothing would leave the search on screen and make the return
@@ -1697,7 +1697,7 @@ else
     # All of it on the pane that is ALREADY up: no second cold start, no second cold search.
     # The rows on screen are the fixture these keys need, and the keys are the only way to
     # reach the write path — there is no verb for it, deliberately (the agent surface for a
-    # preference IS the config file, ARCHITECTURE.md §3.6).
+    # preference IS the config file, ARCHITECTURE.md「两个根数据文件」).
     #
     # The write is DEFERRED — a cycle sets a dirty bit and the flush happens on the reader's
     # idle tick — so every assertion below POLLS the file instead of reading it once. That is

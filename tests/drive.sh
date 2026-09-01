@@ -18,8 +18,8 @@
 #      the isolation block below. Reaping unconditionally is only safe once nothing else
 #      lives there.
 #
-# The keymap it can send lives in README.md (§Keys) and the YT_* knobs in
-# AS-BUILT-contract.md §5 — this file restates neither.
+# The keymap it can send lives in README.md (Keys) and the YT_* knobs in
+# AS-BUILT-contract.md「配置面」 — this file restates neither.
 #
 # Portability: bash 3.2 (macOS system bash). Needs tmux; jq only for the cleanup report.
 #
@@ -52,7 +52,7 @@ done
 command -v tmux >/dev/null 2>&1 || { echo "drive.sh: tmux is required (uting needs a real tty)" >&2; exit 1; }
 
 # ---- a state dir of this run's own --------------------------------------------------
-# Why, once, for all three files under tests/: contract.sh's header, and §27. What is specific
+# Why, once, for all three files under tests/: contract.sh's header, and AS-BUILT-verification.md「验证矩阵」. What is specific
 # to a DRIVER: the pane holds a real `uting` driving a real `ut-play` and a real mpv, so only
 # whose state it lands on changes — and their playlists and history still render, because
 # UT_STATE_DIR is deliberately NOT redirected (a frame captured here should show the store a
@@ -185,7 +185,7 @@ fi
 # changing every ~0.1s), writes the frame's head at 2.76s, then goes QUIET before writing the
 # rest. That quiet stretch is the trap: it is not a slow trickle with small pauses, it is one
 # stall mid-frame — the width layer measuring what the frame is about to print
-# (AS-BUILT-tui.md §11) — so a settle shorter than it photographs the tear no matter how it is
+# (AS-BUILT-tui.md) — so a settle shorter than it photographs the tear no matter how it is
 # spelled. A first attempt at 0.6s did, and so did a quiescence test with a 0.25s window. The
 # stall itself was 0.88s when this was written and is 0.20s since disp_fits bounded the
 # measurement; the window is not re-tuned down, because what it is sized against is the SLOW
