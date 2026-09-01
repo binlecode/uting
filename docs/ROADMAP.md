@@ -8,7 +8,8 @@
 > 「Go 重写 NO」……），不设编号键；触发器或前置消失即整行删除，不留痕。
 > **在飞的是什么这里不答** —— `docs/PLAN-*.md` 在或不在就是答案。
 > 定位与非目标在 `ARCHITECTURE.md`「定位与设计目标」（判断一个新功能进不进来先问那一节），
-> 调研数据在 [`RESEARCH-tui-player.md`](RESEARCH-tui-player.md)。
+> 调研数据在 [`RESEARCH-tui-player.md`](RESEARCH-tui-player.md) 与
+> [`RESEARCH-terminal-graphics.md`](RESEARCH-terminal-graphics.md)。
 
 ---
 
@@ -49,6 +50,23 @@
   就不是瓶颈。**重开 = 有人真的在一个吞不下 300KB/s 的终端上跑它**，并且第一步不是加一档
   algo，而是把画布一起降回 `rows × 1` —— 否则换来的是更少的纵向级数**加上**一个模糊的边。
 
+- **图片不走 mpv 的 VO NO —— 终端里画图这件事，mpv 不是那个后端。** 这条**只否掉一条路线，
+  不否掉功能本身**（图片功能是 `PLAN-` 的事，这里不答）。理由是实测的三条（2026-09-01，
+  `RESEARCH-terminal-graphics.md`「不加依赖能走多远」）：mpv 给的是一个 **VO 不是一个 widget**
+  —— 一帧输出里带 `\e[?1003h`（抢鼠标上报）与 `\e[2J`（清整屏，`--vo-kitty-alt-screen=no`
+  也照清），而 `uting` 自己拥有终端（`AS-BUILT-tui.md`）；载荷是 `f=24` **未压缩**，
+  一张 320×180 = **462KB** 且**与显示格子大小无关**（协议传原图）；**不带 `i=` 图像 id**，
+  每帧整幅重传。**同一张图自己发 `f=100`（PNG，用 mpv 的 `--vo=image` 转码得来）是 52,012
+  字节，而且只在换行时付一次、不是每帧** —— `base64`/`fold` 都在 `/usr/bin`，不是新依赖；
+  mpv 在那条管线里只当解码器，一个转义序列都不发。所以贵的是这条**路线**，不是这件事。
+  **顺带钉死两条别再重提**：chafa / img2sixel / ueberzugpp / kitty 的 `icat` 一律是**新增
+  运行时依赖**，撞 `CLAUDE.md` 的硬规则；而缩略图 URL **不是契约缺口** —— 两个引擎的 `-J`
+  现在就带着（`yt-search` 的 thumbnail arrays、`bili-search` 的 `pic`）。
+  **重开 = mpv 长出一个不抢屏幕的放置模式**，或 `--vo-kitty-use-shm` / 图像 id 被实测证明
+  把载荷压到手写发射器的量级（怎么量见「本轮没能确定的问号」）。
+  **不在这条 NO 之内**：`YT_ASCII_VO=kitty` 的 viz 今天就能跑（门在 `ut-play` 的
+  `mpv_supports_vo`）—— 那一格 mpv 的 VO 语义正合适，因为那时屏幕本来就归它。
+
 - **Go 重写 NO —— 不做 Go 版。** 差异化在契约不在渲染，而契约与语言无关
   （`ARCHITECTURE.md`「六条发现」第 1 条）；single-binary 全有全无 —— 引擎永不移植（随外部
   网站变，shell 的原地可改性是净收益），于是 Go TUI 或 Go 播放器接 shell 引擎仍是四依赖，
@@ -59,6 +77,15 @@
   **两个重开条件**：真的要 MCP 那张脸（解除「定位与设计目标」的那条非目标 —— 领域证据与
   可抄的工程细节在 `RESEARCH-tui-player.md` §10），或**打包 NO 反转**。哪一条成立，
   第一步都是冻结当时的契约（`ARCHITECTURE.md`「冻结面」）。
+
+- **terminfo 探测 truecolor NO** —— 24 位色的探针只有 `COLORTERM`，不查 terminfo 的
+  `RGB`/`Tc` 能力位。提这条的动机是"community 主题在某些终端悄悄退回 ANSI-16"，两半都经不起
+  实测（2026-09-01，本机）：macOS 自带 `infocmp` 是 **ncurses 6.0.20150808**，而 `RGB` 是
+  6.1（2018）才进的能力位 —— `xterm-256color`/`tmux-256color` 里都查不到它，库里也根本没有
+  `xterm-direct`，所以这个探针在**首要平台上恒答"不支持"**，比现状更差；而 **tmux 3.7c 实测
+  原样透传 `COLORTERM`**（外层 `truecolor` → 内层仍 `truecolor`），要补的那个洞本身不存在。
+  **重开 = macOS 自带 ncurses ≥ 6.1**，或出现一个真支持 24 位色却不设 `COLORTERM` 的终端 ——
+  届时也是按名字加白名单，而不是去查 terminfo。
 
 ## 重开触发器 —— 已定之事各自等着的条件
 

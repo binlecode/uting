@@ -10,12 +10,13 @@
    ├── ARCHITECTURE.md          ← 你在这里。伞：定位与非目标、六条发现、
    │                              设计决定（按模块与接口）、拓扑与接缝、控制流、
    │                              四条工作流、已知约束、风险登记、bash 3.2 契约
-   ├── AS-BUILT-contract.md       面向 agent 的冻结面：why 与 semver 边界（形状在 usage() 与测试里）
+   ├── AS-BUILT-cli-contract.md   面向 agent 的冻结面：why 与 semver 边界（形状在 usage() 与测试里）
    ├── AS-BUILT-engine.md         站点那一半：搜索、解析、登录/PO-token 探测、句柄文法
    ├── AS-BUILT-player.md         播放器、队列，与两个持久存储
    ├── AS-BUILT-tui.md            人机面：一个视图五个行源、宽度层、重排、三个播放态
    ├── ROADMAP.md                 还开着的：记下来的 NO、重开条件、没做的事
    ├── RESEARCH-tui-player.md     这套决定所依赖的那份外部调研
+   ├── RESEARCH-terminal-graphics.md  终端显示图片：协议、同路项目、不加依赖的成本实测
    └── PLAN-<topic>.md            在飞的工作
 ```
 

@@ -336,6 +336,11 @@ surface.
   **the other is read, not run** — how other terminal players are built along five orthogonal
   design axes, the five playback architectures they pick from, and the four routes to a
   playable URL on the Chinese side. It labels its own gaps.
+- [`docs/RESEARCH-terminal-graphics.md`](docs/RESEARCH-terminal-graphics.md) — the second survey:
+  showing pictures in a terminal. What the protocols settled on, what the comparable Chinese
+  projects actually ship, and — **measured on this machine** — how far mpv alone gets you before
+  a sixth dependency is needed — mpv's own graphics VO turns out to be the expensive route, not
+  the only one. It is the evidence behind the roadmap's mpv-VO NO.
 
 ## License
 
