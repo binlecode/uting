@@ -2701,26 +2701,51 @@ chapter_sec() {
 CHAP_JSON=""
 build_chapter_rows() {
     local i n=${#ITEM_CHAP_SEC[@]} sec end len h m ss lines="" out dfmt rail
+    local ws=0 we=0
+    local starts=() ends=() dfmts=()
     CHAP_JSON=""
     ((n > 0)) || return 1
+    # TWO PASSES, because the arrow is a COLUMN. Right-flushing each span on its own aligns
+    # the ends and nothing else: `5:42 → 8:00` and `8:00 → 11:32` put their arrows one cell
+    # apart, and an hour in puts it four apart, so the eye scanning down the one column that
+    # exists to be scanned finds it moving. The rails are therefore all built to the SAME
+    # width — each time right-aligned in a field sized over the whole table — and the flush
+    # then lands every arrow and every digit on one column. Sizing over the table, not over
+    # the page, for the reason the row-number field is sized over NUM_ENTRIES: a column that
+    # re-aligns as you page is the same ragged column, discovered later.
     for ((i = 0; i < n; i++)); do
         sec="${ITEM_CHAP_SEC[$i]}"
         end="${ITEM_CHAP_END[$i]:-}"
         disp_clock "$sec"
-        rail="$DISP_CLOCK $GL_ARROW"
-        dfmt=""
+        starts[$i]="$DISP_CLOCK"
+        ((${#DISP_CLOCK} > ws)) && ws=${#DISP_CLOCK}
+        ends[$i]=""
+        dfmts[$i]=""
         if [[ -n "$end" ]] && ((end > sec)); then
             len=$((end - sec))
             h=$((len / 3600)); m=$(((len % 3600) / 60)); ss=$((len % 60))
             printf -v dfmt '%02dh:%02dm:%02ds' "$h" "$m" "$ss"
+            dfmts[$i]="$dfmt"
             disp_clock "$end"
-            rail="$rail $DISP_CLOCK"
-        else
-            len=""
+            ends[$i]="$DISP_CLOCK"
+            ((${#DISP_CLOCK} > we)) && we=${#DISP_CLOCK}
         fi
-        chapter_url "$ITEM_URL" "$sec"
+    done
+    for ((i = 0; i < n; i++)); do
+        # An item whose engine published no end at all leaves we at 0, and then the rail is
+        # the start and the arrow with no field behind it — a column of trailing blanks would
+        # spend cells of the title's budget to show nothing. A table where only SOME chapters
+        # have an end still reserves the field: those rows are the ones being aligned to.
+        if ((we > 0)); then
+            printf -v rail '%*s %s %*s' "$ws" "${starts[$i]}" "$GL_ARROW" "$we" "${ends[$i]}"
+        else
+            printf -v rail '%*s %s' "$ws" "${starts[$i]}" "$GL_ARROW"
+        fi
+        len=""
+        [[ -n "${ends[$i]}" ]] && len=$(( ITEM_CHAP_END[i] - ITEM_CHAP_SEC[i] ))
+        chapter_url "$ITEM_URL" "${ITEM_CHAP_SEC[$i]}"
         printf -v out '%s%s%s%s%s%s%s%s%s' \
-            "$CHAP_URL" "$US" "${ITEM_CHAP_TITLE[$i]}" "$US" "$dfmt" "$US" "${len}" "$US" "$rail"
+            "$CHAP_URL" "$US" "${ITEM_CHAP_TITLE[$i]}" "$US" "${dfmts[$i]}" "$US" "${len}" "$US" "$rail"
         lines="$lines$out"$'\n'
     done
     CHAP_JSON=$(printf '%s' "$lines" | jq -Rsc --arg eng "$ITEM_ENGINE" '

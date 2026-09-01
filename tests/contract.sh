@@ -1926,10 +1926,15 @@ else
     # row uses to say how LONG it is. Printing the start alone — which is what shipped —
     # passes every other check on this view while telling the reader a number whose meaning
     # silently changed between two lists that are otherwise identical. The pattern is a
-    # SHAPE, never a value: which chapters today's item has is the site's business.
+    # SHAPE, never a value: which chapters today's item has is the site's business. The gap
+    # after the arrow is ` +` and not ` ` for the same reason — both times are right-aligned
+    # in a field sized over the whole table, so a page whose ends are all shorter than the
+    # widest one is padded, and pinning one space would make this check depend on which page
+    # the item's hour mark falls on. Alignment itself is not asserted here: layout belongs to
+    # capture-pane and drive.sh.
     report "…and a chapter row reads as a span" 1 \
         "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null |
-            grep -cE '[0-9]:[0-9][0-9] (→|->) [0-9]+:[0-9][0-9]' | awk '{print ($1 > 0) ? 1 : 0}')"
+            grep -cE '[0-9]:[0-9][0-9] (→|->) +[0-9]+:[0-9][0-9]' | awk '{print ($1 > 0) ? 1 : 0}')"
     if [ "$shown" != 1 ] || [ "$paid" != 1 ]; then
         echo "  ---- pane at the moment i did not open the chapter rows ----" >&2
         tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
