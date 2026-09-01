@@ -887,8 +887,20 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     `YT_ASCII=1` 下回退成 `cpu`/`ram` 文字）。
     读的是同一对缓存（`RES_CPU`/`RES_MEM`，`fetch_play_res` 在共享时钟上每
     UT_RESOURCE_TICKS 拍采一次），
-    渲染也不为它花任何 fork。口径、读法与两个键的语义在 `AS-BUILT-contract.md`「配置面」
-    （一个事实一个地方）。丢弃顺序里它排在键尾之后、位置读数之前 ——
+    渲染也不为它花任何 fork。**口径是播放器的进程组**（wrapper + mpv + 可能的回退 mpv，
+    pgid == wrapper pid），不是整机 —— 整机负载任何系统工具都给，这个进程组只有拿着 pid 的
+    uting 知道。读法是一次 `ps -A -o pgid=,%cpu=,rss=` 加 awk 按组求和（约 24ms）：`ps -g`
+    在 macOS 与 procps 下语义不同，全表扫描是唯一一种两个平台同一拼写的读法；%cpu 取 ps 自己
+    的语义（衰减/生命期均值，不是瞬时值），rss 两边都是 KB。空闲不采：没在播就没有可量的组，
+    而钟本来也只在播放时转。
+    **怎么读这个数：网络流下 ~300M 是 mpv 的正常体型，不是泄漏。** mpv 播网络流会把还没播到
+    的内容囤在内存里防断流，出厂上限 `--demuxer-max-bytes=150MiB`（前向）+
+    `--demuxer-max-back-bytes=50MiB`（回退，供往回跳），囤满即停涨（实测 v0.41.0：前向缓存
+    顶满正好 150M，加解码器与共享库落在 ~300M）。缓冲期的尖峰（~400M+）是 yt-dlp 那个 Python
+    进程还在组里；解析完它退出，数就落回 mpv 自己的。一个放大器：audio 模式的 `ba/b` 链回落到
+    混流格式（如 yt 的 f18）时，囤的字节里有一半是不会渲染的视频轨。嫌大在**你自己的 mpv.conf**
+    里调 `demuxer-max-bytes`（`run_mpv` 不传 `--no-config`，用户的 mpv.conf 生效）—— mpv 的
+    调音面已经存在，套件不为它再包一个键。丢弃顺序里它排在键尾之后、位置读数之前 ——
     足迹说的是播放器的开销，不是曲目。
     与 PT_ 三元组一起在 `clear_play_state` 清空，计数器同时归零，
     于是下一个播放器的第一拍就采样，而不是接着上一个播放器的步幅走。
