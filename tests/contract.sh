@@ -689,8 +689,6 @@ report "yt-resolve has no --parts"  0 "$(err_has 'unknown flag' shell/yt-resolve
 report "yt --parts is usage"        1 "$(rc shell/yt-resolve --parts)"
 # A flag that cannot act is REJECTED, not ignored: -f and -S select a stream format, and
 # enumerating parts resolves no stream. Same rule --info is already held to above.
-report "bili --parts refuses -f"   1 "$(rc shell/bili-resolve --parts -f audio -- "$BILI_ID")"
-report "bili --parts refuses -S"   1 "$(rc shell/bili-resolve --parts -S abr -- "$BILI_ID")"
 report "bili --parts takes ONE handle" 1 \
     "$(rc shell/bili-resolve --parts -- "$BILI_ID" "$BILI_ID")"
 report "bili-search rejects -d" 1 "$(rc shell/bili-search -d -- 音乐)"
@@ -721,6 +719,45 @@ for spec in UT_PLAY_QUALITY=bogus UT_KEYS=bogus YT_BG=sideways UT_RESOURCE=maybe
     *) KNOB_HIT=no ;;
     esac
     report "${spec%%=*}: a bogus value dies naming the key" "yes" "$KNOB_HIT"
+done
+
+# UT_VIZ_STYLE is the player's own scalar door and lives behind a MODE, so the loop above —
+# which drives uting — cannot reach it. Three claims, and the discriminator is the MESSAGE
+# for the same reason it is up there: all three exit 1. A handle on a host no engine claims
+# keeps every one of them offline, because the host gate answers before yt-dlp is reached.
+VIZ_URL="https://example.com/x"
+viz_says_key() {
+    case "$(env "$1" shell/ut-play -f "$2" -- "$VIZ_URL" 2>&1 || true)" in
+    *UT_VIZ_STYLE*) echo yes ;;
+    *) echo no ;;
+    esac
+}
+report "UT_VIZ_STYLE: a bogus value dies naming the key" "yes" "$(viz_says_key UT_VIZ_STYLE=bogus viz)"
+# …and the gate is at the DOOR, before the handle's own: a legal style has to fall THROUGH
+# to the resolve failure rather than be answered here.
+report "UT_VIZ_STYLE: a legal value reaches the handle gate" "no" "$(viz_says_key UT_VIZ_STYLE=wave viz)"
+# …and it is scoped to the mode that draws. A door that fires for -f audio would reject a
+# config the audio path never reads — which is the shape a mode-blind `case` arrives in.
+report "UT_VIZ_STYLE: silent outside -f viz" "no" "$(viz_says_key UT_VIZ_STYLE=bogus audio)"
+
+# THE TERMINAL-RENDERING MODES CANNOT DETACH, and the refusal is a usage error, not a
+# tool failure — an agent reading 2+ would retry a combination that can never work. Stated
+# over BOTH such modes rather than the one that happened to be written first: they share a
+# single gate, so a check driving only `viz` would be green if the gate ever narrowed to it.
+# The queue is the same claim from the other side: it STARTS a detached player, so it
+# inherits the same impossibility without naming a mode at all.
+for _m in ascii viz; do
+    report "-d refuses -f $_m" 1 "$(rc shell/ut-play -d -f "$_m" -- "$VIZ_URL")"
+    report "--queue refuses -f $_m" 1 "$(rc_in '[]' shell/ut-play -f "$_m" --queue - )"
+    # The TUI states the same impossibility from its own side — its playback IS detached, so
+    # the mode could never reach a terminal — and there the claim has to be the MESSAGE: the
+    # TTY gate a few lines further into `uting` also exits 1, so an exit code cannot separate
+    # "refused the mode" from "refused the pipe". Captured then matched, per this file's rule.
+    case "$(shell/uting -f "$_m" q </dev/null 2>&1 || true)" in
+    *"must be one of"*) _mhit=yes ;;
+    *) _mhit=no ;;
+    esac
+    report "uting refuses -f $_m, naming the modes" yes "$_mhit"
 done
 
 # One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
@@ -759,13 +796,56 @@ done
 report "every search half refuses -S" "$NENG" "$_sdash"
 # The tier abstraction is held to the same two shapes as -S: a flag that cannot act is
 # rejected (--parts resolves no stream), and a search half resolves no format at all.
-report "bili --parts refuses --quality" 1 \
-    "$(rc shell/bili-resolve --parts --quality high -- "$BILI_ID")"
 _qdash=0
 for n in $ENGINES; do
     [ "$(rc "shell/$n-search" --quality high -- q)" = 1 ] && _qdash=$((_qdash + 1))
 done
 report "every search half refuses --quality" "$NENG" "$_qdash"
+
+# THE READ-ONLY RESOLVE VERBS ARE HELD TO THE SAME RULE, and this replaces three lines that
+# named ONE engine's ONE verb: `--info` — the verb EVERY engine has — had no coverage at all.
+# `--info`, `--transcript` and `--parts` resolve no stream, so all three stream-format flags
+# are values they cannot act on.
+#
+# Which verbs an engine HAS is discovered from the flag list the engine itself prints when
+# handed an unknown flag — the only authoritative enumeration of what it accepts. Two nearer
+# sources were tried and both lie. An error string: a missing verb is reported two different
+# ways (`yt-resolve --parts` says "unknown flag", `bili-resolve --transcript` says the site
+# carries no captions), so a probe keyed on either message concludes the wrong thing about
+# the other engine. And `-h`: `bili-resolve -h` explains "There is no --transcript" —
+# capability by absence, stated in the help — so a grep for the verb MATCHES on the engine
+# that does not have it. Both mistakes end the same way: counting a refusal that happened
+# because the VERB is absent as proof the FLAG was rejected. Green for the wrong reason is
+# what this discovery exists to avoid, and it is the reason the count below is 12 and not 15.
+#
+# The claim is the MESSAGE, for the same reason: an absent verb and a refused flag both exit
+# 1. And the handle is one no engine claims, which keeps every case offline AND pins the gate
+# ORDER — a flag error must not need a good handle to be reported.
+# CAPTURED, then matched — never piped straight from the command. This file runs under
+# `set -o pipefail`, so `resolve … | grep -q` reports the RESOLVE's exit 1 rather than
+# grep's 0, and every verb reads as absent (measured: the discovery found 0 cases).
+_ro_verb_has() {
+    local _list
+    _list=$("shell/$1-resolve" --ut-not-a-flag 2>&1 >/dev/null | head -1) || true
+    case "$_list" in *"$2"*) return 0 ;; *) return 1 ;; esac
+}
+_ro=0
+_ro_n=0
+for n in $ENGINES; do
+    for _v in --info --transcript --parts; do
+        _ro_verb_has "$n" "$_v" || continue
+        for _bad in "-f audio" "-S abr" "--quality low"; do
+            _ro_n=$((_ro_n + 1))
+            [ "$(err_has "does not apply to $_v" "shell/$n-resolve" $_v $_bad -- "$VIZ_URL")" = 0 ] &&
+                _ro=$((_ro + 1))
+        done
+    done
+done
+# >= 6, not a literal: two engines x one shared verb x three flags is the floor, and engine
+# #3 or a fourth read-only verb must RAISE this, never break the line.
+[ "$_ro_n" -ge 6 ] ||
+    { echo "contract.sh: fewer than six read-only verb x format-flag cases discovered" >&2; exit 1; }
+report "every read-only resolve verb refuses a format flag" "$_ro_n" "$_ro"
 
 # --auth: the cookie DECISION, stated over every discovered engine. It is the one resolve
 # verb that takes no handle, makes no request and runs no yt-dlp, so all four of those are
