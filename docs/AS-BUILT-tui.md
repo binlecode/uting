@@ -23,15 +23,21 @@ mpv socket（AS-BUILT-player.md「运行时 IPC」）。
 ### 调用面 —— 选项的乘积
 
 `uting` 的 argv 面很窄（搜索参数转发给引擎，菜单参数留给自己），但它有一个别的命令没有的
-前提：**它要真 TTY，stdin 和 stdout 都要**。下面每一条都对应 `tests/contract.sh` 的检查。
+前提：**它要真 TTY，stdin 和 stdout 都要**。下面每一行 `tests/contract.sh` 都以同样的 argv、
+同样的顺序真的跑过一遍（查询词是检查自己的）—— 管进 `</dev/null` 之后每一行都该落在 TTY 门上，
+所以一个拼错的 flag 会先被 flag 门答掉，检查随即变红。
 
 ```sh
-uting                                  # 无 query，交互式问
-uting "lofi hip hop"                   # 直接搜
-uting --engine bili -n 40 "周杰伦"      # 转发给 bili-search
-uting -f video --volume 60 "…"          # 菜单参数：起播 mode 与起播音量
-uting --theme nord --lang zh "…"        # chrome
+uting                                  # 已证 · 无 query，交互式问
+uting "lofi hip hop"                   # 已证 · 直接搜
+uting --engine bili -n 40 "周杰伦"      # 已证 · 转发给 bili-search
+uting -f video --volume 60 "…"          # 已证 · 菜单参数：起播 mode 与起播音量
+YT_LANG=zh uting --theme nord "…"       # 已证 · chrome —— 主题是 flag，语言是键（`l` 键实时轮换）
 ```
+
+最后一行原来写的是 `uting --theme nord --lang zh`，而 **`--lang` 根本不是 `uting` 的 flag**。
+它就那么错着，直到这一节的检查第一次真的跑它（2026-09-01）—— 这正是「示例只印不跑」的代价，
+也是这一段现在长成这样的原因。
 
 **两道门，都退 1，而且顺序是固定的**：flag 门在前，TTY 门在后。
 
@@ -45,6 +51,10 @@ uting --theme nord --lang zh "…"        # chrome
 **这两道门必须靠文案分辨，不能靠退出码** —— 两道都是 1。一个只看退出码的检查，在「拒了这个
 值」和「拒了这根管道」之间是分不开的，也就等于**不会失败**。套件里 uting 这一段的每条断言
 都是匹配文案的，原因就是这个。
+
+**顺序本身也是这么钉住的：喂同一根管道两次，读回两种文案。** `uting -f viz </dev/null` 报
+mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检查紧挨着放。单看任何一条
+都与「只有一道门」自洽，两条放在一起就不自洽了：一个先查 tty 的实现会让上面那条也报 TTY 门。
 
 顺带一条不对称：**cycle 被收窄后仍然必须能启动**。`-f` 与 `-s` 的默认值是拿 cycle 校验的，
 所以如果默认写成字面量 `audio`，`UT_MODE_CYCLE=video` 就成了一个「跑不起来的配置」——用户

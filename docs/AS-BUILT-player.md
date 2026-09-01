@@ -31,12 +31,21 @@ prose 会腐烂，检查会红。
 **终端可视化（`-f viz`，别名 `waves` / `wave`）** —— 前台阻塞，占满整个 pane：
 
 ```sh
-ut-play -f viz -- URL                              # 最小调用
-UT_VIZ_STYLE=wave ut-play -f viz -- URL            # 这一次换风格（默认 bars）
-ut-play -f viz --volume 0 -- URL                   # 只要画面
-ut-play -f viz --start 90 --quality low -- URL     # 起播偏移 + 低码率（可视化不看画质）
-ut-play --engine bili -f viz -- BV…                # 换引擎，同一个 mode
+ut-play -f viz -- URL                              # 已证 · 最小调用
+UT_VIZ_STYLE=wave ut-play -f viz -- URL            # 已证 · 这一次换风格（默认 bars，两个都跑过）
+ut-play -f viz --volume 0 -- URL                   # 已证 · 只要画面
+ut-play -f viz --start 90 --quality low -- URL     # 已证 · 起播偏移 + 低码率（可视化不看画质）
+ut-play --engine bili -f viz -- BV…                # 已证 · 换引擎，同一个 mode
 ```
+
+**「已证」在这里证的是 argv，不是画面。** 五行每一行 `tests/contract.sh` 都以同样的 flag、
+同样的顺序真的跑过一次，句柄换成一个**没有引擎认领的 host**：这样整条调用离线（引擎的 host
+门在 yt-dlp 之前答，量到 0.05s），而报回来的必须是**引擎**那句 `<engine>-resolve could not
+resolve` —— 也就是每个 flag 都被收下了、这个组合合法、调用一路走到了引擎。断言的是**文案**
+不是退出码：一个被拒的 flag 与一个被拒的 host 同样退 1。`--engine bili` 那行的判据是文案里
+的**引擎名**，所以它不是第一行的重复；`--start 90 --quality low` 那行是最容易腐的一条 ——
+两个 flag 各自的值门都单独有检查，但在此之前没有任何检查把它们一起给过一个自己还带着门
+（拒 `-d`、拒 `--queue`）的 mode。画面本身仍然只标「实测」，理由见下。
 
 被拒的三种，都是**用法错误（退 1）而不是工具失败（2+）**：一个 agent 把 2+ 读成「稍后重试」，
 会去重试一个永远不成立的组合。

@@ -20,9 +20,9 @@
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md「可移植性契约」.
 #
 # Cost, measured 2026-09-01 and broken down because a number at the door is what a reader
-# decides on: ~55-65s in full (runs minutes apart came back 55s, 63s and 64s — the live half is
+# decides on: ~55-65s in full (runs minutes apart came back 55s, 60s, 63s and 64s — the live half is
 # roughly 21 engine round trips and the spread is the sites'), of which `--offline` is the
-# first ~20s: 210 of the 308 checks, no packet sent. That 20 is dominated by one deliberate
+# first ~20s: 220 of the 318 checks, no packet sent. That 20 is dominated by one deliberate
 # 5.5s lock spin — a FRESH held lock has to be waited out, that being what the spin is for;
 # the stale-lock steal beside it costs 0.1s because staleness is tested before the spin, not
 # after (shell/ut-playlist:lock_playlist).
@@ -788,6 +788,44 @@ report "UT_VIZ_STYLE: a legal value reaches the handle gate" "no" "$(viz_says_ke
 # config the audio path never reads — which is the shape a mode-blind `case` arrives in.
 report "UT_VIZ_STYLE: silent outside -f viz" "no" "$(viz_says_key UT_VIZ_STYLE=bogus audio)"
 
+# ── AS-BUILT-player.md「终端可视化」's five worked calls, each run once. The PICTURE those
+# lines are about needs a real resolve and a real tty, so it stays 实测 in that doc — a
+# foreground blocking play with no --length is not time this suite spends, and bounding it
+# would take a stand-in it does not keep. What CAN be held here is the half that rots
+# silently: that each of those argv lines is still ACCEPTED — every flag parsed, every
+# combination legal, the call travelling all the way to the engine.
+#
+# The claim is the MESSAGE, for the reason the scalar-knob loop above states: a rejected flag
+# and a refused host both exit 1, so an exit code cannot separate "this combination is legal"
+# and "one of these flags is not", and a check that cannot separate them cannot fail. The
+# handle is the check's own — a host no engine claims, which keeps every one of these offline
+# (the engine's host gate answers before yt-dlp is reached; measured at 0.05s) while still
+# proving the call got past ut-play entirely. Reaching the ENGINE is the pass, and the engine
+# NAME in the message is what makes the --engine line more than a repeat of the first.
+viz_reaches_engine() { # <engine> <env assignments and argv…> — yes if it got as far as <engine>
+    local want=$1
+    shift
+    case "$(env "$@" 2>&1 </dev/null || true)" in
+    *"$want-resolve could not resolve"*) echo yes ;;
+    *) echo no ;;
+    esac
+}
+report "-f viz: the minimal call"     yes "$(viz_reaches_engine yt shell/ut-play -f viz -- "$VIZ_URL")"
+# `bars` beside `wave`: the check above proves a legal style is not answered at the door, but
+# it drives one member of a two-member enum, and the default is the OTHER one — so a door that
+# only ever admitted its own default would be green up there and red here.
+report "…UT_VIZ_STYLE=bars, the default" yes "$(viz_reaches_engine yt UT_VIZ_STYLE=bars shell/ut-play -f viz -- "$VIZ_URL")"
+report "…with --volume 0"             yes "$(viz_reaches_engine yt shell/ut-play -f viz --volume 0 -- "$VIZ_URL")"
+# Three flags at once, which is the line most likely to rot: --start and --quality each have a
+# value gate of their own and each is checked alone above, but nothing had ever given both to
+# a MODE whose own gate refuses -d and --queue. A combination gate that grew one arm too wide
+# is exactly what this catches, and it is invisible to any single-flag check.
+report "…with --start 90 --quality low" yes "$(viz_reaches_engine yt shell/ut-play -f viz --start 90 --quality low -- "$VIZ_URL")"
+# The mode is engine-agnostic — it is the player's, not a site's — so the same -f viz has to
+# survive being pointed at the other engine. The name in the message is the assertion: a
+# --engine that was parsed and then dropped would come back naming `yt`.
+report "…and --engine bili keeps it"  yes "$(viz_reaches_engine bili shell/ut-play --engine bili -f viz -- "$VIZ_URL")"
+
 # THE TERMINAL-RENDERING MODES CANNOT DETACH, and the refusal is a usage error, not a
 # tool failure — an agent reading 2+ would retry a combination that can never work. Stated
 # over BOTH such modes rather than the one that happened to be written first: they share a
@@ -807,6 +845,36 @@ for _m in ascii viz; do
     esac
     report "uting refuses -f $_m, naming the modes" yes "$_mhit"
 done
+
+# ── THE ORDER OF `uting`'s TWO GATES, and AS-BUILT-tui.md「调用面」's worked calls, which are
+# the same check from two sides. That doc states the order as a fact — the flag gate answers
+# first, the TTY gate second — and both gates exit 1, so the order can only be pinned by
+# feeding the SAME stdin twice and reading two different messages. The `-f viz` arm of the
+# loop directly above is one half: a pipe is present, and what comes back is the MODE gate.
+# Below is the other: the same pipe, a legal -f, and what comes back is the TTY gate. Either
+# check alone is consistent with a single gate; together they are not.
+#
+# The same loop is also the doc's example block executed. Every line there ends at the TTY
+# gate when it is piped, so one assertion covers both claims — and it caught the block's fifth
+# line being wrong: it read `--theme nord --lang zh`, and `--lang` is not a uting flag at all
+# (the chrome language is YT_LANG, cycled live by the `l` key). Nothing had ever run it. The
+# argv below is the corrected line, and the doc now matches it — the CHECK is the authority.
+uting_gate() { # <env assignments and argv…> — which gate answered
+    case "$(env "$@" </dev/null 2>&1 || true)" in
+    *"requires a terminal"*) echo tty ;;
+    *"must be one of"*) echo mode ;;
+    *"unknown flag"*) echo unknown-flag ;;
+    *) echo other ;;
+    esac
+}
+report "uting: no query reaches the TTY gate" tty "$(uting_gate shell/uting)"
+report "…a bare query too"          tty "$(uting_gate shell/uting "lofi hip hop")"
+report "…search args forwarded"     tty "$(uting_gate shell/uting --engine bili -n 40 "周杰伦")"
+# The legal -f, and the half that pins the order: identical stdin to the `-f viz` check above,
+# a different gate in the answer. A uting that checked the tty first would answer `tty` up
+# there too and this pair would say nothing.
+report "…menu args, and -f is legal" tty "$(uting_gate shell/uting -f video --volume 60 "lofi")"
+report "…chrome args"               tty "$(uting_gate YT_LANG=zh shell/uting --theme nord "lofi")"
 
 # One engine, one site. `yt-resolve` used to accept ANY http(s) URL and hand it to yt-dlp,
 # which supports 1700+ sites — so a Bilibili URL resolved fine and came back labelled
