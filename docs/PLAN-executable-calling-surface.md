@@ -140,6 +140,8 @@ c472dd8 docs: 接口 becomes 接口与 API and takes the calling surface
   `one part is still a list`）不是回归，但也不只是环境：`x/web-interface/view` 从两个网络、
   每一种 header/cookie 组合都回 412。已由 `7b39373` 关掉 —— `--parts` 在 view 被拒后退到
   `x/player/pagelist`。完整 `tests/contract.sh` 现在 **304 ok / 0 failed**，push 门通。
-- worktree 里仍有三处**不属于本单元**的未提交改动：`README.md`、`shell/uting`、
-  `docs/AS-BUILT-tui.md` 里那段双 rail / 章节视图。它们是另一条线的在飞工作，不要动 ——
-  提交本单元时用过滤后的 patch `git apply --cached` 只入本批的 hunk。
+- ~~worktree 里仍有三处**不属于本单元**的未提交改动~~ **已落地（2026-09-01，`a957c1b`）。**
+  `README.md`、`shell/uting`、`docs/AS-BUILT-tui.md` 里那段双 rail / 章节视图是另一条线的
+  在飞工作，本单元始终没有动它（`2bf4962` 用过滤后的 patch `git apply --cached` 只入了本批的
+  hunk）。那条线自己收了尾：第二条 rail 缺的另一半是**光标也要跟着播放头走**，否则一章放完
+  就钳在 100%、正在播的那一章在屏幕上没有东西。worktree 现在是干净的。
