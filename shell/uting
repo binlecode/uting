@@ -1053,7 +1053,7 @@ set_ui_lang() {
         S_HIST_EMPTY="还没有收听记录"; S_HIST_ABSENT="未安装 ut-history"
         S_PARTS_KEY="分P"; S_PARTS_ACT="分P"; S_PARTS_ONE="这个视频只有一 P"
         S_INFO_ACT="详情"
-        S_VER_KEY="章节"; S_VER_NONE="这个条目没有章节"
+        S_CHAP_KEY="章节"; S_CHAP_NONE="这个条目没有章节"
         S_Q_ADD="加入队列"; S_Q_SKIP="下一首"; S_Q_ACT="队列"
         S_Q_NONE="当前没有在播放的播放器"; S_Q_END="队列已到末尾"
         S_PREF_ACT="配置"
@@ -1086,7 +1086,7 @@ set_ui_lang() {
         S_HIST_EMPTY="nothing listened to yet"; S_HIST_ABSENT="ut-history is not installed"
         S_PARTS_KEY="parts"; S_PARTS_ACT="Parts"; S_PARTS_ONE="this video has only one part"
         S_INFO_ACT="Info"
-        S_VER_KEY="chapters"; S_VER_NONE="this item has no chapters"
+        S_CHAP_KEY="chapters"; S_CHAP_NONE="this item has no chapters"
         S_Q_ADD="queue"; S_Q_SKIP="skip"; S_Q_ACT="Queue"
         S_Q_NONE="nothing is playing"; S_Q_END="nothing queued after this track"
         S_PREF_ACT="Config"
@@ -1279,18 +1279,20 @@ CURRENT_PLAY_STARTED=0     # epoch seconds when WE attached, for the elapsed rea
 # the row: title, channel, duration, views, id, mode and quality are all on the list screen
 # already. What the round trip buys is what the list cannot hold — the upload date and the
 # like count (the status line prints them) and the CHAPTER TABLE, which becomes the rows
-# themselves (build_version_rows).
+# themselves (build_chapter_rows).
 ITEM_ENGINE=""
 ITEM_URL=""
 ITEM_TITLE=""
 ITEM_UPLOADED=""
 ITEM_LIKES=""
 ITEM_CHAP_N=0
-# The chapter table, two parallel arrays because bash 3.2 has no associative one: the start
-# second (arithmetic — it becomes the row's `t=` and the --seek-to target) and the title.
-# Filled once per `--info`, and read once more by build_version_rows; there is no cursor into
+# The chapter table, three parallel arrays because bash 3.2 has no associative one: the start
+# second (arithmetic — it becomes the row's `t=` and the --seek-to target), the end second
+# (empty when the engine did not publish one) and the title.
+# Filled once per `--info`, and read once more by build_chapter_rows; there is no cursor into
 # them, because the rows built from them carry the list's own `selected`.
 ITEM_CHAP_SEC=()
+ITEM_CHAP_END=()
 ITEM_CHAP_TITLE=()
 # One slot, not a map: bash 3.2 has no associative arrays, and parallel arrays are a cache's
 # complexity without a cache's behaviour — the rhythm this exists for is going back into the
@@ -1458,6 +1460,21 @@ short_dur() {
         return 0
     fi
     SHORT_DUR="--:--"
+}
+
+# Seconds -> the SAME display form short_dur produces (`2:30`, `1:02:19`), for the one caller
+# that has a number rather than the engine's wire spelling: the chapter rail, which is built
+# from two integers and must line up with every other time on the screen. Pure bash for the
+# reason short_dur is — a fork per chapter per open is a fork this view does not need.
+DISP_CLOCK=""
+disp_clock() {
+    local t=$1 h m sec
+    h=$((t / 3600)); m=$(((t % 3600) / 60)); sec=$((t % 60))
+    if ((h > 0)); then
+        printf -v DISP_CLOCK '%d:%02d:%02d' "$h" "$m" "$sec"
+    else
+        printf -v DISP_CLOCK '%d:%02d' "$m" "$sec"
+    fi
 }
 
 # 27264629 -> 27,264,629. Sets COMMAS. Same no-fork rule as short_dur (`sed -e :a -e
@@ -2568,7 +2585,8 @@ build_all_rows() {
           (.view_count | if . == null then "" else tostring end),
           (.channel // "?" | oneline),
           (.live_status // ""),
-          ($e // "")
+          ($e // ""),
+          ""
         ] | join("\u001f")')
 }
 
@@ -2579,6 +2597,10 @@ build_all_rows() {
 # Channel and view count are deliberately empty: they are not stored (they expire), and an
 # empty field renders as absent rather than as a guess. ut-playlist derives duration_fmt on
 # read, so nothing here formats a duration.
+# The eighth field is the row's own RAIL, in display form. Only the chapter table writes one
+# (build_chapter_rows, where a row is a span and not a length) — a stored playlist, the log
+# and a parts list all leave it absent and get short_dur on the duration, which is what the
+# column means for them.
 build_playlist_rows() {
     ALL_ROWS=$(printf '%s' "$json" | jq -r "$JQ_TEXT_DEFS"'
       .items[]
@@ -2591,7 +2613,8 @@ build_playlist_rows() {
           "",
           "",
           "",
-          (.engine // "")
+          (.engine // ""),
+          (.rail // "")
         ] | join("\u001f")')
 }
 
@@ -2648,7 +2671,7 @@ chapter_sec() {
     return 0
 }
 
-# The chapter table as an ENVELOPE (VER_JSON), which build_playlist_rows then walks — this
+# The chapter table as an ENVELOPE (CHAP_JSON), which build_playlist_rows then walks — this
 # does not emit rows itself, for two reasons. `a` and `+` cut one item out of `json`
 # (focused_payload), so a row source whose json did not match its rows would be a list you can
 # play but cannot store; and the caller must be able to fail AFTER this returns without having
@@ -2656,27 +2679,57 @@ chapter_sec() {
 # table, fed US-joined lines — the shape ut-playlist and ut-play --enqueue already read, and
 # the same shape open_parts reshapes --parts into.
 #
-# The duration column carries the chapter's START time, in the engine's wire spelling: the
-# rail runs every row through short_dur, so a "00:15" written here would print as "--:--".
-# One time in one column, spelled the way this view spells every other one.
-VER_JSON=""
-build_version_rows() {
-    local i n=${#ITEM_CHAP_SEC[@]} sec h m ss lines="" out
-    VER_JSON=""
+# A CHAPTER IS A SPAN, AND THE RAIL PRINTS IT AS ONE (`2:30 → 5:42`). It used to print the
+# start alone, in the same column, the same spelling and the same place a search row prints
+# how LONG it is — so the one number on the row changed meaning between two lists that are
+# otherwise identical, and nothing said so. A range cannot be read as a duration.
+#
+# The span is built HERE, as the row's own `rail`, rather than computed at render time from
+# the neighbouring row: the live filter and paging reorder what is on screen, so "the next
+# row's start" is not this chapter's end. It is the one field in the record that is already
+# in display form (the eighth — see load_rows), and that is what it is for: a row may name
+# its own rail, and a source that does not carries an empty one and gets short_dur.
+#
+# `duration` is the chapter's LENGTH, in seconds, and `duration_fmt` is the same number in
+# the engine's wire spelling — so the details line, `a` and `+` all get a true duration.
+# They used to get the START as the duration: a chapter stored into a playlist came back
+# claiming to be 2 minutes 30 long because that is where it began.
+#
+# An engine that published no `end_time` leaves the span half open (`2:30 →`) and the
+# duration absent, rather than guessing: the length of the last chapter is the item's
+# duration minus its start, and this view does not read the item's duration.
+CHAP_JSON=""
+build_chapter_rows() {
+    local i n=${#ITEM_CHAP_SEC[@]} sec end len h m ss lines="" out dfmt rail
+    CHAP_JSON=""
     ((n > 0)) || return 1
     for ((i = 0; i < n; i++)); do
         sec="${ITEM_CHAP_SEC[$i]}"
-        h=$((sec / 3600)); m=$(((sec % 3600) / 60)); ss=$((sec % 60))
+        end="${ITEM_CHAP_END[$i]:-}"
+        disp_clock "$sec"
+        rail="$DISP_CLOCK $GL_ARROW"
+        dfmt=""
+        if [[ -n "$end" ]] && ((end > sec)); then
+            len=$((end - sec))
+            h=$((len / 3600)); m=$(((len % 3600) / 60)); ss=$((len % 60))
+            printf -v dfmt '%02dh:%02dm:%02ds' "$h" "$m" "$ss"
+            disp_clock "$end"
+            rail="$rail $DISP_CLOCK"
+        else
+            len=""
+        fi
         chapter_url "$ITEM_URL" "$sec"
-        printf -v out '%s%s%s%s%02dh:%02dm:%02ds' \
-            "$CHAP_URL" "$US" "${ITEM_CHAP_TITLE[$i]}" "$US" "$h" "$m" "$ss"
+        printf -v out '%s%s%s%s%s%s%s%s%s' \
+            "$CHAP_URL" "$US" "${ITEM_CHAP_TITLE[$i]}" "$US" "$dfmt" "$US" "${len}" "$US" "$rail"
         lines="$lines$out"$'\n'
     done
-    VER_JSON=$(printf '%s' "$lines" | jq -Rsc --arg eng "$ITEM_ENGINE" '
+    CHAP_JSON=$(printf '%s' "$lines" | jq -Rsc --arg eng "$ITEM_ENGINE" '
         [ split("\n")[] | select(length > 0) | split("\u001f")
-          | {url: .[0], title: .[1], duration_fmt: .[2], engine: $eng} ]
-        | {status: "ok", count: length, items: .}' 2>/dev/null) || VER_JSON=""
-    [[ -n "$VER_JSON" ]] || return 1
+          | {url: .[0], title: .[1], duration_fmt: .[2],
+             duration: (if .[3] == "" then null else (.[3] | tonumber) end),
+             rail: .[4], engine: $eng} ]
+        | {status: "ok", count: length, items: .}' 2>/dev/null) || CHAP_JSON=""
+    [[ -n "$CHAP_JSON" ]] || return 1
     return 0
 }
 
@@ -2696,9 +2749,9 @@ apply_search_results() {
 # from the same numbers and cannot disagree about a row.
 load_rows() {
     urls=()
-    R_TITLE=(); R_DUR=(); R_VIEWS=(); R_CHAN=(); R_LIVE=(); R_ENGINE=()
-    local url title dur views chan live engine
-    while IFS="$US" read -r url title dur views chan live engine; do
+    R_TITLE=(); R_DUR=(); R_VIEWS=(); R_CHAN=(); R_LIVE=(); R_ENGINE=(); R_RAIL=()
+    local url title dur views chan live engine rail
+    while IFS="$US" read -r url title dur views chan live engine rail; do
         [[ -n "$url" ]] || continue
         urls+=("$url")
         R_TITLE+=("$title")
@@ -2707,6 +2760,7 @@ load_rows() {
         R_CHAN+=("$chan")
         R_LIVE+=("$live")
         R_ENGINE+=("$engine")
+        R_RAIL+=("$rail")
     done <<<"$1"
     NUM_ENTRIES=${#urls[@]}
     NUM_PAGES=$(( (NUM_ENTRIES + PAGE_SIZE - 1) / PAGE_SIZE ))
@@ -2714,7 +2768,7 @@ load_rows() {
 }
 
 # ── THE VIEW ────────────────────────────────────────────────────────────────────────────
-# One renderer. What used to be a second one is a row source (open_versions), so everything
+# One renderer. What used to be a second one is a row source (open_chapters), so everything
 # below draws rows whatever they came from — a search, a playlist, the log, a video's parts,
 # a video's chapters.
 
@@ -2774,8 +2828,8 @@ display_list_menu() {
         [[ "$LIST_SOURCE" == "parts" && -n "$PARTS_TOTAL_FMT" ]] && st_items+=("total=$PARTS_TOTAL_FMT")
         # The two fields the `--info` fetch paid for that no row can hold. They are the item's,
         # not the rows' — which is why they sit on the line that already names the item
-        # (versions='<title>') and not in the details block, which describes one chapter.
-        if [[ "$LIST_SOURCE" == "versions" ]]; then
+        # (chapters='<title>') and not in the details block, which describes one chapter.
+        if [[ "$LIST_SOURCE" == "chapters" ]]; then
             [[ -n "$ITEM_UPLOADED" ]] && st_items+=("uploaded=$ITEM_UPLOADED")
             [[ -n "$ITEM_LIKES" ]] && st_items+=("likes=$ITEM_LIKES")
         fi
@@ -2932,17 +2986,13 @@ display_list_menu() {
     fi
     # And a fifth time, off the other capability and the same two conditions `c` carries:
     # `i` needs `--info`, and it replaces the rows, so it needs search rows to come back to
-    # (open_versions is search_only for the reason open_parts is — one stash slot). It
+    # (open_chapters is search_only for the reason open_parts is — one stash slot). It
     # relabels from inside its own view exactly as c/b/h do: the way back is CORE, the way in
     # is full.
-    if [[ "$LIST_SOURCE" == "versions" ]]; then
+    if [[ "$LIST_SOURCE" == "chapters" ]]; then
         nav_items+=("i	$S_BACK_SEARCH")
     elif keys_full && ((search_view)) && ((ENGINE_INFO_OK)); then
-        # The label says what the KEY does — chapters — not what the row source is CALLED.
-        # `versions` is the internal source name (and the header field `versions='<title>'`,
-        # which contract.sh and four docs cite); the block is the one place a user reads a
-        # word to find out what a key is for, and "versions" is not that word.
-        nav_items+=("i	$S_VER_KEY")
+        nav_items+=("i	$S_CHAP_KEY")
     fi
     # The queue keys are offered only while something is PLAYING: with no player they say
     # "nothing is playing" and nothing else, and a measured block must not spend cells on a
@@ -3245,7 +3295,13 @@ display_list_menu() {
             # title with no metadata beside it. Views and channel moved to print_details.
             # The rail prints a bare LIVE rather than the "● LIVE" badge: this is a numeric
             # column, and a glyph in it reads as noise (the badge form is in the details).
-            if [[ "${R_LIVE[$i]}" == "is_live" ]]; then
+            # A row may name its own rail (the chapter span, `2:30 → 5:42`), and then the
+            # column is that string: a chapter is not a length, and printing its start in
+            # the place a search row prints its duration is the one number on the screen
+            # that changed meaning without saying so. Everything else formats its duration.
+            if [[ -n "${R_RAIL[$i]}" ]]; then
+                rail="${R_RAIL[$i]}"
+            elif [[ "${R_LIVE[$i]}" == "is_live" ]]; then
                 rail="LIVE"
             else
                 short_dur "${R_DUR[$i]}"
@@ -3797,12 +3853,12 @@ open_playlist() {
 # apart the way F11/F12 did (ARCHITECTURE.md).
 # `parts` belongs here even though no store holds it: what this predicate actually asks is
 # "does `.items[]` read this envelope", and open_parts reshapes `--parts` to exactly that.
-# `versions` is the same answer for the same reason — build_version_rows writes that envelope
+# `chapters` is the same answer for the same reason — build_chapter_rows writes that envelope
 # from the chapter table. The name outlived its first meaning by two row sources; the
 # behaviour it selects did not.
 stored_rows() {
     [[ "$LIST_SOURCE" == "playlist" || "$LIST_SOURCE" == "history" ||
-        "$LIST_SOURCE" == "parts" || "$LIST_SOURCE" == "versions" ]]
+        "$LIST_SOURCE" == "parts" || "$LIST_SOURCE" == "chapters" ]]
 }
 
 search_only() {
@@ -4118,11 +4174,11 @@ open_parts() {
 # stash_search has a single slot, so opening a chapter list from a playlist row would either
 # lose the way back to the search or need a stack, and a stack is its own change on its own
 # day (the one-deep return stack is AS-BUILT-contract.md §1.4).
-open_versions() {
+open_chapters() {
     # The toggle, tested literally for the reason open_history and open_parts give: with a
     # chapter list on screen `i` is the way back, and a chapter list is the only thing `i`
     # closes.
-    if [[ "$LIST_SOURCE" == "versions" ]]; then
+    if [[ "$LIST_SOURCE" == "chapters" ]]; then
         back_to_search
         return 0
     fi
@@ -4142,19 +4198,19 @@ open_versions() {
     # back to (quality is `f`, parts are `c`). The notice answers the question the key asks,
     # exactly as `c` answers "is there more of this than the row shows?" with S_PARTS_ONE.
     if ((ITEM_CHAP_N == 0)); then
-        store_notice "$S_INFO_ACT:" "$S_VER_NONE"
+        store_notice "$S_INFO_ACT:" "$S_CHAP_NONE"
         return 1
     fi
     # Built BEFORE the stash, the order open_parts takes: a build that failed after it would
-    # leave the search stashed behind rows that do not exist. It writes VER_JSON and nothing
+    # leave the search stashed behind rows that do not exist. It writes CHAP_JSON and nothing
     # else, so a failure here leaves the search on screen untouched.
-    if ! build_version_rows; then
+    if ! build_chapter_rows; then
         store_notice "$S_INFO_ACT:" "$S_PL_FAILED"
         return 1
     fi
     stash_search
-    json="$VER_JSON"
-    LIST_SOURCE="versions"
+    json="$CHAP_JSON"
+    LIST_SOURCE="chapters"
     # Single-engine by construction — every row is an offset into ONE item — so the label is
     # that item's engine rather than a jq pass over rows this file just wrote itself.
     PLAYLIST_ENGINES="$ITEM_ENGINE"
@@ -4190,7 +4246,7 @@ play_chapter() {
 }
 
 # The fetch behind `i`: one `--info`, one single-slot cache, one set of ITEM_* fields. It is
-# a function rather than an inline block in open_versions because the cache is the point —
+# a function rather than an inline block in open_chapters because the cache is the point —
 # pressing i on the same row twice must not pay a second round trip, and the store verbs in
 # this file already keep their spinner, their error vocabulary and their cache key in one
 # place each.
@@ -4253,15 +4309,24 @@ apply_item_info() {
     # player. A whole second is under the granularity of all three. The times are NOT
     # pre-formatted any more — the rows carry the engine's wire spelling and the rail's own
     # short_dur renders it, which is one fmt_sec fork per chapter that no longer happens.
+    #
+    # The END comes back in the same pass. A chapter is a SPAN, and the rail prints it as
+    # one (`2:30 → 5:42`), which is the whole reason the column is no longer readable as a
+    # duration; the length it implies is also the only honest `duration` for a row that `a`
+    # can store and `+` can queue. `end_time` is yt-dlp's own field — derived here it would
+    # be the NEXT row's start, which filtering reorders out from under it.
     ITEM_CHAP_SEC=()
+    ITEM_CHAP_END=()
     ITEM_CHAP_TITLE=()
-    while IFS="$US" read -r csec ctitle; do
+    while IFS="$US" read -r csec cend ctitle; do
         [[ "$csec" =~ ^[0-9]+$ ]] || continue
         ITEM_CHAP_SEC+=("$csec")
+        [[ "$cend" =~ ^[0-9]+$ ]] || cend=""
+        ITEM_CHAP_END+=("$cend")
         ITEM_CHAP_TITLE+=("$ctitle")
     done < <(
         printf '%s' "$INFO_CACHE_JSON" | jq -r "$JQ_TEXT_DEFS"'(.chapters // [])[]
-            | "\((.start_time // 0) | floor)\u001f\(.title // "" | oneline)"' 2>/dev/null
+            | "\((.start_time // 0) | floor)\u001f\(if .end_time == null then "" else (.end_time | floor) end)\u001f\(.title // "" | oneline)"' 2>/dev/null
     )
     ITEM_CHAP_N=${#ITEM_CHAP_SEC[@]}
     return 0
@@ -4473,7 +4538,7 @@ cycle_sort() {
 
 # ── FILTER action (key: /) — LIVE incremental narrow ─────────────────────────────────────
 apply_filter() {
-    local q="$1" url title dur views chan live engine hay tok ok matched="" tokens=()
+    local q="$1" url title dur views chan live engine rail hay tok ok matched="" tokens=()
     selected=0
     page_index=1
     if [[ "$q" != *[![:space:]]* ]]; then
@@ -4484,12 +4549,12 @@ apply_filter() {
     FILTER_LABEL="$q"
     read -ra tokens <<<"$q"
     shopt -s nocasematch
-    # SEVEN fields, not six. `read` gives the last variable everything that is left, so with
-    # six names `live` arrived as "is_live<US>yt" and the is_live test below could never be
-    # true — the LIVE token has matched nothing since the engine field landed. The re-emit
-    # hid it: pasting that trailing variable back produced a byte-identical row, so every
-    # row survived and only the haystack was wrong.
-    while IFS="$US" read -r url title dur views chan live engine; do
+    # EIGHT fields, and the count is load-bearing. `read` gives the last variable everything
+    # that is left, so with six names `live` arrived as "is_live<US>yt" and the is_live test
+    # below could never be true — the LIVE token matched nothing for as long as the engine
+    # field was the unnamed one. The re-emit hid it: pasting that trailing variable back
+    # produced a byte-identical row, so every row survived and only the haystack was wrong.
+    while IFS="$US" read -r url title dur views chan live engine rail; do
         [[ -n "$url" ]] || continue
         # The haystack is SYNTHESIZED here, not carried as a seventh field: the row already
         # has the pieces, it is never printed, and a stored key would be one more thing to
@@ -4499,8 +4564,10 @@ apply_filter() {
         # filter that will not match what is on the screen is a filter that looks broken.
         # The literal LIVE is what keeps typing `live` working now that no row carries a
         # rendered "● LIVE" string to match against.
+        # A row that names its own rail contributes THAT — the chapter span is what is on
+        # screen, and the rule this haystack follows is "match what is shown".
         short_dur "$dur"
-        hay="$title $chan $dur $SHORT_DUR $views"
+        hay="$title $chan $dur $SHORT_DUR $views $rail"
         [[ "$live" == "is_live" ]] && hay+=" LIVE"
         ok=1
         for tok in ${tokens[@]+"${tokens[@]}"}; do
@@ -4508,7 +4575,7 @@ apply_filter() {
         done
         # Re-emitted unchanged, so ALL_ROWS stays the one source and a filter never
         # degrades a row.
-        ((ok)) && matched+="${url}${US}${title}${US}${dur}${US}${views}${US}${chan}${US}${live}${US}${engine}"$'\n'
+        ((ok)) && matched+="${url}${US}${title}${US}${dur}${US}${views}${US}${chan}${US}${live}${US}${engine}${US}${rail}"$'\n'
     done <<<"$ALL_ROWS"
     shopt -u nocasematch
     load_rows "$matched"
@@ -4952,7 +5019,7 @@ while true; do
     # Enter → start/switch track in background. A chapter row means the same thing with an
     # offset, and says so through play_chapter's two branches.
     "" | $'\n' | $'\r')
-        if [[ "$LIST_SOURCE" == "versions" ]]; then play_chapter || true; else play_selected || true; fi ;;
+        if [[ "$LIST_SOURCE" == "chapters" ]]; then play_chapter || true; else play_selected || true; fi ;;
     n | N) new_search ;;      # new search (non-blocking: music continues)
     o | O) cycle_sort ;;      # rotate sort
     e | E) cycle_engine ;;    # switch source (engine), re-fetch the same query
@@ -4971,7 +5038,7 @@ while true; do
     # to go back. Same guard, same reason, as the Enter arm above.
     h | H) open_history || true ;;    # open the listening log as the row source
     c | C) open_parts || true ;;      # open the focused row's parts (?p=N) as the row source
-    i | I) open_versions || true ;;   # open the focused row's chapters as the row source (one --info)
+    i | I) open_chapters || true ;;   # open the focused row's chapters as the row source (one --info)
     "+") enqueue_selected ;;  # append the focused row to the running player's queue
     ">") skip_next ;;         # skip to the next queued track
     "/") filter_live ;;       # LIVE incremental filter

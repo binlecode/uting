@@ -1568,9 +1568,10 @@ else
     # it sat in usage() and the README while appearing in neither tier, so the block — the
     # one place a user reads what a key is for — was the only surface that did not know it
     # existed. The pane is a tty with colors on, which is exactly `t`'s own gate, so a
-    # correct block has to print it here. `i` rides along with the word the KEY does
-    # (`chapters`), not the row source's internal name (`versions`, which is still the
-    # header field asserted further down) — the block used to print the latter.
+    # correct block has to print it here. `i` rides along: the block, the header field
+    # and the row source itself all say `chapters` now — the one word the key is about. The
+    # source was called `versions` until 2026-08-31, which put `versions='<title>'` on the
+    # one line that says what you are looking at.
     report "the full tier prints the theme key" 1 \
         "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 't theme')"
     report "…and names i by what it opens" 1 \
@@ -1905,7 +1906,7 @@ else
         while [ $i -lt 40 ]; do
             pane=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null)
             case "$pane" in
-            *"versions="*) shown=1; break ;;
+            *"chapters="*) shown=1; break ;;
             *"no chapters"*) break ;;
             esac
             sleep 0.3; i=$((i + 1))
@@ -1920,13 +1921,22 @@ else
     report "i opens the chapter rows" 1 "$shown"
     tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'uploaded=2' && paid=1
     report "…and it carries what the fetch got" 1 "$paid"
+    # The rail is a SPAN here, and that is a claim about MEANING rather than about layout: a
+    # chapter is `0:00 → 2:30`, not a length, and the column it sits in is the one a search
+    # row uses to say how LONG it is. Printing the start alone — which is what shipped —
+    # passes every other check on this view while telling the reader a number whose meaning
+    # silently changed between two lists that are otherwise identical. The pattern is a
+    # SHAPE, never a value: which chapters today's item has is the site's business.
+    report "…and a chapter row reads as a span" 1 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null |
+            grep -cE '[0-9]:[0-9][0-9] (→|->) [0-9]+:[0-9][0-9]' | awk '{print ($1 > 0) ? 1 : 0}')"
     if [ "$shown" != 1 ] || [ "$paid" != 1 ]; then
         echo "  ---- pane at the moment i did not open the chapter rows ----" >&2
         tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
         echo "  ---- end of pane ----" >&2
     fi
     # The way back, which is the same key — the rule b, h and c already follow, and the line
-    # that says so rather than the commit message. It cannot pass by accident: `versions=` and
+    # that says so rather than the commit message. It cannot pass by accident: `chapters=` and
     # `results=` are different field NAMES on the same header line, so a view that never
     # changed would still be showing the first one.
     tmux send-keys -t "$TS" i
@@ -1934,7 +1944,7 @@ else
     while [ $i -lt 40 ]; do
         pane=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null)
         case "$pane" in
-        *"versions="*) ;;
+        *"chapters="*) ;;
         *"results="*) backed=1; break ;;
         esac
         sleep 0.25; i=$((i + 1))

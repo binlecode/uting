@@ -810,7 +810,7 @@ reflow、共享时钟与三个播放态。
                   （WRAP_MEASURE）, print_details（DETAIL_MEASURE）, card_divider,
                   repeat_glyph, render_prog_bar
      Row sources: open_playlist（`b`）, open_history（`h`）, open_parts（`c`）,
-                  open_versions（`i`：`--info` 的 chapters[] → build_version_rows →
+                  open_chapters（`i`：`--info` 的 chapters[] → build_chapter_rows →
                   `{items:[…]}` → build_playlist_rows；带 `t=` 的 url 让一行成为一次**调用**，
                   tui §11）, stash_search/back_to_search（一层返回栈）,
                   stored_rows（这五个源里哪四个走 `.items[]`）,

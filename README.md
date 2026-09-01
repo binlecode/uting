@@ -228,7 +228,9 @@ row is a call, not a reference: its url carries `t=<second>`, which both engines
 into the resolve envelope's `start_seconds`, so `Enter` plays from that chapter, `+` queues
 from it and `a` stores it. `Enter` on a chapter of the track already playing SEEKS instead —
 an offset inside the file that is open needs no second resolve. An item with no chapters says
-so and stays where it is.
+so and stays where it is. A chapter is a SPAN, so its rail prints one — `0:00 → 2:30`, in the
+column a search row uses for how long it is; the length that implies is also what `a` stores
+and `+` queues. The header names the source, so it reads `chapters='<the item>'`.
 `h` asks for no name — the log is one thing — and shows the 50 newest listenings. `d` is the
 mirror: it is drawn only with a **playlist** on screen, because a search result is a row of
 nothing and the log has no per-row removal to call. It names the track and defaults to no.
