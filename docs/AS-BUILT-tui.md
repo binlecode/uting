@@ -53,6 +53,7 @@ uting "lofi hip hop"                   # 已证 · 直接搜
 uting --engine bili -n 40 "周杰伦"      # 已证 · 转发给 bili-search
 uting -f video --volume 60 "…"          # 已证 · 菜单参数：起播 mode 与起播音量
 YT_LANG=zh uting --theme nord "…"       # 已证 · chrome —— 主题是 flag，语言是键（`l` 键实时轮换）
+UT_ACCENT=0xd65d0e/33 uting --theme custom "…"   # 已证 · 自己的签名色；空 UT_ACCENT 退化成 minimal
 ```
 
 最后一行原来写的是 `uting --theme nord --lang zh`，而 **`--lang` 根本不是 `uting` 的 flag**。
@@ -67,6 +68,7 @@ YT_LANG=zh uting --theme nord "…"       # 已证 · chrome —— 主题是 fl
 | 管道 / 无 pty（`</dev/null`、CI） | `requires a terminal (interactive menu)` |
 | `UT_*_CYCLE` 里有未知成员 | 点名那个键 |
 | `--theme` / 标量旋钮值非法 | 点名那个键，不是笼统的用法错误 |
+| `UT_ACCENT` / `UT_ACCENT_LIGHT` 值非法 | 点名**用户写的那一个**键 —— 两个键共用一把尺子，报错却各说各的名字，否则用户去改错的那一行 |
 
 **这两道门必须靠文案分辨，不能靠退出码** —— 两道都是 1。一个只看退出码的检查，在「拒了这个
 值」和「拒了这根管道」之间是分不开的，也就等于**不会失败**。套件里 uting 这一段的每条断言
@@ -554,6 +556,46 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     各主题的官方十六进制值（catppuccin mocha/latte 的 mauve 与 green，tokyonight
     night/day 的 blue 与 green，nord 的 frost8/frost1 与 aurora14，gruvbox 的 orange 与 green，
     onedark/one-light 的 blue 与 green）。
+  - **`custom` 是第八个主题「名」，不是一层盖在当前主题上的覆盖。** 被否掉的形状是
+    「`UT_ACCENT` 凌驾于当前主题之上」：它会把 `t` 键变成一个**静默空操作** —— 循环七个名字、
+    屏幕始终一个颜色，而 `cycle_theme` 仍然照常把新名字 `mark_pref` 回用户配置。
+    一个按了有反馈、看着没反应的键，比没有这个键更糟。做成名字之后它与另外七个**完全同权**：
+    `--theme custom`、`t` 键、`UT_THEME_CYCLE` 成员、两道门、偏好写回，一个特例分支都不需要 ——
+    `set_theme` 本来就是 `(THEME, BG, COLORTERM_TC)` 的纯函数，多一个 case 臂而已。
+    代价也因此收在一处：合法名字的集合过去被拼写**五遍**（cycle 校验器的 allowed 串、
+    `--theme` 门的模式、那道门的报错文案，以及 `usage()` 的**两**处列表），加第八个名字
+    等于改五个字符串、忘掉一个；现在是一个 `THEME_NAMES` 常量，两道门读它、逗号形式由它派生，
+    而 `usage()` 那两句英文散文由 `tests/contract.sh` 的一条检查盯着 —— 那条检查比的是
+    **命令自己说的两样东西**（门的报错文案 与 `--help`），不是去源码里 grep 那个常量。
+    门也因此从「子串命中」改成了**逐个精确比对**：`--theme "gruvbox onedark"` 恰好是那张
+    名字表的一个子串，子串门会放它过去，然后它从 `set_theme` 的 case 尾部掉出去 ——
+    一个强调色都没设，chrome 无声地变成没有色相。
+  - **空的 `UT_ACCENT` 必须退化成 minimal，绝不能拒绝启动。** 这条是跨文件的不变量，
+    不是保守：`t` 键停在 `custom` 时会把 `YT_THEME=custom` 写进**用户自己的**配置
+    （`PREF_KEYS`），于是一份写着 `custom` 的配置完全可能比那个当初支撑它的 `UT_ACCENT`
+    活得更久。此时若在门上 die，用户就是被自己**从没手打过**的一行挡在门外，
+    而错误信息指着一个他没写过的键。静默退化即可 —— 屏幕上「它变成 minimal 了」本身就是反馈，
+    多一条提示要多两条 i18n 串去说一件用户已经看见的事。
+    反过来，**非空的值不论当前主题是不是 `custom` 都要在门上验**：`t` 键可以在会话中途
+    走到 `custom`，一道只看启动主题的门会把畸形值放行到那个拼 SGR 的 `printf` 上，
+    结果是半截转义序列打进用户的终端。
+  - **24 位色的兜底档必须由用户给，不能算。** 30-37 / 90-97 究竟渲染成什么，
+    是**用户终端自己**定义的 —— 那正是 `minimal` 赖以存在的性质（`ARCHITECTURE.md`）。
+    所以「取最近的 ANSI-16」是在对自己看不见的像素做算术：我们既不知道用户的 16 色表，
+    也不知道他的背景。要一个正确的兜底，只能问写它的人；他不给，就退到 minimal 那一档 ——
+    诚实的答案，而且是他随时可以自己覆盖的那个。
+  - **值的拼法是 `0xRRGGBB` 而不是 `#RRGGBB` —— 实测，不是口味。** `#` 在这个配置格式里
+    **根本无法表达**，加引号只会让它烂得更安静（2026-09-01，直接跑 `ut_read_config`）：
+
+    | 配置里写 | 读回来的值 |
+    |---|---|
+    | `UT_ACCENT=#d65d0e/33` | 空 —— `line="${line%%#*}"` 把它整个当注释剪掉了 |
+    | `UT_ACCENT="#d65d0e/33"` | `"` —— 剪注释发生在剥引号**之前**，静默变成垃圾 |
+    | `UT_ACCENT=0xd65d0e/33` | `0xd65d0e/33` |
+
+    第二行是这条决定真正的理由：一个用户直觉上会写的写法，不报错、不留痕，
+    只是把强调色变成一个引号。`0x` 同时也是 `ROADMAP.md`「viz 的配色要不要可配」
+    给 `UT_VIZ_COLOR` 定下的拼法 —— 一个仓一种拼法。
   - **亮色与暗色终端都拿到一个读得清的强调色。** `YT_BG=auto` 的链条：显式的
     `YT_BG=light|dark` 赢；否则看 `$COLORFGBG`（rxvt 家族，bg==15）；否则发一次 OSC 11
     背景色查询（`\033]11;?\033\`）；再否则算暗色。对 `minimal`/`mono`，亮色把青换成蓝 ——

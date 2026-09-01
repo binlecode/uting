@@ -529,10 +529,12 @@ Menu options:
   -p NUM    Rows per page (default: 10, capped to the terminal height)
   --color MODE  Color: auto | always | never (default: auto)
   --theme NAME  Palette: minimal (default) | mono | catppuccin | tokyonight | nord
-                | gruvbox | onedark. Every theme = one signature accent, nothing else
-                hued; mono = gray hierarchy only, no hue. Community themes emit
-                24-bit color when COLORTERM=truecolor, else ANSI-16 fallbacks.
-                Light/dark picks the theme's own light variant (see YT_BG below).
+                | gruvbox | onedark | custom. Every theme = one signature accent,
+                nothing else hued; mono = gray hierarchy only, no hue. Community
+                themes emit 24-bit color when COLORTERM=truecolor, else ANSI-16
+                fallbacks. custom takes its accent from UT_ACCENT (below) and is
+                minimal when that is unset. Light/dark picks the theme's own light
+                variant (see YT_BG below).
   -h        This help
   -V        Print the suite version
 
@@ -588,14 +590,20 @@ Environment:
   Defaults for every knob below live in <checkout>/config, declared once for the whole
   suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
   per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
-  config > the shipped defaults. See AS-BUILT-contract.md「配置面」.
+  config > the shipped defaults. See AS-BUILT-cli-contract.md「配置面」.
   YT_ASCII=1       Use ASCII glyphs (♫ ● ○ ❯ · ▶ ❚❚ • … → — arrows → ASCII) for
                    terminals whose font can't draw them. Auto-on for non-UTF-8 locales.
                    Shared with the rest of the suite. Legacy alias: YT_TUI_ASCII.
   YT_LANG=en|zh    Language of the menu chrome. Default: zh under a zh* locale,
                    English otherwise (help text and errors are always English).
-  YT_THEME=minimal|mono|catppuccin|tokyonight|nord|gruvbox|onedark
+  YT_THEME=minimal|mono|catppuccin|tokyonight|nord|gruvbox|onedark|custom
                    Palette family (same as --theme; default: minimal).
+  UT_ACCENT        The custom palette's accent, one of: 0xRRGGBB (24-bit, needs
+                   COLORTERM=truecolor), an SGR foreground code 30-37 or 90-97, or
+                   0xRRGGBB/<code> giving both rungs. Unset -> custom is minimal.
+                   Not #RRGGBB: a # starts a comment in the config file. Set-once
+                   tuning, so there is no flag and the t key never writes it back.
+  UT_ACCENT_LIGHT  The same, for a light background. Unset -> UT_ACCENT is used.
   YT_BG=auto|light|dark  Background mode. auto: $COLORFGBG, then an OSC 11 terminal
                    query, then dark. For minimal/mono, light swaps cyan for blue; for
                    community themes it picks the theme's own light variant.
@@ -697,6 +705,40 @@ IFS=' ,' read -r -a SORT_CYCLE <<<"$UT_SORT_CYCLE"
 IFS=' ,' read -r -a QUALITY_CYCLE <<<"$UT_QUALITY_CYCLE"
 # The -s default, one value shared with both search halves.
 SORT_FIELD="$UT_SORT_FIELD"   # -s flag overrides. Runtime-mutable: o rotates it (cycle_sort).
+# WHICH THEME NAMES ARE LEGAL — one place. This used to be spelled five times (the cycle
+# validator's allowed list, the --theme gate's pattern, that gate's message, and usage()'s
+# two lists), and an eighth name meant editing five strings and forgetting one. The two
+# GATES read this constant; the comma form the message wants is derived rather than rewritten.
+# usage()'s two prose lists stay literal — they are English sentences, not data — and are
+# held to this constant by a check in tests/contract.sh instead of by memory.
+THEME_NAMES="minimal mono catppuccin tokyonight nord gruvbox onedark custom"
+THEME_NAMES_CSV=""
+for _tn in $THEME_NAMES; do THEME_NAMES_CSV="${THEME_NAMES_CSV:+$THEME_NAMES_CSV, }$_tn"; done
+unset _tn
+# Membership by exact compare, not by `case " $THEME_NAMES " in *" $THEME "*` the way
+# validate_cycle does it: that idiom is safe only when the candidate cannot contain a space,
+# which is true of a cycle member (the array was split on space) and false of --theme's argv.
+# `--theme "gruvbox onedark"` IS a substring of the name list and would pass a substring gate,
+# then fall off the end of set_theme's case with no accent set at all.
+theme_known() {
+    local t
+    for t in $THEME_NAMES; do
+        if [[ "$1" == "$t" ]]; then return 0; fi
+    done
+    return 1
+}
+# The custom theme's accent, checked at the door for the same reason every scalar knob is:
+# a malformed value must never reach set_theme's printf. Takes the KEY NAME as well as the
+# value because two keys share this one ruler — a shared validator that reported the wrong
+# key would send the user editing the wrong line. An EMPTY value is legal and is NOT an
+# error: it is the degrade path, and set_theme's custom arm says why it has to be.
+accent_gate() {
+    if [[ -z "$2" ]]; then return 0; fi
+    if [[ "$2" =~ ^0x[0-9a-fA-F]{6}(/(3[0-7]|9[0-7]))?$ ]] || [[ "$2" =~ ^(3[0-7]|9[0-7])$ ]]; then
+        return 0
+    fi
+    die "$1 must be 0xRRGGBB, an SGR code 30-37/90-97, or 0xRRGGBB/<code> (got '$2')"
+}
 # The order the t key steps through, defined here rather than beside cycle_theme so all three
 # cycles are built before the one block that validates them. Space- or comma-separated: a
 # user who wants two themes on the t key instead of seven says so once.
@@ -776,7 +818,7 @@ validate_cycle() {
 validate_cycle UT_MODE_CYCLE "audio video fast" ${MODE_CYCLE[@]+"${MODE_CYCLE[@]}"}
 validate_cycle UT_SORT_CYCLE "relevance view_count duration" ${SORT_CYCLE[@]+"${SORT_CYCLE[@]}"}
 validate_cycle UT_QUALITY_CYCLE "auto low medium high" ${QUALITY_CYCLE[@]+"${QUALITY_CYCLE[@]}"}
-validate_cycle UT_THEME_CYCLE "minimal catppuccin tokyonight nord gruvbox onedark mono" \
+validate_cycle UT_THEME_CYCLE "$THEME_NAMES" \
     ${THEME_CYCLE[@]+"${THEME_CYCLE[@]}"}
 # Duration bounds and volume are forwarded verbatim (-m/-M to yt-search, --volume to ut-play),
 # so the core would reject them anyway — but only at the first fetch or the first Enter, where
@@ -804,14 +846,21 @@ refresh_engine_caps
 # The closed set, for the same reason as -s above.
 case "$PLAY_MODE" in audio | video | fast) ;; *) die "-f must be one of: audio, video, fast (ascii/viz need a terminal, which detached playback has none of)" ;; esac
 case "$COLOR_MODE" in auto | always | never) ;; *) die "--color must be one of: auto, always, never" ;; esac
-case "$THEME" in minimal | mono | catppuccin | tokyonight | nord | gruvbox | onedark) ;; *) die "--theme must be one of: minimal, mono, catppuccin, tokyonight, nord, gruvbox, onedark" ;; esac
+theme_known "$THEME" || die "--theme must be one of: $THEME_NAMES_CSV"
+# Both accent keys ride the same door, each under its OWN name. Checked whenever the key is
+# non-empty rather than only when THEME is already custom — the t key can arrive at custom
+# mid-session (cycle_theme re-runs set_theme), and a gate that only fired on the startup theme
+# would let a malformed spec through to the printf that builds an SGR, putting half an escape
+# sequence in the user's terminal.
+accent_gate UT_ACCENT "${UT_ACCENT:-}"
+accent_gate UT_ACCENT_LIGHT "${UT_ACCENT_LIGHT:-}"
 case "$BG_MODE" in auto | light | dark) ;; *) die "YT_BG must be one of: auto, light, dark" ;; esac
 if [[ -n "$PLAY_VOLUME" ]]; then
     is_uint "$PLAY_VOLUME" && ((PLAY_VOLUME <= 100)) || die "--volume must be an integer 0-100"
 fi
 # The quality tier rides the same door: a bogus value in the user's config would otherwise
 # surface as a play that silently defaults. Empty reads as auto (the engine sends no sort
-# for blank or auto alike — AS-BUILT-contract.md「命令规格」); anything else is a mistyped knob
+# for blank or auto alike — AS-BUILT-cli-contract.md「命令规格」); anything else is a mistyped knob
 # and fails loud.
 # NORMALISED to the spelling rather than left blank, because the f key rotates this value:
 # a blank matches no member of the cycle, so the first press would land on the SECOND tier
@@ -878,6 +927,47 @@ init_colorterm() {
     truecolor | 24bit) COLORTERM_TC=1 ;;
     esac
 }
+# minimal's own accent, factored out because THREE arms want it: minimal itself, and both
+# of custom's degrade paths (no spec at all, and a 24-bit spec on a terminal that cannot
+# render one). It is the suite's floor — an ANSI-16 index whose actual color the user's
+# terminal owns, which is the property minimal exists for (ARCHITECTURE.md).
+accent_minimal() {
+    if [[ "$BG" == light ]]; then
+        C_CYAN=$'\033[34m'; C_MARK=$'\033[1;34m'
+    else
+        C_CYAN=$'\033[36m'; C_MARK=$'\033[1;36m'
+    fi
+}
+# One accent spec → C_CYAN/C_MARK. Value syntax is config's UT_ACCENT; the spec reaching here
+# has already passed accent_gate, so this parses rather than validates. Split with ANCHORED
+# strips (${v%%…} / ${v#…}) — ${v//…/} is quadratic on bash 3.2 and the portability contract
+# names it outright.
+#
+# WHY THE FALLBACK RUNG IS THE USER'S TO GIVE and not computed: what 30-37/90-97 render as is
+# defined by the user's terminal, not by us, so "nearest ANSI-16" is arithmetic on pixels we
+# cannot see. A 24-bit-only spec on a non-truecolor terminal therefore degrades to minimal
+# rather than guessing — the honest answer, and the one the user can override by writing the
+# rung they want.
+accent_from_spec() {
+    local spec="$1" hex="" idx="" r g b
+    if [[ "$spec" == */* ]]; then
+        hex="${spec%%/*}"; idx="${spec##*/}"
+    elif [[ "$spec" == 0x* ]]; then
+        hex="$spec"
+    else
+        idx="$spec"
+    fi
+    if [[ -n "$hex" ]] && ((COLORTERM_TC)); then
+        r=$((16#${hex:2:2})); g=$((16#${hex:4:2})); b=$((16#${hex:6:2}))
+        printf -v C_CYAN '\033[38;2;%d;%d;%dm' "$r" "$g" "$b"
+        printf -v C_MARK '\033[1;38;2;%d;%d;%dm' "$r" "$g" "$b"
+    elif [[ -n "$idx" ]]; then
+        C_CYAN=$'\033['"$idx"m
+        C_MARK=$'\033[1;'"$idx"m
+    else
+        accent_minimal
+    fi
+}
 set_theme() {
     # Community themes (catppuccin/tokyonight/nord/gruvbox/onedark) pass through the
     # same minimalist filter as minimal: ONE signature accent, gray hierarchy for
@@ -887,14 +977,29 @@ set_theme() {
     local acc_r acc_g acc_b a16
     case "$THEME" in
     minimal)
-        C_CYAN=$'\033[36m'
-        C_MARK=$'\033[1;36m'
-        if [[ "$BG" == light ]]; then
-            C_CYAN=$'\033[34m'; C_MARK=$'\033[1;34m'
-        fi
+        accent_minimal
         ;;
     mono)
         C_CYAN=''; C_MARK=$'\033[1m'
+        ;;
+    # The eighth name, in every way the peer of the other seven — no override layer above the
+    # current theme, because that would make the t key a silent no-op: seven names cycling
+    # past a screen that never changes color, while cycle_theme still writes the name back as
+    # a preference. A name costs one arm here and nothing anywhere else.
+    #
+    # An EMPTY UT_ACCENT degrades to minimal instead of dying, and this is load-bearing: the t
+    # key writes YT_THEME=custom back to the user's config, so a config naming custom can
+    # outlive the UT_ACCENT that justified it. Refusing to start would lock the user out over
+    # a key they never typed. The screen going minimal IS the feedback — a notice would cost
+    # two i18n strings to say what the user can already see.
+    custom)
+        local spec="${UT_ACCENT:-}"
+        [[ "$BG" == light && -n "${UT_ACCENT_LIGHT:-}" ]] && spec="${UT_ACCENT_LIGHT:-}"
+        if [[ -n "$spec" ]]; then
+            accent_from_spec "$spec"
+        else
+            accent_minimal
+        fi
         ;;
     catppuccin | tokyonight | nord | gruvbox | onedark)
         case "$THEME:$BG" in

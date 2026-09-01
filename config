@@ -106,6 +106,12 @@ UT_KEYS=core                        # how much of the keymap the hint block prin
                                     # key it has. The ? key toggles it live and writes it
                                     # back here. Not a cycle — two tiers, one door
 YT_THEME=minimal                    # palette family; --theme overrides, t cycles live
+UT_ACCENT=                          # the `custom` palette's accent. 0xRRGGBB (24-bit,
+                                    # needs COLORTERM=truecolor) | an SGR code 30-37 or
+                                    # 90-97 | 0xRRGGBB/<code> for both rungs. `#RRGGBB`
+                                    # cannot be written here at all — this file's comment
+                                    # strip eats it. Empty = custom degrades to minimal
+UT_ACCENT_LIGHT=                    # …the light-background rung. Empty = use UT_ACCENT
 YT_BG=auto                          # auto | light | dark
 YT_SYNC=auto                        # synchronised redraw: 0 | 1 | auto (off under tmux)
 YT_ICON=                            # note | phones — the header's two-cell icon slot:

@@ -897,6 +897,7 @@ uting_gate() { # <env assignments and argv…> — which gate answered
     case "$(env "$@" </dev/null 2>&1 || true)" in
     *"requires a terminal"*) echo tty ;;
     *"must be one of"*) echo mode ;;
+    *"UT_ACCENT"*) echo accent ;;
     *"unknown flag"*) echo unknown-flag ;;
     *) echo other ;;
     esac
@@ -1285,7 +1286,7 @@ report "the file did not create the hijack socket" "absent" \
 # member check ran or not. (Written as a literal list rather than a case inside $( ): on
 # bash 3.2 a case pattern's `)` closes the command substitution.)
 for spec in UT_MODE_CYCLE=audio,bogus UT_SORT_CYCLE=relevance,bogus \
-    UT_THEME_CYCLE=nord,bogus UT_QUALITY_CYCLE=auto,bogus; do
+    UT_THEME_CYCLE=nord,bogus UT_THEME_CYCLE=custom,bogus UT_QUALITY_CYCLE=auto,bogus; do
     printf '%s\n' "$spec" > "$CFG"
     report "${spec%%=*}: an unknown member exits 1" "1" "$(UT_CONFIG="$CFG" rc shell/uting q)"
 done
@@ -1312,6 +1313,82 @@ case "$CFG_OUT" in
 *) CFG_HIT=no ;;
 esac
 report "…and it is the TTY gate, not a flag error" "yes" "$CFG_HIT"
+
+# ── THE CUSTOM PALETTE'S ACCENT (UT_ACCENT / UT_ACCENT_LIGHT) ───────────────────────────
+# Asserted on WHICH GATE ANSWERED, never on a bare exit 1: `custom` is a legal theme name, so
+# a build with no accent gate at all reaches the TTY refusal and exits 1 too. A check reading
+# only the code could not fail. uting_gate's `accent` arm is what separates the two.
+#
+# Every one of these runs offline — the flag/config gates all answer before the TTY refusal,
+# which is the order the pair of checks above this one pins.
+for _spec in zzz 40 99 0xd65d0 0xd65d0e/40 0xD65D0E/9; do
+    printf 'YT_THEME=custom\nUT_ACCENT=%s\n' "$_spec" > "$CFG"
+    report "UT_ACCENT=$_spec dies at the accent gate" accent \
+        "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
+done
+# The three legal spellings pass the door. 0x, not #RRGGBB: a # cannot survive this config
+# format's comment strip at all (AS-BUILT-tui.md「为什么是 0x 而不是 #RRGGBB」), so the syntax
+# a user would reach for first is the one that must not silently read back as empty.
+for _spec in 0xd65d0e 33 97 0xd65d0e/33 0xD65D0E/97; do
+    printf 'YT_THEME=custom\nUT_ACCENT=%s\n' "$_spec" > "$CFG"
+    report "UT_ACCENT=$_spec is accepted" tty "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
+done
+# THE WRITE-BACK TRAP. The t key writes YT_THEME=custom into the user's own config, so a
+# config can name custom long after the UT_ACCENT that justified it was cleared. Refusing to
+# start there would lock the user out over a key they never typed — it must degrade, silently,
+# to minimal. The pair matters: a build that dies on an unset accent still passes the row
+# above it, because that row always sets one.
+printf 'YT_THEME=custom\n' > "$CFG"
+report "custom with no accent still starts" tty "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
+printf 'YT_THEME=custom\nUT_ACCENT=\n' > "$CFG"
+report "…and an explicitly empty one too" tty "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
+# The light rung carries the same ruler and names ITSELF in the message — a shared validator
+# that reported the wrong key would send the user editing the wrong line.
+printf 'UT_ACCENT_LIGHT=nope\n' > "$CFG"
+CFG_OUT=$(UT_CONFIG="$CFG" shell/uting q </dev/null 2>&1 || true)
+case "$CFG_OUT" in
+*"UT_ACCENT_LIGHT must be"*) CFG_HIT=yes ;;
+*) CFG_HIT=no ;;
+esac
+report "UT_ACCENT_LIGHT is refused under its own name" "yes" "$CFG_HIT"
+# Validated whether or not custom is the CURRENT theme: the t key can arrive at custom
+# mid-session, and a gate that only fired on the startup theme would let a malformed spec
+# through to the printf that builds an SGR — half an escape sequence, in the user's terminal.
+printf 'YT_THEME=minimal\nUT_ACCENT=zzz\n' > "$CFG"
+report "a bad accent is caught under a non-custom theme" accent \
+    "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
+# A cycle narrowed to custom alone must still start, like every other narrowed cycle above.
+printf 'UT_THEME_CYCLE=custom\nUT_ACCENT=0xd65d0e/33\n' > "$CFG"
+report "a cycle of just custom reaches the TTY gate" tty "$(uting_gate UT_CONFIG="$CFG" shell/uting q)"
+report "--theme custom is accepted" tty "$(uting_gate shell/uting --theme custom q)"
+# AS-BUILT-tui.md「调用面」's custom line, run verbatim rather than printed.
+report "…with an accent on it, as the doc prints it" tty \
+    "$(uting_gate UT_ACCENT=0xd65d0e/33 shell/uting --theme custom "lofi hip hop")"
+# --theme takes ONE name. The membership test is an exact compare over the name list, not a
+# substring of it: "gruvbox onedark" IS a substring of that list and a substring gate would
+# pass it, then fall off the end of set_theme's case with no accent set at all.
+report "--theme rejects two names at once" mode "$(uting_gate shell/uting --theme "gruvbox onedark" q)"
+
+# PROSE AND THE DOOR MAY NOT DIVERGE. The theme names used to be spelled four times; they are
+# one constant now, but usage() stays literal English and can still drift from it. Both sides
+# here are things the COMMAND said — the gate's own refusal message and its own --help — so
+# this compares two live surfaces rather than grepping the source for the constant.
+THEME_GATE_SET=$(shell/uting --theme __not_a_theme__ </dev/null 2>&1 |
+    sed -n 's/.*must be one of: //p' | tr -d ' ' | tr ',' '\n' | sort | tr '\n' ' ')
+THEME_HELP=$(shell/uting -h 2>&1 || true)
+THEME_USAGE_FLAG=$(printf '%s\n' "$THEME_HELP" | tr '\n' ' ' |
+    sed -e 's/.*Palette: //' -e 's/\. Every theme.*//' -e 's/(default)//' |
+    tr '|' '\n' | tr -d ' ' | grep -v '^$' | sort | tr '\n' ' ')
+THEME_USAGE_ENV=$(printf '%s\n' "$THEME_HELP" |
+    sed -n 's/.*YT_THEME=\([a-z|]*\).*/\1/p' | tr '|' '\n' | sort | tr '\n' ' ')
+report "usage()'s --theme list == the gate's" "$THEME_GATE_SET" "$THEME_USAGE_FLAG"
+report "usage()'s YT_THEME list == the gate's" "$THEME_GATE_SET" "$THEME_USAGE_ENV"
+# Not vacuous: the gate set must really hold names, or all three could agree on nothing.
+# Written OUTSIDE the command substitution — on bash 3.2 a case pattern's `)` closes the
+# `$( )`, the same trap the cycle loop above already carries a note about.
+THEME_SET_OK=no
+if [[ "$THEME_GATE_SET" == *minimal* && "$THEME_GATE_SET" == *custom* ]]; then THEME_SET_OK=yes; fi
+report "…and that set really holds names" "yes" "$THEME_SET_OK"
 
 # THE BROKEN CHECKOUT. Defaults now live in <checkout>/config and nowhere else, so a copy of
 # a script without that file has no values at all. The failure must be this one line and exit
