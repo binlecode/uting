@@ -111,7 +111,8 @@ YT_ICON=                            # note | phones — the header's two-cell ic
                                      # note = ♫, phones = 🎧. Unset = one coin flip per
                                      # startup; pin it whenever a frame must repeat exactly
                                      # (a captured doc frame). YT_ASCII=1 overrides it.
-YT_BRAND=0                          # 1 = math-sans-bold header wordmark
+YT_BRAND=0                          # 1 = math-sans-bold header wordmark (zh: 你听 spaced,
+                                     # since Unicode has no bold CJK to reach for)
 YT_AMBIG_WIDE=0                     # 1 = measure East-Asian Ambiguous glyphs as two cells
 
 # ── scope: engine yt ────────────────────────────────────────────────────────────────────

@@ -606,7 +606,8 @@ Environment:
                    the slot entirely and this knob with it.
   YT_BRAND=1       Header wordmark in mathematical sans-serif bold ("𝗨 𝗧 𝗜 𝗡 𝗚").
                    OPT-IN: your terminal font must cover the U+1D5D4 block, else tofu.
-                   ASCII mode (YT_ASCII=1) always wins.
+                   ASCII mode (YT_ASCII=1) always wins. Under YT_LANG=zh the wordmark
+                   is 你听, and this spaces it (你 听) — Unicode has no bold CJK.
   NO_COLOR=1       Disables color in --color auto mode (an explicit --color wins).
   YT_AMBIG_WIDE=1  Measure East-Asian-Ambiguous glyphs (· — • … arrows ─ ━ ○ ● ▶) as
                    TWO cells. Only needed if your terminal is set to treat ambiguous
@@ -1096,9 +1097,12 @@ set_ui_lang() {
 }
 
 # Toggle the chrome language in place (key: l). The card redraws on its 1s tick; the list
-# view redraws when the menu loop comes back around.
+# view redraws when the menu loop comes back around. The header wordmark is a language
+# string too (set_brand), but it cannot live in the table above — it needs ASCII_GLYPHS,
+# which does not exist yet when set_ui_lang first runs — so it is re-resolved here.
 cycle_ui_lang() {
     if [[ "$UI_LANG" == "zh" ]]; then set_ui_lang en; else set_ui_lang zh; fi
+    set_brand
     mark_pref YT_LANG
 }
 
@@ -1198,16 +1202,46 @@ init_glyphs() {
     "") ((RANDOM % 2)) && GL_NOTE="♫ " || GL_NOTE="🎧" ;;
     *) die "YT_ICON must be note or phones (got '$YT_ICON')" ;;
     esac
-    # Brand wordmark (YT_BRAND=1): the three view headers render "𝗨 𝗧 𝗜 𝗡 𝗚" in
-    # mathematical sans-serif bold (U+1D5D4 block). OPT-IN on purpose: terminal fonts
-    # vary, and a font without that block shows tofu — your call, your eyes. Width is
-    # whatever the font gives; char_w's conservative 2-cell overcount keeps the query
-    # elision safe in either case (over-count packs early, never overflows). ASCII mode
-    # always wins — a font that cannot draw ♫ cannot draw these either.
-    GL_BRAND="uting"
-    case "${YT_BRAND:-}" in
-    1 | true | yes | on) ((ASCII_GLYPHS)) || GL_BRAND="𝗨 𝗧 𝗜 𝗡 𝗚" ;;
-    esac
+    set_brand
+}
+
+# The header wordmark, and the ONE piece of chrome that is a glyph AND a language string —
+# which is why it is neither in the glyph table above nor in set_ui_lang's: it needs
+# ASCII_GLYPHS (set by init_glyphs) and UI_LANG (set by init_ui_strings, which runs first),
+# so it is resolved here, from both, and re-resolved by cycle_ui_lang when `l` flips the
+# language under a running frame.
+#
+# Under zh the wordmark is the project's Chinese name, 你听 — the chrome around it is already
+# Chinese, so a Latin "uting" in the one bold cyan slot read as the odd word out.
+#
+# Brand wordmark (YT_BRAND=1): the header renders "𝗨 𝗧 𝗜 𝗡 𝗚" in mathematical sans-serif
+# bold (U+1D5D4 block). OPT-IN on purpose: terminal fonts vary, and a font without that
+# block shows tofu — your call, your eyes. Width is whatever the font gives; char_w's
+# conservative 2-cell overcount keeps the query elision safe in either case (over-count
+# packs early, never overflows). ASCII mode always wins — a font that cannot draw ♫ cannot
+# draw these either.
+#
+# The zh side of YT_BRAND is SPACING, not a font block, and that is not a shortcut: Unicode
+# has no styled variant of 你 or 听 to reach for. The math-alphanumeric planes cover Latin,
+# Greek and digits only; the enclosed-CJK blocks (U+3200–U+32FF) are a fixed ~100-ideograph
+# list that contains neither character. Letter-spacing (隔字) is the actual Chinese
+# typographic device for the same emphasis, it costs no font support, and it mirrors what
+# the Latin wordmark already does with its own spaces.
+#
+# ASCII mode does NOT force the Latin name: YT_ASCII covers the glyph table, never the
+# language — set_ui_lang's labels stay Chinese under it, and so does this.
+set_brand() {
+    if [[ "$UI_LANG" == "zh" ]]; then
+        GL_BRAND="你听"
+        case "${YT_BRAND:-}" in
+        1 | true | yes | on) GL_BRAND="你 听" ;;
+        esac
+    else
+        GL_BRAND="uting"
+        case "${YT_BRAND:-}" in
+        1 | true | yes | on) ((ASCII_GLYPHS)) || GL_BRAND="𝗨 𝗧 𝗜 𝗡 𝗚" ;;
+        esac
+    fi
 }
 init_glyphs
 
