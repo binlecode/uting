@@ -1561,15 +1561,28 @@ cursor_show() { tput cnorm 2>/dev/null || true; }
 # Restore is the state `stty -g` saw on the way in, verbatim, rather than a guess at what the
 # shell handed us: two flags are now being changed, and re-asserting defaults would silently
 # "fix" a tty the caller had deliberately set up otherwise.
+#
+# BRACKETED PASTE (DECSET 2004) is turned on from the same two functions, for the same
+# reason and with the same pairing: it is terminal state this app changes for the length of
+# a session and must hand back. Without it a paste is indistinguishable from someone typing
+# very fast, and every character of it is a KEY — pasting `jazz #hop` into the list moved the
+# cursor on `j`, opened the playlist-name prompt on `a`, and typed the rest into it. `#`, `s`
+# and `d` are worse: they toggle row numbers, stop the player and delete a stored row. The
+# terminal is the only party that knows where a paste begins and ends, and 2004 is how it
+# says so — nothing this side of the tty can tell a paste from typing by timing without
+# guessing. A terminal that does not implement it ignores the sequence and behaves exactly as
+# before, so this costs nothing where it is not supported.
 TTY_ECHO_OFF=0
 TTY_SAVED=""
 tty_echo_off() {
     [[ -n "$TTY_SAVED" ]] || TTY_SAVED=$(stty -g </dev/tty 2>/dev/null || true)
     stty -echo -icanon min 1 time 0 </dev/tty 2>/dev/null && TTY_ECHO_OFF=1
+    ((TTY_ECHO_OFF)) && printf '\033[?2004h'
     return 0
 }
 tty_echo_restore() {
     ((TTY_ECHO_OFF)) || return 0
+    printf '\033[?2004l'
     if [[ -n "$TTY_SAVED" ]]; then
         stty "$TTY_SAVED" </dev/tty 2>/dev/null || true
     else
@@ -5181,7 +5194,7 @@ report_fetch_failure() {
 new_search() {
     local q prev="$QUERY_LABEL" rc=0
     printf '\n%s%s %s%s: ' "$C_BOLD" "$GL_CARET" "$S_NEW_SEARCH" "$C_RESET"
-    read_query_input || return 0
+    read_query_input "${1:-}" || return 0
     q="$QUERY_INPUT"
     [[ "$q" == *[![:space:]]* ]] || return 0
     QUERY_LABEL="$q"
@@ -5413,6 +5426,9 @@ filter_live() {
             move_selection "$READ_NAV_KEY" ;;
         $'\x7f' | $'\b') query="${query%?}"; apply_filter "$query" ;;
         $'\t') ;;   # Tab is a control character, never part of a query — ignore, not append
+        # Text, not a command: with `/` open the user is typing a query, and a paste is the
+        # fastest way to type one. Narrows on the whole payload in one apply_filter.
+        PASTE) query="$query$PASTE_TEXT"; apply_filter "$query" ;;
         # An escape sequence the arms above did not claim (PageUp `[5~`, F1 `OP`, Home, a
         # modified arrow `[1;5A`) is not text the user typed, and appending its bytes would put
         # `[5~` in the query. The introducer alone IS text, though — a sequence always carries
@@ -5557,7 +5573,56 @@ read_esc_tail() {
         [[:alpha:]~]) break ;;
         esac
     done
+    # `\e[200~` is not a key, it is the announcement that TEXT follows. Reported as one
+    # key with its payload beside it, the way ESC is reported as one key, so every caller
+    # decides what a paste MEANS to it instead of decoding the protocol again.
+    if [[ "$seq" == "[200~" ]]; then
+        read_paste_tail
+        READ_NAV_KEY="PASTE"
+        return 0
+    fi
     READ_NAV_KEY="$seq"
+    return 0
+}
+
+# The text of the paste whose opener read_esc_tail just decoded. One slot, consumed by the
+# same call that reports the key, exactly as PENDING_KEY is.
+PASTE_TEXT=""
+# Consume a bracketed paste's payload, the \e[200~ opener already read, and stop on its
+# \e[201~ closer. Split out because BOTH readers need it: the list decodes a paste through
+# read_esc_tail, and the query prompt runs its own byte loop and would otherwise treat the
+# opener's \x1b as the cancel key — which is what it did, so turning 2004 on without this
+# would have made a paste at the `n` prompt close the prompt instead of filling it.
+#
+# A newline inside the payload becomes a SPACE rather than a submit. That is the whole point
+# of knowing it is a paste: the bytes after a line break are part of what the user pasted,
+# not keys they pressed, and letting the first line submit was the other half of this bug —
+# `jazz\n#ch` searched for `jazz` and then ran # and c and h as commands.
+# The cap is a refusal, not a truncation policy: a stray paste of a whole file must not lock
+# the UI in this loop, and 4096 bytes is far past any query. Bytes past it are read and
+# dropped so the closer is still found and the terminal is not left mid-paste.
+read_paste_tail() {
+    local b x seq
+    local -i n=0
+    PASTE_TEXT=""
+    while :; do
+        IFS= read -rsn1 -t 1 b || break
+        if [[ "$b" == $'\x1b' ]]; then
+            seq=""
+            while :; do
+                IFS= read -rsn1 -t 1 x || break 2
+                seq+="$x"
+                case "$x" in [[:alpha:]~]) break ;; esac
+            done
+            [[ "$seq" == "[201~" ]] && break
+            continue    # any other sequence inside a paste is not text; drop it
+        fi
+        # `read -n1` reports a newline as an EMPTY read (it is the delimiter), and a pasted
+        # CRLF arrives as \r plus that empty. One space for the pair, none for the \r alone.
+        [[ "$b" == $'\r' ]] && continue
+        [[ -n "$b" ]] || b=" "
+        if ((n < 4096)); then PASTE_TEXT+="$b"; n=$((n + 1)); fi
+    done
     return 0
 }
 
@@ -5622,9 +5687,14 @@ read_nav_input() {
     return 0
 }
 
+# $1, when given, is text the prompt OPENS with — a paste the list decoded before the prompt
+# existed. It is echoed and then edited like anything typed, rather than searched immediately:
+# a paste is what the user has, not yet what they meant, and the one keystroke it costs buys
+# the chance to fix a stray newline or a tracking suffix before a network round trip.
 read_query_input() {
-    local b="" query="" gone rest i
+    local b="" query="${1:-}" gone rest i seq x
     cursor_show
+    [[ -z "$query" ]] || printf '%s' "$query"
     while true; do
         IFS= read -rsn1 b || return 1
         utf8_complete "$b"
@@ -5633,7 +5703,23 @@ read_query_input() {
         # One cancel code, not two. Esc used to return 2 and EOF 1, and the only caller
         # (new_search) does `read_query_input || return 0` — both always meant cancel, so the
         # distinction was dead weight that read like a promise.
-        $'\x1b') printf '\n'; return 1 ;;
+        # A paste opens with \e[200~, so this arm has to look before it cancels: with 2004 on
+        # and without this, pasting at the prompt would CLOSE the prompt. Anything else after
+        # \x1b is still a cancel, as it always was.
+        $'\x1b')
+            seq=""
+            while :; do
+                IFS= read -rsn1 -t 1 x || break
+                seq+="$x"
+                case "$x" in [[:alpha:]~]) break ;; esac
+            done
+            if [[ "$seq" == "[200~" ]]; then
+                read_paste_tail
+                query+="$PASTE_TEXT"
+                printf '%s' "$PASTE_TEXT"
+                continue
+            fi
+            printf '\n'; return 1 ;;
         # bash's own `read -n` puts the tty in non-canonical mode, so Ctrl-D arrives as the
         # BYTE 0x04, not as EOF — the catch-all below used to append it to the query and send a
         # control character to the search. Give it the shell's meaning instead: cancel on an
@@ -5923,6 +6009,11 @@ while true; do
     # j/k already walked into.
     [0-9]) jump_to_row "$READ_NAV_KEY" ;;
     n | N) new_search ;;      # new search (non-blocking: music continues)
+    # A paste is a QUERY, and it opens the same prompt `n` does with the text already in it.
+    # Beside `n` rather than in the universal block above for the reason the digits are: the
+    # filter runs its own reader, reaches neither block, and takes its paste as query text
+    # there — so a paste means "search" only where `n` itself means it.
+    PASTE) new_search "$PASTE_TEXT" ;;
     o | O) cycle_sort ;;      # rotate sort
     e | E) cycle_engine ;;    # switch source (engine), re-fetch the same query
     v | V) cycle_mode ;;      # rotate playback mode

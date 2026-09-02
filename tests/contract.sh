@@ -1408,6 +1408,57 @@ esac
 report "…naming the file, not an unbound variable" "yes" "$CFG_HIT"
 rm -rf "$CFGD"
 
+# ── A PASTE IS TEXT, NOT KEYS ───────────────────────────────────────────────────────────
+# Hermetic because the STARTUP prompt is up before any search: uting asks for a query with
+# nothing fetched, so the whole claim is provable with no packet sent.
+#
+# The payload carries a NEWLINE, and that is what makes the check discriminating rather than
+# decorative. A build with bracketed paste off is not a build that mangles the text — tmux
+# would simply deliver the bytes raw and the prompt would show `jazz` — so a single-line
+# payload passes either way and proves nothing. With a line break in it the two builds part
+# company: the fixed one joins the lines with a space and stays at the prompt, the broken one
+# submits `jazz` on the newline and leaves the prompt for a search. Asserting on ONE LINE
+# reading `jazz #ch` therefore fails for both halves of the bug this pins — the terminal mode
+# never being asked for, and the prompt reading the paste's \e[200~ opener as its cancel key.
+#
+# `#` in the payload is not incidental: it is a bound key (row numbers) in the list, which is
+# where a pasted query used to be run as commands, and keeping it here documents the class.
+echo
+echo "── a paste is text, not keys ──────────────────────────────────────"
+if ! command -v tmux >/dev/null 2>&1; then
+    echo "  skip  (needs tmux for a real tty)"
+else
+    PS_TS="ctest-paste-$$"
+    # A state dir of this check's own, for the reason every other section has one: the pane
+    # inherits the tmux SERVER's environment, not this shell's, so the value is passed into
+    # the command line rather than exported — the same reason the TUI section spells it out.
+    PS_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-paste.XXXXXX")
+    tmux kill-session -t "$PS_TS" 2>/dev/null
+    tmux new-session -d -s "$PS_TS" -x 80 -y 20 \
+        "UT_STATE_DIR='$PS_STATE' TMPDIR='$TMPDIR' UT_HISTORY=0 '$PWD/shell/uting'" 2>/dev/null
+    pasted=0
+    i=0
+    while [ $i -lt 100 ]; do
+        tmux capture-pane -t "$PS_TS" -p -J 2>/dev/null | grep -q 'Search' && { pasted=1; break; }
+        sleep 0.05; i=$((i + 1))
+    done
+    report "the startup prompt is up with nothing fetched" 1 "$pasted"
+    tmux set-buffer -b ctpaste 'jazz
+#ch' 2>/dev/null
+    tmux paste-buffer -p -b ctpaste -t "$PS_TS" 2>/dev/null
+    kept=0
+    i=0
+    while [ $i -lt 60 ]; do
+        tmux capture-pane -t "$PS_TS" -p -J 2>/dev/null | grep -q 'Search.*jazz #ch' && { kept=1; break; }
+        sleep 0.05; i=$((i + 1))
+    done
+    report "a pasted newline joins the query instead of submitting it" 1 "$kept"
+    report "…and the prompt is still open, not gone to a search" 1 \
+        "$(tmux capture-pane -t "$PS_TS" -p -J 2>/dev/null | grep -c 'Search' | awk '{print ($1 > 0) ? 1 : 0}')"
+    tmux kill-session -t "$PS_TS" 2>/dev/null
+    rm -rf "$PS_STATE"
+fi
+
 if [ "$OFFLINE" = 1 ]; then
     echo
     echo "── the live half: SKIPPED (--offline) ─────────────────────────────"
@@ -2393,6 +2444,21 @@ else
     tmux send-keys -t "$TS" i
     backed=$(poll_until 10 pane_back "chapters='" "query='")
     report "i again leaves it for search" 1 "$backed"
+
+    # A PASTE INTO THE LIST IS A QUERY, not a run of keybindings. This is the half the
+    # offline check above cannot reach — it needs a list, and a list needs a fetch. The
+    # payload's first two characters are the discriminating input: `j` moves the cursor and
+    # `a` opens the playlist-name prompt, so a build that still dispatches a paste as keys
+    # lands on a store prompt reading "Name the new playlist", never on the search prompt.
+    tmux set-buffer -b ctpaste2 'jazz #hop' 2>/dev/null
+    tmux paste-buffer -p -b ctpaste2 -t "$TS" 2>/dev/null
+    prefilled=$(poll_until 10 pane_has 'New search.*jazz #hop')
+    report "a paste opens the search prompt with the text in it" 1 "$prefilled"
+    report "…and not the playlist prompt j+a used to open" 0 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'Name the new playlist')"
+    tmux send-keys -t "$TS" Escape
+    backed=$(poll_until 10 pane_lacks 'New search')
+    report "Esc leaves the prompt the paste opened" 1 "$backed"
 
     # `q` used to be asserted by waiting for tmux to tear the session down, which proves the
     # pty is not wedged but says nothing about the status or about what was handed back. The
