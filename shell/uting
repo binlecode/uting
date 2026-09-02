@@ -1772,7 +1772,13 @@ init_cell_tables() {
     # ▁▃▅▇ bars: those are Ambiguous, so a terminal could give the animation two cells and make
     # it jump. Nothing measures the spinner line today; tabling them anyway keeps "every glyph
     # this draws has a known width" true by construction rather than by where it happens to print.
-    CW_NARROW="↵♫❚❯▘▝▗▖$CW_RANGE"                            # U+21B5 U+266B U+275A U+276F
+    # ╸ U+2578 is the progress bar's playhead, and it belongs HERE rather than in CW_AMBIG
+    # beside the ━ and ─ it sits between. EastAsianWidth splits the box-drawing block:
+    # the full-length horizontals are Ambiguous, the heavy HALF-lines (2574..257F) are
+    # Neutral. A head tabled Ambiguous would take two cells under YT_AMBIG_WIDE=1 and
+    # push the bar one cell past the width it was measured at — a wrap, which is a line
+    # of height the reflow does not know about. Same island the spinner quadrants sit on.
+    CW_NARROW="↵♫❚❯▘▝▗▖╸$CW_RANGE"                           # U+21B5 U+266B U+275A U+276F U+2578
     case "${YT_AMBIG_WIDE:-}" in
     1 | true | yes | on) CW_AMBIG_W=2 ;;
     esac
@@ -2026,6 +2032,10 @@ PT_PCT=""
 # it would be the second spelling this file spends its width layer avoiding. Empty means no
 # reading (a live stream, a socket that answered nothing) — never 0, which is a real position.
 PT_POS_SEC=""
+# The DURATION in seconds, beside PT_TOTAL's printed form, and for the same reason: the
+# chapter bracket on the bar needs a denominator, and reading "1:01:14" back into one
+# would be a second parser of a format fmt_sec already owns.
+PT_DUR_SEC=""
 # The player's own footprint — CPU percent and resident MB — summed over its PROCESS GROUP,
 # not its pid: the recorded pid is the detached wrapper (a bash that costs nothing), and
 # `set -m` at launch made it the group leader (pgid == pid), so the group is the wrapper,
@@ -2067,6 +2077,7 @@ fetch_play_times() {
     PT_TOTAL="$CURRENT_PLAY_DURATION"
     PT_PCT=""
     PT_POS_SEC=""
+    PT_DUR_SEC=""
     local live=0
     if ((CURRENT_PLAY_IS_LIVE)); then
         live=1
@@ -2128,7 +2139,11 @@ fetch_play_times() {
         PT_POS_SEC=${raw_pos%.*}
         [[ "$PT_POS_SEC" =~ ^[0-9]+$ ]] || PT_POS_SEC=""
     fi
-    [[ -n "$raw_dur" && "$raw_dur" != "null" ]] && PT_TOTAL=$(fmt_sec "$raw_dur")
+    if [[ -n "$raw_dur" && "$raw_dur" != "null" ]]; then
+        PT_TOTAL=$(fmt_sec "$raw_dur")
+        PT_DUR_SEC=${raw_dur%.*}
+        [[ "$PT_DUR_SEC" =~ ^[0-9]+$ ]] || PT_DUR_SEC=""
+    fi
     [[ -n "$raw_pct" && "$raw_pct" != "null" ]] && PT_PCT=${raw_pct%.*}
     return 0
 }
@@ -2148,7 +2163,7 @@ fetch_play_times() {
 # on punctuation, which now buy 2 more cells of resolution instead.
 PROG_BAR=""
 render_prog_bar() {
-    local pct=${1%.*} total=${2:-44}
+    local pct=${1%.*} total=${2:-44} mark_a=${3:-} mark_b=${4:-}
     PROG_BAR=""
     [[ "$pct" =~ ^[0-9]+$ ]] || return 0
     ((pct > 100)) && pct=100
@@ -2160,15 +2175,48 @@ render_prog_bar() {
     ((filled > width - 1)) && filled=$((width - 1))
     local empty=$((width - filled - 1))   # track = filled + head + empty
 
-    local f_str e_str head='●' fill='━' rest='─'
+    # The head is ╸ (and > in ASCII), not the ● it was. A filled circle on a heavy rule
+    # reads as a speck of dirt at 4% and as a bullet everywhere else; a heavy half-line reads
+    # as the end of what has played, which is what it marks. It is still exactly one cell —
+    # tabled in CW_NARROW, see init_cell_tables — so the bar's length is unchanged.
+    local f_str e_str head='╸' fill='━' rest='─' b_open='[' b_close=']'
     if ((ASCII_GLYPHS)); then
-        head='#'
+        head='>'
         fill='='
         rest='-'
     fi
-    repeat_glyph "$fill" "$filled"; f_str=$GLYPH_RUN
-    repeat_glyph "$rest" "$empty"; e_str=$GLYPH_RUN
-    PROG_BAR="${f_str}${head}${e_str}"
+    # No interval asked for — every caller but the chapter list — and the bar stays what it
+    # was: two runs and a head, no per-cell work on a line redrawn once a second.
+    if [[ -z "$mark_a" ]]; then
+        repeat_glyph "$fill" "$filled"; f_str=$GLYPH_RUN
+        repeat_glyph "$rest" "$empty"; e_str=$GLYPH_RUN
+        PROG_BAR="${f_str}${head}${e_str}"
+        return 0
+    fi
+    # THE INTERVAL. Two cells of the same track rewritten as brackets, so one line says where
+    # the playhead is AND where the marked span sits in the whole item — which is the pairing
+    # a reader of a chapter list actually wants and the two identical rails never gave.
+    # The head wins a collision: where it is now is a fact about this second, where the span
+    # begins is a fact about the item, and the other bracket still shows the span.
+    ((mark_a < 0)) && mark_a=0
+    ((mark_a > width - 1)) && mark_a=$((width - 1))
+    [[ "$mark_b" =~ ^[0-9]+$ ]] || mark_b=-1
+    ((mark_b > width - 1)) && mark_b=$((width - 1))
+    # A span under two cells wide gets its opener alone: "[]" in one or two cells is not a
+    # span, it is two characters of noise where a plain track would have said more.
+    ((mark_b <= mark_a)) && mark_b=-1
+    local out="" col c
+    for (( col = 0; col < width; col++ )); do
+        if ((col == filled)); then c=$head
+        elif ((col == mark_a)); then c=$b_open
+        elif ((col == mark_b)); then c=$b_close
+        elif ((col < filled)); then c=$fill
+        else c=$rest
+        fi
+        out="$out$c"
+    done
+    PROG_BAR="$out"
+    return 0
 }
 
 # One emit point for every line wrap_print produces, so WRAP_LINES and the measure switch
@@ -2299,9 +2347,17 @@ wrap_print() {
 # row's `duration` never reaches the row arrays, only its wire spelling does, so reading the
 # end here costs no second parser of a format short_dur already owns.
 CHAP_PCT=""
+# The span itself, in seconds, beside the percent — every gate that makes the percent
+# trustworthy (the player holds THIS item, the engine published an end, the end is after the
+# start) is exactly the gate that makes the span drawable on the item's own bar, so they are
+# one function and not two that could disagree about which chapter is being described.
+CHAP_START_SEC=""
+CHAP_END_SEC=""
 chapter_pct() {
     local i=$1 start end cur j
     CHAP_PCT=""
+    CHAP_START_SEC=""
+    CHAP_END_SEC=""
     [[ "$LIST_SOURCE" == "chapters" ]] || return 0
     [[ -n "$CURRENT_PLAY_ID" && -n "$PT_POS_SEC" ]] || return 0
     # if-form, not an AND-list: house rule for an arithmetic test (see player_check_ready).
@@ -2324,6 +2380,8 @@ chapter_pct() {
     done
     [[ -n "$end" ]] || return 0
     if ((end <= start)); then return 0; fi
+    CHAP_START_SEC=$start
+    CHAP_END_SEC=$end
     if ((PT_POS_SEC <= start)); then CHAP_PCT=0; return 0; fi
     if ((PT_POS_SEC >= end)); then CHAP_PCT=100; return 0; fi
     CHAP_PCT=$(((PT_POS_SEC - start) * 100 / (end - start)))
@@ -2364,19 +2422,14 @@ print_details() {
             views=""
         fi
     fi
-    # The rail — and while the player is inside THIS chapter it is a live one: chapter_pct
-    # answers in PT_PCT's vocabulary and render_prog_bar draws it at exactly the width the
-    # divider it replaces would have taken, so the line never changes shape. Every other row
-    # source, and every moment the chapter percent cannot be had, keeps the static divider.
-    chapter_pct "$i"
-    if [[ -n "$CHAP_PCT" ]]; then
-        render_prog_bar "$CHAP_PCT" "$width"
-        ((DETAIL_MEASURE)) || printf '%s%s%s\033[K\n' "$C_CYAN" "$PROG_BAR" "$C_RESET"
-    else
-        card_divider "$width"
-        ((DETAIL_MEASURE)) || printf '%s%s%s\033[K\n' "$C_CYAN" "$DIV_STR" "$C_RESET"
-    fi
-    DETAIL_LINES=1
+    # NO RAIL. This block opened with a full-width rule that was a boundary everywhere and,
+    # in a chapter list, quietly a second progress bar — the playhead's position inside the
+    # SELECTED chapter. Two identical rules a screen apart, each reading a different clock,
+    # is a line the reader has to be told how to read. The boundary is now the blank line
+    # this block already sits under, and the fact the rule carried moved UP onto the item's
+    # own bar as a bracketed span (render_prog_bar's mark_a/mark_b) — where it is next to the
+    # playhead it is measured against instead of six lines away from it.
+    DETAIL_LINES=0
     # NO TITLE HERE. It used to be the first thing this block printed — the same cleaned
     # title the row measured — and the row carrying it is one line up, under the cursor,
     # which is how the reader got here. Restating it spent 1 to 3 lines (it is a WRAP, so a
@@ -2622,6 +2675,7 @@ clear_play_state() {
     PT_TOTAL=""
     PT_PCT=""
     PT_POS_SEC=""
+    PT_DUR_SEC=""
     # The resource pair clears with them and for the same reason: a footprint drawn for a
     # player that no longer exists. The counter resets so the NEXT player's first tick
     # samples instead of finishing the old player's stride.
@@ -3317,10 +3371,20 @@ display_list_menu() {
     # top, which is the one thing this reflow exists to prevent.
     local nav_need=4
     ((NUM_ENTRIES > 1)) && nav_need=5
-    # The banner row counts here whether it prints or stands as a blank (+1); the rail
-    # under the block counts too (+1) — it prints whenever the block does.
+    # The banner row counts here whether it prints or stands as a blank (+1). What used to
+    # be charged beside it was the RAIL under the key block, which printed whenever the block
+    # did; that line is gone. In its place is the progress bar, and the bar is charged on a
+    # different condition — it exists only while a track plays, so an idle screen is now one
+    # line shorter than it was and a playing one is the same height it always was.
+    #
+    # Live gets no bar. mpv's clock describes the broadcast, not a length, so there is no
+    # denominator to draw against — the same fact the banner encodes by printing
+    # "elapsed · LIVE" with no slash. Charged here, before the block is measured, because a
+    # height decided after the budget is a height the budget did not know about.
+    local bar_h=0
+    if [[ -n "$CURRENT_PLAY_ID" ]] && ((CURRENT_PLAY_IS_LIVE == 0)); then bar_h=1; fi
     local nav_ok=0
-    if ((LINES_N - chrome_h - 1 - nav_h - 1 >= nav_need)); then nav_ok=1; fi
+    if ((LINES_N - chrome_h - 1 - bar_h - nav_h >= nav_need)); then nav_ok=1; fi
 
     # Persistent Now-Playing banner (when background playback is active)
     if [[ -n "$CURRENT_PLAY_ID" ]]; then
@@ -3334,9 +3398,9 @@ display_list_menu() {
         # fixed parts and give the title what is left (elided). The key tail appears only
         # when the Navigation block above was dropped (short-terminal fallback).
         local b_head="$p_icon $p_label: "
-        # The tail is a POSITION readout, not a duration: elapsed / total, the pairing the
-        # live rail under it draws as a bar, so the two cannot disagree about where the track
-        # is. PT_CUR/PT_TOTAL come from the shared clock — nav_tick fetches them once a
+        # The tail is a POSITION readout, not a duration: elapsed / total, the same pairing
+        # the bar on the next line draws, so the two cannot disagree about where the track
+        # is — one says how much, the other says where. PT_CUR/PT_TOTAL come from the shared clock — nav_tick fetches them once a
         # second while the list is up — so the banner costs no IPC of its own and is at most
         # one second stale, the resolution it is drawn at anyway.
         #
@@ -3384,8 +3448,8 @@ display_list_menu() {
         # Key tail first: it only exists because the navigation block was dropped, and it is
         # a copy of that block. The FOOTPRINT next — it describes the player's cost, not the
         # track, and nothing else on screen depends on it. Then the POSITION readout — the
-        # rail under the chrome band already carries the same percent, so the row loses a
-        # duplicate, not a fact. The title is last because it is the only field that names
+        # bar on the very next line carries the same percent, so the row loses a duplicate,
+        # not a fact. The title is last because it is the only field that names
         # what is playing; below that there is nothing left to give and it takes the pane
         # minus its own label.
         local title_room=$((nav_cols - head_w - tail_w - res_w - hint_w))
@@ -3415,30 +3479,46 @@ display_list_menu() {
     fi
     chrome_h=$((chrome_h + 1))    # the banner row, or the blank line standing in for it
 
+    # ── The progress bar, on a line of its own ──────────────────────────────────────────
+    # It used to BE the boundary rail under the key block: one line doing two jobs, full
+    # width because a boundary is, and six lines away from the banner whose readout it drew.
+    # Now it is a bar and nothing else, directly under the banner and indented into the same
+    # two-cell gutter the rows use, so banner and bar read as one block. Width is
+    # nav_cols - 4: two cells of indent, and two held on the right for the row gutter, so
+    # every right edge on this screen is derived from one expression rather than three.
+    #
+    # The first second draws 0% rather than nothing. PT_PCT is empty until the first tick
+    # lands, and a line that appeared a second after Enter would push every row down by one
+    # at exactly the moment the user is reading them.
+    if ((bar_h)); then
+        local bar_w=$((nav_cols - 4)) bar_a="" bar_b=""
+        # In a chapter list the bar carries a span as well: where the chapter UNDER THE
+        # CURSOR sits in the whole item, and how long it is. The cursor's, not the playing
+        # one's — the playing chapter is already said by its own row, and a bar repeating it
+        # would be the duplication this step exists to remove. So the reading is positional:
+        # brackets right of the head mean "not there yet", left of it mean "played", around
+        # it mean "you are in it".
+        chapter_pct "$selected"
+        if [[ -n "$CHAP_START_SEC" && -n "$PT_DUR_SEC" ]] && ((PT_DUR_SEC > 0)); then
+            bar_a=$(( CHAP_START_SEC * bar_w / PT_DUR_SEC ))
+            bar_b=$(( CHAP_END_SEC * bar_w / PT_DUR_SEC - 1 ))
+        fi
+        render_prog_bar "${PT_PCT:-0}" "$bar_w" "$bar_a" "$bar_b"
+        printf '  %s%s%s\033[K\n' "$C_CYAN" "$PROG_BAR" "$C_RESET"
+        chrome_h=$((chrome_h + 1))
+    fi
+
     if ((nav_ok)); then
         HINT_SEP=" $GL_SEP "
         print_hints "$nav_cols" "$nav_pad" "$nav_pad" "${nav_items[@]}"
         HINT_SEP=""
         chrome_h=$((chrome_h + nav_h))
-        # Rail under the key-hint block: one boundary between the chrome band and the
-        # result rows (card_divider caches on width+glyph). Accent, not dim: it pairs with
-        # the live rail below, and the two must read as one rail language.
-        #
-        # And while a track plays this IS that live rail: the shared clock leaves the percent
-        # in PT_PCT (nav_tick), so the boundary doubles as the position readout and the list
-        # needs no bar of its own. No percent — a live stream, or the first second before mpv
-        # answers — keeps the static rail, so the line never disappears or changes width.
-        local list_rail=""
-        if [[ -n "$CURRENT_PLAY_ID" && -n "$PT_PCT" ]]; then
-            render_prog_bar "$PT_PCT" "$nav_cols"
-            list_rail="$PROG_BAR"
-        else
-            card_divider "$nav_cols"
-            list_rail="$DIV_STR"
-        fi
-        printf '%s%s%s\033[K\n' "$C_CYAN" "$list_rail" "$C_RESET"
-        chrome_h=$((chrome_h + 1))
     fi
+    # NO RAIL HERE. A full-width rule used to close the chrome band, and a second identical
+    # one opened the details block below the rows — two rules a screen apart, drawn in the
+    # same accent, which is what made a reader look for a difference that was not there. The
+    # band is separated by the blank line below, and that is enough: chrome and rows differ
+    # in dimming and in position already.
     printf '\033[K\n'
     chrome_h=$((chrome_h + 1))
 
