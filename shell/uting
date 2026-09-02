@@ -2199,9 +2199,12 @@ wrap_print() {
 
     # Guarded like every other array expansion here (ARCHITECTURE.md「可移植性契约」): `read -ra words <<< ""` leaves
     # words UNSET, and "${words[@]}" on an unset array is an unbound-variable abort under
-    # set -u on bash 3.2. Reachable from print_details, which passes R_TITLE raw: an
-    # emoji-only title cleans to "" in build_all_rows, so merely moving the selection onto
-    # that row exited the whole TUI with no message.
+    # set -u on bash 3.2, and the abort takes the whole TUI down with no message. The path
+    # that first hit it was print_details restating the row's title, which no longer exists;
+    # the one caller left is the description, and it reaches here the same way — its `-n`
+    # gate passes a description that is nothing but whitespace, and that splits to no words
+    # at all. The guard is not historical: it is what stands between a blank field and a
+    # dead terminal.
     for w in ${words[@]+"${words[@]}"}; do
         disp_w "$w"
         w_len=$DISP_W
@@ -2374,12 +2377,16 @@ print_details() {
         ((DETAIL_MEASURE)) || printf '%s%s%s\033[K\n' "$C_CYAN" "$DIV_STR" "$C_RESET"
     fi
     DETAIL_LINES=1
-    # The same clean-ed title the row measured, so a row and its details cannot disagree
-    # about what the video is called.
-    WRAP_MEASURE=$DETAIL_MEASURE
-    wrap_print "${R_TITLE[$i]}" $((width - 2)) "  " "  "
-    WRAP_MEASURE=0
-    DETAIL_LINES=$((DETAIL_LINES + WRAP_LINES))
+    # NO TITLE HERE. It used to be the first thing this block printed — the same cleaned
+    # title the row measured — and the row carrying it is one line up, under the cursor,
+    # which is how the reader got here. Restating it spent 1 to 3 lines (it is a WRAP, so a
+    # long title costs more than one) on the only fact on this screen the reader cannot
+    # possibly be missing, on the half of the screen with the least room. The description
+    # below already carries the note this block's job is to add: it is the one line here
+    # that is not on the row in some form.
+    #
+    # Removed for ALL row sources, chapters and parts included. A chapter's own identity is
+    # its span and its number, and both are on the row and in the meta line below.
     # The id is DERIVED from the url rather than carried as a field of its own. The '?' below
     # is a glob metacharacter in this expansion and matches the literal '?' of "watch?v=".
     # The OFFSET comes off it: a chapter row's url ends `&t=961`, and `CLeZyIID9Bo&t=961` is
