@@ -1331,9 +1331,9 @@ GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="�
 # shared between them would have to be split before either could ever change shape. That
 # split is exactly the coupling this pass exists to remove.
 GL_CURSOR="▶"
-# The scrollbar: thumb and track. BOTH are East-Asian Ambiguous (U+2588, U+2502), unlike
-# the bar's ╸ which is Neutral — so the gutter is CW_AMBIG_W cells wide, not one, and the
-# width it takes off the rows has to be read from that variable rather than written as 2.
+# The scrollbar: thumb and track. BOTH are East-Asian Ambiguous (U+2588, U+2502) — so the
+# gutter is CW_AMBIG_W cells wide, not one, and the width it takes off the rows has to be
+# read from that variable rather than written as 2.
 GL_BAR_THUMB="█"; GL_BAR_TRACK="│"
 GL_ELL="…"; GL_ARROW="→"; GL_DASH="—"
 # The duration bounds' comparators. Both are East-Asian Ambiguous and already behave like
@@ -1794,7 +1794,7 @@ layout_cols() {
 # if that option is ON. It is an explicit knob and not a locale guess, because the locale
 # says nothing: Ghostty under a zh_CN locale still renders these one cell.
 # Note the bar already assumed this — render_prog_bar promises a string of exactly <total>
-# cells built from ━ ─ ╸, which only holds at one cell each.
+# cells built from ━ and ─, which only holds at one cell each.
 # The table applies wherever these characters occur, titles included, not only to chrome.
 #
 # What IS corrected is the zero-width class, where "two cells" is wrong in every terminal.
@@ -1842,14 +1842,15 @@ init_cell_tables() {
     # ▁▃▅▇ bars: those are Ambiguous, so a terminal could give the animation two cells and make
     # it jump. Nothing measures the spinner line today; tabling them anyway keeps "every glyph
     # this draws has a known width" true by construction rather than by where it happens to print.
-    # ╸ U+2578 is the progress bar's playhead and ╶ U+2576 the break that follows it, and
-    # they belong HERE rather than in CW_AMBIG
-    # beside the ━ and ─ it sits between. EastAsianWidth splits the box-drawing block:
-    # the full-length horizontals are Ambiguous, the heavy HALF-lines (2574..257F) are
-    # Neutral. A head tabled Ambiguous would take two cells under YT_AMBIG_WIDE=1 and
-    # push the bar one cell past the width it was measured at — a wrap, which is a line
-    # of height the reflow does not know about. Same island the spinner quadrants sit on.
-    CW_NARROW="↵♫❚❯▘▝▗▖╸╶$CW_RANGE"                          # U+21B5 U+266B U+275A U+276F U+2578 U+2576
+    # The progress bar's `╸` playhead and the `╶` that compensated its white half used to be
+    # tabled here too — a deliberate placement, because EastAsianWidth splits the box-drawing
+    # block (the full-length horizontals are Ambiguous, the half-lines 2574..257F are
+    # Neutral) and a head tabled Ambiguous would take two cells under YT_AMBIG_WIDE=1 and push
+    # the bar one cell past the width it was measured at, which is a wrap the reflow does not
+    # know about. The bar draws neither glyph now (render_prog_bar: the weight change IS the
+    # playhead), so they are out — a width table is a claim about what this UI draws, and an
+    # entry for a glyph nothing draws is a claim nobody can check.
+    CW_NARROW="↵♫❚❯▘▝▗▖$CW_RANGE"                              # U+21B5 U+266B U+275A U+276F
     case "${YT_AMBIG_WIDE:-}" in
     1 | true | yes | on) CW_AMBIG_W=2 ;;
     esac
@@ -2222,13 +2223,13 @@ fetch_play_times() {
 # Progress bar sized to the caller's layout. $2 is the FULL cell width the bar may occupy,
 # so the caller can lay it exactly over the divider rail it replaces while a track plays,
 # instead of the old hardcoded 44 columns that ignored the terminal width entirely. The rendered string is ALWAYS exactly
-# that many cells — the head glyph is part of the track, and `filled` is capped at width-1 so
-# it stays so at 100%; a bar whose length changed with position made the whole line jitter
+# that many cells — filled + remaining, exactly, at every position, including a full heavy
+# rail at 100%; a bar whose length changed with position made the whole line jitter
 # every second.
 #
 # No [brackets]: the bar is not a widget sitting on the card, it is the card's LIVE RAIL —
 # `━` elapsed and `─` remaining are the divider's own stroke family, so the played part reads
-# as the rail thickening behind the `╸` playhead. HEAVY, not double: `═` was tried and it is
+# as the rail thickening. HEAVY, not double: `═` was tried and it is
 # two strokes where every other glyph on this line is one — it stops reading as a thicker
 # rail and starts reading as a different rail, spliced onto the light one. The bar's whole
 # premise is that ONE line changes weight as it fills, and a weight change is the only thing
@@ -2236,6 +2237,15 @@ fetch_play_times() {
 # ends had to go for that to work: a bracket is a boundary, and this line's whole job is to
 # be boundary-less and exactly rail-wide. They were also 2 cells of the caller's width spent
 # on punctuation, which now buy 2 more cells of resolution instead.
+#
+# NO HEAD GLYPH EITHER, for the same argument carried one step further. A `╸` sat between the
+# two runs for a while: a heavy LEFT half-line, which inks its own left half and leaves its
+# right half white — so the one seam that must not be a boundary was drawn with half a cell
+# of white in it, and the eye read the elapsed run as ENDING rather than as the same rail at
+# a different weight. The weight change IS the playhead; it is the only thing on this line
+# that can be read without a legend, and a glyph marking it a second time can only get in
+# its way. So the rail runs unbroken from `━` straight into `─`, and **the only white on this
+# line is a chapter boundary** — which is what makes a break legible as one.
 PROG_BAR=""
 render_prog_bar() {
     local pct=${1%.*} total=${2:-44} mark_a=${3:-} mark_b=${4:-}
@@ -2247,27 +2257,19 @@ render_prog_bar() {
 
     local width=$total                    # the track IS the full width; no brackets
     local filled=$((pct * width / 100))
-    ((filled > width - 1)) && filled=$((width - 1))
-    local empty=$((width - filled - 1))   # track = filled + head + empty
+    local empty=$((width - filled))       # track = filled + empty, and nothing between them
 
-    # The head is ╸ (and > in ASCII), not the ● it was. A filled circle on a heavy rule
-    # reads as a speck of dirt at 4% and as a bullet everywhere else; a heavy half-line reads
-    # as the end of what has played, which is what it marks. It is still exactly one cell —
-    # tabled in CW_NARROW, see init_cell_tables — so the bar's length is unchanged.
-    local f_str e_str head='╸' fill='━' rest='─' brk=' ' brk_h=''
+    local f_str e_str fill='━' rest='─' brk=' '
     if ((ASCII_GLYPHS)); then
-        head='>'
         fill='='
         rest='-'
-    else
-        brk_h='╶'
     fi
     # No interval asked for — every caller but the chapter list — and the bar stays what it
-    # was: two runs and a head, no per-cell work on a line redrawn once a second.
+    # was: two runs butted together, no per-cell work on a line redrawn once a second.
     if [[ -z "$mark_a" ]]; then
         repeat_glyph "$fill" "$filled"; f_str=$GLYPH_RUN
         repeat_glyph "$rest" "$empty"; e_str=$GLYPH_RUN
-        PROG_BAR="${f_str}${head}${e_str}"
+        PROG_BAR="${f_str}${e_str}"
         return 0
     fi
     # THE INTERVAL. Two cells of the same track BROKEN OUT, so one line says where the
@@ -2275,8 +2277,8 @@ render_prog_bar() {
     # reader of a chapter list actually wants and the two identical rails never gave.
     # The mark is the BREAK itself — one cell of nothing — not a glyph drawn in it. Two
     # candidates were drawn at the real width and both lost to it. `[`/`]` are punctuation
-    # sitting ON a rail: two ink-heavy glyphs of a different family competing with the head
-    # for the eye, on the one line whose job is to be read at a glance. `│` is lighter and in
+    # sitting ON a rail: two ink-heavy glyphs of a different family competing with the
+    # playhead for the eye, on the one line whose job is to be read at a glance. `│` is lighter and in
     # the rail's own stroke family, and it still loses, for the reason the brackets do: a
     # VERTICAL crossing a horizontal rail stops the eye travelling along it. This line is
     # read as a sweep from left to right — that is what a progress bar IS — and a full-height
@@ -2285,8 +2287,6 @@ render_prog_bar() {
     # starts again, which is already a boundary, and is the same argument that took the bar's
     # own end brackets off. It costs nothing in either mode — a space is one cell under any
     # width table and needs no ASCII fallback.
-    # The head wins a collision: where it is now is a fact about this second, where the span
-    # begins is a fact about the item, and the other break still shows the span.
     ((mark_a < 0)) && mark_a=0
     ((mark_a > width - 1)) && mark_a=$((width - 1))
     [[ "$mark_b" =~ ^[0-9]+$ ]] || mark_b=-1
@@ -2297,21 +2297,15 @@ render_prog_bar() {
     # wide gap rather than as two boundaries. Every gap on this line is one cell or it is
     # not a gap, so the closer is dropped rather than allowed to double the opener's.
     ((mark_b <= mark_a + 1)) && mark_b=-1
+    # ONE CELL OF WHITE at every break, and it is a plain space at every one of them. It used
+    # to need a compensating `╶` (light RIGHT half-line) wherever a break landed immediately
+    # after the playhead, because `╸`'s white right half plus a space drew one and a HALF
+    # cells and that break read wider than the others. With no head glyph on the line, every
+    # cell either side of a break is a full-width stroke, so every break is one cell by
+    # construction and the special case is gone with the glyph that caused it.
     local out="" col c
     for (( col = 0; col < width; col++ )); do
-        if ((col == filled)); then c=$head
-        elif ((col == mark_a || col == mark_b)); then
-            # ONE CELL OF WHITE, at every break, including the one right after the head.
-            # `╸` is a heavy LEFT half-line: it inks its own left half and leaves its right
-            # half white, which is what makes it read as an end rather than as a cell. A
-            # plain space next to it therefore draws one and a HALF cells of white, and the
-            # eye reads that break as wider than the other one. `╶` (light RIGHT half) puts
-            # the missing half back: head's white right half + this cell's white left half
-            # = exactly one cell, the same gap every other break draws. Only this position
-            # can collide — a break at filled+1 is always in the `rest` run, never the fill —
-            # so the light half is the only one needed. ASCII needs none of it: `>` inks its
-            # whole cell, so a space beside it is already one cell.
-            if ((col == filled + 1)) && [[ -n "$brk_h" ]]; then c=$brk_h; else c=$brk; fi
+        if ((col == mark_a || col == mark_b)); then c=$brk
         elif ((col < filled)); then c=$fill
         else c=$rest
         fi
@@ -2516,7 +2510,7 @@ print_details() {
     # SELECTED chapter. Two identical rules a screen apart, each reading a different clock,
     # is a line the reader has to be told how to read. The boundary is now the blank line
     # this block already sits under, and the fact the rule carried moved UP onto the item's
-    # own bar as a bracketed span (render_prog_bar's mark_a/mark_b) — where it is next to the
+    # own bar as a broken-out span (render_prog_bar's mark_a/mark_b) — where it is next to the
     # playhead it is measured against instead of six lines away from it.
     DETAIL_LINES=0
     # NO TITLE HERE. It used to be the first thing this block printed — the same cleaned
@@ -3698,8 +3692,8 @@ display_list_menu() {
         # CURSOR sits in the whole item, and how long it is. The cursor's, not the playing
         # one's — the playing chapter is already said by its own row, and a bar repeating it
         # would be the duplication this step exists to remove. So the reading is positional:
-        # brackets right of the head mean "not there yet", left of it mean "played", around
-        # it mean "you are in it".
+        # a span sitting entirely in the light run means "not there yet", entirely in the
+        # heavy run means "played", straddling the weight change means "you are in it".
         chapter_span "$selected"
         if [[ -n "$CHAP_START_SEC" && -n "$PT_DUR_SEC" ]] && ((PT_DUR_SEC > 0)); then
             bar_a=$(( CHAP_START_SEC * bar_w / PT_DUR_SEC ))
