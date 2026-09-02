@@ -382,7 +382,32 @@ SGR 区间**从第 1 列覆盖到第 `nav_cols` 列**。这是这次唯一一个
 `scroll` 模式的两端和 `page` 模式的两端一样：原地不动，不出提示。这条今天已经成立，只是
 现在多了一根轴要遵守它。
 
-### E —— 状态行改成段
+### E —— 状态行改成段 【已落地 2026-09-01】
+
+**实测 100×30 在播：17 行**（A+B 之后是 16）—— 状态并进标题行省下的那一行变成了一行内容。
+`assert_pane.py` 报 `progress bar: right edge [100]` 与 `rail: end col=[100]`，两个右缘同列。
+`contract.sh` **349 ok / 0 failed**。
+
+**这一步逼出的最大一件事：`tests/` 里有九处标记盯的是被删掉的 chrome 拼写。**
+`--offline` 看不见其中任何一处 —— TUI 那一段整个在联机那一半。H 之后只跑了 `--offline`，
+所以红是在 E 才发现的，而其中三处（`9/0 volume`）是 H 留下的。**这正是 V2 判据要更正的原因，
+也是「每一步只跑 V1+V2」不够的证据：只要一步动了 chrome 字面量，那一步就欠一次完整 `contract.sh`。**
+
+| 原标记 | 改成 | 为什么 |
+|---|---|---|
+| `results=` / `items=`（视图标记，5 处） | `query='` / `history='` / `playlist='` | 状态行不再有 `key=`。标题行的**来源字段**本来就是更好的判别式：它说这屏**是什么**，而不是数了多少 |
+| `results=NN`（取行数） | `[0-9]+ results` | 计数变成了段；单位词是它与行内其它数字的区分，`YT_LANG=en` 已在 pane 里钉住 |
+| `9/0 volume`（full 档标记，3 处） | `[-]/= volume` | H 改的。写成 `[-]` 而不是 `-`：`pane_has` 把模式直接交给 grep，前导 `-` 会被当成选项 |
+| `quality=` / `quality=medium` | `quality (auto|medium|high)` / `quality medium` | 裸 `quality` 每帧都在（提示块的 `f quality`），拿它做「auto 时不出现」的断言是一条**永远不会红**的检查 |
+| `uploaded=2` | ISO 日期的**形状** | 日期是那行上唯一不会被误认的值，所以它丢了标签 |
+| `^[[:space:]>]*11\. ` | `^[[:space:]>▶]*11\. ` | 光标字形换了（C） |
+
+**并且行号默认关掉之后，「第 11 行出现了」这个翻页判据没有别的写法** —— 一屏标题来自网络，
+没有第二种方式指名「第 11 行」。所以 `UT_ROW_INDEX=on` 进了 **fixture 文件**而不是环境：
+环境钉住的键会被写回路径拒绝，而 `#` 那四条新检查要能写。
+
+**新增四条检查**（一个新键的两个方向 × 屏幕与文件各一），判别式是**行号本身**：关掉之后
+屏幕上没有任何一行以序号加点开头，一个绑到空处的 `#` 会当场红。
 
 `engine=yt  results=40  sort=view_count  auth=chrome  mode=video (video-enabled)`
 →
@@ -586,7 +611,7 @@ chrome 收到两端，中间纯内容 —— lazygit / yazi / k9s / helix 的位
 | # | 怎么验 | 判据 |
 |---|---|---|
 | V4 | `UT_CONFIG=$(mktemp) shell/uting`，`UT_LIST_MODE=bogus` / `UT_ROW_INDEX=bogus` | 各自退 1，消息点名那个键；**扩的是今天已有的配置门检查，不新开文件** |
-| V5 | `tests/contract.sh` | 322/322 |
+| V5 | `tests/contract.sh` | **349 ok / 0 failed**（初稿写的 322 已过期；E 落地时加了 `#` 键的四条）|
 | V6 | `tests/playback.sh` | 未改播放器，作为回归跑一遍 |
 
 **布局不进 `tests/`。** P1–P9 是 `capture-pane` 的活 —— 单元格网格、列对齐、字形宽度归
@@ -619,7 +644,7 @@ reflow 唯一要防的失败是**表头滚出屏幕**，而那只会被**变高*
   2. G   详情块去掉重复标题              ← 【已落地 2026-09-01】每一步都在腾预算，不是花预算
   3. A+B 删两条 rail + 独立进度条        ← 【已落地 2026-09-01】成对做：A 单独做会在章节视图丢掉一个真事实
   4. C   ▶ 光标 + inverse 在播行 + 编号开关（含 assert_pane.py 的 -pe 新断言）  ← 【已落地 2026-09-01】
-  5. E   状态段（右贴走 CHA，见 I-1）
+  5. E   状态段（右贴走 CHA，见 I-1）        ← 【已落地 2026-09-01】
   6. D   两个模式 + gutter + 删 dots     ← 导航语义换轨；新字形先进宽度表，见 I-1
   7. F   键位带下移 + 三段测量           ← 最后，且是唯一需要 I-2 那条顺序的一步
   8. grep-gate 后删死代码：card_divider / DIV_STR / GL_DOT / GL_DOT_OFF /

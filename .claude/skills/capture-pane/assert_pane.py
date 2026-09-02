@@ -238,20 +238,25 @@ def main(argv):
         if ends:
             notes.append("rail: end col=%s" % sorted(ends))
 
-        # The progress bar. Not a boundary any more and no longer pane-wide: it is indented
-        # into the rows' own two-cell gutter and holds two cells back on the right, so its
-        # width is the pane minus four — the one expression every right edge on this screen
-        # derives from. It prints only while something plays; an idle frame has no bar and
-        # that is not a failure.
+        # The progress bar. Not a boundary any more and not pane-wide: it is indented into
+        # the rows' own two-cell gutter and ends on THE SAME COLUMN the duration rail lands
+        # on. That shared column is the invariant, not any particular number — the renderer
+        # derives both from one expression, and a scrollbar gutter moves them together. So
+        # this asserts against the rail column measured just above rather than against a
+        # literal, and stays true on both sides of that change. It prints only while
+        # something plays; an idle frame has no bar and that is not a failure.
         bar = [l for l in lines
                if re.match(r"^  [━─╸\[\]]{10,}$", l.rstrip())
                or re.match(r"^  [=\->\[\]]{10,}$", l.rstrip())]
         if bar:
-            bw = sorted(set(w(l.strip()) for l in bar))
-            if bw != [width - 4]:
-                fails.append("progress bar is %s cells, expected the pane width - 4 = %d"
-                             % (bw, width - 4))
-            notes.append("progress bar: %s cells" % bw)
+            bar_right = sorted(set(2 + w(l.strip()) for l in bar))
+            if len(bar_right) > 1:
+                fails.append("progress bars end in %d different columns: %r"
+                             % (len(bar_right), bar_right))
+            elif ends and bar_right != sorted(ends):
+                fails.append("progress bar ends at column %s but the duration rail ends at "
+                             "%s; both flush to one right edge" % (bar_right, sorted(ends)))
+            notes.append("progress bar: right edge %s" % bar_right)
 
         # THE PLAYING ROW, from the -e capture. Nothing else on the screen is reversed, so
         # "the reversed line" identifies it without knowing which row is playing.

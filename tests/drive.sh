@@ -135,9 +135,16 @@ tmux new-session -d -s "$S" -x "$COLS" -y "$ROWS" \
 
 # Wait on the ready MARKER, never on a sleep: a captured spinner frame is a picture of the
 # loading state, not of the layout. A cold yt-dlp search takes ~10s.
+#
+# The marker is the TITLE line's source field, not the status line. It was `results=`, and
+# the status line no longer spells anything that way — it is segments now, and `40 results`
+# is a string a fetch notice could also produce. `query='` is on the one line that only the
+# list frame draws, it names the row source rather than a count, and it survives a chrome
+# that is still being rearranged. A marker keyed to chrome wording is a coupling either way;
+# this one is at least keyed to the part of the chrome that says what the screen IS.
 i=0
 while [ $i -lt 100 ]; do
-    tmux capture-pane -t "$S" -p 2>/dev/null | grep -q 'results=' && break
+    tmux capture-pane -t "$S" -p 2>/dev/null | grep -q "query='" && break
     sleep 0.3; i=$((i + 1))
 done
 if [ $i -ge 100 ]; then

@@ -1159,6 +1159,10 @@ set_ui_lang() {
         S_SEARCH="搜索"; S_SORT="排序"; S_FILTER="过滤"
         S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"; S_THEMEKEY="主题"; S_KEYS="键位"
         S_PAUSE="暂停"; S_VOL="音量"; S_JUMP="跳行"; S_ROWNUM="行号"
+        S_U_RESULTS="结果"; S_U_ITEMS="项"; S_U_CHAP="章"; S_U_PAGE="页"
+        S_SORT_RELEVANCE="相关度"; S_SORT_VIEWS="播放量"; S_SORT_DUR="时长"
+        S_MODE_AUDIO="音频"; S_MODE_VIDEO="视频"; S_MODE_FAST="快速"
+        S_AUTH_IN="已登录"; S_AUTH_ANON="匿名"; S_LIKES="赞"; S_TOTAL="总长"
         S_SEEK="跳转"
         S_PLAYING="播放中"; S_PAUSED="已暂停"; S_STARTING="缓冲中"
         S_PROMPT_SEARCH="搜索"; S_NEW_SEARCH="新搜索（Esc 或留空取消）"
@@ -1192,6 +1196,10 @@ set_ui_lang() {
         S_SEARCH="search"; S_SORT="sort"; S_FILTER="filter"
         S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"; S_THEMEKEY="theme"; S_KEYS="keys"
         S_PAUSE="pause"; S_VOL="volume"; S_JUMP="jump"; S_ROWNUM="numbers"
+        S_U_RESULTS="results"; S_U_ITEMS="items"; S_U_CHAP="chapters"; S_U_PAGE="page"
+        S_SORT_RELEVANCE="relevance"; S_SORT_VIEWS="views"; S_SORT_DUR="duration"
+        S_MODE_AUDIO="audio"; S_MODE_VIDEO="video"; S_MODE_FAST="fast"
+        S_AUTH_IN="signed in"; S_AUTH_ANON="anonymous"; S_LIKES="likes"; S_TOTAL="total"
         S_SEEK="seek"
         S_PLAYING="Playing"; S_PAUSED="Paused"; S_STARTING="Starting"
         S_PROMPT_SEARCH="Search"; S_NEW_SEARCH="New search (Esc or empty to cancel)"
@@ -1301,6 +1309,10 @@ GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_DOT="●"; GL_DOT_OFF="○"; GL_AV="↑/↓
 # split is exactly the coupling this pass exists to remove.
 GL_CURSOR="▶"
 GL_ELL="…"; GL_ARROW="→"; GL_DASH="—"
+# The duration bounds' comparators. Both are East-Asian Ambiguous and already behave like
+# the rest of the chrome under YT_AMBIG_WIDE; they are named rather than inlined for the
+# reason every other glyph here is — YT_ASCII=1 has to be able to reach them.
+GL_GE="≥"; GL_LE="≤"
 # The resource readout's two labels (UT_RESOURCE): geometric squares from the same family as
 # the rails' stroke language — ▣ an abstract chip, ▤ a filled "storage cell". Both are
 # East-Asian Ambiguous, so they are tabled in CW_AMBIG below, not hardcoded as one cell.
@@ -1327,6 +1339,7 @@ init_glyphs() {
         GL_PLAY=">"; GL_PAUSE="||"; GL_DOT="*"; GL_DOT_OFF="o"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
         GL_CURSOR=">"
         GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
+        GL_GE=">="; GL_LE="<="
         GL_CPU="cpu"; GL_RAM="ram"
         GL_SPIN=("|" "/" "-" "\\")
     fi
@@ -1780,7 +1793,7 @@ card_divider() {
 CW_ZWJ=$'\xe2\x80\x8d'
 CW_ZERO=""      # characters that add no cells
 CW_NARROW=""    # non-ASCII characters that still take only one, in any terminal
-CW_AMBIG='·—•…←↑→↓─━○●▶▣▤'    # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
+CW_AMBIG='·—•…←↑→↓─━○●▶▣▤≥≤'  # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
 CW_AMBIG_W=1
 CW_RANGE=""
 cw_range() {
@@ -3158,9 +3171,16 @@ display_list_menu() {
     # packed navigation hints below. No width cap: unlike the player cards, the list wants the
     # whole width for its rows. LINES_N is refreshed here too — it is what the reflow below
     # divides up, so a resize has to reach it.
-    local nav_cols chrome_h=0
+    local nav_cols chrome_h=0 right_edge
     layout_cols
     nav_cols=$LAYOUT_COLS
+    # THE right edge. Everything on this screen that flushes right — the duration rail,
+    # the progress bar, the status segments — lands on this column and derives from this
+    # one expression rather than three of its own. Three flushes computed separately is
+    # how one of them ends up a cell out and wraps, which is a line of height the reflow
+    # does not know about (the plan's I-1). D moves it left to make room for the
+    # scrollbar gutter, and moves all three together by changing this line.
+    right_edge=$nav_cols
     LINES_N=$TERM_LINES
     # In-place repaint: home the cursor and let every line
     # below erase its own tail (\033[K), then \033[J at the end wipes whatever the old frame
@@ -3176,68 +3196,137 @@ display_list_menu() {
     # change could move it; AS-BUILT-tui.md records why a banner-only repaint for the one change
     # that cannot (pause) was rejected rather than forgotten.
     printf '\033[H'
-    # Title. Elided like every other row: a long query used to wrap and push the whole layout
-    # down a line.
-    # The field NAME says where the rows came from. `query='chill'` for a playlist would be
-    # a false statement about the one line that tells you what you are looking at.
-    local head_field="query"
-    stored_rows && head_field="$LIST_SOURCE"
-    local t_head="${GL_NOTE:+$GL_NOTE }$GL_BRAND  $head_field="
-    disp_w "$t_head"
-    truncate_disp "'$QUERY_LABEL'" $((nav_cols - DISP_W))
-    printf '%s%s%s%s%s  %s=%s\033[K\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$head_field" "$TRUNC_TEXT"
-    chrome_h=$((chrome_h + 1))
-    
-    # Status line
-    if [[ "$PLAY_MODE" == "audio" ]]; then status_extra="audio-only"; else status_extra="video-enabled"; fi
-    # Fields are packed like every other chrome row, and min=/max= appear only when set:
-    # at their 0s default they were pure width, and the line overflowed a 60-column
-    # terminal because of them.
-    # engine= leads the line: with more than one source installed it is the field that
-    # changes what every other field means.
-    local st_items
+    # ── The status, as SEGMENTS, built before the title line because it may share it ────
+    # It used to be `engine=yt  results=40  sort=view_count  auth=chrome  mode=video
+    # (video-enabled)` — a debug dump, and the widest thing on the screen. Every `key=` was
+    # naming a field whose VALUE already names itself: nothing but a source is spelled `yt`,
+    # nothing but a count is spelled `40 results`, and `mode=video (video-enabled)` said one
+    # fact twice in two vocabularies. So the keys go and the values stay, separated by the
+    # same GL_SEP the rest of the chrome uses.
+    #
+    # The values that are NOT self-naming keep one word in front of them, with a space where
+    # the `=` was: `volume 40` and `queue 2/5` are readable, a bare `40` and a bare `2/5` are
+    # not. That is the line: a segment is a value when the value can stand alone and a short
+    # phrase when it cannot — never a field name plus punctuation.
+    #
+    # The DEFAULTS still cost nothing. min / max / quality / volume / queue appear only when
+    # they are off their default, exactly as they did as key=value pairs, for the same reason
+    # they did: a field at its default is pure width on the widest line of the chrome.
+    if [[ "$PLAY_MODE" == "audio" ]]; then status_extra="$S_MODE_AUDIO"
+    elif [[ "$PLAY_MODE" == "fast" ]]; then status_extra="$S_MODE_FAST"
+    else status_extra="$S_MODE_VIDEO"; fi
+    local st_items st_unit="$S_U_RESULTS"
+    case "$LIST_SOURCE" in
+    chapters) st_unit="$S_U_CHAP" ;;
+    parts) st_unit="$S_PARTS_KEY" ;;
+    playlist | history) st_unit="$S_U_ITEMS" ;;
+    esac
+    # The source leads, for the reason `engine=` did: with more than one installed it is the
+    # field that changes what every other segment means.
     if stored_rows; then
-        st_items=("engine=${PLAYLIST_ENGINES:-?}" "items=$NUM_ENTRIES")
+        st_items=("${PLAYLIST_ENGINES:-?}" "$NUM_ENTRIES $st_unit")
         # P8, and the only screen it can be said on: the search row a part list was opened
         # from prints the COLLECTION's duration — the only number that endpoint returns —
         # while Enter on that row plays part 1. Neither number is wrong, and nothing on the
         # search screen says they are different numbers. Here they sit one line apart: total=
         # against the per-part durations in the rows below, so the mismatch reads as the
         # structure it is. NOT repeated as "part 1 is 12:06": that row is on screen underneath.
-        [[ "$LIST_SOURCE" == "parts" && -n "$PARTS_TOTAL_FMT" ]] && st_items+=("total=$PARTS_TOTAL_FMT")
+        [[ "$LIST_SOURCE" == "parts" && -n "$PARTS_TOTAL_FMT" ]] && st_items+=("$S_TOTAL $PARTS_TOTAL_FMT")
         # The two fields the `--info` fetch paid for that no row can hold. They are the item's,
         # not the rows' — which is why they sit on the line that already names the item
         # (chapters='<title>') and not in the details block, which describes one chapter.
         if [[ "$LIST_SOURCE" == "chapters" ]]; then
-            [[ -n "$ITEM_UPLOADED" ]] && st_items+=("uploaded=$ITEM_UPLOADED")
-            [[ -n "$ITEM_LIKES" ]] && st_items+=("likes=$ITEM_LIKES")
+            # A date needs no label. A like count does — a bare number beside a bare
+            # number ("35 chapters · 1121831") is two counts of nothing in particular.
+            [[ -n "$ITEM_UPLOADED" ]] && st_items+=("$ITEM_UPLOADED")
+            [[ -n "$ITEM_LIKES" ]] && st_items+=("$S_LIKES $ITEM_LIKES")
         fi
     else
-        st_items=("engine=$ENGINE" "results=$NUM_ENTRIES" "sort=$SORT_FIELD")
-        # auth= sits next to engine= because it qualifies it: same source, different
-        # capability depending on whether playback will send cookies. Absent when the
-        # engine has no --auth. NOT offered on a stored list — those rows mix engines, so
-        # a single token would be a false statement about half of them.
-        [[ -n "$ENGINE_AUTH" ]] && st_items+=("auth=$ENGINE_AUTH")
+        local st_sort="$SORT_FIELD"
+        case "$SORT_FIELD" in
+        relevance) st_sort="$S_SORT_RELEVANCE" ;;
+        view_count) st_sort="$S_SORT_VIEWS" ;;
+        duration) st_sort="$S_SORT_DUR" ;;
+        esac
+        st_items=("$ENGINE" "$NUM_ENTRIES $st_unit" "$st_sort")
+        # The auth segment sits next to the source because it qualifies it: same source,
+        # different capability depending on whether playback will send cookies. It says
+        # WHETHER, not which browser — "chrome" as a bare segment names a program, not a
+        # state, and which profile the cookies came from is a thing to set, not to read on
+        # every frame. Absent when the engine has no --auth. NOT offered on a stored list:
+        # those rows mix engines, so one token would be a false statement about half of them.
+        if [[ -n "$ENGINE_AUTH" ]]; then
+            if [[ "$ENGINE_AUTH" == "anon" ]]; then st_items+=("$S_AUTH_ANON")
+            else st_items+=("$S_AUTH_IN"); fi
+        fi
     fi
-    [[ "$MIN_DISP" != "0" ]] && st_items+=("min=${MIN_DISP}s")
-    [[ "$MAX_DISP" != "0" ]] && st_items+=("max=${MAX_DISP}s")
-    st_items+=("mode=$PLAY_MODE ($status_extra)")
+    # A bound with its comparator needs no word: >=30s is already a sentence.
+    [[ "$MIN_DISP" != "0" ]] && st_items+=("$GL_GE${MIN_DISP}s")
+    [[ "$MAX_DISP" != "0" ]] && st_items+=("$GL_LE${MAX_DISP}s")
+    st_items+=("$status_extra")
     # quality= follows mode= because the tier is read against it: the engine's table is
     # (mode, tier), and `high` means 1080p next to video and a bitrate next to audio. Absent
     # at `auto` — the same rule min=/max= follow above: a field at its default is pure width,
     # and auto is what every install that has never pressed f is sitting on.
-    [[ "$PLAY_QUALITY" != "auto" ]] && st_items+=("quality=$PLAY_QUALITY")
-    [[ -n "$PLAY_VOLUME" ]] && st_items+=("volume=$PLAY_VOLUME")
+    [[ "$PLAY_QUALITY" != "auto" ]] && st_items+=("$S_QUALITY $PLAY_QUALITY")
+    [[ -n "$PLAY_VOLUME" ]] && st_items+=("$S_VOL $PLAY_VOLUME")
     # The only confirmation `+` has: the queue-ahead block that used to be it went with the
     # card (D-g), and a key whose whole effect is invisible is a key you press twice. Absent
     # below two, by the rule min=/max=/quality= already follow — a queue of one is what every
     # player has.
-    ((CURRENT_QUEUE_LEN > 1)) && st_items+=("queue=$CURRENT_QUEUE_POS/$CURRENT_QUEUE_LEN")
-    HINT_KEY_COLOR="$C_DIM"
-    print_hints "$nav_cols" "" "" "${st_items[@]}"
-    HINT_KEY_COLOR=""
-    chrome_h=$((chrome_h + HINT_LINES))
+    ((CURRENT_QUEUE_LEN > 1)) && st_items+=("$S_Q_ACT $CURRENT_QUEUE_POS/$CURRENT_QUEUE_LEN")
+
+    # ── The title line, and the status flushed right onto it when both fit ──────────────
+    # Two chrome lines became one: the segments are short enough now to ride the line that
+    # already exists, and the line that already exists had a whole right half of nothing.
+    # The field NAME stays on the title — `query='chill'` against `playlist='chill'` is the
+    # one thing on screen saying where the rows came from, and no segment carries it (a
+    # playlist and the log both count in the same word).
+    #
+    # Flushed with CHA at right_edge, never with computed padding — the width layer
+    # over-counts non-ASCII on purpose, and five GL_SEPs are five cells of drift on a
+    # Chinese status line. \033[K goes FIRST for the same reason it does on a result row:
+    # the jump skips cells without writing them, so a trailing erase leaves the last frame
+    # showing through the gap.
+    #
+    # It falls back to a line of its own rather than eliding: a status the reader has to
+    # guess at is worse than one more chrome line, and print_hints already knows how to pack
+    # it. The floor is 12 cells of query — the same number the banner's own drop order uses.
+    local st_line="" st_w=0 st_inline=0 t_head_w q_room
+    for p in ${st_items[@]+"${st_items[@]}"}; do
+        if [[ -n "$st_line" ]]; then st_line="$st_line $GL_SEP $p"; else st_line="$p"; fi
+    done
+    disp_w "$st_line"; st_w=$DISP_W
+    local head_field="query"
+    stored_rows && head_field="$LIST_SOURCE"
+    disp_w "${GL_NOTE:+$GL_NOTE }$GL_BRAND  $head_field="; t_head_w=$DISP_W
+    q_room=$((right_edge - t_head_w))
+    if ((q_room - st_w - 2 >= 12)); then
+        st_inline=1
+        q_room=$((q_room - st_w - 2))
+    fi
+    truncate_disp "'$QUERY_LABEL'" "$q_room"
+    if ((st_inline)); then
+        printf '\033[K%s%s%s%s%s  %s=%s\033[%dG%s%s%s\n' \
+            "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" \
+            "$head_field" "$TRUNC_TEXT" \
+            $((right_edge - st_w + 1)) "$C_DIM" "$st_line" "$C_RESET"
+        chrome_h=$((chrome_h + 1))
+    else
+        printf '%s%s%s%s%s  %s=%s\033[K\n' "$C_BOLD" "$C_CYAN" "${GL_NOTE:+$GL_NOTE }" "$GL_BRAND" "$C_RESET" "$head_field" "$TRUNC_TEXT"
+        chrome_h=$((chrome_h + 1))
+        # The SAME separator the inline form uses. Two spaces was right when every item
+        # carried its own `key=` to bound it; against bare values it reads as one run-on
+        # phrase ("yt  40 results  views  signed in  audio"). HINT_SEP is what print_hints
+        # measures with as well as prints with, so setting it here cannot make the packer
+        # disagree with the line it produced.
+        HINT_KEY_COLOR="$C_DIM"
+        HINT_SEP=" $GL_SEP "
+        print_hints "$nav_cols" "" "" "${st_items[@]}"
+        HINT_SEP=""
+        HINT_KEY_COLOR=""
+        chrome_h=$((chrome_h + HINT_LINES))
+    fi
     
     # Key navigation hints are measured BEFORE the banner: the banner's inline key tail
     # and this block are ONE job, and two adjacent chrome lines must not both document
@@ -3521,14 +3610,14 @@ display_list_menu() {
     # width because a boundary is, and six lines away from the banner whose readout it drew.
     # Now it is a bar and nothing else, directly under the banner and indented into the same
     # two-cell gutter the rows use, so banner and bar read as one block. Width is
-    # nav_cols - 4: two cells of indent, and two held on the right for the row gutter, so
-    # every right edge on this screen is derived from one expression rather than three.
+    # right_edge - 2: two cells of indent, and then the same right column the duration
+    # rail lands on, so the two edges cannot drift apart (the plan's I-1).
     #
     # The first second draws 0% rather than nothing. PT_PCT is empty until the first tick
     # lands, and a line that appeared a second after Enter would push every row down by one
     # at exactly the moment the user is reading them.
     if ((bar_h)); then
-        local bar_w=$((nav_cols - 4)) bar_a="" bar_b=""
+        local bar_w=$((right_edge - 2)) bar_a="" bar_b=""
         # In a chapter list the bar carries a span as well: where the chapter UNDER THE
         # CURSOR sits in the whole item, and how long it is. The cursor's, not the playing
         # one's — the playing chapter is already said by its own row, and a bar repeating it
@@ -3780,7 +3869,7 @@ display_list_menu() {
             # title off the rail. Truncating to that is what gives the rail room BY
             # CONSTRUCTION — the jump below only repairs measurement drift, it does not
             # license overflow.
-            row_w=$(( nav_cols - pfx_w - 2 - rail_w ))
+            row_w=$(( right_edge - pfx_w - 2 - rail_w ))
             ((row_w < 12)) && row_w=12
             truncate_disp "${R_TITLE[$i]}" "$row_w"
             disp="$TRUNC_TEXT"
@@ -3792,7 +3881,7 @@ display_list_menu() {
             # ~5 columns left of the row above it. Ragged, on the one column that exists to
             # be scanned. CHA ignores what came before and lands on the same cell every
             # time. Columns are 1-based, so a right-flush field of rail_w cells starts at
-            # nav_cols - rail_w + 1. If a title ever rendered WIDER than measured, the jump
+            # right_edge - rail_w + 1. If a title ever rendered WIDER than measured, the jump
             # moves backwards and cleanly overwrites the title tail instead of pushing the
             # rail into a wrap — the failure mode we want, and one the width layer's
             # over-counting rule already refuses to produce.
@@ -3827,17 +3916,17 @@ display_list_menu() {
             if ((i == PLAYING_IDX)); then
                 printf '\033[K%s%s%s%s%s\033[K\033[%dG%s%s\n' \
                     "$C_ROW_HL" "$mark" "$num" "$C_BOLD" "$disp" \
-                    $((nav_cols - rail_w + 1)) "$rail" "$C_ROW_END"
+                    $((right_edge - rail_w + 1)) "$rail" "$C_ROW_END"
             elif ((i == selected)); then
                 # Marker AND number in C_MARK (accent), title in bold, rail back to its own
                 # dim — the selected line no longer inherits one hue end-to-end.
                 printf '\033[K%s%s%s%s%s%s%s\033[%dG%s%s%s\n' \
                     "$C_MARK" "$mark" "$num" "$C_RESET" "$C_BOLD" "$disp" "$C_RESET" \
-                    $((nav_cols - rail_w + 1)) "$C_DIM" "$rail" "$C_RESET"
+                    $((right_edge - rail_w + 1)) "$C_DIM" "$rail" "$C_RESET"
             else
                 printf '\033[K%s%s%s%s\033[%dG%s%s\n' \
                     "$mark" "$num" "$disp" "$C_DIM" \
-                    $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
+                    $((right_edge - rail_w + 1)) "$rail" "$C_RESET"
             fi
         done
     fi

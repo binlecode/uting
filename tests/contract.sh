@@ -1937,7 +1937,13 @@ else
     # below (the new regular file carries the new value). Only `-L` afterwards separates them.
     TUI_CFG="$UT_TEST_TMP/tui-config"
     TUI_CFG_REAL="$UT_TEST_TMP/tui-config.real"
-    printf '%s\n' '# a config a human wrote' 'UT_PLAY_MODE=audio    # keep me' >"$TUI_CFG_REAL"
+    # UT_ROW_INDEX=on is in the FIXTURE and not the environment, deliberately: the row
+    # numbers are off by default now, and the page-crossing check below names a row by its
+    # ordinal — there is no other way to say "row 11" from a pane whose titles come off the
+    # network. In the file rather than the environment because an environment-pinned key is
+    # refused by the write-back path, and the # check further down has to be able to write.
+    printf '%s\n' '# a config a human wrote' 'UT_PLAY_MODE=audio    # keep me' \
+        'UT_ROW_INDEX=on' >"$TUI_CFG_REAL"
     ln -s "$TUI_CFG_REAL" "$TUI_CFG"
     # UT_SORT_FIELD in the pane's ENVIRONMENT is the discriminating input for the refusal:
     # the environment beats the file at every startup, so a uting that wrote this key would
@@ -1975,7 +1981,10 @@ else
                 [ "$(printf '%s\n' "$flags" | grep -c '^icanon$')" = 1 ] && getpass=1
         fi
         if [ $((i % 6)) = 5 ]; then
-            tmux capture-pane -t "$TS" -p 2>/dev/null | grep -q 'results=' && { booted=1; break; }
+            # `query='` and not `results=`: the status line is segments now and spells no
+            # key=value at all. The title line's source field is what identifies a painted
+            # list, at every width this block resizes to.
+            tmux capture-pane -t "$TS" -p 2>/dev/null | grep -q "query='" && { booted=1; break; }
         fi
         sleep 0.05; i=$((i + 1))
     done
@@ -1988,13 +1997,13 @@ else
     for geom in "62x20" "26x24"; do
         gw=${geom%x*}; gh=${geom#*x}
         tmux resize-window -t "$TS" -x "$gw" -y "$gh" 2>/dev/null
-        [ "$(poll_until 5 pane_has 'results=')" = 1 ] || alive=0
+        [ "$(poll_until 5 pane_has "query='")" = 1 ] || alive=0
     done
     report "survives 62x20 and 26x24" 1 "$alive"
 
     # A store is a room with a door, not a one-way trip — and the door is the key that opened
-    # it (AS-BUILT-tui.md). `h` REPLACES the rows with the log (`items=` in the header,
-    # where a search says `results=`) and `h` again puts the search back; until it did, the
+    # it (AS-BUILT-tui.md). `h` REPLACES the rows with the log (`history='` on the title
+    # line, where a search says `query='`) and `h` again puts the search back; until it did, the
     # only exits from that room were retyping a query and quitting. Both halves are asserted:
     # an `h` that quietly did nothing would leave the search on screen and make the return
     # leg pass for free.
@@ -2012,17 +2021,19 @@ else
     # the only place in the app where a key is written down, so a tier that did not filter
     # and a tier that filtered everything are both visible from here.
     #
-    # `9/0 volume` is the marker because the full tier is the only thing that prints it, and
+    # `-/= volume` is the marker because the full tier is the only thing that prints it, and
+    # it is written `[-]/=` so the pattern does not start with a dash: pane_has passes it
+    # straight to grep, which would read a leading `-` as an option and not a pattern.
     # nothing else on a pane with no player prints it at all. One grep says which tier is up.
     report "the core block leaves the playback keys out" 0 \
-        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c '9/0 volume')"
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c '[-]/= volume')"
     # `p` was an undocumented view-toggle alias until P10 and is now nothing at all — as is
     # Tab, since the view it toggled to went (the collapse). It is asserted through the key
     # AFTER it, the way the `c` check further down rides on `h`: a `p` that still did anything
     # would have to leave the list, and the poll below would never see the list's own block.
     tmux send-keys -t "$TS" p
     tmux send-keys -t "$TS" '?'
-    opened=$(poll_until 10 pane_has '9/0 volume')
+    opened=$(poll_until 10 pane_has '[-]/= volume')
     report "? opens the full tier" 1 "$opened"
     report "…and p is not a view toggle any more" 0 \
         "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'NOW PLAYING')"
@@ -2045,7 +2056,7 @@ else
     wrote=$(poll_until 10 cfg_has '^UT_KEYS=full$')
     report "? writes the tier to your config" 1 "$wrote"
     tmux send-keys -t "$TS" '?'
-    closed=$(poll_until 10 pane_lacks '9/0 volume')
+    closed=$(poll_until 10 pane_lacks '[-]/= volume')
     report "? closes it again" 1 "$closed"
     wrote=$(poll_until 10 cfg_has '^UT_KEYS=core$')
     report "…and the file follows it back" 1 "$wrote"
@@ -2056,11 +2067,31 @@ else
     # paging arithmetic. The walk back is asserted too: a k bound to the wrong direction
     # would leave the pane on page 2 and the first check would still be green.
     tmux send-keys -t "$TS" j j j j j j j j j j
-    turned=$(poll_until 10 pane_has '^[[:space:]>]*11\. ')
+    turned=$(poll_until 10 pane_has '^[[:space:]>▶]*11\. ')
     report "j walks the selection onto the next page" 1 "$turned"
     tmux send-keys -t "$TS" k k k k k k k k k k
-    back=$(poll_until 10 pane_lacks '^[[:space:]>]*11\. ')
+    back=$(poll_until 10 pane_lacks '^[[:space:]>▶]*11\. ')
     report "and k walks it back" 1 "$back"
+
+    # The NINTH preference key, and the one display toggle among them. Asserted in both
+    # directions on the pane AND in both directions in the file, the way the tier above is:
+    # a toggle that painted once and stopped, or one that wrote once and stopped, leaves the
+    # file describing a screen that has moved on. The fixture carries UT_ROW_INDEX=on, so
+    # this is an IN-PLACE edit — the append case is the quality key's.
+    #
+    # The row marker is the discriminator and it costs nothing: with the numbers off there
+    # is no `1.` on any row, and no other line on this screen begins with an ordinal and a
+    # dot. An implementation that bound # to nothing leaves them there and goes red here.
+    tmux send-keys -t "$TS" '#'
+    gone=$(poll_until 10 pane_lacks '^[[:space:]>▶]*1\. ')
+    report "# takes the row numbers off" 1 "$gone"
+    wrote=$(poll_until 10 cfg_has '^UT_ROW_INDEX=off$')
+    report "…and writes that to your config" 1 "$wrote"
+    tmux send-keys -t "$TS" '#'
+    shown=$(poll_until 10 pane_has '^[[:space:]>▶]*1\. ')
+    report "# puts them back" 1 "$shown"
+    wrote=$(poll_until 10 cfg_has '^UT_ROW_INDEX=on$')
+    report "…and the file follows it back" 1 "$wrote"
 
     # ---- the preference write-back and the two count edges ----------------------------
     # All of it on the pane that is ALREADY up: no second cold start, no second cold search.
@@ -2072,9 +2103,12 @@ else
     # idle tick — so every assertion below POLLS the file instead of reading it once. That is
     # not a workaround for a race; it is the claim: a preference must reach the disk without
     # anyone quitting the app.
+    # The count is a SEGMENT now — `40 results`, not `results=40` — so the pattern moved
+    # with it. The unit word is what keeps this from matching any other number on the line,
+    # and YT_LANG=en (pinned in TUI_CMD) is what makes naming that word safe here.
     pane_results() {
         tmux capture-pane -t "$TS" -p -J 2>/dev/null |
-            grep -o 'results=[0-9][0-9]*' | head -1 | cut -d= -f2
+            grep -oE '[0-9]+ results' | head -1 | cut -d' ' -f1
     }
     tmux send-keys -t "$TS" v
     wrote=$(poll_until 10 cfg_has '^UT_PLAY_MODE=video')
@@ -2095,12 +2129,15 @@ else
     # medium, not high: the shipped UT_QUALITY_CYCLE is `auto medium high`, so one press from
     # the default lands on the second member — an off-by-one that started the rotation at the
     # head would write auto and go red here.
-    report "quality= is absent at auto" 0 \
-        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c 'quality=')"
+    # The pattern is `quality <tier>`, not bare `quality`: the hint block prints `f quality`
+    # on every frame, so the bare word is always on screen and would make this check
+    # unfailable. The tier alternation is what separates the segment from the key hint.
+    report "the quality tier is absent at auto" 0 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -cE 'quality (auto|medium|high)')"
     tmux send-keys -t "$TS" f
     wrote=$(poll_until 10 cfg_has '^UT_PLAY_QUALITY=medium$')
     report "f writes the quality tier to your config" 1 "$wrote"
-    shown=$(poll_until 10 pane_has 'quality=medium')
+    shown=$(poll_until 10 pane_has 'quality medium')
     report "…and the status line says so" 1 "$shown"
 
     # → past the last page fetches one more batch. Two presses is the geometry this pane has
@@ -2175,7 +2212,7 @@ else
     # — and a parked pane eats the next keystroke. So a c that misbehaved does not show up as
     # its own red; it shows up as `h` never opening the log, which is the same measurement.
     tmux send-keys -t "$TS" c h
-    opened=$(poll_until 10 pane_has 'items=')
+    opened=$(poll_until 10 pane_has "history='")
     report "h opens the log, and the c before it was inert" 1 "$opened"
     # Same witness the `q` check keeps, and for the same reason: the pane is the only place a
     # key that went somewhere else is legible. A reader that is not the menu loop
@@ -2188,7 +2225,7 @@ else
     # The toggle. A plain byte, so unlike the Esc this shipped as it needs no disambiguation
     # window — but the poll stays: a redraw is not instant either.
     tmux send-keys -t "$TS" h
-    backed=$(poll_until 10 pane_back 'items=' 'results=')
+    backed=$(poll_until 10 pane_back "history='" "query='")
     report "h again leaves it for search" 1 "$backed"
 
     # A NOTICE IS NOT AN EXIT. Every row source answers "did not open" with a notice and a
@@ -2241,7 +2278,7 @@ else
     byname=$(poll_until 10 pane_has "playlist='seeded-list'")
     report "1 opens that playlist by number" 1 "$byname"
     tmux send-keys -t "$TS" b
-    backed=$(poll_until 10 pane_back 'items=' 'results=')
+    backed=$(poll_until 10 pane_back "playlist='" "query='")
     report "b again leaves it for search" 1 "$backed"
 
     # `i` — the fifth row source, and its whole round trip. Three claims in one sequence, and
@@ -2269,7 +2306,12 @@ else
         [ $row -lt 4 ] && tmux send-keys -t "$TS" Space Down i
     done
     report "i opens the chapter rows" 1 "$shown"
-    tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -q 'uploaded=2' && paid=1
+    # The date lost its `uploaded=` label with the rest of the key=value status line: a
+    # date is the one value on that line that cannot be mistaken for anything else. So the
+    # pattern is the SHAPE of an ISO date, which no other segment on this line can produce
+    # (the counts are bare integers and the like count has a word in front of it).
+    tmux capture-pane -t "$TS" -p -J 2>/dev/null |
+        grep -qE '(19|20)[0-9][0-9]-[0-9][0-9]-[0-9][0-9]' && paid=1
     report "…and it carries what the fetch got" 1 "$paid"
     # The rail is a SPAN here, and that is a claim about MEANING rather than about layout: a
     # chapter is `0:00 → 2:30`, not a length, and the column it sits in is the one a search
@@ -2291,11 +2333,11 @@ else
         echo "  ---- end of pane ----" >&2
     fi
     # The way back, which is the same key — the rule b, h and c already follow, and the line
-    # that says so rather than the commit message. It cannot pass by accident: `chapters=` and
-    # `results=` are different field NAMES on the same header line, so a view that never
+    # that says so rather than the commit message. It cannot pass by accident: `chapters='`
+    # and `query='` are different field NAMES on the same title line, so a view that never
     # changed would still be showing the first one.
     tmux send-keys -t "$TS" i
-    backed=$(poll_until 10 pane_back 'chapters=' 'results=')
+    backed=$(poll_until 10 pane_back "chapters='" "query='")
     report "i again leaves it for search" 1 "$backed"
 
     # `q` used to be asserted by waiting for tmux to tear the session down, which proves the
