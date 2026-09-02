@@ -1423,6 +1423,16 @@ rm -rf "$CFGD"
 #
 # `#` in the payload is not incidental: it is a bound key (row numbers) in the list, which is
 # where a pasted query used to be run as commands, and keeping it here documents the class.
+#
+# The SAME pane then proves the other half of the Esc contract, and it is a clock claim: how
+# long the prompt takes to close. `read -t` on the bash 3.2 floor takes whole seconds, so the
+# reader that waits to see whether a byte follows an Esc held the prompt open for a full one
+# before cancelling — and at the startup prompt nothing ever follows an Esc, because the app
+# is leaving, so it was paid every time (measured 1062 ms from the keypress to exit; a second
+# of dead terminal before the shell prompt returns reads as a hang). 600 ms is the
+# discriminating bound: unreachable for a one-second wait, and four times the ~130 ms the
+# tty-timed reader takes. It is spent as ONE sleep and ONE capture rather than a poll loop —
+# a loop's own forks would inflate the very window being measured.
 echo
 echo "── a paste is text, not keys ──────────────────────────────────────"
 if ! command -v tmux >/dev/null 2>&1; then
@@ -1435,7 +1445,7 @@ else
     PS_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-paste.XXXXXX")
     tmux kill-session -t "$PS_TS" 2>/dev/null
     tmux new-session -d -s "$PS_TS" -x 80 -y 20 \
-        "UT_STATE_DIR='$PS_STATE' TMPDIR='$TMPDIR' UT_HISTORY=0 '$PWD/shell/uting'" 2>/dev/null
+        "UT_STATE_DIR='$PS_STATE' TMPDIR='$TMPDIR' UT_HISTORY=0 '$PWD/shell/uting'; echo __GONE__; sleep 5" 2>/dev/null
     pasted=0
     i=0
     while [ $i -lt 100 ]; do
@@ -1455,6 +1465,12 @@ else
     report "a pasted newline joins the query instead of submitting it" 1 "$kept"
     report "…and the prompt is still open, not gone to a search" 1 \
         "$(tmux capture-pane -t "$PS_TS" -p -J 2>/dev/null | grep -c 'Search' | awk '{print ($1 > 0) ? 1 : 0}')"
+    # Esc with the pasted text still on the line — the same cancel a user makes, and a harder
+    # input than an empty prompt.
+    tmux send-keys -t "$PS_TS" Escape 2>/dev/null
+    sleep 0.6
+    report "Esc closes the prompt inside 600ms, not a whole second" 1 \
+        "$(tmux capture-pane -t "$PS_TS" -p -J 2>/dev/null | grep -c '__GONE__' | awk '{print ($1 > 0) ? 1 : 0}')"
     tmux kill-session -t "$PS_TS" 2>/dev/null
     rm -rf "$PS_STATE"
 fi

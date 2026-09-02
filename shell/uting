@@ -5532,11 +5532,78 @@ READ_NAV_KEY=""
 PENDING_KEY=""
 PENDING_ESC=0
 
+# The byte after an Esc, or nothing — the ONE question whose answer used to cost a second.
+#
+# A lone Esc is only known to be lone once the terminal has been given a chance to send what
+# follows, and on the bash 3.2 floor that chance was `read -rsn1 -t 1`: `read -t` takes
+# integer seconds only ("invalid timeout specification" on 0.1), and `-t 0` is not bash 4's
+# "is input available" poll — here it FAILS even with a byte already queued (both measured).
+# In the list the second is mostly hidden, because the user's next key ends the wait early.
+# At the startup prompt nothing follows an Esc — the app exits — so the whole second was paid
+# every single time, and a second of dead terminal before the shell prompt comes back reads
+# as a hang. Measured through tmux: Escape at the prompt to exit, 1062 ms.
+#
+# The tty can wait in tenths, so the wait moves there: `min 0 time 1` makes read(2) return as
+# soon as anything is queued, or empty after 100 ms. Neither of bash's own readers can use
+# that. `read -n` forces cbreak (`min 1 time 0`) for its own duration, so it blocks regardless
+# — measured still waiting at 631 ms under `min 0 time 1`. Plain `read` (no -n) does honour it
+# — and is BUFFERED: it asks for a chunk, keeps up to its delimiter and DISCARDS the rest,
+# which on a tty cannot be pushed back. That is not a corner case here, it is the paste path:
+# slurping `\e[200~jazz\n#ch\e[201~` returned `[200~jazz` and ate `#ch\e[201~` off the tty
+# for good. `-d` avoids the delimiter and loses everything instead — on 3.2 a `read` that hits
+# its `-t` returns NOTHING, partial input on timeout being a bash 4 addition.
+#
+# So the read is one `dd bs=1 count=1`: exactly one read(2), which is precisely what VTIME
+# bounds, and nothing beyond that byte is consumed — measured, the paste's whole payload is
+# still in the tty afterwards. Every byte after the first is queued by then and comes back
+# through the caller's own loop at no wait at all. 100 ms is not a corner cut either: it is
+# the generous end of what terminal libraries allow for this exact question (vim's
+# `ttimeoutlen` ships at 50).
+#
+# ONE CALLER, and that is the point of the measurement: two stty and one dd cost ~69 ms of
+# forks, so this pays for itself only where the alternative is the full second EVERY time.
+# That is the query prompt — an Esc there is followed by nothing, because the app is leaving.
+# The list's reader keeps `read -rsn1 -t 1` and read_esc_tail says why.
+#
+# `$(…)` cannot carry a trailing newline, so an Esc followed by Return reads as a lone Esc and
+# the Return is dropped. That is what the old reader did with it too — `read -rsn1` reports a
+# newline as an EMPTY read, which fell through to a PENDING_KEY nothing picks up.
+ESC_C=""
+# Probed once, not per keypress. `dd` is POSIX base and sits at the same tier as the `stty`
+# this file already forks on every resize, so it is not a dependency in the sense the suite
+# forbids — but "not a dependency" has to be TRUE on the host, not assumed. Without the probe
+# an absent dd would make `$(dd …)` empty, which this function reports as "nothing followed
+# the Esc" — and a paste would then close the prompt, the exact bug read_query_input's \x1b
+# arm exists to prevent. So a host without it falls back to the one-second wait: slower, and
+# correct, which is the right way round.
+ESC_DD=-1
+esc_first_byte() {
+    ESC_C=""
+    ((ESC_DD >= 0)) || { command -v dd >/dev/null 2>&1 && ESC_DD=1 || ESC_DD=0; }
+    # Only the two control characters move; -echo -icanon are the session's (tty_echo_off owns
+    # them) and are not touched. Restored to the blocking one-byte read the rest of the app is
+    # written against, which is the pair tty_echo_off itself set.
+    if ((ESC_DD == 0)) || ! stty min 0 time 1 </dev/tty 2>/dev/null; then
+        IFS= read -rsn1 -t 1 ESC_C     # no dd, or no tty to tune: the old wait, unchanged
+        return $?
+    fi
+    ESC_C=$(dd bs=1 count=1 2>/dev/null </dev/tty || true)
+    stty min 1 time 0 </dev/tty 2>/dev/null || true
+    [[ -n "$ESC_C" ]]
+}
+
 # Everything after the \x1b introducer has been consumed. Split out of read_nav_input for one
 # reason: PENDING_ESC has to re-enter the parse HERE, and a copy of it would be a second escape
 # decoder to keep in step with the first.
 read_esc_tail() {
     local next="" seq=""
+    # THE LIST KEEPS THE ONE-SECOND WAIT, deliberately — see esc_first_byte for what it would
+    # buy and what it costs. This read is the ARROW-KEY path, and an arrow's bytes are already
+    # queued when it runs, so it returns at no wait at all; esc_first_byte would put its ~69 ms
+    # of forks on every single arrow (measured: 69 ms with the sequence queued, 179 ms without).
+    # A held arrow at ~11 rows a second to save a second on a key that is not the hot one is the
+    # wrong trade. The second is also mostly hidden here for the reason PENDING_KEY exists: the
+    # user's NEXT key ends this read early, so it is paid only by an Esc pressed alone.
     if ! IFS= read -rsn1 -t 1 next; then
         READ_NAV_KEY="ESC"
         return 0
@@ -5701,11 +5768,14 @@ read_query_input() {
         # and without this, pasting at the prompt would CLOSE the prompt. Anything else after
         # \x1b is still a cancel, as it always was.
         $'\x1b')
-            seq=""
-            while :; do
+            # Nothing behind the Esc = the user pressed it = cancel, in ~150 ms rather than
+            # ~1060 (see esc_first_byte). Anything behind it is the rest of a sequence whose
+            # bytes are all queued by now, so the loop below runs at no wait.
+            if ! esc_first_byte; then printf '\n'; return 1; fi
+            seq="$ESC_C"
+            while [[ "$seq" != *[[:alpha:]~] ]]; do
                 IFS= read -rsn1 -t 1 x || break
                 seq+="$x"
-                case "$x" in [[:alpha:]~]) break ;; esac
             done
             if [[ "$seq" == "[200~" ]]; then
                 read_paste_tail
