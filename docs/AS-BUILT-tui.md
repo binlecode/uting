@@ -23,7 +23,7 @@
                                        ▼ Enter
    ut-play -d -j --engine <该行的引擎> ──► 播放器记录 ──► 三个播放态 Starting / Playing / Paused
    nc -U <播放器在 -d -j 信封里公布的 sock>（唯一批准的直连：进度、暂停、音量）
-   写回：用户 config 的八个偏好键（write_prefs，temp+mv）—— 那份文件就是偏好的 agent 面
+   写回：用户 config 的九个偏好键（write_prefs，temp+mv）—— 那份文件就是偏好的 agent 面
 
    不在这张图里的：任何一条 YouTube / Bilibili 的事实，任何一次 yt-dlp 或 mpv 调用
 ```
@@ -242,7 +242,7 @@ mode 门，`uting -f video --volume 60 </dev/null` 报 TTY 门 —— 两条检�
     是因为它接着要等一次网络。**地板是 max(步长, 一屏)**，到了地板就是原地不动 ——
     与这个键从前在第 1 页的 no-op 一模一样。存的是 `RESULT_N`（要了多少）而不是
     `NUM_ENTRIES`（拿到多少）：一次只有 37 条结果的查询不该把下一次查询的起点钉在 37。
-- **八个键改的设置会写回用户配置**（`mark_pref` / `flush_prefs`；机制、键表与那三条
+- **九个键改的设置会写回用户配置**（`mark_pref` / `flush_prefs`；机制、键表与那三条
   硬约束在 `AS-BUILT-cli-contract.md`「配置面」「写回」，决定在 ARCHITECTURE.md「两个根数据文件」）。TUI 这一侧只有三件事
   值得记在这里：① **置脏点全都在成功路径之后** —— `cycle_engine` / `cycle_sort` 有一个
   取数失败就回滚的窗口，屏幕上是旧值，文件里就必须是旧值；② **写是延后的**，真正落盘发生在

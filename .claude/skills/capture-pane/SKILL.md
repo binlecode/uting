@@ -89,6 +89,21 @@ python3 .claude/skills/capture-pane/assert_pane.py tmp/list.txt 100 list   # PAS
 python3 .claude/skills/capture-pane/assert_pane.py tmp/card.txt 100 card
 ```
 
+**A frame with a player in it needs a second capture.** `capture-pane -p` throws every SGR
+away, and the playing row is drawn as a ground rather than as text — so a row highlighted
+only as far as its title looks exactly like a correct one in a `-p` capture. Take the same
+pane twice and hand the `-e` copy over:
+
+```bash
+tmux capture-pane -t "$S" -p  > tmp/play.txt
+tmux capture-pane -t "$S" -pe > tmp/play.e.txt
+python3 .claude/skills/capture-pane/assert_pane.py tmp/play.txt 100 list --sgr tmp/play.e.txt
+```
+
+If the window has scrolled away from the playing row (the cursor is the user's and the
+window follows the cursor), add `--off-window`: the check then asserts that NOTHING is
+reversed, rather than switching itself off.
+
 If `assert_pane.py` fails, **you found a layout bug — do not paste the frame.** Fix the
 renderer, re-capture. Width measurement lives only in `assert_pane.py`; do not reimplement cell
 counting in this skill's script or in a doc-splicing snippet.

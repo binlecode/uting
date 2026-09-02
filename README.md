@@ -197,13 +197,13 @@ the packaging NO in `docs/ROADMAP.md` says what would change that.
 `o` sort · `v` playback mode · `f` quality tier · `e` switch source · `a` add to playlist ·
 `b` open a playlist · `d` remove from the playlist on screen · `h` listening history ·
 `c` the focused row's parts · `i` the focused row's chapters · `+` add to the queue · `>` next track ·
-`Space` pause · `-`/`=` volume ·
+`Space` pause · `-`/`=` volume · `#` row numbers ·
 `[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
 
 **The hint block has two tiers and `?` is the door.** `core` — the shipped default — prints
 this view's own job (move, act on the row, get back out, quit, and `?` itself) and fits one
 line at 80 columns; `full` prints every key above. It hides HINTS, never keys: everything in
-`full` is still pressable under `core`. The tier is a preference like the other seven, written
+`full` is still pressable under `core`. The tier is a preference like the other eight, written
 back to your own config as `UT_KEYS=core|full`, and `？` is bound with it — a zh input method's
 shift-/ is a full-width question mark. `j`/`k` are list-view only: with `/` open they are text
 you are typing.
@@ -243,8 +243,8 @@ mirror: it is drawn only with a **playlist** on screen, because a search result 
 nothing and the log has no per-row removal to call. It names the track and defaults to no.
 The row count lives on the two page EDGES rather than on a key of its own: `→` past the last
 page fetches one batch more, and `←` on page 1 drops one again — a local truncation, no
-re-fetch, with a screenful as the floor. Seven of these keys — engine, sort, mode, quality
-tier, theme, language and that count — are written back to your own config file, in place, so the next
+re-fetch, with a screenful as the floor. Nine of these keys — engine, sort, mode, quality
+tier, theme, language, that count, the hint tier and the row numbers — are written back to your own config file, in place, so the next
 session opens where this one left off (`docs/AS-BUILT-cli-contract.md`「配置面」). With a
 playlist or the log on screen the two keys that re-fetch a query — `o`, `e` — say so and
 do nothing, and the two edges are a silent no-op there; both can mix sources, and each row plays under the engine that produced it. `+` and `>` appear only while

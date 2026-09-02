@@ -105,6 +105,13 @@ UT_KEYS=core                        # how much of the keymap the hint block prin
                                     # core = this view's own job, one line; full = every
                                     # key it has. The ? key toggles it live and writes it
                                     # back here. Not a cycle — two tiers, one door
+UT_ROW_INDEX=off                    # on|off: print each row's ordinal in front of it. Off
+                                    # by default — the cursor already answers "which row",
+                                    # and the column is charged to every line to serve the
+                                    # one press in ten that jumps. The 0-9 jump keys work
+                                    # either way; this only decides whether you can read
+                                    # the number instead of counting. The # key toggles it
+                                    # live and writes it back here
 YT_THEME=minimal                    # palette family; --theme overrides, t cycles live
 UT_ACCENT=                          # the `custom` palette's accent. 0xRRGGBB (24-bit,
                                     # needs COLORTERM=truecolor) | an SGR code 30-37 or

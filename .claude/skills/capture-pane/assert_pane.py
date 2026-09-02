@@ -23,11 +23,27 @@ goes stale. The checks:
 
   card rails   In the card view, every divider rail and the progress bar are the same width.
 
+  playing row  Given a SECOND capture taken with `tmux capture-pane -pe` (--sgr <file>), the
+               row the player is on carries the reverse attribute from cell 1 to the pane
+               width — the whole line, including the stretch the rail's CHA jumps over
+               without writing. This is the one invariant a plain `-p` capture is
+               structurally blind to: `-p` throws every SGR away, so a row highlighted only
+               as far as its title looks identical to a correct one. The check is here and
+               not in tests/ for the reason every other check here is: this is layout, and
+               the suites assert survival, not shape.
+
+               A window the playing row has scrolled out of is a real frame too — the cursor
+               is the user's and the window follows the cursor, so nothing is highlighted and
+               nothing scrolls back. Say so with --off-window, and the check REVERSES rather
+               than switching off: it then asserts that no row is reversed. Both states are
+               asserted; neither flag turns the check into a no-op.
+
 Captures come from `tmux capture-pane -p` — which is what the capture-pane skill feeds this, and the
 only source now that the pty rigs are gone. Ambiguous-width characters count as ONE cell, matching the suite's default
 (YT_AMBIG_WIDE unset); pass --ambig-wide to match the other setting.
 
 usage: assert_pane.py <capture.txt> <pane_width> [list|card] [--rows N] [--ambig-wide]
+                      [--sgr <capture-pe.txt> [--off-window]]
 exit:  0 = every applicable invariant held, 1 = at least one failed
 """
 import re
@@ -52,13 +68,68 @@ def cells(s, ambig_wide=False):
     return n
 
 
-ROW = re.compile(r"^(> |  )( *)(\d+\.) (?=\S)")
+# A row is its 2-cell cursor slot, then the ordinal field ONLY when the row numbers are on
+# (the # key / UT_ROW_INDEX), then the title. The marker slot is the constant: it is two
+# cells whether it holds the cursor glyph or nothing, which is what keeps the title column
+# still as the cursor moves.
+#
+# The ordinal being optional costs this pattern its own discriminator — "  " then anything
+# also describes the details block's metadata line and the hint block. So a row is this
+# prefix AND a duration rail at the end of the line; neither half identifies one alone.
+ROW = re.compile(r"^(▶ |> |  )( *\d+\. )?(?=\S)")
 RAIL = re.compile(r"(LIVE|--:--|\d+:\d\d(?::\d\d)?)$")
+CSI = re.compile(r"\x1b\[([0-9;]*)([@-~])")
+# every spelling of the wordmark: en, zh, and the maths-bold opt-in of each
+BRAND = re.compile(r"uting|你听|\U0001d5e8|\u4f60")
+
+
+def reverse_span(line, ambig_wide=False):
+    """First and last CELL (1-based, inclusive) carrying SGR 7 on this line, or (None, None).
+
+    tmux -e re-emits the attributes it recorded per cell, so this reads the terminal's own
+    idea of the row rather than the escape sequence uting wrote — which is the point: the
+    stretch between the title and the rail is never written by the renderer at all, it is
+    filled by a back-colour erase, and only the grid knows whether that worked.
+    """
+    rev, col, first, last, i = False, 0, None, None, 0
+    while i < len(line):
+        m = CSI.match(line, i)
+        if m:
+            if m.group(2) == "m":
+                for part in (m.group(1) or "0").split(";"):
+                    part = part or "0"
+                    if part == "7":
+                        rev = True
+                    elif part in ("0", "27"):
+                        rev = False
+            i = m.end()
+            continue
+        if line[i] == "\x1b":          # any other escape: skip its final byte and move on
+            j = i + 1
+            while j < len(line) and not ("@" <= line[j] <= "~"):
+                j += 1
+            i = j + 1
+            continue
+        cw = cells(line[i], ambig_wide)
+        if rev and cw:
+            if first is None:
+                first = col + 1
+            last = col + cw
+        col += cw
+        i += 1
+    return first, last
 
 
 def main(argv):
     ambig_wide = "--ambig-wide" in argv
     argv = [a for a in argv if a != "--ambig-wide"]
+    off_window = "--off-window" in argv
+    argv = [a for a in argv if a != "--off-window"]
+    sgr_path = None
+    if "--sgr" in argv:
+        i = argv.index("--sgr")
+        sgr_path = argv[i + 1]
+        del argv[i:i + 2]
     expect_rows = None
     if "--rows" in argv:
         i = argv.index("--rows")
@@ -83,7 +154,10 @@ def main(argv):
     body = "\n".join(lines)
 
     if view == "list":
-        if not lines or "uting" not in lines[0]:
+        # The wordmark is language-dependent (YT_LANG=zh draws 你听) and YT_BRAND=1 draws it
+        # in mathematical sans-serif bold, so this asks for ANY of the spellings rather than
+        # the English one — a frame captured on a zh config is not a scrolled header.
+        if not lines or not BRAND.search(lines[0]):
             fails.append("header not on line 1 (scrolled off?): %r" % (lines[0][:60] if lines else ""))
         # Detect the hint block by its LAST item (q quit), not by a label: the block carried a
         # "Navigation:" prefix once and no longer does, and a rig that keys off chrome wording
@@ -101,24 +175,53 @@ def main(argv):
             else:
                 notes.append("hint block dropped (short terminal) — expected")
 
-        rows = [l for l in lines if ROW.match(l)]
+        # ROW + RAIL still catches one thing that is not a row: the Now-Playing banner. It
+        # opens with the play glyph in the same 2-cell slot, and at a narrow width its tail
+        # elides down to "elapsed / total", which is a duration rail as far as any pattern
+        # can tell (seen at 40 columns). Localised state labels are not the way out of that —
+        # "播放中" / "Playing" / "Paused" would put chrome wording into a layout rig, which is
+        # the thing this file's own comments already refuse to do twice.
+        #
+        # So use the STRUCTURE instead: result rows are CONTIGUOUS, and they are the last such
+        # block on the screen — the banner sits above the key block, and everything under the
+        # rows (the details metadata, the description, the page counter) fails RAIL. Take the
+        # last run and say how many lines were dropped, so a misdetection is visible rather
+        # than silent.
+        hits = [i for i, l in enumerate(lines) if ROW.match(l) and RAIL.search(l)]
+        runs, cur = [], []
+        for i in hits:
+            if cur and i != cur[-1] + 1:
+                runs.append(cur)
+                cur = []
+            cur.append(i)
+        if cur:
+            runs.append(cur)
+        rows = [lines[i] for i in runs[-1]] if runs else []
+        if len(runs) > 1:
+            notes.append("ignored %d line(s) above the row block (the banner elides to a "
+                         "duration at narrow widths)" % sum(len(r) for r in runs[:-1]))
         notes.append("result rows: %d" % len(rows))
         if expect_rows is not None and len(rows) != expect_rows:
             fails.append("expected %d result rows, found %d" % (expect_rows, len(rows)))
 
         # index column: one start cell for every row, and the marker must appear somewhere
-        starts, seen = {}, []
+        starts, marked, digits = {}, 0, set()
         for l in rows:
             m = ROW.match(l)
-            seen.append(">" if m.group(1) == "> " else m.group(3))
-            starts.setdefault(m.end(), []).append(m.group(1) + m.group(3))
+            if m.group(1) != "  ":
+                marked += 1
+            if m.group(2):
+                digits.add(len(m.group(2).strip()) - 1)
+            starts.setdefault(m.end(), []).append(m.group(0))
         if rows and len(starts) > 1:
             fails.append("titles start in %d different columns: %r" % (len(starts), starts))
-        if rows and ">" not in seen:
-            fails.append("no selected row in this capture (marker never rendered)")
+        if rows and marked == 0:
+            fails.append("no selected row in this capture (cursor marker never rendered)")
+        if rows and marked > 1:
+            fails.append("%d rows carry the cursor marker; there is one cursor" % marked)
         if rows:
-            digits = sorted(set(len(s) - 1 for s in seen if s != ">"))
-            notes.append("index: title col=%s digits=%s" % (sorted(starts), digits or "-"))
+            notes.append("index: title col=%s digits=%s"
+                         % (sorted(starts), sorted(digits) or "off"))
 
         # rail column: right-flush at exactly the pane width, same column on every row
         ends = {}
@@ -135,15 +238,45 @@ def main(argv):
         if ends:
             notes.append("rail: end col=%s" % sorted(ends))
 
-        # The boundary under the hint block is a static divider when nothing plays and the live
-        # progress rail when something does (same width, by construction — that is the claim).
-        rail_line = [l for l in lines if re.match(r"^[─━●]{10,}$", l.strip())
-                     or re.match(r"^●[─━]{9,}", l.strip())]
-        if rail_line:
-            rw = sorted(set(w(l.strip()) for l in rail_line))
-            if rw != [width]:
-                fails.append("boundary rail is %s cells, expected exactly the pane width %d" % (rw, width))
-            notes.append("boundary rail: %s cells" % rw)
+        # The progress bar. Not a boundary any more and no longer pane-wide: it is indented
+        # into the rows' own two-cell gutter and holds two cells back on the right, so its
+        # width is the pane minus four — the one expression every right edge on this screen
+        # derives from. It prints only while something plays; an idle frame has no bar and
+        # that is not a failure.
+        bar = [l for l in lines
+               if re.match(r"^  [━─╸\[\]]{10,}$", l.rstrip())
+               or re.match(r"^  [=\->\[\]]{10,}$", l.rstrip())]
+        if bar:
+            bw = sorted(set(w(l.strip()) for l in bar))
+            if bw != [width - 4]:
+                fails.append("progress bar is %s cells, expected the pane width - 4 = %d"
+                             % (bw, width - 4))
+            notes.append("progress bar: %s cells" % bw)
+
+        # THE PLAYING ROW, from the -e capture. Nothing else on the screen is reversed, so
+        # "the reversed line" identifies it without knowing which row is playing.
+        if sgr_path:
+            elines = open(sgr_path, encoding="utf-8").read().split("\n")
+            spans = [(i + 1, reverse_span(l, ambig_wide)) for i, l in enumerate(elines)]
+            spans = [(i, s) for i, s in spans if s[0] is not None]
+            if off_window:
+                if spans:
+                    fails.append("--off-window, but %d row(s) are reversed (lines %s): the "
+                                 "playing row is not in this window and must not be drawn"
+                                 % (len(spans), [i for i, _ in spans]))
+                else:
+                    notes.append("playing row off this window, nothing reversed — expected")
+            elif not spans:
+                fails.append("no row carries the reverse attribute in %s (nothing playing, "
+                             "or the ground was never drawn). If the window has scrolled off "
+                             "the playing row, say --off-window" % sgr_path.split("/")[-1])
+            for ln, (a, b) in spans:
+                if a != 1 or b != width:
+                    fails.append("playing row on line %d is reversed over cells %d-%s, "
+                                 "expected 1-%d (a hole where CHA jumped?)" % (ln, a, b, width))
+            if spans and not off_window:
+                notes.append("playing row: line %s reversed %s-%s"
+                             % (spans[0][0], spans[0][1][0], spans[0][1][1]))
 
     elif view == "card":
         # The view name is ELIDED at narrow widths (it is chrome like any other row), so the

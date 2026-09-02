@@ -53,7 +53,7 @@ fi
 # and a file recording a value the program has already decided to throw away is a lie that
 # surfaces months later. Ahead of the block below rather than inside it, because that block is
 # duplicated verbatim in all eight entry points and this is uting's alone.
-PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_PLAY_QUALITY UT_SORT_FIELD YT_LANG UT_START_RESULTS UT_KEYS"
+PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_PLAY_QUALITY UT_SORT_FIELD YT_LANG UT_START_RESULTS UT_KEYS UT_ROW_INDEX"
 PREF_PINNED=""
 for _pk in $PREF_KEYS; do
     if eval "[[ -n \"\${$_pk+x}\" ]]"; then PREF_PINNED="$PREF_PINNED $_pk"; fi
@@ -144,6 +144,7 @@ pref_value() {
     YT_LANG)           printf '%s' "$UI_LANG" ;;
     UT_START_RESULTS)  printf '%s' "$RESULT_N" ;;
     UT_KEYS)           printf '%s' "$KEYS_TIER" ;;
+    UT_ROW_INDEX)      if ((ROW_INDEX)); then printf 'on'; else printf 'off'; fi ;;
     esac
 }
 
@@ -549,6 +550,7 @@ Keys (List View):
   s        stop playback
   - / =    volume down / up (via IPC)
   0 - 9    jump the cursor to that row of the visible window (0 = the tenth)
+  #        row numbers on / off (UT_ROW_INDEX; the digit keys work either way)
   [ / ]    seek backward / forward 10s (via IPC)
   v        cycle playback mode: audio → video → fast (applies to next play)
   f        cycle quality tier: auto → medium → high (applies to next play; the
@@ -682,10 +684,19 @@ PLAY_MODE="$UT_PLAY_MODE" # -f flag overrides. Runtime-mutable: v key rotates it
 # rule, and the reason ut-play's own --quality exists for the agent surface.
 PLAY_QUALITY="$UT_PLAY_QUALITY"
 # Which tier of key hints the view prints, rotated live by the ? key (cycle_keys) and
-# written back like the other seven. There is deliberately NO uting flag for it, by the same
+# written back like the other eight. There is deliberately NO uting flag for it, by the same
 # rule as the quality tier above: how much of the keymap you want written down is set-once
 # tuning, not a per-request choice. AS-BUILT-tui.md.
 KEYS_TIER="$UT_KEYS"
+# Whether each row prints its ordinal, toggled live by the # key and written back like the
+# rest. No uting flag, same rule as the key tier and the quality tier: how a list is
+# LABELLED is set-once tuning, not a per-request choice. AS-BUILT-tui.md.
+ROW_INDEX=0
+case "$UT_ROW_INDEX" in
+"" | off | 0) ROW_INDEX=0 ;;
+on | 1) ROW_INDEX=1 ;;
+*) die "UT_ROW_INDEX must be on or off (got '$UT_ROW_INDEX')" ;;
+esac
 PLAY_VOLUME="$UT_VOLUME"  # --volume flag overrides
 COLOR_MODE="auto"
 THEME="minimal"          # --theme / YT_THEME override: minimal | mono (palette family)
@@ -917,6 +928,16 @@ resolve_nc_unix || die "requires a unix-socket netcat: 'nc' with -U support, or 
 # --color auto honors NO_COLOR. YT_SYNC: synchronized redraws (DCS 1 q/2 q), on by default,
 # off under tmux (see display_menu).
 C_RESET=''; C_BOLD=''; C_CYAN=''; C_DIM=''; C_MARK=''
+# The playing row's ground, and it is NOT part of the palette above: reverse video is an
+# ATTRIBUTE, not a hue, so it is set unconditionally and survives --color never / NO_COLOR /
+# a pipe. A terminal with colour turned off still has to be able to say which row is
+# playing, and a screen that cannot is worse than one without an accent.
+#
+# C_ROW_END is its own reset for the same reason: C_RESET is the EMPTY STRING when colours
+# are off, so ending the row with it would leave the ground running to the bottom of the
+# screen. \033[0m is spelled out here and nowhere else in the row path.
+C_ROW_HL=$'\033[7m'
+C_ROW_END=$'\033[0m'
 SYNC_ON=0
 COLORTERM_TC=0
 COLORS_ON=0             # set by init_colors; gates the live theme cycle (t key)
@@ -1137,7 +1158,7 @@ set_ui_lang() {
         S_SELECT="选择"; S_PAGE="翻页"; S_PLAY="播放"; S_MODE="模式"; S_QUALITY="质量"
         S_SEARCH="搜索"; S_SORT="排序"; S_FILTER="过滤"
         S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"; S_THEMEKEY="主题"; S_KEYS="键位"
-        S_PAUSE="暂停"; S_VOL="音量"; S_JUMP="跳行"
+        S_PAUSE="暂停"; S_VOL="音量"; S_JUMP="跳行"; S_ROWNUM="行号"
         S_SEEK="跳转"
         S_PLAYING="播放中"; S_PAUSED="已暂停"; S_STARTING="缓冲中"
         S_PROMPT_SEARCH="搜索"; S_NEW_SEARCH="新搜索（Esc 或留空取消）"
@@ -1170,7 +1191,7 @@ set_ui_lang() {
         S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_MODE="mode"; S_QUALITY="quality"
         S_SEARCH="search"; S_SORT="sort"; S_FILTER="filter"
         S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"; S_THEMEKEY="theme"; S_KEYS="keys"
-        S_PAUSE="pause"; S_VOL="volume"; S_JUMP="jump"
+        S_PAUSE="pause"; S_VOL="volume"; S_JUMP="jump"; S_ROWNUM="numbers"
         S_SEEK="seek"
         S_PLAYING="Playing"; S_PAUSED="Paused"; S_STARTING="Starting"
         S_PROMPT_SEARCH="Search"; S_NEW_SEARCH="New search (Esc or empty to cancel)"
@@ -1229,6 +1250,14 @@ cycle_keys() {
     mark_pref UT_KEYS
 }
 
+# Row numbers on / off (key: #). A pure display toggle — it changes what a row PRINTS and
+# nothing about what a key DOES, which is why the digit jumps do not consult it. The reflow
+# picks the new prefix width up on the next redraw for free: pfx_w is derived, not stored.
+cycle_row_index() {
+    if ((ROW_INDEX)); then ROW_INDEX=0; else ROW_INDEX=1; fi
+    mark_pref UT_ROW_INDEX
+}
+
 # Cycle the palette family in place (key: t). set_theme is a pure function of
 # (THEME, BG, COLORTERM_TC), so a live re-resolve is safe — the same function startup
 # used. Gated on COLORS_ON so --color never / NO_COLOR / non-TTY sessions cannot paint
@@ -1265,6 +1294,12 @@ GL_NOTE="♫ "; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
 # Everything else the chrome draws. These used to be hardcoded, so YT_ASCII=1 still left
 # ▶ / ❚❚ / ● and the arrow hints as tofu on a font that can't draw them.
 GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_DOT="●"; GL_DOT_OFF="○"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="↵"
+# The CURSOR's marker, and it is its own name even though it is the same glyph as GL_PLAY
+# today. They are two different facts — one says "you are pointing here", the other says
+# "the player is playing this" — and now that a row can carry both at once, a single name
+# shared between them would have to be split before either could ever change shape. That
+# split is exactly the coupling this pass exists to remove.
+GL_CURSOR="▶"
 GL_ELL="…"; GL_ARROW="→"; GL_DASH="—"
 # The resource readout's two labels (UT_RESOURCE): geometric squares from the same family as
 # the rails' stroke language — ▣ an abstract chip, ▤ a filled "storage cell". Both are
@@ -1290,6 +1325,7 @@ init_glyphs() {
     if ((ASCII_GLYPHS)); then
         GL_NOTE=""; GL_LIVE="LIVE"; GL_SEP="|"; GL_CARET=">"
         GL_PLAY=">"; GL_PAUSE="||"; GL_DOT="*"; GL_DOT_OFF="o"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
+        GL_CURSOR=">"
         GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
         GL_CPU="cpu"; GL_RAM="ram"
         GL_SPIN=("|" "/" "-" "\\")
@@ -3117,6 +3153,7 @@ load_rows() {
 # List View: result rows + Now-Playing status banner
 display_list_menu() {
     local page=$1 start end i n disp status_extra p dots row_w rail rail_w iw
+    local pfx_w mark num pi pk pstart
     # One size read per redraw, shared by the banner (title elision), the result rows and the
     # packed navigation hints below. No width cap: unlike the player cards, the list wants the
     # whole width for its rows. LINES_N is refreshed here too — it is what the reflow below
@@ -3266,7 +3303,7 @@ display_list_menu() {
     # the playback cluster — and they are `full` because the arrows already say how to
     # move: this is the shortcut, not the way. Three cells wide either tier, so the pair
     # of them cannot move this block from one line to two on its own.
-    keys_full && nav_items+=("0-9	$S_JUMP")
+    keys_full && nav_items+=("0-9	$S_JUMP" "#	$S_ROWNUM")
     keys_full && nav_items+=("v	$S_MODE" "f	$S_QUALITY" "n	$S_SEARCH")
     # `o` re-sorts the SEARCH and refetches it, so on a store's rows it can only answer
     # "search rows only" (cycle_sort's own first line). A key whose whole effect is a notice
@@ -3645,10 +3682,18 @@ display_list_menu() {
         truncate_disp "$S_NO_MATCH $GL_DASH $S_NO_MATCH_KEYS" "$nav_cols"
         printf '%s%s%s\033[K\n' "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
     else
-        # EVERY row carries its number, and the marker gets its own 2-cell slot in front of
-        # it — "> " where an unselected row leaves "  ". The number is not the selection's to
-        # take: it is what the user types to reach a row, and blanking it on the row under the
-        # cursor removes the one label that says which row that is.
+        # The marker gets its own 2-cell slot in front of the row — the cursor glyph where
+        # the cursor is, two spaces everywhere else — and the number, when it is on, is not
+        # the selection's to take: it is what the user types to reach a row (the digit keys),
+        # and blanking it on the row under the cursor removes the one label saying which row
+        # that is.
+        #
+        # The numbers are OFF by default and `#` toggles them. Most of the time the cursor
+        # is the answer to "which row", and a right-aligned column of ordinals on every line
+        # is chrome charged to every row to serve the one press in ten that jumps. The keys
+        # do NOT depend on the toggle: 0-9 jump whether or not the number is drawn, because a
+        # key whose meaning followed a display state would be a second keymap wearing this
+        # one's clothes. The toggle decides whether you have to count.
         #
         # What the field fixes is alignment, not content. The prefixes used to be per-row
         # literals ("> 1. " / "  1. "), so their width was 4 + <digits> and a page that
@@ -3659,6 +3704,55 @@ display_list_menu() {
         # iw + 1 cells of prefix on every row whatever the page. Width comes from NUM_ENTRIES,
         # not from the page, so it does not move as you page.
         iw=$(( ${#NUM_ENTRIES} + 3 ))
+        # The prefix's real width: the 2-cell cursor slot, plus the number field and its one
+        # separating space only when the numbers are on. One expression, used both to size
+        # the title and to lay the prefix out, so the two cannot drift.
+        pfx_w=2
+        ((ROW_INDEX)) && pfx_w=$((iw + 1))
+        # ── Which visible row the PLAYER is on, resolved once per redraw ─────────────────
+        # Once, not per row: bash 3.2 has no associative array, so the obvious spelling is a
+        # parallel-array scan inside the row loop — and one CJK keypress is three byte-reads,
+        # which is three redraws, which would be three scans per character typed.
+        #
+        # By URL, not by index. "The row that is playing" has to stay true across a re-sort
+        # (o), a live filter (/), a resize and a page turn, and the index changes under all
+        # four while the url does not. handle_key is the same normaliser play_chapter asks
+        # with, so "the player holds this row" is decided in one vocabulary.
+        PLAYING_IDX=-1
+        if [[ -n "$CURRENT_PLAY_ID" && -n "$CURRENT_PLAY_URL" ]]; then
+            handle_key "$CURRENT_PLAY_URL"; pk="$HANDLE_KEY"
+            if [[ "$LIST_SOURCE" == "chapters" ]]; then
+                # A chapter row's url ends `&t=<seconds>`, so it can NEVER equal the item url
+                # the player holds — the playing chapter is the one the playhead is inside.
+                # The span is found once over the item's own chapter table (ordered, the
+                # engine's) and then matched against the rows (unordered, the filter's),
+                # rather than asking chapter_pct per row: that would be a scan of the table
+                # for every visible row, on every redraw.
+                pstart=""
+                handle_key "${urls[$start]}"
+                if [[ -n "$PT_POS_SEC" && "$pk" == "$HANDLE_KEY" ]] && ((CURRENT_PLAY_IS_LIVE == 0)); then
+                    for (( pi = 0; pi < ITEM_CHAP_N; pi++ )); do
+                        [[ -n "${ITEM_CHAP_END[$pi]:-}" ]] || continue
+                        if ((PT_POS_SEC >= ITEM_CHAP_SEC[pi] && PT_POS_SEC < ITEM_CHAP_END[pi])); then
+                            pstart="${ITEM_CHAP_SEC[$pi]}"
+                            break
+                        fi
+                    done
+                fi
+                if [[ -n "$pstart" ]]; then
+                    for (( pi = start; pi <= end && pi < NUM_ENTRIES; pi++ )); do
+                        chapter_sec "${urls[$pi]}" || continue
+                        if [[ "$CHAP_SEC" == "$pstart" ]]; then PLAYING_IDX=$pi; break; fi
+                    done
+                fi
+            else
+                for (( pi = start; pi <= end && pi < NUM_ENTRIES; pi++ )); do
+                    [[ "${R_ENGINE[$pi]:-}" == "$CURRENT_PLAY_ENGINE" ]] || continue
+                    handle_key "${urls[$pi]}"
+                    if [[ -n "$pk" && "$pk" == "$HANDLE_KEY" ]]; then PLAYING_IDX=$pi; break; fi
+                done
+            fi
+        fi
         for (( i = start; i <= end && i < NUM_ENTRIES; i++ )); do
             n=$(( i + 1 ))
             # A row is a TITLE and a duration rail — nothing else. It used to be
@@ -3686,7 +3780,7 @@ display_list_menu() {
             # title off the rail. Truncating to that is what gives the rail room BY
             # CONSTRUCTION — the jump below only repairs measurement drift, it does not
             # license overflow.
-            row_w=$(( nav_cols - iw - 1 - 2 - rail_w ))
+            row_w=$(( nav_cols - pfx_w - 2 - rail_w ))
             ((row_w < 12)) && row_w=12
             truncate_disp "${R_TITLE[$i]}" "$row_w"
             disp="$TRUNC_TEXT"
@@ -3707,15 +3801,43 @@ display_list_menu() {
             # trailing erase would leave the previous frame's longer title showing through the
             # gap. Erasing the line before drawing it is the only order that covers a hole the
             # draw itself never touches.
-            if ((i == selected)); then
+            # ── The prefix, built once for all three forms below ──────────────────────
+            # The cursor slot is a constant 2 cells whether it is filled or not, so the title
+            # column never moves; the number field is the part that can vanish.
+            mark="  "
+            ((i == selected)) && mark="$GL_CURSOR "
+            num=""
+            ((ROW_INDEX)) && printf -v num '%*s ' $((iw - 2)) "$n."
+            # ── The PLAYING row: ground first, then the jump ──────────────────────────
+            # The order is the whole trick. \033[K after the title, with the reverse
+            # attribute already set, is a back-colour erase: it carries the ground across the
+            # cells CHA is about to jump over. Set the ground after the jump instead and the
+            # row has a hole in the middle of it — the gap between the title and the rail,
+            # which is most of the line.
+            #
+            # NOT a computed run of spaces. That is the same trap the rail's CHA exists to
+            # avoid: the width layer over-counts non-ASCII on purpose, so a padded ground
+            # would end where our measurement says the title ended rather than where the
+            # terminal actually drew it — ragged on every row with CJK or a maths-bold title.
+            #
+            # A row that is playing AND under the cursor takes both: the ▶ and bold say
+            # cursor, the ground says playing. The accent HUE is dropped there and only
+            # there — a reversed accent is a colour on a colour, and the two facts are
+            # already separately legible without it.
+            if ((i == PLAYING_IDX)); then
+                printf '\033[K%s%s%s%s%s\033[K\033[%dG%s%s\n' \
+                    "$C_ROW_HL" "$mark" "$num" "$C_BOLD" "$disp" \
+                    $((nav_cols - rail_w + 1)) "$rail" "$C_ROW_END"
+            elif ((i == selected)); then
                 # Marker AND number in C_MARK (accent), title in bold, rail back to its own
                 # dim — the selected line no longer inherits one hue end-to-end.
-                printf '\033[K%s> %*s%s %s%s%s\033[%dG%s%s%s\n' \
-                    "$C_MARK" $((iw - 2)) "$n." "$C_RESET" "$C_BOLD" "$disp" "$C_RESET" \
+                printf '\033[K%s%s%s%s%s%s%s\033[%dG%s%s%s\n' \
+                    "$C_MARK" "$mark" "$num" "$C_RESET" "$C_BOLD" "$disp" "$C_RESET" \
                     $((nav_cols - rail_w + 1)) "$C_DIM" "$rail" "$C_RESET"
             else
-                printf '\033[K  %*s %s%s\033[%dG%s%s\n' \
-                    $((iw - 2)) "$n." "$disp" "$C_DIM" $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
+                printf '\033[K%s%s%s%s\033[%dG%s%s\n' \
+                    "$mark" "$num" "$disp" "$C_DIM" \
+                    $((nav_cols - rail_w + 1)) "$rail" "$C_RESET"
             fi
         done
     fi
@@ -5499,6 +5621,11 @@ while true; do
     # `？` is the full-width form a zh input method makes of shift-/ — utf8_complete already
     # assembles it into one key, so binding it is one more pattern and not a second path.
     "?" | "？") cycle_keys; continue ;;
+    # Row numbers, and universal for the same reason the key tier is: every row source
+    # prints rows, so a toggle that worked in only one of them would leave the others with a
+    # labelling the user could not change. `＃` is the full-width form a zh input method
+    # makes of shift-3, bound beside it exactly as `？` is beside `?`.
+    "#" | "＃") cycle_row_index; continue ;;
     esac
 
     # List View specific handlers
