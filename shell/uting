@@ -3652,10 +3652,18 @@ display_list_menu() {
             "$C_DIM" "$b_tail" "$C_RESET" \
             "$C_DIM" "$b_res" "$C_RESET" \
             "$C_DIM" "$b_hint" "$C_RESET"
-    else
-        printf '\033[K\n'
     fi
-    chrome_h=$((chrome_h + 1))    # the banner row, or the blank line standing in for it
+    # The banner used to leave a BLANK LINE standing in for itself when nothing was playing,
+    # so that starting a track did not shift the list. With the key block moved to the bottom
+    # that stand-in became the second of two blank lines in a row — the separator below is
+    # the other — and two empty lines above the rows read as a rendering fault, not as air.
+    # So the stand-in goes and the separator does its job alone.
+    #
+    # The cost is named rather than hidden: the list now moves by TWO rows when playback
+    # starts (the banner and its bar) instead of by one. That is a shift on a frame which is
+    # fully redrawn at that moment anyway, against a blank line that was on screen for the
+    # whole of every session where nothing was playing.
+    if [[ -n "$CURRENT_PLAY_ID" ]]; then chrome_h=$((chrome_h + 1)); fi
 
     # ── The progress bar, on a line of its own ──────────────────────────────────────────
     # It used to BE the boundary rail under the key block: one line doing two jobs, full
@@ -3686,12 +3694,12 @@ display_list_menu() {
         chrome_h=$((chrome_h + 1))
     fi
 
-    if ((nav_ok)); then
-        HINT_SEP=" $GL_SEP "
-        print_hints "$nav_cols" "$nav_pad" "$nav_pad" "${nav_items[@]}"
-        HINT_SEP=""
-        chrome_h=$((chrome_h + nav_h))
-    fi
+    # THE KEY BLOCK IS NOT HERE ANY MORE — it prints under the rows, at the very bottom of
+    # the frame. Chrome belongs at the EDGES and the middle belongs to the content; what is
+    # left at the top is what names the screen and what the player is doing, and everything
+    # that is a reference card is at the other end. Its HEIGHT is still charged before a row
+    # is printed (the lower band, below), and its CONTENT is still decided here, before the
+    # banner — which is what keeps the measurement a chain rather than a loop.
     # NO RAIL HERE. A full-width rule used to close the chrome band, and a second identical
     # one opened the details block below the rows — two rules a screen apart, drawn in the
     # same accent, which is what made a reader look for a difference that was not there. The
@@ -3713,13 +3721,33 @@ display_list_menu() {
     # spacer, the filter's instruction line, the wrapped caret, and the pagination row. Which
     # of them survive is decided by the budget a few lines down — the caret and the pagination
     # row carry state, the other two do not.
-    local avail psize row_gap=1 filter_hint=0 caret_h=0 foot_h
+    local avail psize row_gap=1 hint_gap=0 filter_hint=0 caret_h=0 foot_h
     if ((FILTER_MODE)); then
         filter_hint=1
         disp_w "> $FILTER_LABEL"
         caret_h=$(( (DISP_W + nav_cols - 1) / nav_cols ))
     fi
-    foot_h=$(( row_gap + filter_hint + caret_h ))
+    # ── THE LOWER BAND ─────────────────────────────────────────────────────────────────
+    # The frame is three bands: an upper one (title, banner, bar, spacer — already counted in
+    # chrome_h), the rows, and this. Everything here is charged before a single row is
+    # printed, exactly as the upper band is: a band measured after the rows is a band the
+    # rows have already spent.
+    #
+    # The ORDER of the four steps below is what keeps this non-circular, and it is the same
+    # chain the details block has always used — written out because the lower band now holds
+    # two variable-height members instead of one:
+    #
+    #   1. clamp the cursor         — needs no window geometry at all
+    #   2. measure the block for it — needs the cursor, not the row count
+    #   3. derive the row budget from the measured chrome
+    #   4. derive the window (page / VIEW_TOP) from the cursor
+    #
+    # Which is why the key block's CONTENT may depend on the width, the list mode, the row
+    # source, the installed engines and the player — and never on the row count. The moment
+    # it reads the row count, 1-4 stops being a chain and becomes a loop; and a loop that
+    # converges on its first pass at 100x30 is a loop nobody finds until someone resizes.
+    ((nav_ok)) && hint_gap=1
+    foot_h=$(( row_gap + hint_gap + nav_ok * nav_h + filter_hint + caret_h ))
     # ── The details block is CHROME, and variable-height chrome at that ─────────────────
     # Its height is however far the selected title wraps, so it has to be charged against
     # the row budget before a single row is printed — measure it after the rows and a long
@@ -3767,15 +3795,20 @@ display_list_menu() {
     # drop does the floor overflow, and then it is honest: no arrangement of that terminal
     # shows a header, a row and a caret at once.
     #
-    # The pagination row used to be reclaimed here too, third and last, and it is gone: the
-    # page number is a status segment now and the dots are retired. So the footer is the
-    # spacer and the filter hint, in that order, and the caret is still never dropped.
+    # Reclaimed in VALUE order, and the two blank separators go first because a separator
+    # carries nothing — it only says that two things differ, which their content already
+    # says. Then the filter's instruction line, which teaches a mode the caret beneath it is
+    # demonstrating. The KEY BLOCK is not reclaimed here: its own gate decided it further up,
+    # from the terminal's height and the block's own packed height, before the banner printed
+    # and therefore before anything could depend on the row count. The caret is never
+    # dropped — it echoes what the user is typing.
     while ((avail < 1)); do
         if ((row_gap)); then row_gap=0
+        elif ((hint_gap)); then hint_gap=0
         elif ((filter_hint)); then filter_hint=0
         else break
         fi
-        foot_h=$(( row_gap + filter_hint + caret_h ))
+        foot_h=$(( row_gap + hint_gap + nav_ok * nav_h + filter_hint + caret_h ))
         avail=$((LINES_N - chrome_h - foot_h - detail_h - 1))
     done
     # ONE AXIS PER MODE. In `page` the row count is UT_PAGE_ROWS pressed down to fit; in
@@ -4046,6 +4079,17 @@ display_list_menu() {
 
     # Details for the selected row, in its own section under the rows.
     ((show_details)) && print_details "$nav_cols" "$selected"
+
+    # ── The key block, at the bottom of the frame ──────────────────────────────────────
+    # Its height was charged in the lower band, its content was decided before the banner
+    # printed, and neither depended on how many rows there turned out to be. All that is
+    # left here is the printing.
+    if ((nav_ok)); then
+        ((hint_gap)) && printf '\033[K\n'
+        HINT_SEP=" $GL_SEP "
+        print_hints "$nav_cols" "$nav_pad" "$nav_pad" "${nav_items[@]}"
+        HINT_SEP=""
+    fi
 
     # Live filter input caret
     if ((FILTER_MODE)); then
