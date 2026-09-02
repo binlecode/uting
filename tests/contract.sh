@@ -1942,8 +1942,12 @@ else
     # ordinal — there is no other way to say "row 11" from a pane whose titles come off the
     # network. In the file rather than the environment because an environment-pinned key is
     # refused by the write-back path, and the # check further down has to be able to write.
+    # UT_LIST_MODE=page for the same kind of reason: `scroll` is the shipped default and
+    # its window at this geometry is the whole fetch, so "row 11 appeared" would be true
+    # before a single j was pressed — an unfailable check. Page mode is what makes the page
+    # CROSSING a crossing. The Tab checks below then drive the default and come back.
     printf '%s\n' '# a config a human wrote' 'UT_PLAY_MODE=audio    # keep me' \
-        'UT_ROW_INDEX=on' >"$TUI_CFG_REAL"
+        'UT_ROW_INDEX=on' 'UT_LIST_MODE=page' >"$TUI_CFG_REAL"
     ln -s "$TUI_CFG_REAL" "$TUI_CFG"
     # UT_SORT_FIELD in the pane's ENVIRONMENT is the discriminating input for the refusal:
     # the environment beats the file at every startup, so a uting that wrote this key would
@@ -2092,6 +2096,48 @@ else
     report "# puts them back" 1 "$shown"
     wrote=$(poll_until 10 cfg_has '^UT_ROW_INDEX=on$')
     report "…and the file follows it back" 1 "$wrote"
+
+    # The TENTH preference key, and the one that changes what the other chrome says. Tab was
+    # unbound for as long as there was one renderer; it now switches the WINDOWING of that
+    # one renderer, and both consequences are asserted rather than the key's own hint cell:
+    #   * the page segment goes, because scroll mode has no pages — and the pattern is
+    #     `page N/M`, never a bare `page`, since the arrow cell spells that word too;
+    #   * the ARROW cell goes with it, because ←/→ cannot act in scroll mode and a key that
+    #     cannot act does not spend a cell of a measured block (the rule `o` and the store
+    #     keys already follow, applied to a mode instead of an install).
+    # The second one is the discriminating half: a Tab that only flipped a variable the
+    # window code read would pass the first check on any list short enough to be one page.
+    tmux send-keys -t "$TS" Tab
+    gone=$(poll_until 10 pane_lacks 'page [0-9]+/[0-9]+')
+    report "Tab leaves page mode" 1 "$gone"
+    gone=$(poll_until 10 pane_lacks '←/→ page')
+    report "…and the arrows stop spending a cell" 1 "$gone"
+    wrote=$(poll_until 10 cfg_has '^UT_LIST_MODE=scroll$')
+    report "…and writes the mode to your config" 1 "$wrote"
+    tmux send-keys -t "$TS" Tab
+    shown=$(poll_until 10 pane_has 'page [0-9]+/[0-9]+')
+    report "Tab comes back" 1 "$shown"
+    wrote=$(poll_until 10 cfg_has '^UT_LIST_MODE=page$')
+    report "…and the file follows it back" 1 "$wrote"
+
+    # THE SCROLLBAR, in both modes and on every visible row: the gutter is what replaced the
+    # ●○○○ row, and it is the only thing on screen that says where the window sits when there
+    # are no pages. Asserted as a COUNT of rows carrying a gutter cell rather than as a
+    # picture: which rows hold the thumb is layout, and layout is capture-pane's (assert_pane
+    # measures the column). A list longer than one screen must show BOTH glyphs — all thumb
+    # or all track would mean the geometry collapsed — which no implementation that forgot to
+    # size the thumb can produce.
+    report "every row carries a scrollbar cell" 1 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null |
+            grep -cE '[0-9]:[0-9][0-9] [█│]$' | awk '{print ($1 > 0) ? 1 : 0}')"
+    report "…and the thumb is shorter than the track" 1 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null |
+            awk '/[0-9]:[0-9][0-9] █$/ {t++} /[0-9]:[0-9][0-9] │$/ {k++}
+                 END {print (t > 0 && k > 0) ? 1 : 0}')"
+    # And the row it retired is really gone: ● / ○ were the dots, and nothing else on this
+    # screen draws either of them.
+    report "the pagination dots are gone" 0 \
+        "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | grep -c '○')"
 
     # ---- the preference write-back and the two count edges ----------------------------
     # All of it on the pane that is ALREADY up: no second cold start, no second cold search.

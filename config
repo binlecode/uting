@@ -105,6 +105,13 @@ UT_KEYS=core                        # how much of the keymap the hint block prin
                                     # core = this view's own job, one line; full = every
                                     # key it has. The ? key toggles it live and writes it
                                     # back here. Not a cycle — two tiers, one door
+UT_LIST_MODE=scroll                 # scroll|page: how the rows are windowed. scroll is a
+                                    # continuous window that follows the cursor, and the two
+                                    # ends of the LIST grow and shrink the row count; page is
+                                    # a fixed page, and the two ends of the PAGE do. One axis
+                                    # per mode, never both. Tab toggles it live and writes it
+                                    # back here. UT_PAGE_ROWS is page mode's ceiling only —
+                                    # scroll mode sizes its window from the terminal
 UT_ROW_INDEX=off                    # on|off: print each row's ordinal in front of it. Off
                                     # by default — the cursor already answers "which row",
                                     # and the column is charged to every line to serve the

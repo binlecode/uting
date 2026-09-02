@@ -15,7 +15,16 @@ goes stale. The checks:
                literals, so a page that reached two digits started every 1-digit title one
                cell to the left — ragged in the one column the eye scans down.
 
-  rail column  Every result row's duration rail is right-flush at exactly the pane width.
+  rail column  Every result row's duration rail is right-flush at one column, and the
+               progress bar ends on the same one. That column is the pane width minus the
+               scrollbar gutter and its cell of air, so it is MEASURED rather than assumed —
+               the renderer derives every right-hand flush from one expression, and this
+               asserts they agree with each other, which stays true when the gutter's width
+               changes (█ and │ are Ambiguous: two cells under YT_AMBIG_WIDE).
+
+  gutter       Every result row ends with a scrollbar cell, all in the same column, and a
+               list longer than its window shows BOTH glyphs — all thumb or all track means
+               the thumb was never sized.
                A capture is the terminal's own cell grid, so this measures where the rail was
                actually DRAWN — which is the whole point: char_w over-counts on purpose, so a
                rail placed by computed padding lands early on rows the terminal drew narrower
@@ -77,7 +86,10 @@ def cells(s, ambig_wide=False):
 # also describes the details block's metadata line and the hint block. So a row is this
 # prefix AND a duration rail at the end of the line; neither half identifies one alone.
 ROW = re.compile(r"^(▶ |> |  )( *\d+\. )?(?=\S)")
-RAIL = re.compile(r"(LIVE|--:--|\d+:\d\d(?::\d\d)?)$")
+# The rail, and after it the scrollbar cell that now closes every row. The gutter is part of
+# the match rather than stripped beforehand so that one regex still identifies a row — and
+# its group is what lets the rail's own end column be measured without it.
+RAIL = re.compile(r"(LIVE|--:--|\d+:\d\d(?::\d\d)?)( [█│#|])?$")
 CSI = re.compile(r"\x1b\[([0-9;]*)([@-~])")
 # every spelling of the wordmark: en, zh, and the maths-bold opt-in of each
 BRAND = re.compile(r"uting|你听|\U0001d5e8|\u4f60")
@@ -223,20 +235,35 @@ def main(argv):
             notes.append("index: title col=%s digits=%s"
                          % (sorted(starts), sorted(digits) or "off"))
 
-        # rail column: right-flush at exactly the pane width, same column on every row
-        ends = {}
+        # rail column: one column for every row, and it is the pane width less whatever the
+        # scrollbar gutter takes. Both are measured off the capture — the renderer derives
+        # them from one expression, so what is worth asserting is that they still agree.
+        ends, guts = {}, {}
         for l in rows:
             m = RAIL.search(l)
             if not m:
                 fails.append("row has no duration rail: %r" % l[-30:])
                 continue
-            ends.setdefault(w(l), []).append(m.group(1))
+            g = m.group(2) or ""
+            ends.setdefault(w(l) - w(g), []).append(m.group(1))
+            guts.setdefault(w(l), []).append(g.strip())
         if len(ends) > 1:
             fails.append("rails end in %d different columns: %r" % (len(ends), dict(ends)))
-        elif ends and list(ends)[0] != width:
-            fails.append("rail column is %d, expected the pane width %d" % (list(ends)[0], width))
         if ends:
             notes.append("rail: end col=%s" % sorted(ends))
+        # The gutter: present on every row, in one column, and both glyphs on a list that is
+        # longer than its window. A single glyph everywhere means the thumb was never sized —
+        # which is a correct-looking frame and a scrollbar that says nothing.
+        marks = [g for v in guts.values() for g in v]
+        if rows and not all(marks):
+            fails.append("%d row(s) end without a scrollbar cell" % marks.count(""))
+        elif marks:
+            if len(guts) > 1:
+                fails.append("scrollbar cells end in %d different columns: %r"
+                             % (len(guts), sorted(guts)))
+            if expect_rows is None or expect_rows >= len(rows):
+                notes.append("gutter: col=%s glyphs=%s"
+                             % (sorted(guts), "".join(sorted(set(marks)))))
 
         # The progress bar. Not a boundary any more and not pane-wide: it is indented into
         # the rows' own two-cell gutter and ends on THE SAME COLUMN the duration rail lands
@@ -275,10 +302,16 @@ def main(argv):
                 fails.append("no row carries the reverse attribute in %s (nothing playing, "
                              "or the ground was never drawn). If the window has scrolled off "
                              "the playing row, say --off-window" % sgr_path.split("/")[-1])
+            # The ground runs from cell 1 to the RAIL's column — not to the pane's edge:
+            # the scrollbar sits outside it deliberately, because a reversed thumb is a hole
+            # exactly on the row a reader is most likely to be looking at. So the expectation
+            # is measured off the same capture rather than written down, and it is still one
+            # rule when there is no gutter at all (the rail ends at the pane width then).
+            want = sorted(ends)[0] if ends else width
             for ln, (a, b) in spans:
-                if a != 1 or b != width:
+                if a != 1 or b != want:
                     fails.append("playing row on line %d is reversed over cells %d-%s, "
-                                 "expected 1-%d (a hole where CHA jumped?)" % (ln, a, b, width))
+                                 "expected 1-%d (a hole where CHA jumped?)" % (ln, a, b, want))
             if spans and not off_window:
                 notes.append("playing row: line %s reversed %s-%s"
                              % (spans[0][0], spans[0][1][0], spans[0][1][1]))

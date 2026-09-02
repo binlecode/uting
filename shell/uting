@@ -53,7 +53,7 @@ fi
 # and a file recording a value the program has already decided to throw away is a lie that
 # surfaces months later. Ahead of the block below rather than inside it, because that block is
 # duplicated verbatim in all eight entry points and this is uting's alone.
-PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_PLAY_QUALITY UT_SORT_FIELD YT_LANG UT_START_RESULTS UT_KEYS UT_ROW_INDEX"
+PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_PLAY_QUALITY UT_SORT_FIELD YT_LANG UT_START_RESULTS UT_KEYS UT_ROW_INDEX UT_LIST_MODE"
 PREF_PINNED=""
 for _pk in $PREF_KEYS; do
     if eval "[[ -n \"\${$_pk+x}\" ]]"; then PREF_PINNED="$PREF_PINNED $_pk"; fi
@@ -145,6 +145,7 @@ pref_value() {
     UT_START_RESULTS)  printf '%s' "$RESULT_N" ;;
     UT_KEYS)           printf '%s' "$KEYS_TIER" ;;
     UT_ROW_INDEX)      if ((ROW_INDEX)); then printf 'on'; else printf 'off'; fi ;;
+    UT_LIST_MODE)      printf '%s' "$LIST_MODE" ;;
     esac
 }
 
@@ -551,6 +552,7 @@ Keys (List View):
   - / =    volume down / up (via IPC)
   0 - 9    jump the cursor to that row of the visible window (0 = the tenth)
   #        row numbers on / off (UT_ROW_INDEX; the digit keys work either way)
+  Tab      list mode: scroll <-> page (UT_LIST_MODE)
   [ / ]    seek backward / forward 10s (via IPC)
   v        cycle playback mode: audio → video → fast (applies to next play)
   f        cycle quality tier: auto → medium → high (applies to next play; the
@@ -684,13 +686,23 @@ PLAY_MODE="$UT_PLAY_MODE" # -f flag overrides. Runtime-mutable: v key rotates it
 # rule, and the reason ut-play's own --quality exists for the agent surface.
 PLAY_QUALITY="$UT_PLAY_QUALITY"
 # Which tier of key hints the view prints, rotated live by the ? key (cycle_keys) and
-# written back like the other eight. There is deliberately NO uting flag for it, by the same
+# written back like the other nine. There is deliberately NO uting flag for it, by the same
 # rule as the quality tier above: how much of the keymap you want written down is set-once
 # tuning, not a per-request choice. AS-BUILT-tui.md.
 KEYS_TIER="$UT_KEYS"
 # Whether each row prints its ordinal, toggled live by the # key and written back like the
 # rest. No uting flag, same rule as the key tier and the quality tier: how a list is
 # LABELLED is set-once tuning, not a per-request choice. AS-BUILT-tui.md.
+# Which of the two list modes the rows are windowed by, toggled live by Tab and written back
+# like the rest. `scroll` is a continuous window that follows the cursor; `page` is the fixed
+# page this shipped with. No uting flag, same rule as the key tier: which shape of list you
+# read in is set-once tuning. AS-BUILT-tui.md.
+LIST_MODE="$UT_LIST_MODE"
+case "$LIST_MODE" in
+"") LIST_MODE="scroll" ;;
+scroll | page) ;;
+*) die "UT_LIST_MODE must be scroll or page (got '$UT_LIST_MODE')" ;;
+esac
 ROW_INDEX=0
 case "$UT_ROW_INDEX" in
 "" | off | 0) ROW_INDEX=0 ;;
@@ -1159,7 +1171,7 @@ set_ui_lang() {
         S_SEARCH="搜索"; S_SORT="排序"; S_FILTER="过滤"
         S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"; S_THEMEKEY="主题"; S_KEYS="键位"
         S_PAUSE="暂停"; S_VOL="音量"; S_JUMP="跳行"; S_ROWNUM="行号"
-        S_U_RESULTS="结果"; S_U_ITEMS="项"; S_U_CHAP="章"; S_U_PAGE="页"
+        S_U_RESULTS="结果"; S_U_ITEMS="项"; S_U_CHAP="章"; S_U_PAGE="页"; S_LISTMODE="视图"
         S_SORT_RELEVANCE="相关度"; S_SORT_VIEWS="播放量"; S_SORT_DUR="时长"
         S_MODE_AUDIO="音频"; S_MODE_VIDEO="视频"; S_MODE_FAST="快速"
         S_AUTH_IN="已登录"; S_AUTH_ANON="匿名"; S_LIKES="赞"; S_TOTAL="总长"
@@ -1196,7 +1208,7 @@ set_ui_lang() {
         S_SEARCH="search"; S_SORT="sort"; S_FILTER="filter"
         S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"; S_THEMEKEY="theme"; S_KEYS="keys"
         S_PAUSE="pause"; S_VOL="volume"; S_JUMP="jump"; S_ROWNUM="numbers"
-        S_U_RESULTS="results"; S_U_ITEMS="items"; S_U_CHAP="chapters"; S_U_PAGE="page"
+        S_U_RESULTS="results"; S_U_ITEMS="items"; S_U_CHAP="chapters"; S_U_PAGE="page"; S_LISTMODE="view"
         S_SORT_RELEVANCE="relevance"; S_SORT_VIEWS="views"; S_SORT_DUR="duration"
         S_MODE_AUDIO="audio"; S_MODE_VIDEO="video"; S_MODE_FAST="fast"
         S_AUTH_IN="signed in"; S_AUTH_ANON="anonymous"; S_LIKES="likes"; S_TOTAL="total"
@@ -1266,6 +1278,17 @@ cycle_row_index() {
     mark_pref UT_ROW_INDEX
 }
 
+# scroll <-> page (key: Tab). The CURSOR is the anchor across the switch, not the page number
+# and not the window top: the user is looking at a row, and that row must still be on screen
+# afterwards. Both derivations follow from it — page mode takes the page the cursor falls in,
+# scroll mode lets the renderer pull VIEW_TOP to wherever the cursor is. So neither direction
+# needs to remember anything: the renderer recomputes the window from the selection on the
+# very next frame, which is the same anchor a resize already repages on.
+cycle_list_mode() {
+    if [[ "$LIST_MODE" == "scroll" ]]; then LIST_MODE="page"; else LIST_MODE="scroll"; fi
+    mark_pref UT_LIST_MODE
+}
+
 # Cycle the palette family in place (key: t). set_theme is a pure function of
 # (THEME, BG, COLORTERM_TC), so a live re-resolve is safe — the same function startup
 # used. Gated on COLORS_ON so --color never / NO_COLOR / non-TTY sessions cannot paint
@@ -1308,6 +1331,10 @@ GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_DOT="●"; GL_DOT_OFF="○"; GL_AV="↑/↓
 # shared between them would have to be split before either could ever change shape. That
 # split is exactly the coupling this pass exists to remove.
 GL_CURSOR="▶"
+# The scrollbar: thumb and track. BOTH are East-Asian Ambiguous (U+2588, U+2502), unlike
+# the bar's ╸ which is Neutral — so the gutter is CW_AMBIG_W cells wide, not one, and the
+# width it takes off the rows has to be read from that variable rather than written as 2.
+GL_BAR_THUMB="█"; GL_BAR_TRACK="│"
 GL_ELL="…"; GL_ARROW="→"; GL_DASH="—"
 # The duration bounds' comparators. Both are East-Asian Ambiguous and already behave like
 # the rest of the chrome under YT_AMBIG_WIDE; they are named rather than inlined for the
@@ -1338,6 +1365,7 @@ init_glyphs() {
         GL_NOTE=""; GL_LIVE="LIVE"; GL_SEP="|"; GL_CARET=">"
         GL_PLAY=">"; GL_PAUSE="||"; GL_DOT="*"; GL_DOT_OFF="o"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
         GL_CURSOR=">"
+        GL_BAR_THUMB="#"; GL_BAR_TRACK="|"
         GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
         GL_GE=">="; GL_LE="<="
         GL_CPU="cpu"; GL_RAM="ram"
@@ -1793,7 +1821,7 @@ card_divider() {
 CW_ZWJ=$'\xe2\x80\x8d'
 CW_ZERO=""      # characters that add no cells
 CW_NARROW=""    # non-ASCII characters that still take only one, in any terminal
-CW_AMBIG='·—•…←↑→↓─━○●▶▣▤≥≤'  # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
+CW_AMBIG='·—•…←↑→↓─━○●▶▣▤≥≤█│' # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
 CW_AMBIG_W=1
 CW_RANGE=""
 cw_range() {
@@ -2847,6 +2875,13 @@ trap cleanup_on_exit EXIT INT TERM HUP
 # the chrome it actually measured, every redraw (see the reflow block there).
 term_size; LINES_N=$TERM_LINES
 PAGE_SIZE=$PAGE_OPT
+# scroll mode's window: the ABSOLUTE index of the first visible row. It is the mode's whole
+# state — there is no page number and no page count — and the renderer pulls it to wherever
+# the cursor is, never the other way round. VIEW_START is what the renderer actually drew
+# from, in EITHER mode, so a caller that needs to know what is on screen (jump_to_row, the
+# menu loop's clamp) asks one variable instead of re-deriving the window two more times.
+VIEW_TOP=0
+VIEW_START=0
 PAGE_CAP=$(( LINES_N - 8 ))
 ((PAGE_CAP >= 3)) || PAGE_CAP=3
 ((PAGE_SIZE <= PAGE_CAP)) || PAGE_SIZE=$PAGE_CAP
@@ -3165,8 +3200,8 @@ load_rows() {
 
 # List View: result rows + Now-Playing status banner
 display_list_menu() {
-    local page=$1 start end i n disp status_extra p dots row_w rail rail_w iw
-    local pfx_w mark num pi pk pstart
+    local page=$1 start end i n disp status_extra p row_w rail rail_w iw
+    local pfx_w mark num pi pk pstart gcol gut vis th_len th_top vmax
     # One size read per redraw, shared by the banner (title elision), the result rows and the
     # packed navigation hints below. No width cap: unlike the player cards, the list wants the
     # whole width for its rows. LINES_N is refreshed here too — it is what the reflow below
@@ -3178,9 +3213,12 @@ display_list_menu() {
     # the progress bar, the status segments — lands on this column and derives from this
     # one expression rather than three of its own. Three flushes computed separately is
     # how one of them ends up a cell out and wraps, which is a line of height the reflow
-    # does not know about (the plan's I-1). D moves it left to make room for the
-    # scrollbar gutter, and moves all three together by changing this line.
-    right_edge=$nav_cols
+    # does not know about (the plan's I-1).
+    #
+    # The last column(s) belong to the scrollbar, plus one cell of air. CW_AMBIG_W and not a
+    # literal 2: █ and │ are East-Asian AMBIGUOUS, so under YT_AMBIG_WIDE=1 the gutter is
+    # genuinely two cells wide and a hardcoded 2 would put the rail on top of it.
+    right_edge=$((nav_cols - CW_AMBIG_W - 1))
     LINES_N=$TERM_LINES
     # In-place repaint: home the cursor and let every line
     # below erase its own tail (\033[K), then \033[J at the end wipes whatever the old frame
@@ -3275,6 +3313,14 @@ display_list_menu() {
     # below two, by the rule min=/max=/quality= already follow — a queue of one is what every
     # player has.
     ((CURRENT_QUEUE_LEN > 1)) && st_items+=("$S_Q_ACT $CURRENT_QUEUE_POS/$CURRENT_QUEUE_LEN")
+    # Where the pagination row went. Only in the mode that HAS pages — in scroll mode the
+    # scrollbar says where you are, continuously, and a page number would be a second answer
+    # to the same question in a coarser unit. Derived from the selection rather than read
+    # from page_index, for the reason the reflow derives it the same way: the cursor is the
+    # anchor, and this line is printed before the reflow runs.
+    if [[ "$LIST_MODE" == "page" ]] && ((PAGE_SIZE > 0 && NUM_ENTRIES > PAGE_SIZE)); then
+        st_items+=("$S_U_PAGE $((selected / PAGE_SIZE + 1))/$(( (NUM_ENTRIES + PAGE_SIZE - 1) / PAGE_SIZE ))")
+    fi
 
     # ── The title line, and the status flushed right onto it when both fit ──────────────
     # Two chrome lines became one: the segments are short enough now to ride the line that
@@ -3385,14 +3431,20 @@ display_list_menu() {
     # rebound — an empty key is better than a key spent on whatever was nearest — and it
     # leaves this block by the rule every other key here follows: a key that cannot act must
     # not spend a cell of a measured block.
-    local nav_items=(
-        "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY"
-    )
+    local nav_items=("$GL_AV	$S_SELECT")
+    # ←/→ only in the mode that has pages. In scroll mode they are a silent no-op, and the
+    # rule this block has followed since `o` and the store keys — a key that cannot act must
+    # not spend a cell of a measured block — does not stop applying because the thing that
+    # disabled it is a mode rather than an install. It depends on the LIST MODE and on
+    # nothing else; in particular not on the row count, which would turn the reflow's chain
+    # into a loop (the plan's I-2).
+    [[ "$LIST_MODE" == "page" ]] && nav_items+=("$GL_AH	$S_PAGE")
+    nav_items+=("$GL_ENTER	$S_PLAY")
     # The digits are a movement key, so they print next to the arrows rather than with
     # the playback cluster — and they are `full` because the arrows already say how to
     # move: this is the shortcut, not the way. Three cells wide either tier, so the pair
     # of them cannot move this block from one line to two on its own.
-    keys_full && nav_items+=("0-9	$S_JUMP" "#	$S_ROWNUM")
+    keys_full && nav_items+=("0-9	$S_JUMP" "#	$S_ROWNUM" "Tab	$S_LISTMODE")
     keys_full && nav_items+=("v	$S_MODE" "f	$S_QUALITY" "n	$S_SEARCH")
     # `o` re-sorts the SEARCH and refetches it, so on a store's rows it can only answer
     # "search rows only" (cycle_sort's own first line). A key whose whole effect is a notice
@@ -3661,7 +3713,7 @@ display_list_menu() {
     # spacer, the filter's instruction line, the wrapped caret, and the pagination row. Which
     # of them survive is decided by the budget a few lines down — the caret and the pagination
     # row carry state, the other two do not.
-    local avail psize row_gap=1 filter_hint=0 caret_h=0 dots_ok=1 foot_h
+    local avail psize row_gap=1 filter_hint=0 caret_h=0 foot_h
     if ((FILTER_MODE)); then
         filter_hint=1
         disp_w "> $FILTER_LABEL"
@@ -3705,7 +3757,7 @@ display_list_menu() {
     # `psize` has a hard floor of 1 further down. That floor used to win against a budget of
     # zero and the frame came out one line too tall, which scrolls the header off the top —
     # the exact failure the reflow exists to prevent, arriving from underneath. Measured at
-    # 62x12 with `/` open: chrome 8 + spacer 1 + hint 1 + caret 1 + dots 1 + one row = 13
+    # 62x12 with `/` open: chrome 8 + spacer 1 + hint 1 + caret 1 + a page row 1 + one row = 13
     # lines in a 12-row pane, and the title row went.
     #
     # So when the budget cannot pay for the rows the list owes, reclaim from the footer in
@@ -3715,49 +3767,68 @@ display_list_menu() {
     # drop does the floor overflow, and then it is honest: no arrangement of that terminal
     # shows a header, a row and a caret at once.
     #
-    # `dots_owed` is `NUM_ENTRIES > 1` rather than the `> psize` test the dots are charged
-    # with below, because this loop only ever runs in the regime where psize lands on 1 —
-    # where the two tests agree. It is not a second opinion about the footer, it is the same
-    # opinion evaluated early enough to spend.
-    local dots_owed=0
-    ((NUM_ENTRIES > 1)) && dots_owed=1
-    while ((avail < 1 + dots_owed * dots_ok)); do
+    # The pagination row used to be reclaimed here too, third and last, and it is gone: the
+    # page number is a status segment now and the dots are retired. So the footer is the
+    # spacer and the filter hint, in that order, and the caret is still never dropped.
+    while ((avail < 1)); do
         if ((row_gap)); then row_gap=0
         elif ((filter_hint)); then filter_hint=0
-        elif ((dots_ok)); then dots_ok=0
         else break
         fi
         foot_h=$(( row_gap + filter_hint + caret_h ))
         avail=$((LINES_N - chrome_h - foot_h - detail_h - 1))
     done
-    psize=$PAGE_OPT
-    ((psize > avail)) && psize=$avail
-    # The pagination dots only cost a line when there IS more than one page. Checking against
-    # the no-dots size first is what keeps that from being circular: if everything fits on one
-    # page without the dots row, growing the page cannot introduce a second page.
-    if ((NUM_ENTRIES > psize)); then
-        ((psize > avail - 1)) && psize=$((avail - 1))
+    # ONE AXIS PER MODE. In `page` the row count is UT_PAGE_ROWS pressed down to fit; in
+    # `scroll` it is simply what fits, because a continuous window that stopped at a shipped
+    # ceiling of 10 would be a window with a page size — the two facts the mode split exists
+    # to separate. UT_PAGE_ROWS therefore does not change meaning so much as narrow: it is
+    # page mode's ceiling, and its comment in `config` is true word for word about that mode.
+    if [[ "$LIST_MODE" == "scroll" ]]; then
+        psize=$avail
+    else
+        psize=$PAGE_OPT
+        ((psize > avail)) && psize=$avail
     fi
     ((psize < 1)) && psize=1
-    if ((psize != PAGE_SIZE)); then
-        PAGE_SIZE=$psize
+    PAGE_SIZE=$psize
+    ((selected < 0)) && selected=0
+    ((NUM_ENTRIES > 0 && selected > NUM_ENTRIES - 1)) && selected=$((NUM_ENTRIES - 1))
+    ((selected < 0)) && selected=0
+    if [[ "$LIST_MODE" == "scroll" ]]; then
+        # No pages at all here, and NUM_PAGES=1 says so to everything downstream rather than
+        # being a second thing to keep in step. The window is pulled to the CURSOR — the
+        # cursor is the user's and the window follows it, never the reverse — and then held
+        # inside the list so the last screenful cannot show blank rows below the end.
+        NUM_PAGES=1
+        page=1
+        vmax=$((NUM_ENTRIES - PAGE_SIZE))
+        ((vmax < 0)) && vmax=0
+        ((VIEW_TOP > vmax)) && VIEW_TOP=$vmax
+        ((VIEW_TOP < 0)) && VIEW_TOP=0
+        ((selected < VIEW_TOP)) && VIEW_TOP=$selected
+        ((selected > VIEW_TOP + PAGE_SIZE - 1)) && VIEW_TOP=$((selected - PAGE_SIZE + 1))
+        ((VIEW_TOP < 0)) && VIEW_TOP=0
+        start=$VIEW_TOP
+    else
         NUM_PAGES=$(( (NUM_ENTRIES + PAGE_SIZE - 1) / PAGE_SIZE ))
         ((NUM_PAGES > 0)) || NUM_PAGES=1
         # Across a repage the SELECTION is the anchor, not the page number: the user is
         # looking at a row. Deriving the page from `selected` keeps that row on screen —
         # clamping the selection into the old page number instead teleports it (measured:
         # resizing 24 -> 12 rows dropped the page from 10 entries to 2, and the selection on
-        # row 15 snapped back to row 4, page 2's new window).
-        ((selected < 0)) && selected=0
+        # row 15 snapped back to row 4, page 2's new window). It is the same anchor Tab uses
+        # to cross between the modes, which is why neither mode has to remember the other's
+        # position: both are derived from the row the user is looking at.
         page=$(( selected / PAGE_SIZE + 1 ))
+        ((page > NUM_PAGES)) && page=$NUM_PAGES
+        ((page < 1)) && page=1
+        start=$(( (page - 1) * PAGE_SIZE ))
     fi
-    # Repaging can leave the caller's page/selection outside the new bounds, so clamp both
-    # here and hand `page_index` back — the renderer owns the page geometry now, and the menu
-    # loop reads it back on the next iteration.
-    ((page > NUM_PAGES)) && page=$NUM_PAGES
-    ((page < 1)) && page=1
+    # Handed back to the menu loop, which reads them on the next iteration: the renderer owns
+    # the window geometry in both modes, and VIEW_START is the one answer to "what is on
+    # screen" that every other caller asks rather than deriving a third time.
     page_index=$page
-    start=$(( (page - 1) * PAGE_SIZE ))
+    VIEW_START=$start
     end=$(( start + PAGE_SIZE - 1 ))
     if ((NUM_ENTRIES > 0)); then
         ((selected < start)) && selected=$start
@@ -3798,6 +3869,29 @@ display_list_menu() {
         # the title and to lay the prefix out, so the two cannot drift.
         pfx_w=2
         ((ROW_INDEX)) && pfx_w=$((iw + 1))
+        # ── The scrollbar, one cell per visible row in the last column ───────────────────
+        # It is in BOTH modes, because both have a window and neither had any continuous way
+        # to say where that window sits: page mode had ●○○○, which quantised the answer to a
+        # page and gave up past twelve of them, and scroll mode would have had nothing at all.
+        # A thumb sized to the fraction on screen says both facts — where, and how much — on
+        # every row, in one column, with no line of its own.
+        #
+        # Rounded, not truncated (+ NUM_ENTRIES/2 before the divide): a truncating thumb never
+        # reaches the bottom of the track, so the last screenful of a list reads as "nearly
+        # there" forever. Floor of one cell, and clamped inside the track, so a very long list
+        # still shows a thumb and it never runs off the end.
+        gcol=$((nav_cols - CW_AMBIG_W + 1))
+        vis=$((end - start + 1))
+        ((vis > NUM_ENTRIES - start)) && vis=$((NUM_ENTRIES - start))
+        th_len=0
+        th_top=0
+        if ((NUM_ENTRIES > vis && vis > 0)); then
+            th_len=$(( (vis * vis + NUM_ENTRIES / 2) / NUM_ENTRIES ))
+            ((th_len < 1)) && th_len=1
+            th_top=$(( (vis * start + NUM_ENTRIES / 2) / NUM_ENTRIES ))
+            ((th_top > vis - th_len)) && th_top=$((vis - th_len))
+            ((th_top < 0)) && th_top=0
+        fi
         # ── Which visible row the PLAYER is on, resolved once per redraw ─────────────────
         # Once, not per row: bash 3.2 has no associative array, so the obvious spelling is a
         # parallel-array scan inside the row loop — and one CJK keypress is three byte-reads,
@@ -3913,47 +4007,44 @@ display_list_menu() {
             # cursor, the ground says playing. The accent HUE is dropped there and only
             # there — a reversed accent is a colour on a colour, and the two facts are
             # already separately legible without it.
+            # This row's cell of the scrollbar. Drawn OUTSIDE the playing row's ground, after
+            # its reset: reversed, the thumb is a hole rather than a block, so a full-width
+            # ground would erase the scrollbar on exactly the row a user is most likely to be
+            # looking at. The ground still runs under the cell of air before it, which reads
+            # as the highlight ending where the list ends and the chrome begins.
+            gut="$GL_BAR_TRACK"
+            ((th_len > 0 && i - start >= th_top && i - start < th_top + th_len)) &&
+                gut="$GL_BAR_THUMB"
             if ((i == PLAYING_IDX)); then
-                printf '\033[K%s%s%s%s%s\033[K\033[%dG%s%s\n' \
+                printf '\033[K%s%s%s%s%s\033[K\033[%dG%s%s\033[%dG%s%s%s\n' \
                     "$C_ROW_HL" "$mark" "$num" "$C_BOLD" "$disp" \
-                    $((right_edge - rail_w + 1)) "$rail" "$C_ROW_END"
+                    $((right_edge - rail_w + 1)) "$rail" "$C_ROW_END" \
+                    "$gcol" "$C_DIM" "$gut" "$C_RESET"
             elif ((i == selected)); then
                 # Marker AND number in C_MARK (accent), title in bold, rail back to its own
                 # dim — the selected line no longer inherits one hue end-to-end.
-                printf '\033[K%s%s%s%s%s%s%s\033[%dG%s%s%s\n' \
+                printf '\033[K%s%s%s%s%s%s%s\033[%dG%s%s\033[%dG%s%s\n' \
                     "$C_MARK" "$mark" "$num" "$C_RESET" "$C_BOLD" "$disp" "$C_RESET" \
-                    $((right_edge - rail_w + 1)) "$C_DIM" "$rail" "$C_RESET"
+                    $((right_edge - rail_w + 1)) "$C_DIM" "$rail" \
+                    "$gcol" "$gut" "$C_RESET"
             else
-                printf '\033[K%s%s%s%s\033[%dG%s%s\n' \
+                printf '\033[K%s%s%s%s\033[%dG%s\033[%dG%s%s\n' \
                     "$mark" "$num" "$disp" "$C_DIM" \
-                    $((right_edge - rail_w + 1)) "$rail" "$C_RESET"
+                    $((right_edge - rail_w + 1)) "$rail" \
+                    "$gcol" "$gut" "$C_RESET"
             fi
         done
     fi
     # Spacer, unless the reflow above spent it on a result row.
     ((row_gap)) && printf '\033[K\n'
 
-    # Footer: pagination
-    if ((NUM_PAGES > 1 && dots_ok)); then
-        if ((ASCII_GLYPHS == 0 && NUM_PAGES <= 12)); then
-            dots=""
-            for (( p = 1; p <= NUM_PAGES; p++ )); do
-                # Through the glyph table, not literals: hardcoded ● ○ here were the last
-                # two glyphs YT_ASCII could not reach, and ○ had no GL_ name at all.
-                # Active page dot in accent (C_CYAN): the dots are state, not decoration.
-                # mono resolves C_CYAN to "" → bold active dot, exactly today's look.
-                if ((p == page)); then dots+="$C_BOLD$C_CYAN$GL_DOT$C_RESET"
-                else dots+="$C_BOLD$GL_DOT_OFF$C_RESET"; fi
-            done
-            printf '%s%s\033[K\n' "$dots" "$C_RESET"
-        else
-            dots="page $page/$NUM_PAGES"
-            printf '%s%s%s\033[K\n' "$C_BOLD" "$dots" "$C_RESET"
-        fi
-    fi
+    # NO PAGINATION ROW. `●○○○` was a whole line spent on one number, it could not survive
+    # more than twelve pages without falling back to text anyway, and it says nothing at all
+    # in scroll mode, which has no pages. The number moved into the status segments, where it
+    # costs no line and appears only in the mode that has one; where you are in the list is
+    # now said continuously, by the scrollbar in the gutter.
 
-    # Details for the selected row. Below the pagination dots: the dots belong to the list,
-    # this is a separate section under it.
+    # Details for the selected row, in its own section under the rows.
     ((show_details)) && print_details "$nav_cols" "$selected"
 
     # Live filter input caret
@@ -5524,9 +5615,10 @@ read_query_input() {
 }
 
 # A digit names a row of the VISIBLE window, never of the whole list: 1-9 pick that row and
-# 0 picks the tenth, which is why the key is `0` and not `10`. The window is the current
-# page, so the same arithmetic move_selection uses to clamp the cursor is the one that
-# resolves the digit — one notion of "what is on screen", not two.
+# 0 picks the tenth, which is why the key is `0` and not `10`. The window is whatever the
+# renderer last drew from — VIEW_START, which is the page's first row in page mode and the
+# scroll window's top in the other — so this needs no idea of which mode it is in and there
+# is one notion of "what is on screen" rather than three.
 #
 # Out of range is a SILENT no-op, matching ← on page 1 of a store: a window holding seven
 # rows has no eighth to jump to, and a measured block does not spend a line saying no.
@@ -5539,7 +5631,7 @@ jump_to_row() {
     # if, not `((n == 0)) && n=10`: fine here either way, but the assignment form is the
     # house rule for arithmetic under set -e and this function has no other guard.
     if ((n == 0)); then n=10; fi
-    top=$(( (page_index - 1) * PAGE_SIZE ))
+    top=$VIEW_START
     target=$(( top + n - 1 ))
     ((target < NUM_ENTRIES)) || return 0
     ((target < top + PAGE_SIZE)) || return 0
@@ -5548,9 +5640,47 @@ jump_to_row() {
 }
 
 move_selection() {
-    local input="$1" pmin pmax prev_pages
+    local input="$1" pmin pmax prev_pages prev_n
     pmin=$(( (page_index - 1) * PAGE_SIZE ))
     pmax=$(( pmin + PAGE_SIZE - 1 ))
+    # ── scroll mode: ONE axis, and it is the vertical one ────────────────────────────
+    # The cursor walks the whole list and the renderer drags the window after it, so there is
+    # no page arithmetic to do here at all. The two ENDS of the list carry what ←/→ carry in
+    # page mode — the row count — because that is the one axis this mode has, and a mode with
+    # two ways to change the same number is the thing `m`/`M` were retired for. ←/→ are a
+    # SILENT no-op: there are no pages to turn, and a measured block does not spend a line
+    # saying so.
+    #
+    # The known asymmetry, kept deliberately (the plan's O-2): fewer_results drops rows from
+    # the TAIL while the gesture happens at the HEAD. It is the exact mirror of ← on page 1,
+    # which has always been the same trade; on a continuous axis the distance between the
+    # gesture and its effect is just longer. If it reads wrong once it is real, the way back
+    # is to move it to the other end — both ends under ↓ — which changes a caller, not a
+    # function.
+    if [[ "$LIST_MODE" == "scroll" ]]; then
+        case "$input" in
+        "[A" | "OA" | "["*A | "O"*A | k | K)
+            if ((selected > 0)); then
+                selected=$(( selected - 1 ))
+            elif [[ "$LIST_SOURCE" == "search" ]] && ((FILTER_MODE == 0)); then
+                fewer_results
+            fi ;;
+        "[B" | "OB" | "["*B | "O"*B | j | J)
+            if ((selected < NUM_ENTRIES - 1)); then
+                selected=$(( selected + 1 ))
+            elif [[ "$LIST_SOURCE" == "search" ]] && ((FILTER_MODE == 0)); then
+                # Step onto the first new row if the fetch actually brought some, the way the
+                # page arm steps onto the first new page — so the keypress does the thing the
+                # user pressed it for and not only the thing it paid for. A failed or
+                # exhausted fetch appends nothing and the cursor stays put, which is the
+                # same silence the edges keep everywhere else.
+                prev_n=$NUM_ENTRIES
+                more_results
+                ((NUM_ENTRIES > prev_n)) && selected=$(( selected + 1 ))
+            fi ;;
+        esac
+        return 0
+    fi
     # `k`/`j` ride the SAME arms as ↑/↓ rather than arms of their own: an alias that were a
     # second case would be a second copy of the page-crossing arithmetic, which is the drift
     # every duplicated block in this file has been rewritten to remove. Only the desktop
@@ -5680,10 +5810,15 @@ while true; do
     check_player_alive   # a player that ended or crashed must not keep its banner
     player_check_ready   # …and one that has not started yet must not claim it is playing
     chapter_follow       # …and a chapter list must move with the playhead, not with the keys
-    page_min=$(( (page_index - 1) * PAGE_SIZE ))
-    page_max=$(( page_min + PAGE_SIZE - 1 ))
-    if ((selected < page_min)); then selected=$page_min; fi
-    if ((selected > page_max && selected < NUM_ENTRIES)); then selected=$page_max; fi
+    # Page mode's clamp only. In scroll mode the cursor is free to be anywhere in the list
+    # and it is the WINDOW that follows — clamping it into a page-sized box here would undo
+    # every move the moment it crossed one, which is the whole difference between the modes.
+    if [[ "$LIST_MODE" == "page" ]]; then
+        page_min=$(( (page_index - 1) * PAGE_SIZE ))
+        page_max=$(( page_min + PAGE_SIZE - 1 ))
+        if ((selected < page_min)); then selected=$page_min; fi
+        if ((selected > page_max && selected < NUM_ENTRIES)); then selected=$page_max; fi
+    fi
 
     display_menu "$page_index"
 
@@ -5715,6 +5850,12 @@ while true; do
     # labelling the user could not change. `＃` is the full-width form a zh input method
     # makes of shift-3, bound beside it exactly as `？` is beside `?`.
     "#" | "＃") cycle_row_index; continue ;;
+    # Tab was left deliberately unbound when the second renderer went — an empty key beats a
+    # key spent on whatever was nearest. It has something to reach again: two windowings of
+    # ONE renderer, which is the gesture Tab means everywhere else. Universal, like the two
+    # toggles above it: every row source is windowed, so a mode that worked in one of them
+    # would leave the others in a shape the user could not change.
+    $'\t') cycle_list_mode; continue ;;
     esac
 
     # List View specific handlers

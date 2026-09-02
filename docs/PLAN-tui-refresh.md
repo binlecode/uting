@@ -342,7 +342,33 @@ SGR 区间**从第 1 列覆盖到第 `nav_cols` 列**。这是这次唯一一个
 
 新偏好键 `UT_ROW_INDEX=on|off`，进 `PREF_KEYS`（`shell/uting:56`），走 `mark_pref` 写回。
 
-### D —— 两个列表模式，一键切换；`●○○○` 永久消失
+### D —— 两个列表模式，一键切换；`●○○○` 永久消失 【已落地 2026-09-01】
+
+**必拍集第二轮九帧全 PASS，目标数达成：100×30 搜索列表 **19 行**、章节列表 **20 行**
+（计划开头写的就是 19 / 20）。`contract.sh` 357 ok / 0 failed。
+
+`assert_pane.py` 每一帧报 `rail: end col=[98]` / `gutter: col=[100] glyphs=│█` /
+`progress bar: right edge [98]` / `playing row reversed 1-98` —— 三个右贴同列，反白到那一列为止。
+
+**落地时定下、初稿没写的四条：**
+
+- **`right_edge` 是一个变量，不是三个算式。** I-1 说「一个宽度常量」，E 把它落成了
+  `display_list_menu` 里的 `right_edge`，D 只改了那一行：`nav_cols - CW_AMBIG_W - 1`。
+  **`CW_AMBIG_W` 而不是字面量 2** —— `█` `│` 是 Ambiguous，`YT_AMBIG_WIDE=1` 下 gutter 真的两格宽。
+- **滚动条画在反白之外。** 反白的 `█` 是一个洞，正好落在读者最可能盯着的那一行上。
+  代价是「整行 inverse」到 `right_edge` 为止，不到屏幕边 —— 断言跟着改成
+  「反白 = 第 1 格到时长轨末列」，有无 gutter 都是同一条规则。
+- **滚动模式下 `←/→` 那一格提示要撤掉。** 「不能动作的键不占测量块的格子」这条规矩不因为
+  禁用它的是模式而不是安装就停止适用。它只依赖列表模式，不依赖行数 —— 后者会把 I-2 的链变成环。
+- **`Tab 视图` 而不是 `Tab 模式`。** `v` 已经是「模式」（播放模式），两个格子同词等于没标。
+
+**测试面：`UT_LIST_MODE=page` 也进了 fixture。** 滚动模式在 100×30 上的窗口就是整批取数，
+「第 11 行出现了」在按下任何一个 j 之前就成立 —— 又一条**不可能红**的检查，和 `quality` 那条同类。
+
+**滚动模式两端的覆盖，诚实地记下来**：`contract.sh` 里没有。它们要一次真取数加二十多次按键走到
+表尾，而它们背后的 `more_results` / `fewer_results` 已经由分页模式的 `←/→` 证过 —— 新的只是
+**哪个键够到它们**。落地时用一次性驱动实测过：`←/→` 静默不动（20 → 20）、30 次 `↓` 把计数从
+20 长到 40、40 次 `↑` 把它缩回 21（下限由分页那条「stops at a screenful」证）。
 
 **`UT_LIST_MODE=scroll|page`，默认 `scroll`。切换键 `Tab`。**
 `Tab` 今天是明确无绑定的（`AS-BUILT-tui.md` 有一句专门说它随第二个渲染器一起退役），
@@ -611,7 +637,7 @@ chrome 收到两端，中间纯内容 —— lazygit / yazi / k9s / helix 的位
 | # | 怎么验 | 判据 |
 |---|---|---|
 | V4 | `UT_CONFIG=$(mktemp) shell/uting`，`UT_LIST_MODE=bogus` / `UT_ROW_INDEX=bogus` | 各自退 1，消息点名那个键；**扩的是今天已有的配置门检查，不新开文件** |
-| V5 | `tests/contract.sh` | **349 ok / 0 failed**（初稿写的 322 已过期；E 落地时加了 `#` 键的四条）|
+| V5 | `tests/contract.sh` | **357 ok / 0 failed**（初稿写的 322 已过期；E 加了 `#` 的四条，D 加了 `Tab` 与滚动条的八条）|
 | V6 | `tests/playback.sh` | 未改播放器，作为回归跑一遍 |
 
 **布局不进 `tests/`。** P1–P9 是 `capture-pane` 的活 —— 单元格网格、列对齐、字形宽度归
@@ -645,7 +671,7 @@ reflow 唯一要防的失败是**表头滚出屏幕**，而那只会被**变高*
   3. A+B 删两条 rail + 独立进度条        ← 【已落地 2026-09-01】成对做：A 单独做会在章节视图丢掉一个真事实
   4. C   ▶ 光标 + inverse 在播行 + 编号开关（含 assert_pane.py 的 -pe 新断言）  ← 【已落地 2026-09-01】
   5. E   状态段（右贴走 CHA，见 I-1）        ← 【已落地 2026-09-01】
-  6. D   两个模式 + gutter + 删 dots     ← 导航语义换轨；新字形先进宽度表，见 I-1
+  6. D   两个模式 + gutter + 删 dots     ← 【已落地 2026-09-01】导航语义换轨；新字形先进宽度表，见 I-1
   7. F   键位带下移 + 三段测量           ← 最后，且是唯一需要 I-2 那条顺序的一步
   8. grep-gate 后删死代码：card_divider / DIV_STR / GL_DOT / GL_DOT_OFF /
         chapter_pct（若真无调用方）/ dots_ok / dots_owed
