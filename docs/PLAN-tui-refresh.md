@@ -687,8 +687,11 @@ reflow 唯一要防的失败是**表头滚出屏幕**，而那只会被**变高*
   5. E   状态段（右贴走 CHA，见 I-1）        ← 【已落地 2026-09-01】
   6. D   两个模式 + gutter + 删 dots     ← 【已落地 2026-09-01】导航语义换轨；新字形先进宽度表，见 I-1
   7. F   键位带下移 + 三段测量           ← 【已落地 2026-09-01】最后，且是唯一需要 I-2 那条顺序的一步
-  8. grep-gate 后删死代码：card_divider / DIV_STR / GL_DOT / GL_DOT_OFF /
-        chapter_pct（若真无调用方）/ dots_ok / dots_owed
+  8. grep-gate 后删死代码 ← 【已落地 2026-09-02】card_divider / DIV_STR / DIV_KEY /
+        GL_DOT / GL_DOT_OFF / dots_ok / dots_owed 全部删除；`chapter_pct` **有调用方**，
+        但它的 `CHAP_PCT` 一个读者都不剩 —— 所以删的是那个输出并把函数改名 `chapter_span`：
+        一个不返回百分比的 `_pct` 是要先被怀疑才能用的名字。同时把 `PLAYING_IDX` 补成
+        有声明的全局，而不是「因为在函数里被赋值所以是全局」
   9. 文档重新同步（七处「八个键」→「十个键」+ AS-BUILT-tui.md 里剩下的三处 9/0 键位 +
         AS-BUILT-tui.md 的渲染模型章节与那句「Tab 随第二个渲染器一起退役」）
 ```

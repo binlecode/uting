@@ -1324,7 +1324,7 @@ init_ui_strings
 GL_NOTE="♫ "; GL_LIVE="● LIVE"; GL_SEP="·"; GL_CARET="❯"; ASCII_GLYPHS=0
 # Everything else the chrome draws. These used to be hardcoded, so YT_ASCII=1 still left
 # ▶ / ❚❚ / ● and the arrow hints as tofu on a font that can't draw them.
-GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_DOT="●"; GL_DOT_OFF="○"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="↵"
+GL_PLAY="▶"; GL_PAUSE="❚❚"; GL_AV="↑/↓"; GL_AH="←/→"; GL_ENTER="↵"
 # The CURSOR's marker, and it is its own name even though it is the same glyph as GL_PLAY
 # today. They are two different facts — one says "you are pointing here", the other says
 # "the player is playing this" — and now that a row can carry both at once, a single name
@@ -1363,7 +1363,7 @@ init_glyphs() {
     esac
     if ((ASCII_GLYPHS)); then
         GL_NOTE=""; GL_LIVE="LIVE"; GL_SEP="|"; GL_CARET=">"
-        GL_PLAY=">"; GL_PAUSE="||"; GL_DOT="*"; GL_DOT_OFF="o"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
+        GL_PLAY=">"; GL_PAUSE="||"; GL_AV="Up/Dn"; GL_AH="Lt/Rt"; GL_ENTER="Enter"
         GL_CURSOR=">"
         GL_BAR_THUMB="#"; GL_BAR_TRACK="|"
         GL_ELL="..."; GL_ARROW="->"; GL_DASH="-"
@@ -1755,26 +1755,6 @@ layout_cols() {
     return 0
 }
 
-# Divider rail, cached on (width, glyph mode): it is redrawn every second and only changes
-# when the terminal is resized or the glyph mode flips. Two callers, both in the list — the
-# chrome band's boundary and the details block's own rule. (The name is the player cards',
-# which is where it started; renaming it is its own change on its own day.) Sets
-# DIV_STR. This was `printf '─%.0s' $(seq 1 "$cols")` — a fork plus precisely the idiom
-# repeat_glyph exists to replace — run twice, once to build the Unicode rail and again to
-# throw it away in ASCII mode.
-DIV_STR=""
-DIV_KEY=""
-card_divider() {
-    local cols=$1 glyph='─' key
-    ((ASCII_GLYPHS)) && glyph='-'
-    key="$cols/$glyph"
-    if [[ "$key" != "$DIV_KEY" ]]; then
-        repeat_glyph "$glyph" "$cols"
-        DIV_STR="$GLYPH_RUN"
-        DIV_KEY="$key"
-    fi
-    return 0
-}
 
 # ── Adaptive chrome layout ──────────────────────────────────────────────────────────────
 # ── Cell width: ONE rule, in ONE place (char_w) ──────────────────────────────────────────
@@ -2403,36 +2383,26 @@ wrap_print() {
     fi
 }
 
-# The playhead INSIDE one chapter, as a percent, or empty for "draw no bar" — the same
-# vocabulary PT_PCT speaks, so the details rail can be drawn by the same render_prog_bar the
-# chrome rail is. The two rails then describe the same instant on two different clocks, on
-# purpose: the one above the rows is the ITEM's timeline (where the track is), the one under
-# them is the SELECTED chapter's (how far through this span the track is). A chapter list
-# whose second rail carried the item's percent would spend a whole line restating a number
-# three lines up.
+# One chapter's SPAN in seconds, or empty for "mark nothing". It answered in percent once,
+# because there were two rails and the lower one drew the playhead's position inside the
+# SELECTED chapter; there is one bar now, and what it marks on that bar is where the chapter
+# begins and ends in the whole item — a span, not a fraction of itself. The percent went with
+# the rail: nothing read it any more, and a function called `_pct` that returns no percent is
+# a name that has to be disbelieved before it can be used.
 #
-# Clamped rather than blanked outside the span: a chapter the playhead has passed IS fully
-# played and one it has not reached is not started, both of which are true, and the clamp is
-# what keeps the line a fixed shape as the selection moves down the table. Empty is reserved
-# for the questions this cannot answer — nothing playing, a live stream, no reading yet, a
-# DIFFERENT item in the player, or a chapter whose engine published no end — and then the
-# rail stays the static divider, exactly as the chrome rail does when PT_PCT is empty.
+# Empty is reserved for the questions this cannot answer — nothing playing, a live stream, no
+# reading yet, a DIFFERENT item in the player, or a chapter whose engine published no end —
+# and then the bar is drawn without a span, exactly as it is on every other row source.
 #
 # The END comes out of the item's own chapter table BY START, not by row index: the live
 # filter and paging reorder the rows (the reason chapter_sec reads the offset back out of the
 # row's own url), while ITEM_CHAP_* is the whole table as the engine published it — and the
 # row's `duration` never reaches the row arrays, only its wire spelling does, so reading the
 # end here costs no second parser of a format short_dur already owns.
-CHAP_PCT=""
-# The span itself, in seconds, beside the percent — every gate that makes the percent
-# trustworthy (the player holds THIS item, the engine published an end, the end is after the
-# start) is exactly the gate that makes the span drawable on the item's own bar, so they are
-# one function and not two that could disagree about which chapter is being described.
 CHAP_START_SEC=""
 CHAP_END_SEC=""
-chapter_pct() {
+chapter_span() {
     local i=$1 start end cur j
-    CHAP_PCT=""
     CHAP_START_SEC=""
     CHAP_END_SEC=""
     [[ "$LIST_SOURCE" == "chapters" ]] || return 0
@@ -2459,9 +2429,6 @@ chapter_pct() {
     if ((end <= start)); then return 0; fi
     CHAP_START_SEC=$start
     CHAP_END_SEC=$end
-    if ((PT_POS_SEC <= start)); then CHAP_PCT=0; return 0; fi
-    if ((PT_POS_SEC >= end)); then CHAP_PCT=100; return 0; fi
-    CHAP_PCT=$(((PT_POS_SEC - start) * 100 / (end - start)))
     return 0
 }
 
@@ -2882,6 +2849,10 @@ PAGE_SIZE=$PAGE_OPT
 # menu loop's clamp) asks one variable instead of re-deriving the window two more times.
 VIEW_TOP=0
 VIEW_START=0
+# The visible row the player is on, or -1. Resolved once per redraw ahead of the row loop and
+# read inside it; declared here so it is a global by intent rather than by the accident of
+# being assigned inside a function.
+PLAYING_IDX=-1
 PAGE_CAP=$(( LINES_N - 8 ))
 ((PAGE_CAP >= 3)) || PAGE_CAP=3
 ((PAGE_SIZE <= PAGE_CAP)) || PAGE_SIZE=$PAGE_CAP
@@ -3684,7 +3655,7 @@ display_list_menu() {
         # would be the duplication this step exists to remove. So the reading is positional:
         # brackets right of the head mean "not there yet", left of it mean "played", around
         # it mean "you are in it".
-        chapter_pct "$selected"
+        chapter_span "$selected"
         if [[ -n "$CHAP_START_SEC" && -n "$PT_DUR_SEC" ]] && ((PT_DUR_SEC > 0)); then
             bar_a=$(( CHAP_START_SEC * bar_w / PT_DUR_SEC ))
             bar_b=$(( CHAP_END_SEC * bar_w / PT_DUR_SEC - 1 ))
@@ -3942,7 +3913,7 @@ display_list_menu() {
                 # the player holds — the playing chapter is the one the playhead is inside.
                 # The span is found once over the item's own chapter table (ordered, the
                 # engine's) and then matched against the rows (unordered, the filter's),
-                # rather than asking chapter_pct per row: that would be a scan of the table
+                # rather than asking chapter_span per row: that would be a scan of the table
                 # for every visible row, on every redraw.
                 pstart=""
                 handle_key "${urls[$start]}"
@@ -4972,12 +4943,10 @@ play_chapter() {
     play_selected
 }
 
-# The other half of the chapter rail: the CURSOR follows the playhead over a chapter boundary.
-# Without it the second rail is a bar that fills once and then stops — a chapter that ended
-# stays selected, clamps at 100%, and the chapter now playing has nothing on screen at all,
-# which reads as a frozen view rather than as the "selected chapter" the rail is documented to
-# draw (chapter_pct). The rail is right either way; what was missing is that the selection is
-# the thing the item's own clock moves.
+# The other half of the chapter view: the CURSOR follows the playhead over a chapter boundary.
+# Without it the view freezes — a chapter that ended stays selected and stays marked on the
+# bar, while the chapter now playing has nothing on screen saying so. What was missing is
+# that the selection is the thing the item's own clock moves.
 #
 # Follow, not jump: the user's cursor wins the moment they use it. CHAP_FOLLOW_SEC remembers
 # which chapter the playhead was in at the last look, and the selection is moved only when it
@@ -4988,7 +4957,7 @@ play_chapter() {
 #
 # Anchored on ITEM_URL/ITEM_ENGINE rather than on the selected row, because the question is
 # about the VIEW — every row here is an offset into one item — and the answer must not change
-# as the cursor moves. It is otherwise the same {engine, url} pair chapter_pct and play_chapter
+# as the cursor moves. It is otherwise the same {engine, url} pair chapter_span and play_chapter
 # ask, so all three agree on what "the player holds this item" means.
 #
 # Called from the menu loop ahead of the page clamp, so page_index is set HERE: a selection the
