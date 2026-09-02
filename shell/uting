@@ -622,7 +622,7 @@ Environment:
                    ASCII mode (YT_ASCII=1) always wins. Under YT_LANG=zh the wordmark
                    is 你听, and this spaces it (你 听) — Unicode has no bold CJK.
   NO_COLOR=1       Disables color in --color auto mode (an explicit --color wins).
-  YT_AMBIG_WIDE=1  Measure East-Asian-Ambiguous glyphs (· — • … arrows ─ ═ ○ ● ▶) as
+  YT_AMBIG_WIDE=1  Measure East-Asian-Ambiguous glyphs (· — • … arrows ─ ━ ○ ● ▶) as
                    TWO cells. Only needed if your terminal is set to treat ambiguous
                    width as double-width; every terminal ships with that option off.
 EOF
@@ -1771,7 +1771,7 @@ layout_cols() {
 # tabled can therefore pick up a U+FE0F and silently become a 2-cell emoji behind the table's
 # back. All 17 measured at ONE cell (tmux over Ghostty, `tmux display-message -p '#{cursor_x}'`):
 #   Neutral EAW    ↵ ♫ ❚ ❯                      one cell in EVERY terminal
-#   Ambiguous EAW  · — • … ← ↑ → ↓ ─ ═ ○ ● ▶    one cell unless a terminal is explicitly
+#   Ambiguous EAW  · — • … ← ↑ → ↓ ─ ━ ○ ● ▶    one cell unless a terminal is explicitly
 #                                               configured ambiguous-wide
 # The split is read off the UCD (unicodedata.east_asian_width), not guessed: ♫ U+266B is
 # Neutral, so it stays one cell even under YT_AMBIG_WIDE.
@@ -1781,7 +1781,7 @@ layout_cols() {
 # if that option is ON. It is an explicit knob and not a locale guess, because the locale
 # says nothing: Ghostty under a zh_CN locale still renders these one cell.
 # Note the bar already assumed this — render_prog_bar promises a string of exactly <total>
-# cells built from ═ ─ ╸, which only holds at one cell each.
+# cells built from ━ ─ ╸, which only holds at one cell each.
 # The table applies wherever these characters occur, titles included, not only to chrome.
 #
 # What IS corrected is the zero-width class, where "two cells" is wrong in every terminal.
@@ -1801,7 +1801,7 @@ layout_cols() {
 CW_ZWJ=$'\xe2\x80\x8d'
 CW_ZERO=""      # characters that add no cells
 CW_NARROW=""    # non-ASCII characters that still take only one, in any terminal
-CW_AMBIG='·—•…←↑→↓─═○●▶▣▤≥≤█│' # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
+CW_AMBIG='·—•…←↑→↓─━○●▶▣▤≥≤█│' # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
 CW_AMBIG_W=1
 CW_RANGE=""
 cw_range() {
@@ -1829,13 +1829,14 @@ init_cell_tables() {
     # ▁▃▅▇ bars: those are Ambiguous, so a terminal could give the animation two cells and make
     # it jump. Nothing measures the spinner line today; tabling them anyway keeps "every glyph
     # this draws has a known width" true by construction rather than by where it happens to print.
-    # ╸ U+2578 is the progress bar's playhead, and it belongs HERE rather than in CW_AMBIG
-    # beside the ═ and ─ it sits between. EastAsianWidth splits the box-drawing block:
+    # ╸ U+2578 is the progress bar's playhead and ╶ U+2576 the break that follows it, and
+    # they belong HERE rather than in CW_AMBIG
+    # beside the ━ and ─ it sits between. EastAsianWidth splits the box-drawing block:
     # the full-length horizontals are Ambiguous, the heavy HALF-lines (2574..257F) are
     # Neutral. A head tabled Ambiguous would take two cells under YT_AMBIG_WIDE=1 and
     # push the bar one cell past the width it was measured at — a wrap, which is a line
     # of height the reflow does not know about. Same island the spinner quadrants sit on.
-    CW_NARROW="↵♫❚❯▘▝▗▖╸$CW_RANGE"                           # U+21B5 U+266B U+275A U+276F U+2578
+    CW_NARROW="↵♫❚❯▘▝▗▖╸╶$CW_RANGE"                          # U+21B5 U+266B U+275A U+276F U+2578 U+2576
     case "${YT_AMBIG_WIDE:-}" in
     1 | true | yes | on) CW_AMBIG_W=2 ;;
     esac
@@ -2213,13 +2214,12 @@ fetch_play_times() {
 # every second.
 #
 # No [brackets]: the bar is not a widget sitting on the card, it is the card's LIVE RAIL —
-# `═` elapsed and `─` remaining are the divider's own stroke family, so the played part reads
-# as the rail thickening behind the `╸` playhead. DOUBLE, not heavy: `━` against `─` is one
-# stroke slightly fatter than another, and at 13px in a terminal font that difference is a
-# guess — several monospace faces hint the two to the same pixel row, which leaves the one
-# line whose whole job is to say how far in you are saying nothing at a glance. `═` differs
-# in COUNT rather than in weight, so the played run reads as played at any size and in any
-# font, and it is what the ASCII fallback (`=` against `-`) has always said. The
+# `━` elapsed and `─` remaining are the divider's own stroke family, so the played part reads
+# as the rail thickening behind the `╸` playhead. HEAVY, not double: `═` was tried and it is
+# two strokes where every other glyph on this line is one — it stops reading as a thicker
+# rail and starts reading as a different rail, spliced onto the light one. The bar's whole
+# premise is that ONE line changes weight as it fills, and a weight change is the only thing
+# that can be read without a legend. The
 # ends had to go for that to work: a bracket is a boundary, and this line's whole job is to
 # be boundary-less and exactly rail-wide. They were also 2 cells of the caller's width spent
 # on punctuation, which now buy 2 more cells of resolution instead.
@@ -2241,11 +2241,13 @@ render_prog_bar() {
     # reads as a speck of dirt at 4% and as a bullet everywhere else; a heavy half-line reads
     # as the end of what has played, which is what it marks. It is still exactly one cell —
     # tabled in CW_NARROW, see init_cell_tables — so the bar's length is unchanged.
-    local f_str e_str head='╸' fill='═' rest='─' brk=' '
+    local f_str e_str head='╸' fill='━' rest='─' brk=' ' brk_h=''
     if ((ASCII_GLYPHS)); then
         head='>'
         fill='='
         rest='-'
+    else
+        brk_h='╶'
     fi
     # No interval asked for — every caller but the chapter list — and the bar stays what it
     # was: two runs and a head, no per-cell work on a line redrawn once a second.
@@ -2276,13 +2278,27 @@ render_prog_bar() {
     ((mark_a > width - 1)) && mark_a=$((width - 1))
     [[ "$mark_b" =~ ^[0-9]+$ ]] || mark_b=-1
     ((mark_b > width - 1)) && mark_b=$((width - 1))
-    # A span under two cells wide gets its opening break alone: two stops with nothing
-    # between them is not a span, it is a gap in the rail where a plain track said more.
-    ((mark_b <= mark_a)) && mark_b=-1
+    # A span under three cells wide gets its opening break alone. Two stops with nothing
+    # between them is not a span, it is a gap in the rail where a plain track said more —
+    # and the two breaks would be ADJACENT, which draws two cells of white and reads as one
+    # wide gap rather than as two boundaries. Every gap on this line is one cell or it is
+    # not a gap, so the closer is dropped rather than allowed to double the opener's.
+    ((mark_b <= mark_a + 1)) && mark_b=-1
     local out="" col c
     for (( col = 0; col < width; col++ )); do
         if ((col == filled)); then c=$head
-        elif ((col == mark_a || col == mark_b)); then c=$brk
+        elif ((col == mark_a || col == mark_b)); then
+            # ONE CELL OF WHITE, at every break, including the one right after the head.
+            # `╸` is a heavy LEFT half-line: it inks its own left half and leaves its right
+            # half white, which is what makes it read as an end rather than as a cell. A
+            # plain space next to it therefore draws one and a HALF cells of white, and the
+            # eye reads that break as wider than the other one. `╶` (light RIGHT half) puts
+            # the missing half back: head's white right half + this cell's white left half
+            # = exactly one cell, the same gap every other break draws. Only this position
+            # can collide — a break at filled+1 is always in the `rest` run, never the fill —
+            # so the light half is the only one needed. ASCII needs none of it: `>` inks its
+            # whole cell, so a space beside it is already one cell.
+            if ((col == filled + 1)) && [[ -n "$brk_h" ]]; then c=$brk_h; else c=$brk; fi
         elif ((col < filled)); then c=$fill
         else c=$rest
         fi
