@@ -2134,6 +2134,14 @@ else
         "$(tmux capture-pane -t "$TS" -p -J 2>/dev/null |
             awk '/[0-9]:[0-9][0-9] █$/ {t++} /[0-9]:[0-9][0-9] │$/ {k++}
                  END {print (t > 0 && k > 0) ? 1 : 0}')"
+    # WHAT THIS SECTION DELIBERATELY DOES NOT PROVE: scroll mode's own two ends. In that mode
+    # the row count is grown and shrunk by ↓ on the last row and ↑ on the first, and reaching
+    # them from here is a twenty-key walk plus a real fetch. The functions behind them —
+    # more_results / fewer_results — are the SAME ones page mode's ←/→ drive a few checks up,
+    # including the floor; what scroll mode adds is only which key reaches them. That is
+    # coverage this file does not have, and saying so beats a check that walks the list and
+    # then asserts something the arrows already pinned.
+    #
     # And the row it retired is really gone: ● / ○ were the dots, and nothing else on this
     # screen draws either of them.
     report "the pagination dots are gone" 0 \

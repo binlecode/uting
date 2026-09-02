@@ -25,6 +25,7 @@ import re
 import sys
 
 SPINNER = "▖▘▝▗|/-\\"
+READY = re.compile(r"(query|chapters|parts|playlist|history)='")
 FETCH = re.compile(r'^\s*(searching|搜索中)\b.*$')
 
 
@@ -52,14 +53,18 @@ def main():
 
     # Staleness is judged on the RAW frame, before the fetch line is dropped — a pure
     # spinner frame cleans down to nothing, and "empty pane" would be the wrong diagnosis.
-    stale = ("results=" not in raw) and (
+    # The ready marker is the TITLE line's source field — `query='`, `chapters='`,
+    # `playlist='`. It was `results=` until the status line became segments and stopped
+    # spelling any key=value at all; the title line is also the better marker, because it
+    # says what the screen IS rather than how many rows it happens to hold.
+    stale = (READY.search(raw) is None) and (
         FETCH.search(raw) is not None or any(g in raw for g in SPINNER)
     )
     if stale and not args.allow_fetch:
         sys.exit(
-            "clean_capture: this frame looks mid-fetch (spinner present, no `results=` header).\n"
+            "clean_capture: this frame looks mid-fetch (spinner present, no title line).\n"
             "  Wait for the ready marker before capturing:\n"
-            "    until tmux capture-pane -t $S -p | grep -q 'results='; do sleep 0.5; done\n"
+            "    until tmux capture-pane -t $S -p | grep -q \"query='\"; do sleep 0.5; done\n"
             "  Pass --allow-fetch if the loading state is what you mean to document."
         )
 

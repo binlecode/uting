@@ -23,8 +23,8 @@ when it doesn't fit), so a frame without its geometry stated is not a claim anyo
 |---|---|---|---|
 | list (canonical) | default | `-x 100 -y 30` | wide enough for a full nav block and a 10-row page |
 | list (narrow / degraded) | default | `-x 62 -y 12` | the reflow floor — the details block DROPS rather than overflowing |
-| focus card | `Tab` | `-x 100 -y 30` | rails render at 80 cells; the meta row keeps all its fields |
-| card (dropping fields) | `Tab` | `-x 40 -y 20` | the meta row drops `· mode` instead of wrapping |
+| playing | `Enter`, wait for the banner | `-x 100 -y 30` | banner + progress bar + the playing row's ground; needs a `-pe` capture too |
+| page mode | `Tab` | `-x 100 -y 30` | the other windowing: a fixed page, and a `page N/M` segment |
 | filter open | `/` then text | `-x 100 -y 30` | caret + narrowed page + bottom input row |
 | ASCII fallback | `YT_ASCII=1` | any | the whole glyph set in its ASCII form |
 | zh chrome | `YT_LANG=zh` | any | translated chrome at the same measured width |
@@ -45,17 +45,21 @@ S=cap
 CAPCFG=$(mktemp "${TMPDIR:-/tmp}/uting-capture.XXXXXX")
 tmux kill-session -t $S 2>/dev/null
 tmux new-session -d -s $S -x 100 -y 30 "cd $PWD && YT_LANG=en UT_CONFIG=$CAPCFG shell/uting 'lofi hip hop'"
-timeout 30 bash -c "until tmux capture-pane -t $S -p | grep -q 'results='; do sleep 0.5; done"
+timeout 30 bash -c "until tmux capture-pane -t $S -p | grep -q \"query='\"; do sleep 0.5; done"
 tmux capture-pane -t $S -p > tmp/raw-list.txt
 ```
 
+The marker is the TITLE line's source field (`query='`, `chapters='`, `playlist='`), not the
+status line: the status is segments now and spells no `key=` at all. It also names what the
+screen IS rather than how many rows it holds, which is what a marker should do.
+
 For a keypress-driven frame, send the key and wait for the state to settle before capturing —
-a re-fetch (`n`, `o`, `→` past the last page) needs the `results=` marker again, and a view
-switch needs ~1 s:
+a re-fetch (`n`, `o`, `→` past the last page) needs the marker again, and a mode switch
+needs ~1 s:
 
 ```bash
 tmux send-keys -t $S Tab; sleep 1.2
-tmux capture-pane -t $S -p > tmp/raw-card.txt
+tmux capture-pane -t $S -p > tmp/raw-page-mode.txt
 tmux send-keys -t $S '/'; sleep 0.5; tmux send-keys -t $S -l 'radio'; sleep 1
 tmux capture-pane -t $S -p > tmp/raw-filter.txt
 tmux kill-session -t $S 2>/dev/null
@@ -85,8 +89,7 @@ A capture is evidence only once it has been measured. This is the step that sepa
 skill from screenshotting:
 
 ```bash
-python3 .claude/skills/capture-pane/assert_pane.py tmp/list.txt 100 list   # PASS + rail/index columns reported
-python3 .claude/skills/capture-pane/assert_pane.py tmp/card.txt 100 card
+python3 .claude/skills/capture-pane/assert_pane.py tmp/list.txt 100 list   # PASS + rail/index/gutter columns reported
 ```
 
 **A frame with a player in it needs a second capture.** `capture-pane -p` throws every SGR
@@ -134,7 +137,7 @@ relocates an index-based splice, and the diff looks like a doc rewrite.
 
 ## Gotchas
 
-- **A spinner frame is the #1 mistake.** Wait for `results=`; the cleaner blocks it, but only
+- **A spinner frame is the #1 mistake.** Wait for `query='`; the cleaner blocks it, but only
   if you run the cleaner.
 - **State the geometry in the prose.** A 100-col frame under a claim about 62 cols is worse
   than no frame.

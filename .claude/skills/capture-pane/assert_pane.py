@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Assert uting's layout invariants against a captured pane.
 
-Three rigs merged into one, because they all read the same capture and all failed the same
+Several rigs merged into one, because they all read the same capture and all failed the same
 way when kept apart — you fix a renderer, remember to re-run two of the three, and the third
-goes stale. The checks:
+goes stale. There is one view left to check: the `card` branch went when the second renderer
+did, and a mode nothing can produce is a mode that quietly passes. The checks:
 
   pane width   No drawn line exceeds the pane. This is the one that catches the width layer
                getting something wrong, and it is measured in CELLS (east_asian_width), not
@@ -30,7 +31,6 @@ goes stale. The checks:
                rail placed by computed padding lands early on rows the terminal drew narrower
                than we measured. Placing it with CHA is what makes this pass.
 
-  card rails   In the card view, every divider rail and the progress bar are the same width.
 
   playing row  Given a SECOND capture taken with `tmux capture-pane -pe` (--sgr <file>), the
                row the player is on carries the reverse attribute from cell 1 to the pane
@@ -51,7 +51,7 @@ Captures come from `tmux capture-pane -p` — which is what the capture-pane ski
 only source now that the pty rigs are gone. Ambiguous-width characters count as ONE cell, matching the suite's default
 (YT_AMBIG_WIDE unset); pass --ambig-wide to match the other setting.
 
-usage: assert_pane.py <capture.txt> <pane_width> [list|card] [--rows N] [--ambig-wide]
+usage: assert_pane.py <capture.txt> <pane_width> [list] [--rows N] [--ambig-wide]
                       [--sgr <capture-pe.txt> [--off-window]]
 exit:  0 = every applicable invariant held, 1 = at least one failed
 """
@@ -315,21 +315,6 @@ def main(argv):
             if spans and not off_window:
                 notes.append("playing row: line %s reversed %s-%s"
                              % (spans[0][0], spans[0][1][0], spans[0][1][1]))
-
-    elif view == "card":
-        # The view name is ELIDED at narrow widths (it is chrome like any other row), so the
-        # old literal match failed on a correct 28-column frame. The header's LAYOUT is what
-        # this rig is about: brand on line 1, blank line under it. A header too long for the
-        # pane wraps into that blank line, which is the defect the literal match was really
-        # catching.
-        head = lines[0] if lines else ""
-        if "uting" not in head or (len(lines) > 1 and lines[1].strip()):
-            fails.append("card header missing or wrapped: %r" % head[:60])
-        rails = [l for l in lines if re.match(r"^[─━-]{10,}$", l.strip())]
-        widths = sorted(set(w(r.strip()) for r in rails))
-        if len(widths) > 1:
-            fails.append("divider rails disagree in width: %r" % widths)
-        notes.append("rails: %d @ %s cells" % (len(rails), widths))
 
     print("%-26s %-5s pane=%-4d lines=%-3d max_cell=%-4d %s"
           % (path.split("/")[-1], view, width, len(lines),
