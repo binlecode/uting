@@ -547,7 +547,8 @@ Keys (List View):
            play FROM that chapter — a seek if that item is already playing
   Space    pause / resume playback
   s        stop playback
-  9 / 0    volume down / up (via IPC)
+  - / =    volume down / up (via IPC)
+  0 - 9    jump the cursor to that row of the visible window (0 = the tenth)
   [ / ]    seek backward / forward 10s (via IPC)
   v        cycle playback mode: audio → video → fast (applies to next play)
   f        cycle quality tier: auto → medium → high (applies to next play; the
@@ -1136,7 +1137,7 @@ set_ui_lang() {
         S_SELECT="选择"; S_PAGE="翻页"; S_PLAY="播放"; S_MODE="模式"; S_QUALITY="质量"
         S_SEARCH="搜索"; S_SORT="排序"; S_FILTER="过滤"
         S_STOP="停止"; S_QUIT="退出"; S_LANGKEY="语言"; S_THEMEKEY="主题"; S_KEYS="键位"
-        S_PAUSE="暂停"; S_VOL="音量"
+        S_PAUSE="暂停"; S_VOL="音量"; S_JUMP="跳行"
         S_SEEK="跳转"
         S_PLAYING="播放中"; S_PAUSED="已暂停"; S_STARTING="缓冲中"
         S_PROMPT_SEARCH="搜索"; S_NEW_SEARCH="新搜索（Esc 或留空取消）"
@@ -1169,7 +1170,7 @@ set_ui_lang() {
         S_SELECT="select"; S_PAGE="page"; S_PLAY="play"; S_MODE="mode"; S_QUALITY="quality"
         S_SEARCH="search"; S_SORT="sort"; S_FILTER="filter"
         S_STOP="stop"; S_QUIT="quit"; S_LANGKEY="language"; S_THEMEKEY="theme"; S_KEYS="keys"
-        S_PAUSE="pause"; S_VOL="volume"
+        S_PAUSE="pause"; S_VOL="volume"; S_JUMP="jump"
         S_SEEK="seek"
         S_PLAYING="Playing"; S_PAUSED="Paused"; S_STARTING="Starting"
         S_PROMPT_SEARCH="Search"; S_NEW_SEARCH="New search (Esc or empty to cancel)"
@@ -2435,7 +2436,7 @@ print_details() {
 #
 # Two paths deliberately do NOT follow:
 #   - fetch_play_times, which runs on every 1 s tick: a process chain per tick is a real cost.
-#   - the 9/0 volume keys, which are HELD DOWN. Measured on a live player, 10 presses each:
+#   - the -/= volume keys, which are HELD DOWN. Measured on a live player, 10 presses each:
 #     10 ms a press over the socket against 60 ms through `ut-play --set-volume` (that verb
 #     also resolves the target and patches the state file under a lock). Above the 50 ms line
 #     this repo set for the choice, so they stay on the socket — the exception is recorded in
@@ -3145,7 +3146,7 @@ display_list_menu() {
     # keys. When this block prints (its gate below passes), the banner stays pure status
     # — one key source per screen, and the playing title gains the tail's ~30 cells; when
     # the gate drops this block on a short terminal, the banner's tail carries
-    # Space/s/9/0 instead. A rail sits UNDER the block (Option B): one boundary
+    # Space/s and the volume pair instead. A rail sits UNDER the block (Option B): one boundary
     # between the chrome band (status + banner + keys) and the result rows. It prints only
     # with the block: no keys, no rail.
     #
@@ -3155,13 +3156,13 @@ display_list_menu() {
     # label either, so "Navigation:" was the only thing on the chrome band announcing what
     # the reader could already see. It also cost 12 cells on the widest line here.
     #
-    # The PLAYBACK keys cluster at the end, before s/q: 9/0, Space and [/] are all handled by
+    # The PLAYBACK keys cluster at the end, before s/q: -/=, Space and [/] are all handled by
     # the universal case in the menu loop, so they work here exactly as they do in the card,
     # and all three were missing from the one view whose job is to write the keys down. The
     # card's hint block and the banner's short-terminal fallback already documented volume and
     # pause, which is what made their absence here a gap rather than a decision.
     #
-    # The seek keys print as "[ ]", NOT "[/]": / is this line's "or" separator (9/0, ↑/↓), but
+    # The seek keys print as "[ ]", NOT "[/]": / is this line's "or" separator (-/=, ↑/↓), but
     # the two keys here ARE brackets, so wrapping a slash in them read as "a bracketed /" and
     # collided with the real / filter entry three items earlier. A space says "two keys" without
     # spending a character that already means something else on this line.
@@ -3200,6 +3201,11 @@ display_list_menu() {
     local nav_items=(
         "$GL_AV	$S_SELECT" "$GL_AH	$S_PAGE" "$GL_ENTER	$S_PLAY"
     )
+    # The digits are a movement key, so they print next to the arrows rather than with
+    # the playback cluster — and they are `full` because the arrows already say how to
+    # move: this is the shortcut, not the way. Three cells wide either tier, so the pair
+    # of them cannot move this block from one line to two on its own.
+    keys_full && nav_items+=("0-9	$S_JUMP")
     keys_full && nav_items+=("v	$S_MODE" "f	$S_QUALITY" "n	$S_SEARCH")
     # `o` re-sorts the SEARCH and refetches it, so on a store's rows it can only answer
     # "search rows only" (cycle_sort's own first line). A key whose whole effect is a notice
@@ -3218,7 +3224,7 @@ display_list_menu() {
     # "cannot act" the source key and the store keys are gated on.
     keys_full && ((COLORS_ON)) && nav_items+=("t	$S_THEMEKEY")
     keys_full && nav_items+=(
-        "9/0	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "s	$S_STOP"
+        "-/=	$S_VOL" "Space	$S_PAUSE" "[ ]	$S_SEEK" "s	$S_STOP"
     )
     nav_items+=("q	$S_QUIT")
     # Same rule as the source key: a key that cannot do anything must not spend a cell of a
@@ -3352,7 +3358,7 @@ display_list_menu() {
         [[ -n "$RES_CPU" ]] && b_res=" $GL_SEP $GL_CPU ${RES_CPU}% $GL_RAM ${RES_MEM}M"
         local b_hint=""
         if ((!nav_ok)); then
-            b_hint="  [Space $S_PAUSE | s $S_STOP | 9/0 $S_VOL]"
+            b_hint="  [Space $S_PAUSE | s $S_STOP | -/= $S_VOL]"
         fi
         # Assignment form, not ((head_w += DISP_W)): an arithmetic command evaluating to 0
         # returns status 1, which `set -e` would take as a failure (see char_w).
@@ -5219,6 +5225,30 @@ read_query_input() {
     done
 }
 
+# A digit names a row of the VISIBLE window, never of the whole list: 1-9 pick that row and
+# 0 picks the tenth, which is why the key is `0` and not `10`. The window is the current
+# page, so the same arithmetic move_selection uses to clamp the cursor is the one that
+# resolves the digit — one notion of "what is on screen", not two.
+#
+# Out of range is a SILENT no-op, matching ← on page 1 of a store: a window holding seven
+# rows has no eighth to jump to, and a measured block does not spend a line saying no.
+#
+# It does NOT depend on whether the row numbers are being printed. A key whose meaning
+# changed with a display toggle would be a second keymap wearing one keymap's clothes;
+# the toggle decides whether the user has to count, not whether the digit acts.
+jump_to_row() {
+    local n=$1 top target
+    # if, not `((n == 0)) && n=10`: fine here either way, but the assignment form is the
+    # house rule for arithmetic under set -e and this function has no other guard.
+    if ((n == 0)); then n=10; fi
+    top=$(( (page_index - 1) * PAGE_SIZE ))
+    target=$(( top + n - 1 ))
+    ((target < NUM_ENTRIES)) || return 0
+    ((target < top + PAGE_SIZE)) || return 0
+    selected=$target
+    return 0
+}
+
 move_selection() {
     local input="$1" pmin pmax prev_pages
     pmin=$(( (page_index - 1) * PAGE_SIZE ))
@@ -5365,8 +5395,14 @@ while true; do
     case "$READ_NAV_KEY" in
     " ") toggle_pause; continue ;;
     s | S) stop_current_playback; continue ;;
-    9) adjust_volume -5; continue ;;
-    0) adjust_volume 5; continue ;;
+    # Volume moved off 9/0 because the digits are worth more as row jumps: a ten-row
+    # window whose rows can be NAMED by a digit and not REACHED by one is a readout
+    # pretending to be a control. `=` and not `+`, because `+` is already enqueue and `=`
+    # is the unshifted key in the same physical place, so the two read as one rocker.
+    # They stay UNIVERSAL for the reason they always were: volume belongs to the player,
+    # not to a view, and every row source can have one running.
+    "-") adjust_volume -5; continue ;;
+    "=") adjust_volume 5; continue ;;
     "[") seek_relative -10; continue ;;
     "]") seek_relative 10; continue ;;
     # The door to the other key tier, universal for the same reason the playback keys are:
@@ -5390,6 +5426,13 @@ while true; do
     # offset, and says so through play_chapter's two branches.
     "" | $'\n' | $'\r')
         if [[ "$LIST_SOURCE" == "chapters" ]]; then play_chapter || true; else play_selected || true; fi ;;
+    # 0-9 jump the cursor inside the visible window. In THIS case block and deliberately
+    # not the universal one above: with `/` open a digit is query text the user is typing
+    # (`2026` is a real query), and filter_live runs its own reader that reaches neither
+    # block — so keeping the digits out of the universal case is what makes the filter
+    # safe by construction instead of by a guard that has to be remembered. Same trap
+    # j/k already walked into.
+    [0-9]) jump_to_row "$READ_NAV_KEY" ;;
     n | N) new_search ;;      # new search (non-blocking: music continues)
     o | O) cycle_sort ;;      # rotate sort
     e | E) cycle_engine ;;    # switch source (engine), re-fetch the same query
