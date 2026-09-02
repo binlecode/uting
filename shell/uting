@@ -622,7 +622,7 @@ Environment:
                    ASCII mode (YT_ASCII=1) always wins. Under YT_LANG=zh the wordmark
                    is 你听, and this spaces it (你 听) — Unicode has no bold CJK.
   NO_COLOR=1       Disables color in --color auto mode (an explicit --color wins).
-  YT_AMBIG_WIDE=1  Measure East-Asian-Ambiguous glyphs (· — • … arrows ─ ━ ○ ● ▶) as
+  YT_AMBIG_WIDE=1  Measure East-Asian-Ambiguous glyphs (· — • … arrows ─ ═ ○ ● ▶) as
                    TWO cells. Only needed if your terminal is set to treat ambiguous
                    width as double-width; every terminal ships with that option off.
 EOF
@@ -1771,7 +1771,7 @@ layout_cols() {
 # tabled can therefore pick up a U+FE0F and silently become a 2-cell emoji behind the table's
 # back. All 17 measured at ONE cell (tmux over Ghostty, `tmux display-message -p '#{cursor_x}'`):
 #   Neutral EAW    ↵ ♫ ❚ ❯                      one cell in EVERY terminal
-#   Ambiguous EAW  · — • … ← ↑ → ↓ ─ ━ ○ ● ▶    one cell unless a terminal is explicitly
+#   Ambiguous EAW  · — • … ← ↑ → ↓ ─ ═ ○ ● ▶    one cell unless a terminal is explicitly
 #                                               configured ambiguous-wide
 # The split is read off the UCD (unicodedata.east_asian_width), not guessed: ♫ U+266B is
 # Neutral, so it stays one cell even under YT_AMBIG_WIDE.
@@ -1781,7 +1781,7 @@ layout_cols() {
 # if that option is ON. It is an explicit knob and not a locale guess, because the locale
 # says nothing: Ghostty under a zh_CN locale still renders these one cell.
 # Note the bar already assumed this — render_prog_bar promises a string of exactly <total>
-# cells built from ━ ─ ●, which only holds at one cell each.
+# cells built from ═ ─ ╸, which only holds at one cell each.
 # The table applies wherever these characters occur, titles included, not only to chrome.
 #
 # What IS corrected is the zero-width class, where "two cells" is wrong in every terminal.
@@ -1801,7 +1801,7 @@ layout_cols() {
 CW_ZWJ=$'\xe2\x80\x8d'
 CW_ZERO=""      # characters that add no cells
 CW_NARROW=""    # non-ASCII characters that still take only one, in any terminal
-CW_AMBIG='·—•…←↑→↓─━○●▶▣▤≥≤█│' # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
+CW_AMBIG='·—•…←↑→↓─═○●▶▣▤≥≤█│' # East-Asian Ambiguous: one cell, or two under YT_AMBIG_WIDE
 CW_AMBIG_W=1
 CW_RANGE=""
 cw_range() {
@@ -1830,7 +1830,7 @@ init_cell_tables() {
     # it jump. Nothing measures the spinner line today; tabling them anyway keeps "every glyph
     # this draws has a known width" true by construction rather than by where it happens to print.
     # ╸ U+2578 is the progress bar's playhead, and it belongs HERE rather than in CW_AMBIG
-    # beside the ━ and ─ it sits between. EastAsianWidth splits the box-drawing block:
+    # beside the ═ and ─ it sits between. EastAsianWidth splits the box-drawing block:
     # the full-length horizontals are Ambiguous, the heavy HALF-lines (2574..257F) are
     # Neutral. A head tabled Ambiguous would take two cells under YT_AMBIG_WIDE=1 and
     # push the bar one cell past the width it was measured at — a wrap, which is a line
@@ -2213,8 +2213,13 @@ fetch_play_times() {
 # every second.
 #
 # No [brackets]: the bar is not a widget sitting on the card, it is the card's LIVE RAIL —
-# `━` elapsed and `─` remaining are the divider's own stroke family, so the played part reads
-# as the rail thickening behind the `●` playhead (the same glyph the status row uses). The
+# `═` elapsed and `─` remaining are the divider's own stroke family, so the played part reads
+# as the rail thickening behind the `╸` playhead. DOUBLE, not heavy: `━` against `─` is one
+# stroke slightly fatter than another, and at 13px in a terminal font that difference is a
+# guess — several monospace faces hint the two to the same pixel row, which leaves the one
+# line whose whole job is to say how far in you are saying nothing at a glance. `═` differs
+# in COUNT rather than in weight, so the played run reads as played at any size and in any
+# font, and it is what the ASCII fallback (`=` against `-`) has always said. The
 # ends had to go for that to work: a bracket is a boundary, and this line's whole job is to
 # be boundary-less and exactly rail-wide. They were also 2 cells of the caller's width spent
 # on punctuation, which now buy 2 more cells of resolution instead.
@@ -2236,7 +2241,7 @@ render_prog_bar() {
     # reads as a speck of dirt at 4% and as a bullet everywhere else; a heavy half-line reads
     # as the end of what has played, which is what it marks. It is still exactly one cell —
     # tabled in CW_NARROW, see init_cell_tables — so the bar's length is unchanged.
-    local f_str e_str head='╸' fill='━' rest='─' b_open='[' b_close=']'
+    local f_str e_str head='╸' fill='═' rest='─' brk=' '
     if ((ASCII_GLYPHS)); then
         head='>'
         fill='='
@@ -2250,23 +2255,34 @@ render_prog_bar() {
         PROG_BAR="${f_str}${head}${e_str}"
         return 0
     fi
-    # THE INTERVAL. Two cells of the same track rewritten as brackets, so one line says where
-    # the playhead is AND where the marked span sits in the whole item — which is the pairing
-    # a reader of a chapter list actually wants and the two identical rails never gave.
+    # THE INTERVAL. Two cells of the same track BROKEN OUT, so one line says where the
+    # playhead is AND where the marked span sits in the whole item — which is the pairing a
+    # reader of a chapter list actually wants and the two identical rails never gave.
+    # The mark is the BREAK itself — one cell of nothing — not a glyph drawn in it. Two
+    # candidates were drawn at the real width and both lost to it. `[`/`]` are punctuation
+    # sitting ON a rail: two ink-heavy glyphs of a different family competing with the head
+    # for the eye, on the one line whose job is to be read at a glance. `│` is lighter and in
+    # the rail's own stroke family, and it still loses, for the reason the brackets do: a
+    # VERTICAL crossing a horizontal rail stops the eye travelling along it. This line is
+    # read as a sweep from left to right — that is what a progress bar IS — and a full-height
+    # stroke is a wall across that sweep, twice. The break is the only mark that does not
+    # interrupt the flow, because it is not a mark: the rail simply stops for a cell and
+    # starts again, which is already a boundary, and is the same argument that took the bar's
+    # own end brackets off. It costs nothing in either mode — a space is one cell under any
+    # width table and needs no ASCII fallback.
     # The head wins a collision: where it is now is a fact about this second, where the span
-    # begins is a fact about the item, and the other bracket still shows the span.
+    # begins is a fact about the item, and the other break still shows the span.
     ((mark_a < 0)) && mark_a=0
     ((mark_a > width - 1)) && mark_a=$((width - 1))
     [[ "$mark_b" =~ ^[0-9]+$ ]] || mark_b=-1
     ((mark_b > width - 1)) && mark_b=$((width - 1))
-    # A span under two cells wide gets its opener alone: "[]" in one or two cells is not a
-    # span, it is two characters of noise where a plain track would have said more.
+    # A span under two cells wide gets its opening break alone: two stops with nothing
+    # between them is not a span, it is a gap in the rail where a plain track said more.
     ((mark_b <= mark_a)) && mark_b=-1
     local out="" col c
     for (( col = 0; col < width; col++ )); do
         if ((col == filled)); then c=$head
-        elif ((col == mark_a)); then c=$b_open
-        elif ((col == mark_b)); then c=$b_close
+        elif ((col == mark_a || col == mark_b)); then c=$brk
         elif ((col < filled)); then c=$fill
         else c=$rest
         fi
