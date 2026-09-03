@@ -4955,6 +4955,50 @@ open_history() {
 #
 # ONE fork on the KEY, never on the selection moving. Whether the key is offered at all was
 # answered at the last source switch (refresh_engine_parts), so this costs nothing per redraw.
+# The fetch behind `c`, and the twin of fetch_item_info — same single slot, same spinner,
+# same error vocabulary, and a function for the same reason that one is: THE CACHE IS THE
+# POINT. `c` asks "is there more of this than the row shows?", and on a one-part video the
+# answer is no — an answer bought with a real round trip, which pressing the key again must
+# not buy a second time (ROADMAP.md「横切规范」付了的代价不丢). `i` has had this since it
+# shipped; `c` did not, so a second press paid again for a no it already owned.
+#
+# The round trip is unavoidable and that is measured, not assumed: 2026-09-03, nothing in a
+# search page separates a multi-part row from a single one — a real 200-part row comes back
+# with the same empty `episode_count_text`, the same `is_union_video: 0`, the same key set as
+# a five-minute MV, and the site's own count lives one request per row away. So `c` is a
+# QUESTION key by construction, and what a question key owes is that its answer is cheap the
+# second time.
+#
+# The spinner is here for the reason `i` prints one: this is a moment the TUI has nothing to
+# draw, and a key that freezes with no feedback reads as a key that was not received. The
+# frame after it is a full in-place repaint, so the line needs no cleanup.
+PARTS_CACHE_KEY=""
+PARTS_CACHE_JSON=""
+fetch_item_parts() {
+    local eng=$1 url=$2 bin key out rc=0 errfile msg
+    bin=$(engine_resolve_bin "$eng") || bin=""
+    [[ -n "$bin" ]] || return 1
+    key="$eng:$url"
+    if [[ "$key" != "$PARTS_CACHE_KEY" || -z "$PARTS_CACHE_JSON" ]]; then
+        errfile=$(mktemp "${TMPDIR:-/tmp}/uting-parts-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-parts-err.$$"
+        printf '\n  %s%s%s' "$C_DIM" "$S_PARTS_ACT$GL_ELL" "$C_RESET"
+        spin_start
+        out=$("$bin" --parts -j -- "$url" 2>"$errfile") || rc=$?
+        spin_stop
+        msg=$(<"$errfile")
+        rm -f "$errfile"
+        if ((rc != 0)) || [[ -z "$out" ]]; then
+            msg=${msg##*$'\n'}
+            msg=${msg#"$eng"-resolve: }
+            store_notice "$S_PARTS_ACT:" "${msg:-$S_PL_FAILED}"
+            return 1
+        fi
+        PARTS_CACHE_KEY="$key"
+        PARTS_CACHE_JSON="$out"
+    fi
+    return 0
+}
+
 PARTS_TOTAL_FMT=""
 open_parts() {
     # The toggle, tested literally for the reason open_history gives: with a part list on
@@ -4969,25 +5013,14 @@ open_parts() {
     ((NUM_ENTRIES > 0)) || return 0
     search_only || return 0
 
-    local url="${urls[$selected]}" row_engine bin out rc=0 errfile msg cnt title reshaped
+    local url="${urls[$selected]}" row_engine out cnt title reshaped
     # The ROW's engine, the way play_selected reads it. Under search_only every row carries
     # the session engine, so the two agree today; reading the row is what keeps them agreeing
     # if that ever stops being true.
     row_engine="${R_ENGINE[$selected]:-}"
     [[ -n "$row_engine" ]] || row_engine="$CURRENT_ENGINE"
-    bin=$(engine_resolve_bin "$row_engine") || bin=""
-    [[ -n "$bin" ]] || return 0
-
-    errfile=$(mktemp "${TMPDIR:-/tmp}/uting-parts-err.XXXXXX" 2>/dev/null) || errfile="${TMPDIR:-/tmp}/uting-parts-err.$$"
-    out=$("$bin" --parts -j -- "$url" 2>"$errfile") || rc=$?
-    msg=$(<"$errfile")
-    rm -f "$errfile"
-    if ((rc != 0)); then
-        msg=${msg##*$'\n'}
-        msg=${msg#"$row_engine"-resolve: }
-        store_notice "$S_PARTS_ACT:" "${msg:-$S_PL_FAILED}"
-        return 1
-    fi
+    fetch_item_parts "$row_engine" "$url" || return 1
+    out="$PARTS_CACHE_JSON"
     cnt=$(printf '%s' "$out" | jq -r '.count // 0' 2>/dev/null || echo 0)
     # One part is not an error — the engine says so by answering count 1 rather than failing —
     # and it is not a view either: the row already on screen IS that one part, so opening a
