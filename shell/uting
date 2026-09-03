@@ -1760,6 +1760,38 @@ repeat_glyph() {
 # which the widest single field still fits. Below that the clamp is honest: it is the size
 # at which one field of the status row cannot be drawn at all.
 LAYOUT_MIN=24
+
+# ── The rest of the layout budget, named ────────────────────────────────────────────────
+# A literal earns a name here when the same fact appears at more than one site — prose tying
+# them together does not go red when one of them moves — or when the number carries a
+# measurement a reader cannot recover from the code. A `1` that only says "this block is one
+# line" stays a `1` at its site: that is a row count, not a threshold, and naming it would
+# buy a level of indirection and nothing else.
+
+# A DROPPABLE field's floor: the cells it must still get, or the field goes entirely. Three
+# sites spend it — the status row deciding whether it fits inline beside the query, and the
+# banner's drop order twice (key tail, then footprint). The tie used to live in prose on the
+# status row: "the same number the banner's own drop order uses".
+LAYOUT_MIN_FIELD=12
+
+# An UNDROPPABLE text budget's floor: what such a budget is clamped UP to, so a pane too
+# narrow to hold everything beside the text elides the text rather than wrapping the row. It
+# is also what truncate_disp's contract leans on — no caller reaches its budget-cannot-hold-
+# the-mark branch, because every caller clamps to at least this.
+LAYOUT_MIN_BUDGET=8
+
+# The cursor's resting row, charged by every budget that ends in rows: filling the last line
+# and emitting its newline scrolls the screen up by one, which would cost the header again.
+LAYOUT_CURSOR_ROW=1
+
+# Rows that must survive BELOW the navigation block, or the block does not print: the blank
+# line after the block, one result row, the blank line after the rows, and the cursor's
+# resting row.
+LAYOUT_NAV_KEEP=4
+
+# Rows that must survive BELOW the details block, or the block does not print: one result
+# row, and the pagination row the block would otherwise have eaten.
+LAYOUT_DETAIL_KEEP=2
 LAYOUT_COLS=0
 layout_cols() {
     term_size
@@ -1973,7 +2005,8 @@ truncate_disp() {
     # The one promise this function makes is "at most <max> cells". Clamping the budget up
     # to 1 broke it: at max=1 it emitted a character AND the mark, two cells. When the
     # budget cannot hold the mark, the mark goes. No caller reaches this today (they all
-    # clamp their budget to >= 8) — it is the guard on the function's only contract.
+    # clamp their budget to >= LAYOUT_MIN_BUDGET) — it is the guard on the function's only
+    # contract.
     if ((budget < 1)); then
         mark=""
         budget=$max
@@ -3347,7 +3380,7 @@ display_list_menu() {
     #
     # It falls back to a line of its own rather than eliding: a status the reader has to
     # guess at is worse than one more chrome line, and print_hints already knows how to pack
-    # it. The floor is 12 cells of query — the same number the banner's own drop order uses.
+    # it. The floor is LAYOUT_MIN_FIELD cells of query.
     local st_line="" st_w=0 st_inline=0 t_head_w q_room
     for p in ${st_items[@]+"${st_items[@]}"}; do
         if [[ -n "$st_line" ]]; then st_line="$st_line $GL_SEP $p"; else st_line="$p"; fi
@@ -3357,7 +3390,7 @@ display_list_menu() {
     stored_rows && head_field="$LIST_SOURCE"
     disp_w "${GL_NOTE:+$GL_NOTE }$GL_BRAND  $head_field="; t_head_w=$DISP_W
     q_room=$((right_edge - t_head_w))
-    if ((q_room - st_w - 2 >= 12)); then
+    if ((q_room - st_w - 2 >= LAYOUT_MIN_FIELD)); then
         st_inline=1
         q_room=$((q_room - st_w - 2))
     fi
@@ -3549,16 +3582,16 @@ display_list_menu() {
     HINT_SEP=""
     HINT_MEASURE=0
     local nav_h=$HINT_LINES
-    # 4 = the blank line after the block, one result row, the blank line after the rows, the
-    # cursor's resting row. Plus one more for the PAGINATION row whenever the list can
-    # paginate at all: this gate only bites on a short terminal, and on a short terminal more
-    # than one entry always means more than one page. Measured without that +1 (and true of
-    # the shipped version too, at any width where the block fits in one fewer line than the
-    # gate believes): a 62x10 terminal kept the block and then printed 7 chrome lines, one
-    # row, a blank and the page counter — eleven lines into ten, and the header went off the
-    # top, which is the one thing this reflow exists to prevent.
-    local nav_need=4
-    ((NUM_ENTRIES > 1)) && nav_need=5
+    # LAYOUT_NAV_KEEP is what has to survive below the block. The +1 is a SECOND fact — the
+    # PAGINATION row — charged whenever the list can paginate at all: this gate only bites on
+    # a short terminal, and on a short terminal more than one entry always means more than
+    # one page. Measured without that +1 (and true of the shipped version too, at any width
+    # where the block fits in one fewer line than the gate believes): a 62x10 terminal kept
+    # the block and then printed 7 chrome lines, one row, a blank and the page counter —
+    # eleven lines into ten, and the header went off the top, which is the one thing this
+    # reflow exists to prevent.
+    local nav_need=$LAYOUT_NAV_KEEP
+    ((NUM_ENTRIES > 1)) && nav_need=$((LAYOUT_NAV_KEEP + 1))
     # The banner row counts here whether it prints or stands as a blank (+1). What used to
     # be charged beside it was the RAIL under the key block, which printed whenever the block
     # did; that line is gone. In its place is the progress bar, and the bar is charged on a
@@ -3641,11 +3674,11 @@ display_list_menu() {
         # what is playing; below that there is nothing left to give and it takes the pane
         # minus its own label.
         local title_room=$((nav_cols - head_w - tail_w - res_w - hint_w))
-        if ((title_room < 12)); then
+        if ((title_room < LAYOUT_MIN_FIELD)); then
             b_hint=""; hint_w=0
             title_room=$((nav_cols - head_w - tail_w - res_w))
         fi
-        if ((title_room < 12)); then
+        if ((title_room < LAYOUT_MIN_FIELD)); then
             b_res=""; res_w=0
             title_room=$((nav_cols - head_w - tail_w))
         fi
@@ -3778,17 +3811,16 @@ display_list_menu() {
         DETAIL_MEASURE=0
         detail_h=$DETAIL_LINES
         # A terminal too short to pay for both drops the block and keeps the rows — the same
-        # trade the navigation hints make above, and the reason "no cap on the title" is safe:
-        # 2 = one result row and the pagination row it would otherwise have eaten.
-        if ((LINES_N - chrome_h - foot_h - 1 - detail_h >= 2)); then
+        # trade the navigation hints make above, and the reason "no cap on the title" is
+        # safe. What has to survive underneath it is LAYOUT_DETAIL_KEEP.
+        if ((LINES_N - chrome_h - foot_h - LAYOUT_CURSOR_ROW - detail_h >= LAYOUT_DETAIL_KEEP)); then
             show_details=1
         else
             detail_h=0
         fi
     fi
-    # -1 for the cursor's resting row: filling the last line and emitting its newline scrolls
-    # the screen up by one, which would cost the header again.
-    avail=$((LINES_N - chrome_h - foot_h - detail_h - 1))
+    # LAYOUT_CURSOR_ROW is charged here and by every other budget that ends in rows.
+    avail=$((LINES_N - chrome_h - foot_h - detail_h - LAYOUT_CURSOR_ROW))
     # ── The floor conflict: a budget of zero rows against a `psize` floor of one ────────
     # Every other block here can drop itself when the terminal is too short — the navigation
     # hints do, the details block does. The ROWS cannot: a list with no rows is not a list, so
@@ -3819,7 +3851,7 @@ display_list_menu() {
         else break
         fi
         foot_h=$(( row_gap + hint_gap + nav_ok * nav_h + filter_hint + caret_h ))
-        avail=$((LINES_N - chrome_h - foot_h - detail_h - 1))
+        avail=$((LINES_N - chrome_h - foot_h - detail_h - LAYOUT_CURSOR_ROW))
     done
     # ONE AXIS PER MODE. In `page` the row count is UT_PAGE_ROWS pressed down to fit; in
     # `scroll` it is simply what fits, because a continuous window that stopped at a shipped
@@ -4493,7 +4525,7 @@ delete_from_playlist() {
     # "are you sure" is asking about something the user has to remember rather than read.
     layout_cols
     w=$((LAYOUT_COLS - 4))
-    ((w < 8)) && w=8
+    ((w < LAYOUT_MIN_BUDGET)) && w=$LAYOUT_MIN_BUDGET
     truncate_disp "${R_TITLE[$selected]}" "$w"
     printf '\n%s%s%s %s %s\n' "$C_BOLD" "$S_PL_RM_HEAD" "$C_RESET" "$GL_ARROW" "$name"
     printf '  %s\n' "$TRUNC_TEXT"
@@ -4697,10 +4729,10 @@ pick_playlist() {
         if ((date_ok)); then metas[$i]="${counts[$i]} $unit  ${metas[$i]}"; else metas[$i]="${counts[$i]} $unit"; fi
         disp_w "${metas[$i]}"; ((DISP_W > meta_w)) && meta_w=$DISP_W
     done
-    # 3 indent + "N." + 1 + 2 gutter. Clamped at 8 the way every other budget in this file is,
-    # so a pane too narrow to hold the meta elides the name rather than wrapping the row.
+    # 3 indent + "N." + 1 + 2 gutter, then clamped at LAYOUT_MIN_BUDGET so a pane too narrow
+    # to hold the meta elides the name rather than wrapping the row.
     idx=$((cols - 3 - num_w - 1 - 2 - meta_w))
-    ((idx < 8)) && idx=8
+    ((idx < LAYOUT_MIN_BUDGET)) && idx=$LAYOUT_MIN_BUDGET
     ((name_w > idx)) && name_w=$idx
 
     printf '\n  %s%s%s\n' "$C_BOLD" "$header" "$C_RESET"
