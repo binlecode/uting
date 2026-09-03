@@ -573,7 +573,8 @@ Keys (List View):
   b        open a stored playlist as the row source; b again
            returns to the search results                    (needs ut-playlist)
   d        remove the focused row from the playlist on screen, after a
-           confirmation; playlist rows only                 (needs ut-playlist)
+           confirmation; stops the player when it was on that row;
+           playlist rows only                               (needs ut-playlist)
   h        open the listening log as the row source; h again
            returns to the search results                    (needs ut-history)
   c        open the focused row's parts as the row source; c again returns to the
@@ -4536,6 +4537,23 @@ focused_index() {
     return 0
 }
 
+# Is the focused row the one the PLAYER is on? Decided in the renderer's vocabulary — the
+# row's engine plus handle_key's normalised handle — so "the player holds this row" has one
+# spelling in this file and not two that can drift. PLAYING_IDX is not reusable here: it is
+# resolved over the VISIBLE page inside a redraw, so it answers for a page, and `d` needs the
+# answer about one row at a moment no redraw has run.
+focused_is_playing() {
+    [[ -n "$CURRENT_PLAY_ID" && -n "$CURRENT_PLAY_URL" ]] || return 1
+    [[ "${R_ENGINE[$selected]:-}" == "$CURRENT_PLAY_ENGINE" ]] || return 1
+    local pk
+    handle_key "$CURRENT_PLAY_URL"
+    pk="$HANDLE_KEY"
+    [[ -n "$pk" ]] || return 1
+    handle_key "${urls[$selected]}"
+    if [[ "$pk" == "$HANDLE_KEY" ]]; then return 0; fi
+    return 1
+}
+
 # Remove the focused row from the playlist it is a row OF. The store does the removing, by
 # index, exactly as `a` lets it do the adding: this file neither rewrites the file nor decides
 # what a removal means. Two things make it different from the other store keys — it is
@@ -4545,13 +4563,17 @@ delete_from_playlist() {
     ((NUM_ENTRIES > 0)) || return 0
     playlist_only || return 0
     have_store || return 0
-    local name="$PLAYLIST_NAME" rc=0 msg errfile w
+    local name="$PLAYLIST_NAME" rc=0 msg errfile w playing=0
     if ! focused_index; then
         # The row is not in the envelope the view was built from, so the store and the screen
         # disagree and an --index taken from here would delete SOMETHING ELSE. Refuse.
         store_notice "$S_PL_ACT:" "$S_PL_FAILED"
         return 0
     fi
+    # Asked while the row is still the focused one, because the answer is about THIS row and
+    # nothing below still knows which row it was: reload_playlist repoints `selected` at
+    # whatever moved up into the gap.
+    if focused_is_playing; then playing=1; fi
     # What is about to go, named the way the row names it — a confirmation that says only
     # "are you sure" is asking about something the user has to remember rather than read.
     layout_cols
@@ -4573,6 +4595,10 @@ delete_from_playlist() {
         return 0
     fi
     printf '%s%s%s %s %s\n' "$C_BOLD" "$S_PL_REMOVED" "$C_RESET" "$GL_ARROW" "$name"
+    # The record is gone, so a player still holding it is playing something the user just
+    # deleted — and the banner would keep naming a row the store no longer has. Stopped
+    # BEFORE the reload, so the redraw that reload ends with already draws no player.
+    if ((playing)); then stop_current_playback; fi
     reload_playlist "$name"
 }
 
