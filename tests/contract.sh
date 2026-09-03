@@ -20,11 +20,16 @@
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md「可移植性契约」.
 #
 # Cost, measured 2026-09-03 and broken down because a number at the door is what a reader
-# decides on: ~76-94s in full (three consecutive runs came back 94s, 81s and 76s), of which
-# `--offline` is the first ~28s: 258 of the 389 checks, no packet sent. The live half is
-# roughly 21 engine round trips plus the `i` walk, and the spread is now mostly the WALK's —
-# it stops at the first row with chapters, so today's result ordering decides whether it pays
-# one lap or six. That 28 is dominated by one deliberate
+# decides on: ~76-96s in full (four runs: 94s, 81s, 76s, 96s), of which `--offline` is the
+# first ~28s: 258 checks, no packet sent. The live half is roughly 21 engine round trips plus
+# the `i` walk, and the spread is now mostly the WALK's — it stops at the first row with
+# chapters, so today's result ordering decides whether it pays one lap or six.
+#
+# THE TOTAL IS A RANGE, 388-389, and that is not sloppiness: two checks report only when the
+# walk gives them something to report (a chapterless row for the kept-fields claim, an opened
+# view for the toggle), and the alternative to skipping them is a check that cannot fail on
+# the days YouTube puts chapters on row 1. A skip line says which one, and 0 failed is the
+# number that means passing. That 28 is dominated by one deliberate
 # 5.5s lock spin — a FRESH held lock has to be waited out, that being what the spin is for;
 # the stale-lock steal beside it costs 0.1s because staleness is tested before the spin, not
 # after (shell/ut-playlist:lock_playlist).
