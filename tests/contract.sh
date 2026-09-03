@@ -2756,11 +2756,12 @@ else
     report "quits on q with 0" 1 "$left"
     # A red here is TWO reds: the FLAGS line the next check reads is printed by the same
     # command line, after uting returns, so a TUI that did not leave takes the tty check down
-    # with it. And the pane is the only witness there will ever be. `q` cannot be SLOW —
-    # shell/uting:3485 prints and exits, and with no player the nav read blocks with no
-    # timeout — so the byte was eaten by a reader that is not the menu loop (press_any_key,
-    # the `n` prompt, the loading spinner's own `read -t 1`), and which one it was is legible
-    # in the frame and nowhere else. Measured once, 2026-08-25, and unreproducible since.
+    # with it. And the pane is the only witness there will ever be. `q` cannot be SLOW — the
+    # dispatch arm prints and exits, and with no player the nav read blocks with no timeout —
+    # so the byte was eaten by a reader that is not the menu loop (the `n` prompt,
+    # confirm_key's y/N, the loading spinner's own `read -t 1`), and which one it was is
+    # legible in the frame and nowhere else. Measured once, 2026-08-25, and unreproducible
+    # since. The list is one reader shorter than it was: a notice no longer owns one.
     if [ "$left" != 1 ]; then
         echo "  ---- pane at the moment q was not honoured ----" >&2
         # `>&2` BEFORE `2>/dev/null`: the other order points stdout at stderr's CURRENT
