@@ -1844,12 +1844,13 @@ report "search result keys agree" \
 #
 # Asserted against the CLOSED ENUM, never against `has("kind")`: an engine writing
 # kind:"video" — the site's own word, the likeliest wrong answer — satisfies presence and
-# fails here. The non-empty result requirement is what stops the whole thing passing
+# fails here. The enum is TWO values: a container has no value here because it is not a
+# row at all (the clause above is what drops it), so `kind:"collection"` fails too. The non-empty result requirement is what stops the whole thing passing
 # vacuously on an engine that returned nothing.
 ROW_IS_A_CALL='(.results|length)>0 and all(.results[];
       (.url|type=="string") and (.url|length)>0
       and (.id|type=="string") and (.id|length)>0
-      and (.kind|IN("track","collection","multipart"))
+      and (.kind|IN("track","multipart"))
       and (.access|IN("full","preview","paywalled"))
       and ((.duration|type)=="number" or (.live_status|type)=="string"))'
 for n in $ENGINES; do

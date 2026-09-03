@@ -502,7 +502,7 @@ Options:
 Output (JSON, -j): {"status","engine","query","count","results":[{id,title,url,channel,
                     duration,duration_fmt,view_count,live_status,description,kind,access}, ...]}
   results[].id is this engine's media id — the input to `yt-resolve`.
-  kind (track|collection|multipart) and access (full|preview|paywalled) are always
+  kind (track|multipart) and access (full|preview|paywalled) are always
   track/full on this site: a row IS one video, and anonymous extraction returns the
   whole timeline or no stream at all.
 
