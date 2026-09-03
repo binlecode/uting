@@ -19,10 +19,12 @@
 #
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md「可移植性契约」.
 #
-# Cost, measured 2026-09-01 and broken down because a number at the door is what a reader
-# decides on: ~55-65s in full (runs minutes apart came back 55s, 60s, 63s and 64s — the live half is
-# roughly 21 engine round trips and the spread is the sites'), of which `--offline` is the
-# first ~20s: 224 of the 322 checks, no packet sent. That 20 is dominated by one deliberate
+# Cost, measured 2026-09-03 and broken down because a number at the door is what a reader
+# decides on: ~76-94s in full (three consecutive runs came back 94s, 81s and 76s), of which
+# `--offline` is the first ~28s: 258 of the 389 checks, no packet sent. The live half is
+# roughly 21 engine round trips plus the `i` walk, and the spread is now mostly the WALK's —
+# it stops at the first row with chapters, so today's result ordering decides whether it pays
+# one lap or six. That 28 is dominated by one deliberate
 # 5.5s lock spin — a FRESH held lock has to be waited out, that being what the spin is for;
 # the stale-lock steal beside it costs 0.1s because staleness is tested before the spin, not
 # after (shell/ut-playlist:lock_playlist).
@@ -2470,24 +2472,35 @@ else
     said=$(poll_until 15 pane_has 'UT_SORT_FIELD')
     report "a pinned key is refused out loud" 1 "$said"
     report "and never reaches the file" 0 "$(grep -c '^UT_SORT_FIELD' "$TUI_CFG")"
-    # The notice holds the frame on a press-any-key; Space is inert here (there is no player
-    # to pause), so it dismisses the notice without doing anything if the notice never came.
+    # A notice is a frame line and ANY key clears it; Space is inert here (there is no player
+    # to pause), so this is a plain "get the unadorned frame back" step and asserts nothing.
     tmux send-keys -t "$TS" Space
     poll_until 5 pane_lacks 'UT_SORT_FIELD' >/dev/null
 
-    # `c` first, and it must do NOTHING here: it is the third key of that same row-source
-    # family, but it is gated on the engine having --parts, and yt does not (one id there is
-    # one file). The witness is the key AFTER it, which is why this rides on `h` instead of
-    # asserting on the hint block: an UNGATED c would call yt-resolve --parts, collect the
-    # unknown-flag refusal the offline half pins, and park the pane on a press-any-key notice
-    # — and a parked pane eats the next keystroke. So a c that misbehaved does not show up as
-    # its own red; it shows up as `h` never opening the log, which is the same measurement.
-    tmux send-keys -t "$TS" c h
+    # `c` must do NOTHING here: it is the third key of that same row-source family, but it is
+    # gated on the engine having --parts, and yt does not (one id there is one file). An
+    # UNGATED c would call `yt-resolve --parts`, collect the unknown-flag refusal the offline
+    # half pins, and put it on the frame under the Parts label — so that label IS the witness,
+    # read directly.
+    #
+    # It used to be read through the NEXT key: a notice owned a blocking read, so an ungated c
+    # parked the pane and `h` never opened the log, which made one measurement serve two
+    # claims. A notice is a frame line now and eats no keystroke — that being the point of the
+    # change — so this check had to stop borrowing its witness or become a check that cannot
+    # fail.
+    #
+    # A poll for an ABSENCE passes on its first look, so this one spends its whole budget:
+    # two seconds of that label never arriving. What it watches for is a FLAG refusal, not a
+    # fetch — when it lands, it lands in milliseconds.
+    tmux send-keys -t "$TS" c
+    said=$(poll_until 2 pane_has 'Parts:')
+    report "c is inert on an engine with no --parts" 0 "$said"
+    tmux send-keys -t "$TS" h
     opened=$(poll_until 10 pane_has "history='")
-    report "h opens the log, and the c before it was inert" 1 "$opened"
+    report "h opens the log as the row source" 1 "$opened"
     # Same witness the `q` check keeps, and for the same reason: the pane is the only place a
-    # key that went somewhere else is legible. A reader that is not the menu loop
-    # (press_any_key behind a notice, the `n` prompt) shows up here and nowhere else.
+    # key that went somewhere else is legible. A reader that is not the menu loop (the `n`
+    # prompt, confirm_key's y/N) shows up here and nowhere else.
     if [ "$opened" != 1 ]; then
         echo "  ---- pane at the moment h did not open the log ----" >&2
         tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
@@ -2515,14 +2528,34 @@ else
     tmux send-keys -t "$TS" h
     said=$(poll_until 10 pane_has 'nothing listened to yet')
     report "an empty log answers with a notice" 1 "$said"
-    # Space dismisses it (inert here — there is no player to pause). The witness is the notice
-    # LEAVING the pane, not the list being in it: the list is still on screen underneath while
-    # the notice holds the frame, so "results= is visible" would be green before the keypress
-    # and could not fail. A TUI that died leaves the notice where it is and prints RC= under it.
-    tmux send-keys -t "$TS" Space
+    # THE DISCRIMINATING INPUT for "a notice is content, not a modal" lives HERE rather than
+    # in the `i` walk below, because this notice is DETERMINISTIC: the log was cleared by a
+    # real command, so it is empty on every run, while whether any of today's rows carries
+    # chapters is YouTube's business and the walk can break before it ever meets a notice.
+    #
+    # The next key is a plain arrow, sent with nothing in between and nothing fed to any
+    # reader, and THREE things have to be true of it — each its own report, because they fail
+    # for different reasons. The notice goes. The TUI is alive (a dead one leaves the notice
+    # on screen and prints RC= under it). And the key DID ITS OWN JOB: the cursor moved one
+    # row. That last one is what a modal notice cannot do — it would have spent this
+    # keystroke on its own dismissal and left the cursor where it was.
+    #
+    # The row is read off the pane rather than assumed (everything above this line has been
+    # moving the cursor), and the direction is chosen from it so the key always has somewhere
+    # to go: a cursor already on the last row would not move DOWN, and that is not a finding.
+    cur_row=$(tmux capture-pane -t "$TS" -p -J 2>/dev/null | sed -n 's/^▶ *\([0-9][0-9]*\)\..*/\1/p' | head -1)
+    case "$cur_row" in
+    '' | *[!0-9]*)
+        echo "contract.sh: no row cursor on the pane before the notice check — suite error, not a failure" >&2
+        exit 1 ;;
+    esac
+    if [ "$cur_row" -gt 1 ]; then nav_key=Up; want=$((cur_row - 1)); else nav_key=Down; want=$((cur_row + 1)); fi
+    tmux send-keys -t "$TS" "$nav_key"
     notice_gone() { pane_lacks 'nothing listened to yet' && pane_lacks 'RC='; }
     alive=$(poll_until 10 notice_gone)
-    report "…and the key that dismisses it does not exit" 1 "$alive"
+    report "…and the next key clears it without exiting" 1 "$alive"
+    moved=$(poll_until 5 pane_has "^▶ +$want\.")
+    report "…and that key did its own job, not the notice's" 1 "$moved"
     if [ "$alive" != 1 ]; then
         echo "  ---- pane after the notice was dismissed ----" >&2
         tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
@@ -2561,22 +2594,67 @@ else
     # It WALKS the rows rather than naming one, because the door is conditional on live data:
     # `i` opens only where the item has chapters, and which of today's results does is not
     # something this file gets to decide. A row without them answers with the notice instead,
-    # which is dismissed and the walk continues. FOUR rows is the bet, and every lap of it is
-    # a real `--info` round trip (~3s) — which is the whole reason the bet is not larger and
-    # the reason the dismissal costs nothing: `Space Down i` goes in ONE send-keys, because
-    # the pane reads its input in order and a fixed sleep between keys buys nothing that
-    # waiting on the outcome does not. The pane is dumped if none of the four opened, so a
-    # failure says whether the door is broken or the query simply went chapterless.
+    # which is dismissed and the walk continues. EIGHT rows is the bet and the walk stops at
+    # the first hit, so the bound is not the usual cost: measured 2026-09-03, chapters sat on
+    # rows 3, 7 and 8 of the first eight, which is what made FOUR rows a coin flip on the
+    # day's ordering rather than a bet on the door. A lap is a real `--info` round trip
+    # (~3.1s measured), so the bound is ~25s and today's run pays ~10.
+    #
+    # EVERY KEY WAITS FOR THE THING THAT MAKES IT MEAN SOMETHING. The walk used to send
+    # `Space Down i` as one burst; the keys were read in order (that was never the bug) but
+    # the settle condition was `no chapters` being on screen, and that text stays up until
+    # the next redraw — so a lap's first capture could match the PREVIOUS lap's notice, call
+    # itself settled in milliseconds, and fire the next lap on top of an in-flight fetch
+    # (measured both ways 2026-09-03: honest ~3.1s laps in one run, an instant advance in
+    # another, a capture being 30-60ms). It was then fixed by waiting for the notice to be
+    # gone — which worked, and which was this file paying interest on a design debt: the
+    # notice owned a blocking read, so the walk had to feed it a Space before the TUI would
+    # accept another key. The notice is now a line in the frame that the next key clears
+    # (ROADMAP.md「横切规范」只为一个答案停下来), so both the Space and the wait are gone.
+    #
+    # WHICH MAKES THE `Down` BELOW THE DISCRIMINATING INPUT for that design, not a step in
+    # the walk: it is sent straight after the notice with nothing in between, so a build
+    # whose notice still ate a keypress would spend this key dismissing it, the cursor would
+    # not move, and `walked` goes 0 — red, and named as the walk rather than as the door.
+    #
+    # EIGHT rows is the bet and the walk stops at the first hit: measured 2026-09-03,
+    # chapters sat on rows 3, 7 and 8 of the first eight, which is what made FOUR rows a coin
+    # flip on the day's ordering rather than a bet on the door. A lap is a real `--info`
+    # round trip (~3.1s), so the bound is ~25s and a typical run pays ~10. The pane is dumped
+    # if none of the eight opened, so a failure still says whether the door is broken or the
+    # query simply went chapterless.
     chap_settled() { pane_has 'chapters=' || pane_has 'no chapters'; }
-    shown=0; paid=0; row=0
-    tmux send-keys -t "$TS" i
-    while [ $row -lt 4 ]; do
+    iso_on_pane() { pane_has '(19|20)[0-9][0-9]-[0-9][0-9]-[0-9][0-9]'; }
+    shown=0; paid=0; row=1; walked=1; nochap=0; kept=0
+    while :; do
+        tmux send-keys -t "$TS" i
         poll_until 12 chap_settled >/dev/null
         pane_has 'chapters=' && { shown=1; break; }
+        nochap=1
+        # The round trip is not thrown away when the view does not open: `i` on a chapterless
+        # row draws the date it just fetched on the status line anyway. Read HERE, on the
+        # first such row, because this is the only moment it can be told apart from the
+        # chapter view's own copy of the same segment — after the break below, a date on the
+        # pane proves nothing about this claim.
+        [ $kept = 0 ] && iso_on_pane && kept=1
+        [ $row -ge 8 ] && break
+        tmux send-keys -t "$TS" Down
         row=$((row + 1))
-        [ $row -lt 4 ] && tmux send-keys -t "$TS" Space Down i
+        walked=$(poll_until 5 pane_has "^▶ +$row\.")
+        [ "$walked" = 1 ] || break
     done
     report "i opens the chapter rows" 1 "$shown"
+    # Named separately, because a walk that stopped early and a walk that found nothing are
+    # different failures and the first one is about this file rather than about the TUI.
+    report "…and the walk got where it was going" 1 "$walked"
+    # Reported only when the walk actually met a chapterless row. Today's ordering decides
+    # that, and a claim nothing exercised is stated as unproved rather than counted green —
+    # the alternative is a check that cannot fail on the day chapters sit on row 1.
+    if [ $nochap = 1 ]; then
+        report "…and a chapterless row keeps what it fetched" 1 "$kept"
+    else
+        echo "  skip  (no chapterless row in today's first eight — nothing to keep)"
+    fi
     # The date lost its `uploaded=` label with the rest of the key=value status line: a
     # date is the one value on that line that cannot be mistaken for anything else. So the
     # pattern is the SHAPE of an ISO date, which no other segment on this line can produce
@@ -2607,9 +2685,17 @@ else
     # that says so rather than the commit message. It cannot pass by accident: `chapters='`
     # and `query='` are different field NAMES on the same title line, so a view that never
     # changed would still be showing the first one.
-    tmux send-keys -t "$TS" i
-    backed=$(poll_until 10 pane_back "chapters='" "query='")
-    report "i again leaves it for search" 1 "$backed"
+    # GATED ON `shown`, because the assertion is "no chapters=' and a query='" and a screen
+    # that never entered the chapter view satisfies both by standing still. Un-gated, this
+    # was green on exactly the runs where the walk had already gone red — a check whose
+    # comment claimed it could not pass by accident, passing by accident.
+    if [ $shown = 1 ]; then
+        tmux send-keys -t "$TS" i
+        backed=$(poll_until 10 pane_back "chapters='" "query='")
+        report "i again leaves it for search" 1 "$backed"
+    else
+        echo "  skip  (the walk never opened a chapter view to leave)"
+    fi
 
     # A PASTE INTO THE LIST IS A QUERY, not a run of keybindings. This is the half the
     # offline check above cannot reach — it needs a list, and a list needs a fetch. The

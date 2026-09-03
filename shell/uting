@@ -292,9 +292,10 @@ flush_prefs() {
     if ! write_prefs "$keys"; then
         PREF_WRITE_OFF=1
         # Soft failure: a read-only ~/.config must not kill a TUI that is playing music. It
-        # must not be silent either — this line goes into the scroll area and the exit repeats
-        # it, because the redraw after a tick wipes whatever is there.
-        printf '\n%s%s%s %s\n' "$C_BOLD" "$S_PREF_ACT:" "$C_RESET" "$S_PREF_FAILED"
+        # must not be silent either — so it is a notice, on the next frame, and cleanup_on_exit
+        # repeats it on the way out: this is the one message whose audience may already have
+        # left the keyboard, and the exit line is what makes the frame's single life enough.
+        store_notice "$S_PREF_ACT:" "$S_PREF_FAILED"
     fi
     return 0
 }
@@ -583,7 +584,7 @@ Keys (List View):
            fetch (upload date and likes land on the status line); i again returns
            to the search results. A chapter row is a call: Enter plays from it,
            + queues from it, a stores it
-                                    (only when the engine has --info; both do)
+                              (only when the engine has --info; the shipped ones all do)
   +        append the focused row to the running player's queue (nothing playing: says so)
   >        skip to the next queued track
   /        live filter — type to narrow instantly; ↑/↓ select, Enter play, Esc clear
@@ -1186,7 +1187,7 @@ set_ui_lang() {
         S_PROMPT_SEARCH="搜索"; S_NEW_SEARCH="新搜索（Esc 或留空取消）"
         S_ENGINE="音源"; S_ENGINE_ACT="音源"
         S_SEARCHING="搜索中"; S_REFETCH="重新获取"; S_RESULTS_N="条"
-        S_ANY_KEY="按任意键继续"; S_QUITTING="正在退出"
+        S_QUITTING="正在退出"; S_PLAY_FAILED="播放失败"; S_SEARCH_ACT="搜索"
         S_MORE_ACT="更多"; S_SORT_ACT="排序"
         S_NO_MATCH="(无匹配"; S_NO_MATCH_KEYS="按 / 改过滤，或 n 重新搜索)"
         S_FILTER_HINT="过滤（输入即筛选，Enter 播放，Esc 清除）"
@@ -1223,7 +1224,7 @@ set_ui_lang() {
         S_PROMPT_SEARCH="Search"; S_NEW_SEARCH="New search (Esc or empty to cancel)"
         S_ENGINE="source"; S_ENGINE_ACT="Source"
         S_SEARCHING="searching"; S_REFETCH="re-fetching"; S_RESULTS_N="results"
-        S_ANY_KEY="Press any key"; S_QUITTING="Quitting"
+        S_QUITTING="Quitting"; S_PLAY_FAILED="Play failed"; S_SEARCH_ACT="Search"
         S_MORE_ACT="More"; S_SORT_ACT="Sort"
         S_NO_MATCH="(no matches"; S_NO_MATCH_KEYS="press / to change filter, or n for new search)"
         S_FILTER_HINT="filter (type to narrow, Enter plays, Esc clears)"
@@ -2686,8 +2687,10 @@ enqueue_selected() {
         store_notice "$S_Q_ACT:" "$S_PL_FAILED"
         return 0
     fi
-    # No press_any_key on success: one keypress should cost one keypress, and the status
-    # line's queue= field IS the confirmation.
+    # No notice on success: one keypress should cost one keypress, and the status line's
+    # queue segment IS the confirmation. This was the first key to be given that rule; the
+    # notice mechanism now applies it everywhere (see store_notice), so what used to be the
+    # exception here is simply how the file works.
     apply_player_record "$out"
     return 0
 }
@@ -3316,15 +3319,6 @@ display_list_menu() {
         # against the per-part durations in the rows below, so the mismatch reads as the
         # structure it is. NOT repeated as "part 1 is 12:06": that row is on screen underneath.
         [[ "$LIST_SOURCE" == "parts" && -n "$PARTS_TOTAL_FMT" ]] && st_items+=("$S_TOTAL $PARTS_TOTAL_FMT")
-        # The two fields the `--info` fetch paid for that no row can hold. They are the item's,
-        # not the rows' — which is why they sit on the line that already names the item
-        # (chapters='<title>') and not in the details block, which describes one chapter.
-        if [[ "$LIST_SOURCE" == "chapters" ]]; then
-            # A date needs no label. A like count does — a bare number beside a bare
-            # number ("35 chapters · 1121831") is two counts of nothing in particular.
-            [[ -n "$ITEM_UPLOADED" ]] && st_items+=("$ITEM_UPLOADED")
-            [[ -n "$ITEM_LIKES" ]] && st_items+=("$S_LIKES $ITEM_LIKES")
-        fi
     else
         local st_sort="$SORT_FIELD"
         case "$SORT_FIELD" in
@@ -3343,6 +3337,21 @@ display_list_menu() {
             if [[ "$ENGINE_AUTH" == "anon" ]]; then st_items+=("$S_AUTH_ANON")
             else st_items+=("$S_AUTH_IN"); fi
         fi
+    fi
+    # The two fields the `--info` fetch paid for that no row can hold — the upload date and
+    # the like count. They describe ONE item, so they are drawn while the cursor is standing
+    # on that item's row (info_is_focused) rather than while a chapter list happens to be up.
+    # That is the whole of D2: `i` on a row with no chapters opens no view, and the round
+    # trip the user just bought must not be thrown away with the view that did not open
+    # (ROADMAP.md「横切规范」付了的代价不丢). In a chapter list every row is an offset into
+    # that same item, so the predicate is true for all of them and this line reads exactly as
+    # it did when the test was on LIST_SOURCE.
+    #
+    # A date needs no label. A like count does — a bare number beside a bare number
+    # ("35 chapters · 1121831") is two counts of nothing in particular.
+    if info_is_focused; then
+        [[ -n "$ITEM_UPLOADED" ]] && st_items+=("$ITEM_UPLOADED")
+        [[ -n "$ITEM_LIKES" ]] && st_items+=("$S_LIKES $ITEM_LIKES")
     fi
     # A bound with its comparator needs no word: >=30s is already a sentence.
     [[ "$MIN_DISP" != "0" ]] && st_items+=("$GL_GE${MIN_DISP}s")
@@ -3420,6 +3429,26 @@ display_list_menu() {
         chrome_h=$((chrome_h + HINT_LINES))
     fi
     
+    # ── The notice, one line, inside the measured chrome ───────────────────────────────
+    # Where a key that could not do what it was pressed for answers: the line under the
+    # title, gone by the next keypress (read_nav_input drops it). Charged to chrome_h like
+    # every other band member, so the row budget below gives up one row while it is up
+    # rather than letting it push the last row off the bottom — the reflow is a chain, and a
+    # height decided after the budget is a height the budget did not know about.
+    #
+    # TRUNCATED, never wrapped: the text can be a line of an engine's stderr, and a wrapped
+    # notice is exactly the extra line the measure pass exists to prevent. Bold label, dim
+    # text — the two weights the status segments already use, so it reads as chrome and not
+    # as a row.
+    if [[ -n "$NOTICE_LABEL" || -n "$NOTICE_TEXT" ]]; then
+        local nt_w
+        disp_w "$NOTICE_LABEL "; nt_w=$DISP_W
+        truncate_disp "$NOTICE_TEXT" $((right_edge - nt_w))
+        printf '\033[K%s%s%s %s%s%s\n' \
+            "$C_BOLD" "$NOTICE_LABEL" "$C_RESET" "$C_DIM" "$TRUNC_TEXT" "$C_RESET"
+        chrome_h=$((chrome_h + 1))
+    fi
+
     # Key navigation hints are measured BEFORE the banner: the banner's inline key tail
     # and this block are ONE job, and two adjacent chrome lines must not both document
     # keys. When this block prints (its gate below passes), the banner stays pure status
@@ -4214,9 +4243,10 @@ display_menu() {
 # the bug and not the fix.
 #
 # WINCH_OK gates it to the wait that owns the whole screen. Everywhere else something else
-# owns the cursor — the `n` prompt is echoing a query mid-keystroke, press_any_key is
-# holding a message in the scroll area, the fetch spinner is animating one line — and a
-# full-screen repaint there erases what the user is reading or typing. Setting it around
+# owns the cursor — the `n` prompt is echoing a query mid-keystroke, confirm_key is holding
+# a y/N question, the fetch spinner is animating one line — and a full-screen repaint there
+# erases what the user is reading or typing. (A NOTICE is not on this list any more: it is
+# drawn by the frame, so a repaint reproduces it instead of erasing it.) Setting it around
 # the one blocking read in read_nav_input covers both key loops that own the screen (the
 # menu loop and filter_live, which drive the same reader) and reaches neither of the others.
 #
@@ -4232,14 +4262,6 @@ on_winch() {
 trap on_winch WINCH
 
 # ── Failure reporting ───────────────────────────────────────────────────────────────────
-# The tail both reporters below share. A message printed into the scroll area lives exactly
-# until the next redraw, and the next redraw is one keypress away — so the pause is not a
-# courtesy, it is the only thing that makes the message readable at all.
-press_any_key() {
-    printf '%s%s' "$S_ANY_KEY" "$GL_ELL"
-    IFS= read -rsn1 _ || true
-}
-
 # A failed play used to be silent: play_selected returned 1, the case arm's `|| true` swallowed
 # it (that guard is what stops set -e from killing the TUI), and Enter on an
 # unplayable row did nothing and said nothing.
@@ -4247,11 +4269,14 @@ press_any_key() {
 # The reason exists ONLY on the core's stderr. `die` writes prose there and exits 1 whatever -j
 # asked for, so a synchronous -d failure puts nothing on stdout — there is no envelope field to
 # read it out of. AS-BUILT-cli-contract.md「数据契约」's `reason` taxonomy belongs to the BLOCKING play path, which uting never
-# takes. Not colored: the chrome carries ONE accent (see the palette block), and the n/m/o failures next
-# to it print plain too.
+# takes.
+#
+# One notice mechanism for the whole file, and this is just its label: store_notice records,
+# the frame draws (see the notice block). What USED to be here — and in every one of the 30-odd
+# notice sites — was a printf into the scroll area followed by a blocking read that ate the
+# next key; the reason that shape is gone is written down where store_notice now lives.
 play_failed_notice() {
-    printf '\n%sPlay failed:%s %s\n' "$C_BOLD" "$C_RESET" "$1"
-    press_any_key
+    store_notice "$S_PLAY_FAILED:" "$1"
 }
 
 # ── PLAY delegate (Asynchronous / Non-blocking) ─────────────────────────────────────────
@@ -4356,11 +4381,35 @@ play_selected() {
 # surface. A version of `a` that appended to a file here would be the exact shape
 # CLAUDE.md forbids — correctness added up, in a UI, instead of down.
 #
-# A short notice, then a keypress. Same contract as play_failed_notice, with a caller-
-# supplied label, because "Play failed:" is the wrong word for a store that is not there.
+# ── The notice: ONE LINE IN THE FRAME, NOT A MODAL ──────────────────────────────────────
+# A notice answers a key the user just pressed — an empty log, a one-part video, a row with
+# no chapters, a store that is not installed, a fetch that failed, a preference the
+# environment has pinned. None of those questions want an answer back, so a notice is
+# CONTENT: this function only RECORDS it, display_list_menu draws it under the title line
+# inside the measured chrome, and read_nav_input drops it the moment the next key is in
+# hand. It lives exactly one frame — exactly as long as the question it answers.
+#
+# It used to be a printf into the scroll area (outside the frame model entirely) plus a
+# blocking `read -rsn1` to hold it there, and that shape cost this suite twice. Once when
+# the 1 the row-source openers return met `set -e` on the very keypress meant to dismiss
+# the notice, taking the TUI down at the worst possible moment — the `|| true` still on the
+# h/c/i arms is that scar. Once when tests/contract.sh's chapter walk had to feed that
+# reader a Space and then wait for the notice to disappear before it could send another
+# key, which made the walk race its own previous lap and go flaky: a check paying interest
+# on a design debt. The debt itself is that a modal message turns the NEXT key into two
+# things at once — dismiss, or command — and the user cannot know which one they pressed.
+#
+# So: a message stops the UI only when it is really asking something (ROADMAP.md「横切规范」
+# 只为一个答案停下来). The two readers that ARE asking keep their own blocking read, because
+# they have a question in them: confirm_key (y/N) and prompt_name (a playlist name).
+#
+# The label is the caller's, because "Play failed:" is the wrong word for a store that is
+# not there — and it is what lets one line serve every source without a second spelling.
+NOTICE_LABEL=""
+NOTICE_TEXT=""
 store_notice() {
-    printf '\n%s%s%s %s\n' "$C_BOLD" "$1" "$C_RESET" "$2"
-    press_any_key
+    NOTICE_LABEL="$1"
+    NOTICE_TEXT="$2"
 }
 
 have_store() {
@@ -4507,8 +4556,10 @@ add_to_playlist() {
         store_notice "$S_PL_ACT:" "$msg"
         return 0
     fi
-    printf '\n%s%s%s %s %s\n' "$C_BOLD" "$S_PL_ADDED" "$C_RESET" "$GL_ARROW" "$name"
-    press_any_key
+    # The success side is a notice too, and under the same label as every failure this key
+    # can report: one keypress costs one keypress (the rule `+` already followed), and the
+    # confirmation rides the next frame instead of holding the screen for a second key.
+    store_notice "$S_PL_ACT:" "$S_PL_ADDED $GL_ARROW $name"
 }
 
 # Which item of the STORE the focused row is, in PL_ITEM_INDEX — 0-based, which is what
@@ -4594,7 +4645,7 @@ delete_from_playlist() {
         store_notice "$S_PL_ACT:" "$msg"
         return 0
     fi
-    printf '%s%s%s %s %s\n' "$C_BOLD" "$S_PL_REMOVED" "$C_RESET" "$GL_ARROW" "$name"
+    store_notice "$S_PL_ACT:" "$S_PL_REMOVED $GL_ARROW $name"
     # The record is gone, so a player still holding it is playing something the user just
     # deleted — and the banner would keep naming a row the store no longer has. Stopped
     # BEFORE the reload, so the redraw that reload ends with already draws no player.
@@ -5175,6 +5226,27 @@ fetch_item_info() {
     return 0
 }
 
+# Do the ITEM_* fields describe the row the cursor is ON? The {engine, url} pair, asked the
+# way chapter_span and play_chapter ask it — handle_key drops the `t=`, so a chapter row and
+# the search row it came from answer the same, which is what makes ONE predicate serve both
+# views. In the search view only the row `i` was actually pressed on matches; in a chapter
+# list every row does.
+#
+# This is what lets a chapterless `i` keep what it paid for. It is a question about the
+# CURSOR, not about the fetch: move off that row and the fields stop being drawn, while the
+# single-slot cache stays, so pressing `i` there again still costs no round trip
+# (fetch_item_info). ITEM_TITLE is in the guard because apply_item_info refuses a record
+# without one — an empty ITEM_URL with a stale title would otherwise match a row by accident.
+info_is_focused() {
+    local cur
+    [[ -n "$ITEM_URL" && -n "$ITEM_TITLE" ]] || return 1
+    ((NUM_ENTRIES > 0)) || return 1
+    [[ "${R_ENGINE[$selected]:-}" == "$ITEM_ENGINE" ]] || return 1
+    handle_key "$ITEM_URL"; cur="$HANDLE_KEY"
+    handle_key "${urls[$selected]}"
+    [[ -n "$cur" && "$cur" == "$HANDLE_KEY" ]]
+}
+
 # The `--info` envelope into the item fields. ONE jq call, US-joined, the way every other
 # envelope read in this file works. It reads FOUR fields and not the eight it used to: the
 # view count, the channel and the duration are already on the row this key was pressed from,
@@ -5260,17 +5332,17 @@ cycle_quality() {
 # QUERY_LABEL because every caller restores its own mutated global BEFORE reporting, so by the
 # time we run the label is already back to the one that still works.
 report_fetch_failure() {
-    local rc="$1" q="${2:-}"
+    local rc="$1" q="${2:-}" text
     if ((rc == 2)); then
         if [[ -n "$q" ]]; then
-            printf 'no results for "%s". ' "$q"
+            text="no results for \"$q\""
         else
-            printf 'no results. '
+            text="no results"
         fi
     else
-        printf '%s. ' "${SEARCH_ERR:-search failed}"
+        text="${SEARCH_ERR:-search failed}"
     fi
-    press_any_key
+    store_notice "$S_SEARCH_ACT:" "$text"
 }
 
 # ── SEARCH action (key: n) ──────────────────────────────────────────────────────────────
@@ -5789,6 +5861,11 @@ read_paste_tail() {
     return 0
 }
 
+# A NOTICE DIES ON A KEY, NOT ON A CLOCK, and this is the one place that knows the
+# difference: every path below that returns 0 has a real keypress in hand, and the one that
+# returns 1 is the tick. Clearing it here rather than in the two loops that call this gives
+# the notice a single owner — and clearing it on the tick instead would give a notice a
+# one-second life whenever a track is playing, which is not long enough to read one.
 read_nav_input() {
     READ_NAV_KEY=""
     local input=""
@@ -5799,10 +5876,12 @@ read_nav_input() {
     if [[ -n "$PENDING_KEY" ]]; then
         READ_NAV_KEY="$PENDING_KEY"
         PENDING_KEY=""
+        NOTICE_LABEL=""; NOTICE_TEXT=""
         return 0
     fi
     if ((PENDING_ESC)); then
         PENDING_ESC=0
+        NOTICE_LABEL=""; NOTICE_TEXT=""
         read_esc_tail
         return 0
     fi
@@ -5839,6 +5918,7 @@ read_nav_input() {
         return 1
     fi
     WINCH_OK=0
+    NOTICE_LABEL=""; NOTICE_TEXT=""
     if [[ "$input" != $'\x1b' ]]; then
         # One byte is not one key: finish the character before handing it up. The ESC/arrow
         # decoding in read_esc_tail is untouched — those sequences are all ASCII.
