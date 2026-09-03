@@ -27,7 +27,7 @@
 # decides whether it pays one lap or six. The `c` walk is the cheaper of the two (one HTTP
 # request per lap against an extraction).
 #
-# THE TOTAL IS A RANGE, 390-393, and that is not sloppiness: four checks report only when a
+# THE TOTAL IS A RANGE, 400-403, and that is not sloppiness: four checks report only when a
 # walk gives them something to report (a chapterless row for the kept-fields claim, an opened
 # view for either toggle, a parts view to read a total off), and the alternative to skipping
 # them is a check that cannot fail on the days the site is generous. A skip line names each
@@ -1659,6 +1659,7 @@ spawn yt-dead      shell/ut-play      -j -- AAAAAAAAAAA
 spawn bili-resolve shell/bili-resolve -j -- "$BILI_ID"
 spawn bili-info    shell/bili-resolve --info -j -- "$BILI_ID"
 spawn bili-zh      shell/bili-search  -j -n 20 -M 600 -- 周杰伦
+spawn yt-zh        shell/yt-search    -J -n 15 -- 周杰伦
 spawn bili-offset  shell/bili-resolve -j -- "https://www.bilibili.com/video/$BILI_PARTS_ID?p=2&t=601"
 spawn bili-parts   shell/bili-resolve --parts -j -- "$BILI_PARTS_ID"
 spawn bili-part1   shell/bili-resolve --parts -j -- "$BILI_ID"
@@ -1717,8 +1718,14 @@ echo "── search envelope ─────────────────
 # yt-search round trips a run, all of them the same query.
 YT_S=$(out search-yt)
 YT_SJ=$(out searchJ-yt)
+# `<=10`, not `==10`: `-n` says how many to FETCH and never how many come back — -m/-M have
+# always shortened it, and since the container gate the row count can drop by one on a query
+# whose page holds a channel (AS-BUILT-engine.md「kind 与 access」). The ceiling-is-honoured
+# claim is the cap-/dflt- pair above, which is where it belongs; asserting an exact count here
+# only ever held because `lofi`'s top ten happen to be all videos, and would have gone red on
+# a YouTube ranking change rather than on a bug of ours.
 report "search -j envelope" 0 \
-    "$(jqv '.query and .count and (.results|length==10)' "$YT_S")"
+    "$(jqv '.query and .count and (.results|length)>0 and (.results|length<=10)' "$YT_S")"
 # The engine names itself in its own envelope. This is what lets a caller route a chosen
 # result back to the matching <engine>-resolve without pattern-matching its URL, so a new
 # engine that forgets the field breaks routing rather than merely looking different.
@@ -1825,6 +1832,15 @@ report "search result keys agree" \
 #     shipped exactly that — search_type=video mixes in `ketang` (paid-course) records that
 #     carry no `bvid`, 3 of 20 on "钢琴", and an EMPTY bvid is TRUTHY in jq, so the `.id !=
 #     null` gate passed them through with `id: ""` and `url: null`.
+#   · A row with NO LENGTH AND NO REASON is not a row either, and this is the clause that
+#     catches a CONTAINER — the shape a buildable url gets past the check above. A playable
+#     call either has a duration or says why it has none: a live stream carries
+#     live_status "is_live" with duration null, an archived one carries "was_live" with a
+#     number. A channel row carries NEITHER (measured 2026-09-03: row 15 of 周杰伦 on
+#     yt-search is the artist's channel — duration null, and yt-dlp does not even put the
+#     live_status key on that entry, while every video entry beside it has it). That is the
+#     engine-independent way to say "a row is a playable call" without any site knowledge
+#     leaking in here: this file must not know what a /channel/ url looks like.
 #
 # Asserted against the CLOSED ENUM, never against `has("kind")`: an engine writing
 # kind:"video" — the site's own word, the likeliest wrong answer — satisfies presence and
@@ -1834,12 +1850,22 @@ ROW_IS_A_CALL='(.results|length)>0 and all(.results[];
       (.url|type=="string") and (.url|length)>0
       and (.id|type=="string") and (.id|length)>0
       and (.kind|IN("track","collection","multipart"))
-      and (.access|IN("full","preview","paywalled")))'
+      and (.access|IN("full","preview","paywalled"))
+      and ((.duration|type)=="number" or (.live_status|type)=="string"))'
 for n in $ENGINES; do
     report "$n-search -j rows are calls" 0 \
         "$(jqv "$ROW_IS_A_CALL" "$(out "search-$n")")"
     report "$n-search -J rows are calls" 0 \
         "$(jqv "$ROW_IS_A_CALL" "$(out "searchJ-$n")")"
+done
+# The same predicate over EVERY OTHER live search this file already paid for — the ceiling
+# and default envelopes, and the three 周杰伦 ones. Not one extra request, and it is what
+# stops the invariant going vacuous: a container row appears in a MINORITY of queries, so
+# asserting it on one query per engine is asserting it on a sample that usually has nothing
+# to catch. `lofi` at -n 10 has never carried one; 周杰伦 does today.
+for e in yt-zh bili-zh ne-vip ne-novip $(for n in $ENGINES; do echo "cap-$n dflt-$n"; done); do
+    [ -s "$LIVE/$e.out" ] || continue
+    report "$e rows are calls" 0 "$(jqv "$ROW_IS_A_CALL" "$(out "$e")")"
 done
 # `access` IS A COMPUTED FIELD ON ONE ENGINE, and only a live search can show it. The
 # invariant above holds every engine to the closed enum, which a row hardcoding "full"

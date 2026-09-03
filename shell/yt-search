@@ -399,13 +399,40 @@ fetch_results() {
     # `kind` and `access` (AS-BUILT-cli-contract.md「数据契约」) are the ENGINE'S JUDGEMENT about a row,
     # not a site field carried over, so they are merged LAST and win over any raw entry key of
     # the same name. Both are constants on this site and that is the whole answer, not a stub:
-    # a YouTube search row IS one video, and anonymous extraction returns the whole timeline or
-    # no stream at all — there is no preview form to report. Injecting them here rather than in
-    # the lean projection is what puts them in -J as well: they are the engine's routing
-    # judgement, and the caller that asked for MORE data must not be the one that loses it.
+    # a YouTube search row that SURVIVES THE GATE BELOW is one video, and anonymous extraction
+    # returns the whole timeline or no stream at all — there is no preview form to report.
+    # Injecting them here rather than in the lean projection is what puts them in -J as well:
+    # they are the engine's routing judgement, and the caller that asked for MORE data must not
+    # be the one that loses it.
+    #
+    # A ROW IS A PLAYABLE CALL, so a container is not a row. `ytsearch` has no scope selector
+    # — the other two engines pick one (bili-search sends search_type=video, ne-search sends
+    # type:1) and so never see this — and its result set really is mixed: measured 2026-09-03,
+    # row 15 of 周杰伦 is the artist's CHANNEL, and it shipped as kind:\"track\" with a null
+    # duration. `ut-play --engine yt -- <that url>` does not play one thing, so the envelope was
+    # making a claim the row could not keep.
+    #
+    # The signal is free: yt-dlp tags every flat entry with the extractor that will handle it,
+    # and it is already in the response — a video is `Youtube`, a channel or a playlist is
+    # `YoutubeTab`. No extra request, which is what makes this a gate rather than a roadmap item.
+    #
+    # FAIL OPEN, deliberately: an entry with NO ie_key is kept. The gate's job is to drop a
+    # shape we can name, not to require a key from yt-dlp — a future version that stops
+    # emitting it would otherwise empty every search on this engine, which is a far worse
+    # failure than the one row this fixes.
+    #
+    # Dropping shortens the count, and that is the contract already: `-n` says how many to
+    # FETCH, never how many come back (`-m`/`-M` have always shortened it, and bili-search's
+    # url gate does the same — AS-BUILT-engine.md「kind 与 access」). Compensating by
+    # over-fetching would spend a request on every query for a row most queries do not carry.
+    #
+    # A container is not lost, it is UNCLAIMED: what a caller could do with an album or a
+    # channel is its own verb with its own envelope, where a track count and a page cursor
+    # have somewhere to live. docs/ROADMAP.md「容器行」.
     FILTERED_JSON=$(printf '%s' "$result_json" | jq "$JQ_PRELUDE
         [ (.entries // [])[]
           | select($bounds)
+          | select((.ie_key // \"Youtube\") == \"Youtube\")
           | . + {duration_fmt: (.duration | fmt_dur), description: (.description | oneline),
                  kind: \"track\", access: \"full\"} ]$sort_expr")
 }
@@ -460,7 +487,8 @@ Usage:
   yt-search [options] <search query>
 
 Options:
-  -n NUM   Number of results to fetch (default: 20)
+  -n NUM   Number of results to fetch (default: 20). This is how many are ASKED FOR, not a
+           promise of how many come back: -m/-M and the container gate both shorten it
   -m SEC   Minimum duration in seconds
   -M SEC   Maximum duration in seconds
   -s FIELD Sort field: relevance | view_count | duration (default: relevance)
