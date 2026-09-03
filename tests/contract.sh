@@ -20,16 +20,18 @@
 # Portability: bash 3.2 (macOS system bash). No bash-4 idioms; see docs/ARCHITECTURE.md「可移植性契约」.
 #
 # Cost, measured 2026-09-03 and broken down because a number at the door is what a reader
-# decides on: ~76-96s in full (four runs: 94s, 81s, 76s, 96s), of which `--offline` is the
-# first ~28s: 258 checks, no packet sent. The live half is roughly 21 engine round trips plus
-# the `i` walk, and the spread is now mostly the WALK's — it stops at the first row with
-# chapters, so today's result ordering decides whether it pays one lap or six.
+# decides on: ~83-99s in full (three runs at this size: 83s, 99s, 86s), of which `--offline`
+# is the first ~28s: 258 checks, no packet sent. The live half is roughly 21 engine round
+# trips plus TWO walks — `i` over the chapter rows and `c` over the parts rows — and the
+# spread is mostly theirs: each stops at the first row that opens, so today's result ordering
+# decides whether it pays one lap or six. The `c` walk is the cheaper of the two (one HTTP
+# request per lap against an extraction).
 #
-# THE TOTAL IS A RANGE, 388-389, and that is not sloppiness: two checks report only when the
+# THE TOTAL IS A RANGE, 390-393, and that is not sloppiness: four checks report only when a
 # walk gives them something to report (a chapterless row for the kept-fields claim, an opened
-# view for the toggle), and the alternative to skipping them is a check that cannot fail on
-# the days YouTube puts chapters on row 1. A skip line says which one, and 0 failed is the
-# number that means passing. That 28 is dominated by one deliberate
+# view for either toggle, a parts view to read a total off), and the alternative to skipping
+# them is a check that cannot fail on the days the site is generous. A skip line names each
+# one, and 0 failed is the number that means passing. That 28 is dominated by one deliberate
 # 5.5s lock spin — a FRESH held lock has to be waited out, that being what the spin is for;
 # the stale-lock steal beside it costs 0.1s because staleness is tested before the spin, not
 # after (shell/ut-playlist:lock_playlist).
@@ -2782,6 +2784,101 @@ else
         "$(shell/ut-play --status -j 2>/dev/null | jq '.players | length')"
     tmux kill-session -t "$TS" 2>/dev/null
     rm -rf "$TUI_STATE"
+
+    # ── The parts view (key: c), on whichever installed engine HAS --parts ──────────────
+    # This row source had no coverage at all. The session above drives yt, where `c` is inert
+    # by capability — which is a real claim and is checked up there, but it means open_parts'
+    # whole happy path (fetch, count, reshape, stash, build, label) only ever ran in a human's
+    # terminal. It went unnoticed because the key LOOKS covered.
+    #
+    # The engine is discovered by CAPABILITY, never named: _ro_verb_has is the probe the
+    # read-only verb cases above already use, and it asks the same question uting's own
+    # refresh_engine_parts asks. So a fourth engine with --parts is covered the day it lands,
+    # and a checkout without a --parts engine skips with a reason instead of going red.
+    PARTS_ENG=""
+    for n in $ENGINES; do
+        _ro_verb_has "$n" "--parts" && { PARTS_ENG="$n"; break; }
+    done
+    if [ -z "$PARTS_ENG" ]; then
+        echo "  skip  (no installed engine has --parts — no parts view to open)"
+    else
+        # Its own config and its own state dir, not the section's above: the `#` check up
+        # there TOGGLES UT_ROW_INDEX and writes it back, so borrowing that file would make
+        # the row cursor readable or not depending on which checks ran before this one. A
+        # fixture, in the sense this file allows — data a real command reads.
+        PTS_CFG="$UT_TEST_TMP/parts-config"
+        printf '%s\n' '# fixture: the walk below names rows by their ordinal' \
+            'UT_ROW_INDEX=on' 'UT_LIST_MODE=page' >"$PTS_CFG"
+        PTS_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-partsstore.XXXXXX")
+        TS="ctest-parts-$$"          # the helpers above read $TS; the first session is gone
+        tmux kill-session -t "$TS" 2>/dev/null
+        tmux new-session -d -s "$TS" -x 100 -y 30 \
+            "cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$PTS_STATE' UT_CONFIG='$PTS_CFG' YT_LANG=en shell/uting --engine $PARTS_ENG -n 10 'lofi hip hop'; printf 'RC=%s\n' \$?; sleep 20"
+        up=$(poll_until 30 pane_has "query='")
+        if [ "$up" != 1 ]; then
+            report "the parts pane came up" 1 "$up"
+        else
+            # The same walk shape the `i` block uses, and for the same reason: which of
+            # today's rows is multi-part is the site's business, not this file's. Cheaper per
+            # lap than that one — `--parts` is a single HTTP request, not an extraction — so
+            # the bound is six rows. Measured 2026-09-03 on this query: the first ten rows
+            # came back 17, 6, 99, 1, 1, 3 parts, so the walk normally pays one lap.
+            parts_settled() { pane_has "parts='" || pane_has 'only one part'; }
+            popened=0; ponly=0; prow=1; pwalked=1
+            while :; do
+                tmux send-keys -t "$TS" c
+                poll_until 12 parts_settled >/dev/null
+                pane_has "parts='" && { popened=1; break; }
+                ponly=1
+                [ $prow -ge 6 ] && break
+                tmux send-keys -t "$TS" Down
+                prow=$((prow + 1))
+                pwalked=$(poll_until 5 pane_has "^▶ +$prow\.")
+                [ "$pwalked" = 1 ] || break
+            done
+            report "c opens a multi-part row as the row source" 1 "$popened"
+            if [ "$popened" != 1 ]; then
+                echo "  ---- pane where no row of $prow opened its parts ----" >&2
+                tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
+                echo "  ---- end of pane ----" >&2
+            fi
+            # Named apart from the door for the reason the `i` walk names its own: a walk
+            # that stalled and a query that had no multi-part row are different failures, and
+            # the first one is about this file. It is also the DISCRIMINATING INPUT on a
+            # second, independent notice path — after a single-part row's refusal the walk's
+            # next key is a plain Down with nothing fed to any reader, so a notice that still
+            # ate a keypress would leave the cursor where it was.
+            report "…and the walk got past every refusal on the way" 1 "$pwalked"
+            if [ $popened = 1 ]; then
+                # The witness that the ENVELOPE was read and not merely the rows: the
+                # collection's own total duration — the number the search row was showing
+                # while Enter on that row plays part one. No row of this view carries it and
+                # no search screen explains it, so a parts view built without reading
+                # total_duration_fmt still lists parts and fails right here.
+                report "…and states the collection's total, which no row holds" 1 \
+                    "$(pane_has 'total [0-9]' && echo 1 || echo 0)"
+                tmux send-keys -t "$TS" c
+                report "c again leaves the parts for search" 1 \
+                    "$(poll_until 10 pane_back "parts='" "query='")"
+            else
+                echo "  skip  (no parts view was opened to read a total off or to leave)"
+            fi
+            # NOT reported, and this says why so the gap is not rediscovered as an oversight:
+            # "a single-part row answers with a notice instead of a one-row list" cannot be
+            # separated by a walk that stops at the first view it opens. A build that DID
+            # open a one-row list would break the loop as "opened" and never reach a claim
+            # about the refusal — so any report here would be a tautology on the branch that
+            # observed it, which is the one thing this file will not print. Proving it needs
+            # a row known to hold one part before the key is pressed, and today no engine's
+            # search page says which row that is (the same measurement that makes `c` a
+            # question key: docs/ROADMAP.md「横切规范」按下前可预期).
+        fi
+        tmux send-keys -t "$TS" q 2>/dev/null
+        poll_until 5 pane_has 'RC=0' >/dev/null
+        tmux kill-session -t "$TS" 2>/dev/null
+        UT_STATE_DIR="$PTS_STATE" shell/ut-play --stop --all >/dev/null 2>&1
+        rm -rf "$PTS_STATE"
+    fi
 fi
 
 report_real_config
