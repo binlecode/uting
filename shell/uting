@@ -592,8 +592,9 @@ Keys (List View):
            `core` is this view's own job, `full` is every key above. UT_KEYS pins it
   q        quit (stops background playback on exit)
 
-  The eight settings these keys change — engine, sort field, playback mode, quality tier,
-  theme, chrome language, the result count and the key-hint tier — are written back to YOUR config file
+  The ten settings these keys change — engine, sort field, playback mode, quality tier,
+  theme, chrome language, the result count, the key-hint tier, row numbers and the list
+  mode — are written back to YOUR config file
   (${XDG_CONFIG_HOME:-~/.config}/uting/config), in place: comments and layout are kept,
   only the value moves. The shipped defaults file is never written. A key you have pinned
   in the environment is left alone, and says so once.

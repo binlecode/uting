@@ -1,6 +1,6 @@
 ---
 name: audit-conformance
-description: Periodic whole-suite audit of uting against the coding rules baked into this skill — surface layering (no YouTube logic in the TUI), DRY across the eight scripts, bash 3.2 portability, dead functions and one-sided variables, swallowed errors, stale prose defending retired mechanisms, contract drift in the JSON envelope / exit codes, and doc drift against docs/ARCHITECTURE.md. Inventories every violation with file:line + rule citation, then writes a scoped cleanup report. The whole-tree counterpart to reviewing a single diff. Never proposes structural or guard tests.
+description: Periodic whole-suite audit of uting against the coding rules baked into this skill — surface layering (no YouTube logic in the TUI), DRY across the ten scripts, bash 3.2 portability, dead functions and one-sided variables, swallowed errors, stale prose defending retired mechanisms, contract drift in the JSON envelope / exit codes, and doc drift against docs/ARCHITECTURE.md. Inventories every violation with file:line + rule citation, then writes a scoped cleanup report. The whole-tree counterpart to reviewing a single diff. Never proposes structural or guard tests.
 argument-hint: "[file-or-surface scope, default all of shell/]"
 disable-model-invocation: true
 ---
@@ -14,8 +14,8 @@ slow accretion. This skill is the other scope: judgment-scan the whole suite aga
 **defined in this file**, inventory every violation with `file:line` + the rule cited, and
 write a scoped cleanup report.
 
-**Why this exists here specifically.** uting has no linter, no type checker, no CI, and eight
-standalone bash scripts — a player, a TUI, two engine pairs, and two durable stores
+**Why this exists here specifically.** uting has no linter, no type checker, no CI, and ten
+standalone bash scripts — a player, a TUI, three engine pairs, and two durable stores
 (`ut-playlist`, `ut-history`) — written to a frozen bash 3.2 floor. Nothing but judgment
 defends its invariants, and three of them erode silently: logic creeping *up* into the TUI, a
 bash-4 idiom slipping in (it runs fine on the author's shell and aborts under `/bin/bash`), and
@@ -72,6 +72,7 @@ mandate — and both are restated inline where they matter.
         ↑                                            ↑
   engine pairs   shell/yt-search · shell/yt-resolve     shell/ut-play      (player)
                  shell/bili-search · shell/bili-resolve
+                 shell/ne-search · shell/ne-resolve
                  (every site-specific fact)           (playback + lifecycle; asks an
         ↑                                              engine BY NAME, never a site;
         │                                              writes the listening row by
@@ -87,8 +88,8 @@ Every arrow points **up**. A violation is any downward reach that skips a layer:
 touching a primitive, an engine writing player state, a store learning a host pattern or an
 mpv flag, the player or an engine knowing anything about the TUI. The player may not read a
 `YT_TUI_*`-shaped knob; the TUI may not construct yt-dlp argv. **There are no wrappers left
-to hide a decision in** — the eight scripts are peers, so a misplaced fact is always in one
-of eight files.
+to hide a decision in** — the ten scripts are peers, so a misplaced fact is always in one
+of ten files.
 
 ---
 
@@ -123,7 +124,7 @@ of eight files.
    # R3 back-edges: these MUST be empty apart from dep-check strings and comments
    grep -n 'yt-dlp\|mpv \|--input-ipc-server' shell/uting
    grep -n 'yt-dlp\|cookies-from-browser' shell/ut-play
-   grep -n 'mpv \|--input-ipc-server\|players/' shell/yt-search shell/yt-resolve shell/bili-search shell/bili-resolve
+   grep -n 'mpv \|--input-ipc-server\|players/' shell/*-search shell/*-resolve
    grep -n 'yt-dlp\|mpv \|--input-ipc-server\|players/' shell/ut-playlist shell/ut-history
 
    # R5 bash-4 leaks (the hook gates added lines; this catches what predates it)
@@ -166,7 +167,7 @@ of eight files.
 
 ## Pass 1 — Rule-class audit
 
-Read-only. The suite is eight files; a single careful sweep by the orchestrator is usually
+Read-only. The suite is ten files; a single careful sweep by the orchestrator is usually
 right. For a full periodic audit, fan out to read-only subagents (`Read, Grep, Bash`; no
 Edit/Write) grouped by rule cluster so each holds one mental model:
 
