@@ -2909,9 +2909,9 @@ cleanup_on_exit() {
 }
 trap cleanup_on_exit EXIT INT TERM HUP
 
-# Page size: default 10, provisionally capped to terminal height so the FIRST load_rows has a
-# NUM_PAGES to work with. It is only provisional: display_list_menu reflows PAGE_SIZE against
-# the chrome it actually measured, every redraw (see the reflow block there).
+# Page size: default 10, so the FIRST load_rows has a NUM_PAGES to work with. It is only
+# provisional: display_list_menu reflows PAGE_SIZE against the chrome it actually measured,
+# every redraw (see the reflow block there), before anything reads either value.
 term_size; LINES_N=$TERM_LINES
 PAGE_SIZE=$PAGE_OPT
 # scroll mode's window: the ABSOLUTE index of the first visible row. It is the mode's whole
@@ -2925,9 +2925,6 @@ VIEW_START=0
 # read inside it; declared here so it is a global by intent rather than by the accident of
 # being assigned inside a function.
 PLAYING_IDX=-1
-PAGE_CAP=$(( LINES_N - 8 ))
-((PAGE_CAP >= 3)) || PAGE_CAP=3
-((PAGE_SIZE <= PAGE_CAP)) || PAGE_SIZE=$PAGE_CAP
 
 # ── Fetch spinner ───────────────────────────────────────────────────────────────────────
 # A search is the one moment this TUI has nothing to draw, and a still `searching…` line reads
