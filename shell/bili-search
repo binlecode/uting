@@ -50,7 +50,7 @@ fi
 
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
-# Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
+# Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
 # AS-BUILT-cli-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
@@ -66,7 +66,7 @@ ut_read_config() {
         val="${line#*=}"
         while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
-        [[ "$key" =~ ^(UT|YT|BILI)_[A-Z0-9_]+$ ]] || continue
+        [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
         UT_CONFIG | UT_DEFAULTS | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
@@ -462,6 +462,13 @@ fetch_page_once() {
     ((PAGE_CURL_RC == 0)) && ((PAGE_RISK == 0)) && [[ "$PAGE_HTTP" == "200" && "$PAGE_CODE" == "0" ]]
 }
 
+# IT RETURNS A STATUS AND WRITES A FILE; IT DOES NOT PRINT AND IT DOES NOT DIE. Reporting a
+# failure by calling `search_fail` from in here swallowed it: the caller runs this inside a
+# command substitution, so the error envelope landed in a shell variable and a JSON caller got
+# an empty stdout with a bare exit 2 — no `status`, no `reason`, the one thing the envelope
+# exists to guarantee (AS-BUILT-cli-contract.md「数据契约」). The exit code was right the whole
+# time, which is why it went unnoticed.
+FETCH_REASON=""
 fetch_page() {
     local page=$1
     local body="$SCRATCH_DIR/page.$page.json"
@@ -474,16 +481,20 @@ fetch_page() {
         # answer will say the same thing a second later, and asking again is just another
         # request against a host that counts them.
         if [[ "$reason" != "network" ]]; then
-            search_fail "$reason"
+            FETCH_REASON="$reason"
+            return 1
         fi
         sleep "$BILI_RETRY_PAUSE"
         if ! fetch_page_once "$page" "$body"; then
-            search_fail "$(classify_http_error "$PAGE_CURL_RC" "$PAGE_HTTP" "$PAGE_CODE" "$PAGE_RISK")"
+            FETCH_REASON=$(classify_http_error "$PAGE_CURL_RC" "$PAGE_HTTP" "$PAGE_CODE" "$PAGE_RISK")
+            return 1
         fi
     fi
 
     # An exhausted or empty search omits `data.result` entirely rather than sending [].
-    jq -c '.data.result // []' "$body" 2>/dev/null || echo '[]'
+    jq -c '.data.result // []' "$body" >"$SCRATCH_DIR/chunk.json" 2>/dev/null ||
+        echo '[]' >"$SCRATCH_DIR/chunk.json"
+    return 0
 }
 
 fetch_results() {
@@ -511,10 +522,11 @@ fetch_results() {
     local page=1 got=0
     while ((page <= pages)); do
         local chunk n
-        chunk=$(fetch_page "$page")
-        n=$(printf '%s' "$chunk" | jq 'length' 2>/dev/null) || n=0
+        fetch_page "$page" || search_fail "$FETCH_REASON"
+        chunk="$SCRATCH_DIR/chunk.json"
+        n=$(jq 'length' "$chunk" 2>/dev/null) || n=0
         ((n == 0)) && break
-        jq -c --argjson chunk "$chunk" '. + $chunk' "$all" >"$all.tmp" && mv "$all.tmp" "$all"
+        jq -c --slurpfile chunk "$chunk" '. + $chunk[0]' "$all" >"$all.tmp" && mv "$all.tmp" "$all"
         got=$((got + n))
         ((got >= wanted)) && break
         page=$((page + 1))
