@@ -52,7 +52,7 @@ fi
 # key the environment pins would be written to the file and then IGNORED at the next startup,
 # and a file recording a value the program has already decided to throw away is a lie that
 # surfaces months later. Ahead of the block below rather than inside it, because that block is
-# duplicated verbatim in all eight entry points and this is uting's alone.
+# duplicated verbatim in all ten entry points and this is uting's alone.
 PREF_KEYS="UT_DEFAULT_ENGINE YT_THEME UT_PLAY_MODE UT_PLAY_QUALITY UT_SORT_FIELD YT_LANG UT_START_RESULTS UT_KEYS UT_ROW_INDEX UT_LIST_MODE"
 PREF_PINNED=""
 for _pk in $PREF_KEYS; do
@@ -106,7 +106,7 @@ ut_read_config "$UT_CONFIG"
 ut_read_config "$UT_DEFAULTS"
 
 # ── PREFERENCE WRITE-BACK ───────────────────────────────────────────────────────────────
-# The eight keys above are the ones this TUI changes at runtime, and they are written back to
+# The ten keys above are the ones this TUI changes at runtime, and they are written back to
 # the USER's config file in place. A preference that has to be re-pressed every session is not
 # a preference; the reasoning is ARCHITECTURE.md「两个根数据文件」 (reopen triggers: ROADMAP), the key table is
 # AS-BUILT-cli-contract.md「配置面」. What the code below is:
@@ -133,7 +133,7 @@ PREF_WRITE_OFF=0   # a write failed once; stop retrying at every tick
 PREF_SAID=""       # keys already refused out loud, so the notice is said once each
 
 # The whitelist AND the key→variable map. One case, because two of them would be two places
-# to add the ninth key and one place to forget it.
+# to add an eleventh key and one place to forget it.
 pref_value() {
     case "$1" in
     UT_DEFAULT_ENGINE) printf '%s' "$ENGINE" ;;
@@ -150,14 +150,14 @@ pref_value() {
 }
 
 # pref_listed <needle> <space-separated haystack>. bash 3.2 has no associative arrays and
-# these lists are eight long, so a set is a string and membership is a glob.
+# these lists are ten long, so a set is a string and membership is a glob.
 pref_listed() {
     case " $2 " in *" $1 "*) return 0 ;; esac
     return 1
 }
 
-# A value is acceptable only if ut_read_config would read it back UNCHANGED. The eight are
-# enumerations and a number, so this never fires today; it is here so a ninth key cannot
+# A value is acceptable only if ut_read_config would read it back UNCHANGED. The ten are
+# enumerations and a number, so this never fires today; it is here so an eleventh key cannot
 # quietly write a line the loader mangles — `#` starts a comment, one matching quote pair is
 # stripped, surrounding space is trimmed and a leading ~/ becomes $HOME.
 pref_value_ok() {
@@ -323,7 +323,7 @@ fi
 # The listening log, located the same way and just as optionally. HISTORY_BIN, not
 # UT_HISTORY: that name is already the player's set-once switch for whether a row is
 # written at all (AS-BUILT-cli-contract.md「配置面」) — and like its two siblings above, an internal
-# does not wear the UT_/YT_/BILI_ prefix, which ut_read_config accepts as settable.
+# does not wear the UT_/YT_/BILI_/NE_ prefix, which ut_read_config accepts as settable.
 # This file only READS it, and only when h is pressed — the writing is the player's, where
 # the fact "a track ended, and why" exists.
 HISTORY_BIN=""
@@ -647,7 +647,7 @@ require_cmd() {
     done
 }
 
-# The unix-socket client, resolved once at startup (ut-play carries the same probe — eight
+# The unix-socket client, resolved once at startup (ut-play carries the same probe — ten
 # peers, no shared library). BSD/OpenBSD nc take -U; netcat-traditional and busybox nc do
 # not, and there nmap's ncat is the same primitive under its second name. Probed by
 # CAPABILITY (' -U' in the -h text), never by version string. ncat's -w bounds only the

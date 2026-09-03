@@ -49,7 +49,7 @@ fi
 #
 # The shipped defaults are `<checkout>/config`, read from one level above this script's own
 # RESOLVED location — the same mechanism, and the same reason, as the VERSION read above.
-# That file is where every default value in the suite is declared, ONCE, for all eight entry
+# That file is where every default value in the suite is declared, ONCE, for all ten entry
 # points. Before it existed each default was inlined per script, which meant a cross-engine
 # value like UT_MAX_SEARCH_RESULTS was written twice and could drift apart with nothing to
 # catch it. It is therefore NOT optional: a checkout without it is broken, and says so with
@@ -66,7 +66,7 @@ fi
 # stripped, a leading ~/ expanded. Deliberately NOT sourced as shell: a config file that is
 # executed can run anything, and this suite's safety story is that its inputs are DATA.
 # `eval` assigns from a variable, never from the line, so `UT_X=$(cmd)` stores those nine
-# characters. Only UT_/YT_/BILI_ keys are read, so no file can reach PATH, TMPDIR or
+# characters. Only UT_/YT_/BILI_/NE_ keys are read, so no file can reach PATH, TMPDIR or
 # LD_PRELOAD; and the four the player sets for its own detached child are refused inside
 # those namespaces — a file-level YT_IPC_SOCK would aim every player at one socket. So are
 # the three names in there that are not knobs at all: the two config paths (a file cannot
@@ -78,8 +78,8 @@ fi
 # default chains through XDG_STATE_HOME, which a flat file cannot express), YT_LANG (unset
 # IS the locale probe) and YT_ASCII (it falls back through the legacy alias YT_TUI_ASCII).
 #
-# The key list is AS-BUILT-cli-contract.md「配置面」. This block is duplicated VERBATIM in all eight
-# entry points: eight independent executables share no library, and a byte-for-byte copy is
+# The key list is AS-BUILT-cli-contract.md「配置面」. This block is duplicated VERBATIM in all ten
+# entry points: ten independent executables share no library, and a byte-for-byte copy is
 # greppable for drift where a sourced file would invert the dependency direction the VERSION
 # data file exists to keep straight.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"

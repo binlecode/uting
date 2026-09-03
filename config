@@ -9,10 +9,10 @@
 #   ${XDG_CONFIG_HOME:-~/.config}/uting/config
 # which is read first and wins over everything here.
 #
-# THIS FILE IS NEVER WRITTEN BY ANY COMMAND. Your file is: `uting` writes eight keys back to
+# THIS FILE IS NEVER WRITTEN BY ANY COMMAND. Your file is: `uting` writes ten keys back to
 # it when you change one at runtime (engine, sort, mode, quality, theme, language, result
-# count, key-hint tier) — in place, comments and layout kept. AS-BUILT-cli-contract.md「配置面」
-# (write-back), ARCHITECTURE.md「两个根数据文件」.
+# count, key-hint tier, row numbers, list mode) — in place, comments and layout kept.
+# AS-BUILT-cli-contract.md「配置面」 (write-back), ARCHITECTURE.md「两个根数据文件」.
 #
 #   Precedence:  flag  >  environment  >  your config  >  this file
 #

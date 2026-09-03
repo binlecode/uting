@@ -109,7 +109,7 @@ SEARCH_ENDPOINT="https://api.bilibili.com/x/web-interface/search/type"
 # authentication mechanism — every Bilibili extractor in yt-dlp sends the same one.
 #
 # UNPREFIXED, like SEARCH_ENDPOINT above and for the same reason: since ARCHITECTURE.md「两个根数据文件」 the prefix IS
-# config reachability — ut_read_config accepts every UT_/YT_/BILI_ name that is not in its
+# config reachability — ut_read_config accepts every UT_/YT_/BILI_/NE_ name that is not in its
 # refusal list — so a BILI_ spelling would be taken off disk and then silently overwritten
 # by this line 16 lines later. A constant must not wear a settable name.
 SEARCH_REFERER="https://www.bilibili.com/"
