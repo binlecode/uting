@@ -96,7 +96,7 @@ ut_read_config() {
         val="${line#*=}"
         while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
-        [[ "$key" =~ ^(UT|YT|BILI)_[A-Z0-9_]+$ ]] || continue
+        [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
         UT_CONFIG | UT_DEFAULTS | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac

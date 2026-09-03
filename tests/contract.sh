@@ -703,6 +703,14 @@ NOPROXY="http://127.0.0.1:1"
 # ok path at a long music stream is how that check first went red against working code.
 CAPTIONED="https://www.youtube.com/watch?v=8S0FDjFBj8o"
 BARE="https://www.youtube.com/watch?v=n61ULEU7CO0"
+# The same pair for the third engine, whose caption track is a LYRIC — and the second of them
+# is the one that carries the finding. An instrumental here does NOT set the site's documented
+# `nolyric` flag (measured 2026-09-02: not one of eight did); it returns a real lyric holding
+# the composer credits and then the site's own sentinel line, so an engine reading only the
+# flag answers status:"ok" with three lines of credits where the words should be. NE_SILENT is
+# that shape, and it is the input that separates the two implementations.
+NE_LYRIC="1824020871"
+NE_SILENT="478507889"
 
 # Shape validation lives in the ENGINE now — the player cannot tell a good id from a bad one.
 report "resolve rejects a non-id" 1 "$(rc shell/yt-resolve -j -- "not an id")"
@@ -718,6 +726,17 @@ report "bili-resolve rejects a non-id" 1 "$(rc shell/bili-resolve -j -- "not an 
 # Capability differs per engine and is stated, not faked: this site's videos carry no
 # caption track, so the verb is absent rather than always answering "none".
 report "bili-resolve has no --transcript" 1 "$(rc shell/bili-resolve --transcript -- "$BILI_ID")"
+# The third engine states its own two absences the same way, and they are absences of
+# DIFFERENT kinds — which is the point of asserting both. `--parts` is a verb this site has no
+# shape for (one song id is one file), so it falls through to the unknown-flag arm: that exact
+# wording is how `uting` and this file's own verb probe learn a verb is missing, and a friendlier
+# sentence there would advertise a `c` key that cannot work. `--sub-lang` is the opposite —
+# the verb it belongs to IS here, but the CAPABILITY behind it is not: one lyric per song, tagged
+# with no language, so there is nothing to choose between and the flag is refused rather than
+# accepted and ignored (AS-BUILT-engine.md「字幕」).
+report "ne-resolve has no --parts"  1 "$(rc shell/ne-resolve --parts -- "$NE_LYRIC")"
+report "ne-resolve has no --sub-lang" 1 \
+    "$(rc shell/ne-resolve --transcript --sub-lang zh-Hans -- "$NE_LYRIC")"
 
 # --parts is the other half of that same statement-by-capability rule, read from the other
 # direction: this site HAS multi-part videos and the sibling site does not, so the verb
@@ -1024,9 +1043,19 @@ _ro_host_n=0
 for n in $ENGINES; do
     for _v in --info --transcript --parts; do
         _ro_verb_has "$n" "$_v" || continue
-        # The companion flag rides along where the documented line has one. --sub-lang is
-        # --transcript's and nothing else's, and a check that drops it is not running the example.
-        case "$_v" in --transcript) _with="--sub-lang zh-Hans" ;; *) _with="" ;; esac
+        # The companion flag rides along where the documented line has one — and whether
+        # THIS engine has it is discovered, never tabled. --sub-lang is --transcript's and
+        # nothing else's, and a check that drops it is not running the example; but a caption
+        # track and a LANGUAGE CHOICE are two capabilities, not one, and the second engine to
+        # grow --transcript had only the first (NetEase serves one lyric per song and tags it
+        # with no language, so it refuses --sub-lang rather than accepting a flag it cannot
+        # act on). Hardcoding the pair sent that engine a flag it does not have and read the
+        # resulting flag refusal as a failure to reach the host gate. Same probe as the verb
+        # discovery above, pointed at the companion.
+        _with=""
+        case "$_v" in
+        --transcript) _ro_verb_has "$n" "--sub-lang" && _with="--sub-lang zh-Hans" ;;
+        esac
         _ro_host_n=$((_ro_host_n + 1))
         [ "$(err_has "needs its own engine" "shell/$n-resolve" -j $_v $_with -- "$VIZ_URL")" = 0 ] &&
             _ro_host=$((_ro_host + 1))
@@ -1158,7 +1187,9 @@ report "userinfo stripped before port"   $((NENG - 1)) "$(refusals "https://user
 #   https:///         an empty host must match nothing
 #   <host>.           trailing dot refused — the safe direction, pinned so a change is deliberate
 for u in 'https://evilyoutube.com/watch?v=x' 'https://evilbilibili.com/x' \
+         'https://evilmusic.163.com/song?id=1' \
          'https://youtube.com@evil.com/' 'https://bilibili.com@evil.com/' \
+         'https://music.163.com@evil.com/song?id=1' \
          'https:///watch?v=x' 'https://youtube.com./watch?v=x'; do
     report "all refuse ${u#https://}" "$NENG" "$(refusals "$u")"
 done
@@ -1171,6 +1202,50 @@ done
 # form by the resolve envelope, live, in the half below.
 report "yt-resolve still takes youtu.be" 1 \
     "$([ "$(http_proxy=$NOPROXY https_proxy=$NOPROXY rc shell/yt-resolve -j -- https://youtu.be/$MEDIA_ID)" != 1 ] && echo 1 || echo 0)"
+
+# ── ONE SONG, FOUR SPELLINGS, ONE CANONICAL URL ────────────────────────────────────────────
+# Every handle grammar in this suite is per-engine and duplicated (each `normalize_target` is
+# its own), so this is the shape of check that has to be written once per engine. It is here
+# rather than in the live half because none of it needs the site: the ERROR ENVELOPE reports
+# the canonical url, so the dead proxy turns a resolve into a ~0.8s read of exactly the field
+# under test.
+#
+# THE CLAIM: NetEase publishes one song under four spellings a person really pastes — the
+# plain URL, the desktop app's single-page route (the id lives in a FRAGMENT there, invisible
+# to a query parser), the mobile share host, and the bare number — and all four must
+# canonicalise to the one string `ne-search` puts in results[].url. They must, because
+# `ut-playlist --add` stores that string: two spellings of one track that do not collapse are
+# two rows in a playlist and two rows in the listening log.
+#
+# It cannot pass vacuously — an engine that passed the typed handle through would answer four
+# different urls, and one that dropped the fragment route would answer 1 instead of 2.
+NE_CANON="https://music.163.com/song?id=1824020871"
+_nec=0
+for h in "$NE_CANON" \
+         'https://music.163.com/#/song?id=1824020871' \
+         'https://y.music.163.com/m/song?id=1824020871' \
+         '1824020871'; do
+    [ "$(http_proxy=$NOPROXY https_proxy=$NOPROXY shell/ne-resolve -j -- "$h" 2>/dev/null |
+         jq -r '.url' 2>/dev/null)" = "$NE_CANON" ] && _nec=$((_nec + 1))
+done
+report "ne: four spellings, one canonical url" 4 "$_nec"
+
+# THE OTHER SIDE OF THAT GATE, and the reason it is not just "does it have an id". EVERY
+# resource on this site is `?id=N` — an artist, an album, a playlist, a user — so an engine
+# reading the query and ignoring the path takes `/artist?id=6452` and resolves SONG 6452:
+# a different track, played silently, with nothing in the envelope to say so. That is the
+# worst failure a resolver has, and `/artist?id=` below is the input that separates the two
+# implementations. The other three are the ordinary refusals: right host and no id at all, a
+# handle that is neither URL nor number, and a bare `-` that must not be read as a flag.
+_ner=0
+for h in 'https://music.163.com/artist?id=6452' \
+         'https://music.163.com/song' \
+         'notanid' \
+         '-'; do
+    [ "$(http_proxy=$NOPROXY https_proxy=$NOPROXY rc shell/ne-resolve -j -- "$h")" = 1 ] &&
+        _ner=$((_ner + 1))
+done
+report "ne refuses a non-song handle" 4 "$_ner"
 
 echo "── a part list is a playlist nobody saved yet ─────────────────────"
 # THE CLAIM --parts EXISTS TO MAKE GOOD ON: every element of a part list IS an item record,
@@ -1570,8 +1645,14 @@ spawn bili-parts   shell/bili-resolve --parts -j -- "$BILI_PARTS_ID"
 spawn bili-part1   shell/bili-resolve --parts -j -- "$BILI_ID"
 spawn bili-nopart  shell/bili-resolve --parts -j -- av999999999999
 spawn bili-route   shell/ut-play      --engine bili -j -- BV1111111111
-spawn_once net-j   env http_proxy="$NOPROXY" https_proxy="$NOPROXY" shell/yt-search -j -n 2 -- lofi
-spawn_once net-t   env http_proxy="$NOPROXY" https_proxy="$NOPROXY" shell/yt-search    -n 2 -- lofi
+spawn ne-vip       env NE_INCLUDE_VIP=1 shell/ne-search -j -n 20 -- 周杰伦
+spawn ne-trans     shell/ne-resolve --transcript -j -- "$NE_LYRIC"
+spawn ne-notrans   shell/ne-resolve --transcript -j -- "$NE_SILENT"
+spawn ne-novip     shell/ne-search  -j -n 20 -- 周杰伦
+for n in $ENGINES; do
+    spawn_once "net-j-$n" env http_proxy="$NOPROXY" https_proxy="$NOPROXY" shell/"$n"-search -j -n 2 -- lofi
+    spawn_once "net-t-$n" env http_proxy="$NOPROXY" https_proxy="$NOPROXY" shell/"$n"-search    -n 2 -- lofi
+done
 
 # The dependent four, fired as soon as their handle exists rather than after the whole batch.
 # shellcheck disable=SC2086
@@ -1671,6 +1752,26 @@ report "no captions -> error"     0 \
     "$(jqv '.status=="error" and .reason=="no_subtitles_available"' "$NOCAP")"
 report "no captions exit"         1 "$NOCAP_ST"
 
+# THE SAME VERB ON A SITE WHOSE CAPTION TRACK IS A LYRIC. Asserted as the same envelope,
+# because that is the claim `--transcript` makes across engines — but with `lang` explicitly
+# NULL rather than a string, which is the one field these two engines honestly differ on:
+# YouTube tags its caption tracks with a language, this site tags nothing and its catalogue is
+# not one language, so an engine that filled the key would be guessing. Both spellings are
+# legal, and pinning the null side is what stops a later "tidy-up" writing a constant into it.
+report "ne transcript envelope"   0 \
+    "$(jqv '.status=="ok" and .id and .lang==null and .is_auto==false and .chars>0
+            and .segment_count>0 and (.text|length>0)' "$(out ne-trans)")"
+# THE INSTRUMENTAL, and the reason this line is worth its round trip: the site does NOT set
+# its own `nolyric` flag on these (measured — not one of eight did). It sends the composer
+# credits and then a sentinel line, so an engine trusting the flag answers status:"ok" here
+# with three lines of credits in `text`, passes every other check in this file, and hands an
+# agent someone's name to summarise as a song. There is no other input that separates those
+# two implementations.
+NE_NOLYR=$(out ne-notrans); NE_NOLYR_ST=$(src ne-notrans)
+report "an instrumental is a miss, not empty words" 0 \
+    "$(jqv '.status=="error" and .reason=="no_subtitles_available"' "$NE_NOLYR")"
+report "…and it exits 1, like the other engine's" 1 "$NE_NOLYR_ST"
+
 echo "── the second engine: the same envelope, or the split is a fiction ─"
 # The second engine's envelopes. The SEARCH is the one the live half already made — a key
 # set does not care what was searched for, and this used to be a fourth round trip asking
@@ -1721,6 +1822,28 @@ for n in $ENGINES; do
     report "$n-search -J rows are calls" 0 \
         "$(jqv "$ROW_IS_A_CALL" "$(out "searchJ-$n")")"
 done
+# `access` IS A COMPUTED FIELD ON ONE ENGINE, and only a live search can show it. The
+# invariant above holds every engine to the closed enum, which a row hardcoding "full"
+# satisfies — and both shipping engines DO hardcode it, honestly, because their search
+# responses carry no such signal. NetEase's does (`fee`, in the page already fetched), so this
+# is the check that separates an engine which reads it from one which copied the constant.
+#
+# 周杰伦 is the input rather than a song id: pinning a track's fee would nail someone else's
+# commercial decision into this suite, while "an artist's page is mostly VIP here" is the
+# measured shape of the catalogue (2026-09-02: 70% of that query's rows were not "full", and
+# the four artist queries measured ran 64-94%). An engine printing the constant answers false
+# on the first line below and goes red.
+#
+# The second line is the DEFAULT FILTER, and it is the same envelope pair read from the other
+# side: with NE_INCLUDE_VIP unset, every row that survives must be playable. That is what
+# makes a stored row a CALL rather than a reference — and the two lines cannot both pass
+# unless the filter and the mapping are really wired to each other, since they read the SAME
+# query through the one knob.
+report "ne computes access from the site's own fee" "true" \
+    "$(out ne-vip | jq -r '(.results|length) > 0 and any(.results[]; .access != "full")' 2>/dev/null)"
+report "…and NE_INCLUDE_VIP=0 keeps only playable rows" "true" \
+    "$(out ne-novip | jq -r '(.results|length) > 0 and all(.results[]; .access == "full")' 2>/dev/null)"
+
 report "resolve envelopes agree" \
     "$(printf '%s' "$YT_R" | jq -Sc 'keys' 2>/dev/null)" \
     "$(printf '%s' "$BILI_R" | jq -Sc 'keys' 2>/dev/null)"
@@ -1911,12 +2034,29 @@ report "ut-play routes to the bili engine" 0 \
     "$(jqv '.status=="error" and .exit_code>=2 and (.reason|type)=="string"' "$(out bili-route)")"
 
 echo "── failure taxonomy: 2 is a tool failure, never 1 ─────────────────"
-report "network envelope" 0 \
-    "$(jqv '.status=="error" and .reason=="network"' "$(out net-j)")"
-report "network exit is 2" 2 \
-    "$(src net-j)"
-report "network exit is 2 (text)" 2 \
-    "$(src net-t)"
+# A SEARCH THAT COULD NOT REACH ITS SITE STILL ANSWERS IN JSON. The exit code is the easy
+# half and was never the whole promise: `-j` says a caller gets {status:"error", …, reason}
+# and branches on the reason, so an empty stdout beside a bare 2 is a broken contract wearing
+# a correct number (AS-BUILT-cli-contract.md「数据契约」).
+#
+# STATED OVER EVERY DISCOVERED ENGINE, and that is not tidiness — it is the whole finding.
+# This check drove yt-search alone, where the failure path prints from the top level and is
+# fine. `bili-search` reached its site through a page loop, called search_fail from INSIDE the
+# command substitution that collected the page, and so printed its error envelope into a shell
+# variable: the caller got nothing on stdout and 2. Every exit-code check in this file stayed
+# green for as long as that lasted, because the exit code really was 2. The third engine pages
+# the same way and would have shipped the same defect; asserting the ENVELOPE, per engine, is
+# what separates a failure path that answers from one that only exits.
+report "an unreachable network is an ERROR ENVELOPE, over every engine" "$NENG" \
+    "$(_ne=0; for n in $ENGINES; do
+           [ "$(jqv '.status=="error" and .reason=="network"' "$(out "net-j-$n")")" = 0 ] &&
+               _ne=$((_ne + 1))
+       done; echo $_ne)"
+report "…and it exits 2, in both output modes" $((NENG * 2)) \
+    "$(_nx=0; for n in $ENGINES; do
+           [ "$(src "net-j-$n")" = 2 ] && _nx=$((_nx + 1))
+           [ "$(src "net-t-$n")" = 2 ] && _nx=$((_nx + 1))
+       done; echo $_nx)"
 
 echo "── the TUI boots, paints, survives a resize, and leaves on q ──────"
 # NOT a renderer assertion: no cell arithmetic, no width table, no captured frame compared

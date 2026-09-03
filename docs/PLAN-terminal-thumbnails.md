@@ -226,7 +226,7 @@ kitty 协议规定终端只需理解**三种**格式 —— `f=24`（RGB）、`f
 
 **agent 面（评审已定）**：`thumbnail` 这个字段**就是** agent 面 —— agent 拿到 URL
 自己去取图即可。**不加 `--thumbnail` 动词**，那是同一件事的第二拼法
-（`ARCHITECTURE.md`「八个平级动词」）。
+（`ARCHITECTURE.md`「平级动词，没有内核」）。
 
 ---
 

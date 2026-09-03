@@ -1,0 +1,1286 @@
+#!/usr/bin/env bash
+# ne-resolve — the NetEase Cloud Music RESOLVE ENGINE: a media handle -> direct stream URL(s)
+# plus the HTTP headers needed to fetch them, and the two read-only verbs beside it.
+# Agent-facing.
+#
+# The other half of the netease engine pair (`ne-search` + `ne-resolve`); the player
+# (`ut-play`) is source-agnostic and knows neither. Everything NetEase-specific about turning
+# a handle into bytes lives here: the yt-dlp invocation, the cookie decision, the
+# format-per-mode table, the quality tiers and the handle shapes this site uses. It has NO
+# playback, lifecycle, or mpv logic and never starts a process that outlives it.
+#
+# WHY THIS HALF SHELLS OUT TO yt-dlp WHILE ITS SIBLING ENCRYPTS ITS OWN REQUESTS. The reason
+# is the mirror image of the one in `ne-search`, and it is measured (2026-09-02): one
+# `yt-dlp -J` on a song returns, in ~3.5s, the stream URL, the headers it must be fetched
+# with, the title and the duration — the whole resolve envelope. Doing it by hand means the
+# eapi request envelope, a second cipher, a device id and the site's stream-tier ladder;
+# yt-dlp's `netease:song` extractor already maintains all of it. So the search half carries a
+# hand-written client because the site left it no choice, and this half carries none because
+# the site did. docs/ARCHITECTURE.md「原语与接缝」.
+#
+# THE ONE THING THIS FILE DOES NOT NEED, and it is worth saying because the sibling does:
+# openssl. Streams come through yt-dlp and lyrics through a plain GET, so a machine without
+# openssl loses `ne-search` and keeps every verb here.
+set -euo pipefail
+# Portability: bash 3.2 (macOS system bash) — no bash-4 features; guard empty-array
+# expansions ("${arr[@]}" on an empty array aborts under set -u on 3.2). ARCHITECTURE.md「可移植性契约」.
+
+# Resolve this script's OWN symlink chain before looking for its siblings — see the same
+# block in yt-search for why `cd -P`/`pwd -P` and a hand-rolled loop (bash 3.2 has no
+# `readlink -f`).
+_self="${BASH_SOURCE[0]}"
+while [[ -L "$_self" ]]; do
+    _link=$(readlink "$_self")
+    case "$_link" in
+    /*) _self="$_link" ;;
+    *)  _self="$(dirname "$_self")/$_link" ;;
+    esac
+done
+SCRIPT_DIR=$(cd -P "$(dirname "$_self")" && pwd -P)
+
+# THE version of the whole suite, declared once — in a data file, not in code. See the same
+# block in ne-search / yt-resolve / ut-play. CLAUDE.md § one fact, one place.
+if [[ -r "$SCRIPT_DIR/../VERSION" ]]; then
+    UT_VERSION=$(cat "$SCRIPT_DIR/../VERSION")
+else
+    UT_VERSION="unknown"
+fi
+
+# CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
+# in `<checkout>/config`, which is where every default value in the suite is declared once.
+# Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
+# AS-BUILT-cli-contract.md「配置面」 for the keys.
+UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
+UT_DEFAULTS="$SCRIPT_DIR/../config"
+ut_read_config() {
+    local file="$1" line key val
+    [[ -r "$file" ]] || return 0
+    while IFS= read -r line || [[ -n "$line" ]]; do
+        line="${line%%#*}"
+        while [[ "$line" == [[:space:]]* ]]; do line="${line#[[:space:]]}"; done
+        while [[ "$line" == *[[:space:]] ]]; do line="${line%[[:space:]]}"; done
+        [[ -n "$line" && "$line" == *=* ]] || continue
+        key="${line%%=*}"
+        val="${line#*=}"
+        while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
+        while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
+        [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
+        case "$key" in
+        UT_CONFIG | UT_DEFAULTS | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
+        esac
+        if [[ ${#val} -ge 2 ]] && { [[ "$val" == \"*\" ]] || [[ "$val" == \'*\' ]]; }; then
+            val="${val#?}"
+            val="${val%?}"
+        fi
+        [[ "$val" == "~/"* ]] && val="$HOME/${val#\~/}"
+        eval "[[ -n \"\${$key+x}\" ]]" && continue
+        eval "$key=\$val"
+    done < "$file"
+}
+# FAIL FAST AND SAY WHY. There is deliberately no escape hatch for --version or --help: a
+# checkout missing part of itself is not a dependency gate (yt-dlp, jq and curl still answer
+# --version without being installed) — it is a broken checkout, and 2 is the exit code for a
+# failure that is not the caller's usage error.
+if [[ ! -r "$UT_DEFAULTS" ]]; then
+    printf '%s: cannot read the shipped defaults at %s — that file declares every default value in the suite and is not optional\n' \
+        "$(basename "$0")" "$UT_DEFAULTS" >&2
+    exit 2
+fi
+ut_read_config "$UT_CONFIG"
+ut_read_config "$UT_DEFAULTS"
+
+# The engine's own name, as it appears in the envelope AND as the command prefix its two
+# executables carry. docs/ARCHITECTURE.md「命令拓扑」.
+ENGINE_NAME="ne"
+
+# ==============================================================================
+# 1. SETTINGS
+# ==============================================================================
+
+# THE LYRIC ENDPOINT — this file's second transport, and the suite's third and last place
+# where an HTTP request is built by hand (the other two are the Bilibili pair's). It is here
+# rather than behind yt-dlp because yt-dlp's `netease:song` extractor does not fetch lyrics at
+# all, and because the endpoint costs nothing to call: measured 2026-09-02, a plain GET with a
+# Referer answers code:200 with the LRC text. No encryption, no credential, no signature —
+# which is exactly why openssl is the SIBLING's dependency and not this file's.
+#
+# UNPREFIXED, like the sibling's SEARCH_ENDPOINT and for the same reason: since
+# ARCHITECTURE.md「两个根数据文件」 the prefix IS config reachability, so a constant must not
+# wear a settable name.
+LYRIC_ENDPOINT="https://music.163.com/api/song/lyric"
+SITE_REFERER="https://music.163.com"
+SITE_COOKIE="os=pc"
+
+# Cookies (login) are ON by default (browser: chrome), the same posture the other two engines
+# take, and for the same reason: on this site an account is what unlocks the higher stream
+# tiers (`higher`, `exhigh`, and above them the VIP-only `lossless`/`hires`). Public tracks
+# resolve fine without them, so an absent profile degrades to anonymous rather than failing.
+# Set NE_COOKIE_BROWSER=none to force anonymous-only (skips the keychain read).
+#
+# MEASURED, so nobody reads more into it than it says (2026-09-02): with a real MUSIC_U
+# session from chrome — `nuser/account/get` answering code:200, hasProfile:true — this site
+# served a FREE account (vipType:0) exactly the anonymous ladder, field for field. So an
+# accepted login can be indistinguishable from no login at all, which is why `--auth` reports
+# what is SENT and never what it buys.
+COOKIE_ARGS=()
+if [[ -n "${NE_COOKIE_BROWSER:-}" && "$NE_COOKIE_BROWSER" != "none" ]]; then
+    browser_exists=0
+    case "$NE_COOKIE_BROWSER" in
+    chrome|chromium|brave)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            if [[ -d "$HOME/Library/Application Support/Google/Chrome" || -d "$HOME/Library/Application Support/BraveSoftware" || -d "$HOME/Library/Application Support/Chromium" ]]; then
+                browser_exists=1
+            fi
+        else
+            if [[ -d "$HOME/.config/google-chrome" || -d "$HOME/.config/chromium" || -d "$HOME/.config/BraveSoftware" ]]; then
+                browser_exists=1
+            fi
+        fi
+        ;;
+    safari)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Safari" ]] && browser_exists=1
+        fi
+        ;;
+    firefox)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Firefox" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.mozilla/firefox" ]] && browser_exists=1
+        fi
+        ;;
+    edge)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Microsoft Edge" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/microsoft-edge" ]] && browser_exists=1
+        fi
+        ;;
+    opera)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/com.operasoftware.Opera" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/opera" ]] && browser_exists=1
+        fi
+        ;;
+    vivaldi)
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            [[ -d "$HOME/Library/Application Support/Vivaldi" ]] && browser_exists=1
+        else
+            [[ -d "$HOME/.config/vivaldi" ]] && browser_exists=1
+        fi
+        ;;
+    *)
+        browser_exists=0
+        ;;
+    esac
+
+    if ((browser_exists)); then
+        COOKIE_ARGS=(--cookies-from-browser "$NE_COOKIE_BROWSER")
+    fi
+fi
+
+ACTION="stream"      # stream | info | transcript | auth
+# The `-f` default, cross-engine: a user who listens rather than watches says so once.
+PLAYBACK_MODE="$UT_PLAY_MODE"
+FORMAT_SORT=""
+FORMAT_FLAG=""       # which of -f / -S / --quality was actually given (gate: stream resolution only)
+QUALITY="auto"       # auto | low | medium | high — the tier abstraction (--quality)
+COLOR_MODE="auto"
+OUTPUT_MODE="list"   # list (prose) | json | json_full
+TARGET=""            # the handle as the caller typed it
+TARGET_URL=""        # the canonical song URL it normalises to
+TARGET_ID=""         # the numeric song id inside it — the lyric endpoint's input
+TARGET_START=""      # ?t= seconds carried by the handle, or "" — see parse_start_seconds
+FMT=""               # the yt-dlp format string the mode resolves to
+
+# Glyph fallback shares ONE switch with uting (YT_ASCII, legacy alias YT_TUI_ASCII).
+MUSIC_CHAR="♫"
+case "${YT_ASCII:-${YT_TUI_ASCII:-}}" in
+1 | true | yes | on) MUSIC_CHAR="" ;;
+"")
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+    *UTF-8* | *utf-8* | *UTF8* | *utf8*) ;;
+    *) MUSIC_CHAR="" ;;
+    esac
+    ;;
+esac
+
+# ==============================================================================
+# 2. HELPERS
+# ==============================================================================
+
+die() {
+    local red='' reset=''
+    case "${COLOR_MODE:-auto}" in
+    always)
+        red=$'\033[31m'
+        reset=$'\033[0m'
+        ;;
+    auto)
+        if [[ -t 2 ]]; then
+            red=$'\033[31m'
+            reset=$'\033[0m'
+        fi
+        ;;
+    never) ;;
+    esac
+    echo "${red}Error:${reset} $*" >&2
+    exit 1
+}
+
+validate_enum() {
+    local value=$1
+    shift
+    local allowed
+    for allowed in "$@"; do
+        if [[ "$value" == "$allowed" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+require_cmd() {
+    local cmd=$1
+    command -v "$cmd" >/dev/null 2>&1 || die "required command not found: $cmd"
+}
+
+require_deps() {
+    local cmd
+    for cmd in "$@"; do
+        require_cmd "$cmd"
+    done
+}
+
+# The ONE implementation of duration formatting: seconds -> "[Nd ]HHh:MMm:SSs". Each engine
+# carries its own copy — they are independent executables sharing no library — and the shared
+# fact is the FORMAT, stated once in docs/AS-BUILT-engine.md「搜索子系统」.
+JQ_PRELUDE='
+def p2: tostring | if length < 2 then "0" + . else . end;
+def fmt_dur:
+  if type != "number" then null
+  else (. | floor) as $t
+    | ($t / 86400 | floor) as $d
+    | (($t % 86400) / 3600 | floor) as $h
+    | (($t % 3600) / 60 | floor) as $m
+    | ($t % 60) as $s
+    | (if $d > 0 then "\($d)d " else "" end) + "\($h | p2)h:\($m | p2)m:\($s | p2)s"
+  end;
+'
+
+# Map captured yt-dlp output + exit code to the suite's stable reason taxonomy so an agent
+# caller can branch on `reason` instead of string-matching raw extractor wording. The ENUM is
+# the shared fact and lives in AS-BUILT-cli-contract.md「数据契约」 — no member may be added here
+# that it does not already have; `unknown` is the conservative default.
+#
+# The site-specific half is the first pattern. This extractor's way of saying "the catalogue
+# has it and you may not have it" is a missing media link rather than an HTTP status, and that
+# is `unavailable` — a statement about the HANDLE, so an agent stops asking — never `network`,
+# which would send it round the loop for ever.
+classify_yt_dlp_error() {
+    local text=$1 rc=$2
+    if ((rc == 130)); then
+        echo "stopped_by_user"
+        return
+    fi
+    if grep -qiE 'No media links found|Song not available|not available for|VIP|付费|会员|无版权|版权' <<<"$text"; then
+        echo "unavailable"
+        return
+    fi
+    # A NONEXISTENT song id, and the string really is this: the extractor indexes into the
+    # empty `songs` array the API returns for an unknown id and the IndexError reaches stderr
+    # verbatim (measured 2026-09-02, `ERROR: list index out of range`). It is classified
+    # rather than left to fall through because `unknown` is the one member a caller cannot act
+    # on, and this handle will never resolve however long it waits. Narrow and fragile on
+    # purpose: it matches one exact sentence, so an extractor that starts saying something
+    # better simply stops matching and lands on `unknown` again.
+    if grep -qiE 'list index out of range' <<<"$text"; then
+        echo "unavailable"
+        return
+    fi
+    if grep -qiE 'HTTP Error 403|[^a-z]403[^0-9]|Forbidden' <<<"$text"; then
+        echo "forbidden"
+        return
+    fi
+    if grep -qiE 'Video unavailable|has been removed|no longer available|does not exist|Unable to extract' <<<"$text"; then
+        echo "unavailable"
+        return
+    fi
+    if grep -qiE 'Requested format is not available|No video formats|requested format|only images are available' <<<"$text"; then
+        echo "format_unavailable"
+        return
+    fi
+    if grep -qiE 'Temporary failure in name resolution|Failed to resolve|Name or service not known|Network is unreachable|Connection (refused|timed out|reset)|Could not connect|getaddrinfo|Timed out|Operation timed out|HTTP Error 429|Too Many Requests|Unable to download (webpage|API page|JSON metadata)' <<<"$text"; then
+        echo "network"
+        return
+    fi
+    echo "unknown"
+}
+
+# This process's own scratch dir: 0700, created lazily, removed however we exit. Lazily
+# because -h / -V must answer without touching the filesystem, and process-level rather than a
+# function `local` because the EXIT trap runs after the function has returned. 0700 rather
+# than a bare /tmp path because the captured yt-dlp stderr can name a cookie database, and a
+# lyric body is content. `players/` has exactly one owner (ut-play) and it is not this file.
+SCRATCH_DIR=""
+ERR_FILE=""
+cleanup_scratch() {
+    [[ -n "$SCRATCH_DIR" ]] && rm -rf "$SCRATCH_DIR" 2>/dev/null
+    return 0
+}
+trap cleanup_scratch EXIT
+
+ensure_scratch() {
+    [[ -n "$SCRATCH_DIR" ]] && return 0
+    SCRATCH_DIR=$(mktemp -d "${TMPDIR:-/tmp}/ne-resolve.XXXXXX") || die "cannot create a scratch directory"
+    chmod 700 "$SCRATCH_DIR" 2>/dev/null || true
+    ERR_FILE="$SCRATCH_DIR/yt-dlp.err"
+    : >"$ERR_FILE"
+}
+
+# The yt-dlp format string a playback mode resolves to. This table is the reason format
+# selection belongs to the engine and not the player: the player sends a MODE and gets back
+# bytes, and it must never learn to read a yt-dlp format expression.
+#
+# EVERY MODE LANDS ON THE SAME ARM HERE, and that is the site rather than an oversight: a
+# `netease:song` handle has no video track at all (measured 2026-09-02 — one audio-only format
+# per tier, vcodec "none" throughout). `-f video` and `-f fast` therefore resolve the audio
+# stream and say so honestly in the envelope's `format`/`selected_resolution`; they are not
+# refused, because a player switching modes across a mixed queue must not fail on this row,
+# and they do not pretend, because the fields report what was actually picked. The site's
+# video form (an MV) is a different handle shape and is not in this engine's first version.
+format_for_mode() {
+    case "$1" in
+    *) echo "$NE_AUDIO_FORMAT" ;;
+    esac
+}
+
+# The yt-dlp format-sort a quality tier resolves to. Same rule as format_for_mode: a caller
+# sends a canonical TIER, and the yt-dlp sort string exists only here. auto sends no
+# --format-sort — the default format table already picks the best. -S is the expert escape and
+# EXPLICITLY wins: both given, the caller's own sort replaces this table's
+# (AS-BUILT-engine.md「解析」).
+#
+# A SORT, NOT A FORMAT ID, and the distinction is load-bearing on this site. The tiers have
+# names here — `standard` (128k), `higher` (192k), `exhigh` (320k), and the VIP-only ladder
+# above them — so `-f exhigh` looks like the precise answer. It is the brittle one: which
+# tiers exist depends on the ACCOUNT, and an anonymous client asking for a tier it is not
+# offered gets "Requested format is not available" instead of the best track it could have
+# had. A bitrate target degrades to the nearest rung instead of failing, which is what a tier
+# abstraction is for. The named tiers are what the numbers below are aimed at.
+quality_sort_for_tier() {
+    local mode=$1 tier=$2
+    # TWO LEVELS, LIKE THE OTHER ENGINES', AND THE OUTER ONE COLLAPSES — kept as a case rather
+    # than flattened away so the shape of the table is the same everywhere and the collapse is
+    # visible rather than implied. The mode axis is real in the contract (a `video` tier means
+    # a resolution somewhere else) and empty here, for the reason format_for_mode states: this
+    # site has no video track for any mode to pick.
+    case "$mode" in
+    *)
+        case "$tier" in
+        low) echo "+abr" ;;       # smallest bitrate — the `standard` rung
+        medium) echo "abr:192" ;; # ~`higher`
+        high) echo "abr:320" ;;   # ~`exhigh`; a VIP ladder above it is taken when offered
+        esac
+        ;;
+    esac
+}
+
+# The hostname a URL names — lowercased, with userinfo, port, path, query and fragment
+# removed. Lowercasing goes through `tr` because the parameter-expansion form for it is a
+# bash-4 feature and the floor here is 3.2; one fork per invocation.
+url_host() {
+    local h=$1
+    h="${h#*://}"
+    h="${h%%/*}"
+    h="${h%%\?*}"
+    h="${h%%#*}"
+    h="${h##*@}"
+    h="${h%%:*}"
+    printf '%s' "$h" | tr 'A-Z' 'a-z'
+}
+
+# Is this host THIS engine's? One engine, one site. An engine that resolves someone else's URL
+# is lying in the `engine` field, and that field's whole job is letting a caller route a result
+# back to the resolver that produced it. An explicit list rather than a substring test:
+# `evilmusic.163.com` must not pass because `music.163.com` is a suffix of it.
+is_own_host() {
+    case "$1" in
+    music.163.com | y.music.163.com) return 0 ;;
+    esac
+    return 1
+}
+
+# The site's single-page app puts the whole route in a FRAGMENT — `music.163.com/#/song?id=N`
+# is the URL a person copies out of a desktop browser, and everything after the `#` is
+# invisible to a query parser. Folding `/#/` down to `/` before anything else reads the URL is
+# what makes that handle work; it is done with anchored expansions rather than
+# `${var//pat/repl}`, which is quadratic on bash 3.2 (CLAUDE.md「可移植性契约」).
+strip_hash_route() {
+    local u=$1
+    case "$u" in
+    *"/#/"*) printf '%s/%s' "${u%%/#/*}" "${u#*/#/}" ;;
+    *) printf '%s' "$u" ;;
+    esac
+}
+
+# Does this URL's PATH name a song? `id=` alone is not enough to answer, and that is the
+# whole reason this function exists: every resource on this site is `?id=N` — an artist, an
+# album, a playlist, a user — so an engine that read the query and ignored the path would take
+# `music.163.com/artist?id=6452` and resolve SONG 6452, a different track entirely, without a
+# word to the caller. Silently playing the wrong thing is the worst failure a resolver has, so
+# the path has to say `song` (the desktop route, the mobile share link `/m/song`, and the
+# `/song/media/outer/url` form all do) or the handle is refused.
+url_is_song_path() {
+    local u=$1
+    u="${u%%\?*}"
+    u="${u%%#*}"
+    case "$u" in
+    */song | */song/*) return 0 ;;
+    esac
+    return 1
+}
+
+# The numeric song id carried by a URL's query, or empty. Only `id=` is read: every handle
+# shape this site publishes — the desktop route, the mobile share link, the outer-url form —
+# carries the id there, and guessing one out of a path segment is the one thing that must not
+# happen.
+url_song_id() {
+    local u=$1 q="" v=""
+    u="${u%%#*}"
+    case "$u" in
+    *\?*) q="${u#*\?}" ;;
+    *) return 0 ;;
+    esac
+    local p
+    while [[ -n "$q" ]]; do
+        p=${q%%&*}
+        case "$q" in
+        *\&*) q=${q#*&} ;;
+        *) q="" ;;
+        esac
+        case "$p" in
+        id=*) v=${p#id=} ;;
+        esac
+    done
+    [[ "$v" =~ ^[0-9]+$ ]] || return 0
+    printf '%s' "$v"
+}
+
+# A handle is either a URL on one of this site's hosts or a bare song id. Knowing those shapes
+# is ENGINE knowledge — precisely what the player gave up when it stopped being a YouTube
+# tool — so the check lives here, and a bad handle is an EXTRACTION failure the player reports
+# as 2+, never a usage error. A URL from another site IS a usage error (1): nothing was
+# attempted and nothing is retryable.
+#
+# Every accepted handle collapses to ONE canonical form, `https://music.163.com/song?id=N`.
+# That matters twice: it is byte-identical to what `ne-search` puts in `results[].url`, so a
+# record stored from a pasted mobile link names the same track as one stored from a search
+# row; and it is what yt-dlp is handed, so nothing a caller appended to the query — a `t=`
+# offset, a share campaign tag — can reach the extractor and change what it matches.
+normalize_target() {
+    local t host id
+    t=$(strip_hash_route "$1")
+    case "$t" in
+    http://* | https://*)
+        host=$(url_host "$t")
+        is_own_host "$host" ||
+            die "'$host' is not a NetEase host — this engine resolves NetEase Cloud Music only (another site needs its own engine: ut-play --engine NAME)"
+        ;;
+    music.163.com/* | y.music.163.com/*)
+        t="https://$t"
+        ;;
+    [0-9]*)
+        [[ "$t" =~ ^[0-9]+$ ]] ||
+            die "'$1' is not a NetEase handle (expected a music.163.com song URL or a numeric song id)"
+        TARGET_ID="$t"
+        TARGET_URL="https://music.163.com/song?id=$t"
+        return 0
+        ;;
+    *)
+        die "'$1' is neither a NetEase URL nor a song id (to search, run ne-search)"
+        ;;
+    esac
+
+    url_is_song_path "$t" ||
+        die "'$1' is not a song URL — this engine resolves one song at a time, and every resource on this site is ?id=N (to search, run ne-search)"
+    parse_start_seconds "$t"
+    id=$(url_song_id "$t")
+    [[ -n "$id" ]] ||
+        die "'$1' carries no song id — a NetEase handle is .../song?id=N, or the bare number"
+    TARGET_ID="$id"
+    TARGET_URL="https://music.163.com/song?id=$id"
+}
+
+# The ?t= seconds a handle carries, floored to a whole second, or "" when it carries none.
+#
+# The site itself never writes one — no NetEase link carries a start offset — and the key is
+# parsed anyway, because `?t=` is the SUITE's spelling for "start here" and every engine has
+# to read it: `ut-play --start` round-trips through the handle, and a queue built by hand
+# writes it. `bili-resolve` parses it for the same reason and from the same absence.
+#
+# Split by hand rather than `for p in $q` — an unquoted expansion would glob, and a query
+# value really can hold a `*`. Every expansion below is ANCHORED (`%%`/`#`), never the
+# ${var//pat/} substitution form, which is O(n2) on bash 3.2 (CLAUDE.md).
+parse_start_seconds() {
+    local url=$1 q p v=""
+    case "$url" in
+    *\?*) q=${url#*\?} ;;
+    *) return 0 ;;
+    esac
+    q=${q%%#*}
+    while [[ -n "$q" ]]; do
+        p=${q%%&*}
+        case "$q" in
+        *\&*) q=${q#*&} ;;
+        *) q="" ;;
+        esac
+        case "$p" in
+        t=*) v=${p#t=} ;;
+        esac
+    done
+    # An unreadable value is NOT an error: it did not answer a question that had to be
+    # answered, so the envelope says null and the resolve carries on. Fractions floor for the
+    # reason yt-resolve's start_secs floors — the key counts seconds already gone by.
+    [[ "$v" =~ ^[0-9]+(\.[0-9]+)?$ ]] || return 0
+    TARGET_START=${v%%.*}
+}
+
+# ==============================================================================
+# 3. STREAM RESOLUTION
+# ==============================================================================
+
+# ONE yt-dlp call answers the whole question: the media URL for the selected format, the
+# per-format http_headers that must accompany it, and the title/duration the player needs for
+# its OSD and its state record.
+#
+# --no-playlist for the reason every engine here carries it: a handle must resolve to one
+# track even when the extractor could read the surrounding album.
+dump_once() {
+    local cmd=(yt-dlp --dump-single-json --no-playlist -f "$FMT")
+    if [[ -n "$FORMAT_SORT" ]]; then
+        # -S is the expert escape and explicitly wins over the tier: both given, the caller's
+        # own sort replaces the table's (AS-BUILT-engine.md「解析」).
+        cmd+=(--format-sort "$FORMAT_SORT")
+    else
+        local sort
+        sort=$(quality_sort_for_tier "$PLAYBACK_MODE" "$QUALITY")
+        [[ -n "$sort" ]] && cmd+=(--format-sort "$sort")
+    fi
+    (($#)) && cmd+=("$@")
+    cmd+=(--no-warnings --quiet "$TARGET_URL")
+    "${cmd[@]}" 2>>"$ERR_FILE"
+}
+
+# Project a raw yt-dlp record down to [ {url, http_headers} ], VIDEO FIRST. jq's sort is
+# stable, so a merge keeps yt-dlp's own ordering within each class and an audio-only selection
+# stays a one-element list — which on this site is every selection. The player reads position,
+# not codec: element 0 is what mpv opens.
+#
+# Credential-bearing headers are STRIPPED. The player turns every header in this object into
+# an mpv `--http-header-fields-append=` argument, and mpv's argv is visible in `ps` to every
+# process on the machine — so a Cookie carrying this account's MUSIC_U would be world-readable
+# for as long as playback lasts. This extractor was measured sending User-Agent / Accept /
+# Accept-Language / Sec-Fetch-Mode / X-Forwarded-For and no cookie, so today the filter
+# removes nothing; it is here so a future extractor change cannot quietly turn a login into a
+# leak. CLAUDE.md § security.
+JQ_STREAMS='
+def safe_headers:
+  (. // {}) | with_entries(select(.key | ascii_downcase
+                                       | . != "cookie" and . != "authorization" and . != "set-cookie"));
+[ if (.requested_formats | type) == "array"
+  then (.requested_formats[] | {url: .url, http_headers: (.http_headers | safe_headers), vcodec: (.vcodec // "none")})
+  else {url: .url, http_headers: (.http_headers | safe_headers), vcodec: (.vcodec // "none")}
+  end
+]
+| map(select(.url != null))
+| sort_by(if .vcodec == "none" then 1 else 0 end)
+'
+
+# The resolve envelope (AS-BUILT-cli-contract.md「数据契约」) — the same one yt-resolve and
+# bili-resolve emit, key for key, because the player must not be able to tell which engine
+# answered. `format` is the format STRING this engine SENT; the player records it verbatim and
+# never reads it, and `selected` is what yt-dlp answered with ("standard - audio only").
+#
+# `url` is the CANONICAL handle this file built, not the record's `webpage_url`: they agree
+# today, and building it here is what guarantees the key can never carry a `t=` offset back
+# out — the url answers WHICH MEDIA, never where to start, because `ut-playlist --add` stores
+# exactly this string and an offset riding along in it would replay a saved track from 10:01
+# for ever.
+#
+# `http_headers` is a REQUIRED key, empty object when none. It is not decorative here: the
+# extractor decides what accompanies the stream request — a browser UA always, and an
+# X-Forwarded-For on some resolutions — and the player has to send back exactly what it was
+# handed rather than a set of its own.
+emit_stream() {
+    local raw=$1 retried=$2
+    local retried_json=false
+    ((retried)) && retried_json=true
+
+    if [[ "$OUTPUT_MODE" == "json_full" ]]; then
+        printf '%s\n' "$raw" | jq -c '.'
+        return 0
+    fi
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        printf '%s\n' "$raw" | jq -c \
+            --arg engine "$ENGINE_NAME" --arg mode "$PLAYBACK_MODE" --arg format "$FMT" \
+            --arg canon "$TARGET_URL" \
+            --argjson retried "$retried_json" --argjson start "${TARGET_START:-null}" \
+            "$JQ_PRELUDE
+             ($JQ_STREAMS) as \$s
+             | {status: \"ok\", engine: \$engine,
+                id: (.id // null), url: \$canon,
+                title: (.title // null), duration: (.duration // null),
+                start_seconds: \$start,
+                mode: \$mode, format: \$format,
+                selected: (.format // null),
+                selected_resolution: (.resolution // null),
+                stream_urls: [\$s[].url],
+                http_headers: (\$s[0].http_headers // {}),
+                retried: \$retried}"
+        return 0
+    fi
+    # Prose: the stream URLs, one per line — what a human piping this into another tool wants.
+    printf '%s' "$raw" | jq -r "$JQ_STREAMS | .[].url"
+}
+
+# Report a resolve that produced nothing usable. Exit code follows the suite taxonomy: 2+ is a
+# PROPAGATED tool failure and 1 is reserved for usage, so a yt-dlp status of 0 or 1 is FLOORED
+# to 2 — yt-dlp exits 1 for an unavailable track, and letting that through would make "this
+# track is VIP-only" indistinguishable from "you called me wrong".
+resolve_fail() {
+    local rc=$1 reason
+    reason=$(classify_yt_dlp_error "$(cat "$ERR_FILE" 2>/dev/null)" "$rc")
+    ((rc <= 1)) && rc=2
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        jq -nc --arg engine "$ENGINE_NAME" --arg url "$TARGET_URL" \
+            --arg mode "$PLAYBACK_MODE" --arg reason "$reason" \
+            '{status: "error", engine: $engine, url: $url, mode: $mode, reason: $reason}'
+    else
+        echo "ne-resolve: could not resolve a stream for $TARGET_URL ($reason)" >&2
+    fi
+    exit "$rc"
+}
+
+# Cookies are ON by default because on this site they can unlock a higher tier. If the cookie
+# attempt FAILS — a locked profile, a denied keychain, an expired session — the anonymous
+# client is tried before giving up, because a free track plays either way and losing the 320k
+# rendition beats losing the song.
+#
+# There is deliberately NO fetch probe here, and its absence is the point. yt-resolve
+# test-fetches its resolved URL because a googlevideo link missing its proof-of-origin token
+# resolves fine and then 403s at play time — a YouTube-specific defect, patched with a
+# YouTube-specific anonymous client. This site has no such failure mode, so inheriting the
+# probe would mean an extra round trip per play to answer a question that cannot come out
+# wrong. A new engine inherits the CONTRACT, not the other engine's workarounds.
+resolve_stream() {
+    ensure_scratch
+    FMT=$(format_for_mode "$PLAYBACK_MODE")
+
+    local raw_c="" rc_c=0 raw_a="" rc_a=0
+
+    if ((${#COOKIE_ARGS[@]} > 0)); then
+        raw_c=$(dump_once "${COOKIE_ARGS[@]}") || rc_c=$?
+        if ((rc_c == 0)) && [[ -n "$raw_c" ]]; then
+            emit_stream "$raw_c" 0
+            return 0
+        fi
+        raw_a=$(dump_once) || rc_a=$?
+        if ((rc_a == 0)) && [[ -n "$raw_a" ]]; then
+            emit_stream "$raw_a" 1
+            return 0
+        fi
+        # The COOKIE attempt's status is reported, not the fallback's: it is the one that
+        # describes what the caller asked for.
+        resolve_fail "$rc_c"
+    fi
+
+    # Anonymous-only (NE_COOKIE_BROWSER=none, or no profile on this machine).
+    raw_a=$(dump_once) || rc_a=$?
+    if ((rc_a == 0)) && [[ -n "$raw_a" ]]; then
+        emit_stream "$raw_a" 0
+        return 0
+    fi
+    resolve_fail "$rc_a"
+}
+
+# ==============================================================================
+# 4. METADATA VERB (read-only: nothing plays, no mpv, no state file)
+# ==============================================================================
+
+# Rich metadata WITHOUT playing, mirroring `yt-resolve --info` and `bili-resolve --info` field
+# for field so a caller does not branch on which engine answered. -j projects a lean schema;
+# -J returns the full raw record; the default is a readable text block.
+resolve_info() {
+    ensure_scratch
+    local cmd=(yt-dlp --dump-single-json --no-playlist --skip-download)
+    if ((${#COOKIE_ARGS[@]} > 0)); then
+        cmd+=("${COOKIE_ARGS[@]}")
+    fi
+    cmd+=(--no-warnings --quiet "$TARGET_URL")
+
+    local raw rc=0
+    raw=$("${cmd[@]}" 2>"$ERR_FILE") || rc=$?
+
+    if ((rc != 0)) || [[ -z "$raw" ]]; then
+        local reason
+        reason=$(classify_yt_dlp_error "$(cat "$ERR_FILE" 2>/dev/null)" "$rc")
+        if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+            jq -nc --arg engine "$ENGINE_NAME" --arg url "$TARGET_URL" --arg reason "$reason" \
+                '{status: "error", engine: $engine, url: $url, reason: $reason}'
+            exit 1
+        fi
+        die "could not fetch metadata for: $TARGET_URL ($reason)"
+    fi
+
+    # Same jq prelude as the sibling half, so --info and search can never drift on this format.
+    local duration_fmt
+    duration_fmt=$(printf '%s' "$raw" | jq -r "$JQ_PRELUDE (.duration | fmt_dur) // empty")
+
+    case "$OUTPUT_MODE" in
+    json_full)
+        printf '%s\n' "$raw" | jq -c '.'
+        ;;
+    json)
+        # `channel` falls back through `uploader` to `creator`: this extractor leaves the
+        # first two null and puts the ARTIST in the third, and the envelope's shape must not
+        # depend on which field a site happens to fill.
+        printf '%s\n' "$raw" | jq -c --arg engine "$ENGINE_NAME" --arg df "$duration_fmt" \
+            --arg canon "$TARGET_URL" --argjson start "${TARGET_START:-null}" \
+            '{
+            status: "ok",
+            engine: $engine,
+            id, title,
+            url: $canon,
+            channel: (.channel // .uploader // .creator // null),
+            uploader: (.uploader // .creator // null),
+            upload_date: (.upload_date // null),
+            duration, duration_fmt: (if $df == "" then null else $df end),
+            start_seconds: $start,
+            view_count: (.view_count // null),
+            like_count: (.like_count // null),
+            live_status: (.live_status // null),
+            description: (.description // null),
+            chapters: (if (.chapters | type) == "array"
+                       then [.chapters[] | {start_time, end_time, title}]
+                       else null end)
+        }'
+        ;;
+    *)
+        local title channel upload_date view_count like_count description
+        title=$(printf '%s' "$raw" | jq -r '.title // "(untitled)"')
+        channel=$(printf '%s' "$raw" | jq -r '.channel // .uploader // .creator // "?"')
+        upload_date=$(printf '%s' "$raw" | jq -r '.upload_date // "?"')
+        view_count=$(printf '%s' "$raw" | jq -r '.view_count // "?"')
+        like_count=$(printf '%s' "$raw" | jq -r '.like_count // "?"')
+        description=$(printf '%s' "$raw" | jq -r '.description // ""')
+
+        if [[ -n "$MUSIC_CHAR" ]]; then printf '%s %s\n' "$MUSIC_CHAR" "$title"; else printf '%s\n' "$title"; fi
+        printf '  - channel: %s\n' "$channel"
+        printf '  - uploaded: %s\n' "$upload_date"
+        [[ -n "$duration_fmt" ]] && printf '  - duration: %s\n' "$duration_fmt"
+        printf '  - views: %s   likes: %s\n' "$view_count" "$like_count"
+        printf '  - url: %s\n' "$TARGET_URL"
+
+        [[ -n "$description" ]] && printf '\nDescription:\n%s\n' "$description"
+        ;;
+    esac
+    exit 0
+}
+
+# ==============================================================================
+# 5. THE TRANSCRIPT VERB (read-only: one HTTP request, no yt-dlp, no state file)
+# ==============================================================================
+
+# LYRICS ARE THIS ENGINE'S CAPTION TRACK, and having the verb is how the engine says so
+# (AS-BUILT-cli-contract.md「命令规格」) — the same way `bili-resolve` says the opposite by not
+# having it. It is here in the first version because it costs almost nothing: one plain GET,
+# no encryption, no credential, and the site returns time-stamped LRC that drops straight into
+# a prompt.
+#
+# It is NOT routed through yt-dlp: the `netease:song` extractor fetches no lyrics at all, so
+# there is nothing to ask it for.
+
+LYRIC_CURL_RC=0
+LYRIC_HTTP=""
+LYRIC_CODE=""
+
+# The transport seam, twin of the sibling half's `fetch_page_once`: arguments reach curl as an
+# ARRAY and the id through --data-urlencode, so nothing in a handle can be read as a further
+# curl argument. `lv=-1&kv=-1&tv=-1` asks for the original, the karaoke and the translated
+# tracks in one request — the site's own client's spelling for "all of them".
+#
+# NO RETRY: this verb spends exactly one request per invocation and has no burst to smooth
+# out. `network` is the enum member that already means retryable, and spending another request
+# is the caller's decision.
+fetch_lyric_once() {
+    local id=$1 body=$2
+    local cmd=(
+        curl -sS --compressed
+        --max-time 15 --retry 0
+        -o "$body" -w '%{http_code}'
+        -G "$LYRIC_ENDPOINT"
+        --data-urlencode "id=$id"
+        --data-urlencode "lv=-1"
+        --data-urlencode "kv=-1"
+        --data-urlencode "tv=-1"
+        -H "User-Agent: $NE_UA"
+        -H "Referer: $SITE_REFERER"
+        -H "Cookie: $SITE_COOKIE"
+    )
+
+    LYRIC_CURL_RC=0
+    LYRIC_HTTP=$("${cmd[@]}" 2>/dev/null) || LYRIC_CURL_RC=$?
+    LYRIC_CODE=""
+    if [[ -s "$body" ]]; then
+        LYRIC_CODE=$(jq -r '.code // empty' "$body" 2>/dev/null) || LYRIC_CODE=""
+    fi
+    ((LYRIC_CURL_RC == 0)) && [[ "$LYRIC_HTTP" == "200" && "$LYRIC_CODE" == "200" ]]
+}
+
+# HTTP status + body code -> the suite's shared reason enum. Separate from
+# classify_yt_dlp_error above, which reads an extractor's prose: this one reads two numbers.
+classify_lyric_error() {
+    local rc=$1 http=$2 code=$3
+    ((rc != 0)) && {
+        echo "network"
+        return
+    }
+    case "$http" in
+    412 | 429 | 5??) echo "network"; return ;;
+    403) echo "forbidden"; return ;;
+    404) echo "unavailable"; return ;;
+    esac
+    case "$code" in
+    -462 | -447 | 405) echo "network"; return ;;
+    -460 | -2) echo "forbidden"; return ;;
+    -404 | -400) echo "unavailable"; return ;;
+    esac
+    echo "unknown"
+}
+
+# LRC -> the same [{start, duration, text}] shape yt-resolve's json3 parser produces, so the
+# two engines' `--transcript -J` envelopes carry the same segment record.
+#
+# A line is a segment only if it OPENS with a `[mm:ss]` stamp. That single rule drops the
+# file's metadata header — `[ti:]`, `[ar:]`, `[by:]`, which are the same bracket syntax with a
+# non-numeric tag — without an exclusion list that would go stale the first time the site
+# added a tag. Trailing stamps on the same line (LRC's repeat-this-line form) are stripped
+# from the text, and a line whose text cleans to empty is dropped: an instrumental break is
+# written as a stamp with nothing after it, and a caller handed a run of empty strings would
+# read them as words.
+#
+# `duration` is derived from the NEXT segment's start, because LRC states when a line begins
+# and never how long it lasts. The last line gets 0 — the honest answer, since the file does
+# not say.
+JQ_LRC='
+def lrc_clean: gsub("\\[[0-9]+:[0-9]+([.:][0-9]+)?\\]"; "")
+             | gsub("[[:space:]]+"; " ") | sub("^ +"; "") | sub(" +$"; "");
+def lrc_segments:
+  [ (. // "") | split("\n")[]
+    | capture("^[[:space:]]*\\[(?<m>[0-9]+):(?<s>[0-9]+([.:][0-9]+)?)\\](?<t>.*)$")?
+    | { start: ((.m | tonumber) * 60 + (.s | sub(":"; ".") | tonumber)),
+        text:  (.t | lrc_clean) }
+    | select(.text != "") ]
+  | . as $segs
+  | [ range(0; $segs | length) as $i
+      | $segs[$i]
+      + { duration: (if ($i + 1) < ($segs | length)
+                     then ($segs[$i + 1].start - $segs[$i].start) else 0 end) } ];
+'
+
+# The one place --transcript reports a miss, so the text and JSON shapes cannot drift. Mirrors
+# yt-resolve's: machine callers get {status:"error", ...} and exit 1, humans get a sentence on
+# stderr. `reason` is the shared enum, never prose — `no_subtitles_available` is the member
+# yt-resolve already publishes for this, and an instrumental here is the same answer as an
+# uncaptioned video there.
+transcript_fail() {
+    local reason=$1
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        jq -nc --arg engine "$ENGINE_NAME" --arg url "$TARGET_URL" --arg reason "$reason" \
+            '{status: "error", engine: $engine, url: $url, reason: $reason}'
+        exit 1
+    fi
+    case "$reason" in
+    no_subtitles_available) die "no lyrics available for: $TARGET_URL" ;;
+    *) die "could not fetch lyrics ($reason) for: $TARGET_URL" ;;
+    esac
+}
+
+resolve_transcript() {
+    ensure_scratch
+    local body="$SCRATCH_DIR/lyric.json"
+
+    if ! fetch_lyric_once "$TARGET_ID" "$body"; then
+        transcript_fail "$(classify_lyric_error "$LYRIC_CURL_RC" "$LYRIC_HTTP" "$LYRIC_CODE")"
+    fi
+
+    # AN INSTRUMENTAL IS A MISS, AND IT TAKES TWO TESTS TO SAY SO — which is measured, not
+    # defensive. `nolyric: true` is the documented flag and it is the one that almost never
+    # fires: of eight instrumentals sampled 2026-09-02 (a "纯音乐 钢琴" page) NOT ONE set it.
+    # What they all did instead was return a real `lrc` holding the credit lines and then the
+    # site's own sentinel line, `纯音乐，请欣赏` — "instrumental, enjoy". Reading only the flag
+    # therefore answers status:"ok" with a three-line "transcript" of composer credits, and an
+    # agent asked to summarise the lyrics summarises those. The sentinel is a UI string the
+    # site writes, never a lyric a person wrote, so matching it is engine knowledge of exactly
+    # the kind this file exists to hold.
+    #
+    # A track whose lyrics were simply never contributed is the third shape: the key absent
+    # and an empty `lrc`. All three are the same answer to the caller — a MISS, not an empty
+    # success, because {"text":""} would be summarised as silence and never explain itself.
+    jq -e '(.nolyric // false) != true
+           and (((.lrc.lyric // "") | contains("纯音乐，请欣赏")) | not)' "$body" >/dev/null 2>&1 ||
+        transcript_fail "no_subtitles_available"
+
+    local segments
+    segments=$(jq -c "$JQ_LRC"' .lrc.lyric | lrc_segments' "$body" 2>/dev/null) || segments=""
+    if [[ -z "$segments" || "$segments" == "[]" ]]; then
+        transcript_fail "no_subtitles_available"
+    fi
+
+    # -j vs -J is the SAME split the search path publishes: -j is the lean projection, -J the
+    # same envelope at full fidelity — a strict SUPERSET, so an agent that widens -j to -J
+    # keeps every field it was already reading. What -j drops is `segments`, which is the same
+    # words twice: once as timed rows and once joined into `text`.
+    #
+    # `lang` is NULL, and that is the honest answer rather than a missing feature: this
+    # endpoint tags no track with a language, and the catalogue is not one language — the very
+    # first record measured here was a Japanese song. An engine states what it knows, and a
+    # constant "zh" would be a guess dressed as a fact. `is_auto` IS knowable and is false:
+    # these lyrics are contributed by users (the response names the contributor), never
+    # machine-generated.
+    if [[ "$OUTPUT_MODE" == "json" || "$OUTPUT_MODE" == "json_full" ]]; then
+        local full=false
+        [[ "$OUTPUT_MODE" == "json_full" ]] && full=true
+        jq -nc --arg engine "$ENGINE_NAME" --arg id "$TARGET_ID" --arg url "$TARGET_URL" \
+            --argjson segments "$segments" --argjson full "$full" \
+            '($segments | map(.text) | join(" ")) as $text
+             | {status: "ok", engine: $engine, id: $id, url: $url, lang: null, is_auto: false,
+                chars: ($text | length), segment_count: ($segments | length), text: $text}
+             + (if $full then {segments: $segments} else {} end)'
+    else
+        # Same string the envelope's `text` carries, so the two output modes can never
+        # disagree about what the transcript says.
+        printf '%s' "$segments" | jq -r 'map(.text) | join(" ")'
+    fi
+    exit 0
+}
+
+# ==============================================================================
+# 6. THE AUTH VERB (read-only: no network, no yt-dlp, no state file)
+# ==============================================================================
+
+# Report the cookie DECISION this engine made at startup: which browser profile playback will
+# read, and whether that profile exists on this machine. It answers BEFORE the yt-dlp
+# dependency gate and makes no request, because it is a question about this process's own
+# configuration, not about the site.
+#
+# What it deliberately does NOT claim is that the session behind those cookies buys anything.
+# `auth: "cookie"` means the cookies are SENT. Measured 2026-09-02 and stated because it is
+# the whole reason this verb is worth having anyway: a real logged-in chrome session on a FREE
+# account (vipType:0) was served exactly the anonymous tier ladder, field for field. So an
+# accepted login can be indistinguishable from no login, quality is never the evidence for
+# this field, and this field is never the evidence for quality.
+resolve_auth() {
+    local auth="anonymous" found=false
+    if ((${#COOKIE_ARGS[@]} > 0)); then
+        auth="cookie"
+        found=true
+    fi
+    if [[ "$OUTPUT_MODE" == "json" ]]; then
+        jq -nc --arg engine "$ENGINE_NAME" --arg auth "$auth" \
+            --arg browser "$NE_COOKIE_BROWSER" --argjson found "$found" \
+            '{status: "ok", engine: $engine, auth: $auth,
+              cookie_browser: $browser, profile_found: $found}'
+        return 0
+    fi
+    if [[ "$auth" == "cookie" ]]; then
+        printf 'cookie (%s)\n' "$NE_COOKIE_BROWSER"
+    else
+        printf 'anonymous\n'
+    fi
+}
+
+# ==============================================================================
+# 7. CLI
+# ==============================================================================
+
+print_usage() {
+    cat <<'EOF'
+ne-resolve — the NetEase resolve engine: a handle becomes bytes (non-interactive)
+
+Usage:
+  ne-resolve [-f MODE] [-S SORT] [--quality TIER] [-j|-J] -- <song id | URL>
+  ne-resolve --info [-j|-J] -- <song id | URL>
+  ne-resolve --transcript [-j|-J] -- <song id | URL>
+  ne-resolve --auth [-j]
+
+The handle is a NetEase song URL or the bare numeric song id (what `ne-search -j` returns as
+results[].id). Both the desktop route (music.163.com/#/song?id=N) and the mobile share link
+(y.music.163.com/...?id=N) are accepted; every one of them canonicalises to
+https://music.163.com/song?id=N, which is what the envelope reports and what a playlist
+stores. Knowing those shapes is this engine's job, not the player's.
+
+Options:
+  -f MODE  Playback mode the format is chosen for: audio | video | fast | ascii | viz
+           (default: audio). This site's songs have NO video track, so every mode resolves
+           the audio stream and the envelope says so — nothing is refused and nothing pretends
+  -S SORT  yt-dlp format-sort override (--format-sort)
+  --quality TIER  Quality tier: auto | low | medium | high (default: auto). The
+           (mode, tier) -> format-sort table lives here, not in ut-play; -S overrides it.
+           The site's rungs are standard (128k) / higher (192k) / exhigh (320k) and a
+           VIP-only ladder above them; the tier is a bitrate TARGET, so a rung your account
+           is not offered degrades to the best one it is instead of failing
+  -j       JSON envelope (see below)
+  -J       Full raw yt-dlp record
+  --info   Metadata only (title, artist, album) — nothing is resolved
+  --transcript  The song's lyrics as clean text, ready to drop into a prompt. One plain GET
+           to the site's lyric endpoint — no yt-dlp, no credential, no encryption
+  --auth   Report the cookie decision: which browser profile playback will read, and whether
+           it exists here. No network, no handle. Says cookies are SENT, not that they are
+           accepted — an expired login still reports "cookie"
+  --color MODE  auto | always | never (default: auto)
+  -h       This help
+  -V       Print the suite version
+
+Resolve JSON (-j): {"status","engine","id","url","title","duration","start_seconds","mode",
+                    "format","selected","selected_resolution",
+                    "stream_urls":[...],"http_headers":{...},"retried"}
+  format is the selection string SENT; selected is the format yt-dlp actually PICKED
+  ("standard - audio only"), and selected_resolution is always "audio only" here.
+  Identical to yt-resolve's and bili-resolve's envelope, key for key.
+  http_headers is REQUIRED and it MATTERS: what the extractor decides to send with the
+  stream request varies per resolution, and the player must send back exactly this object.
+
+Info JSON (--info -j): {status,engine,id,title,url,channel,uploader,upload_date,duration,
+                        duration_fmt,start_seconds,view_count,like_count,live_status,
+                        description,chapters}
+
+Transcript JSON (--transcript -j): {status,engine,id,url,lang,is_auto,chars,segment_count,text}
+  -J adds segments[]: {start,duration,text}, the timed LRC rows `text` is joined from.
+  lang is always null — this site tags no lyric with a language and the catalogue is not one
+  language, so an engine that filled it would be guessing. is_auto is always false: these
+  lyrics are contributed by people, not generated.
+  An instrumental is reported as a miss with reason no_subtitles_available and exit 1, never
+  as an empty success — and it is detected by the sentinel line the site actually sends
+  ("纯音乐，请欣赏") as well as by its documented `nolyric` flag, because measured 2026-09-02
+  the flag fires on almost none of them.
+
+Auth JSON (--auth -j): {status,engine,auth,cookie_browser,profile_found}
+  auth is "cookie" exactly when cookie_browser is not "none" AND profile_found.
+
+There is no --parts: one song id is one file here. The site's many-item forms (an album, a
+playlist) live behind their own URL shapes and are not in this engine's first version.
+
+Much of this catalogue is VIP-only — 43% of rows across the ten queries measured — and a
+VIP-only track resolves to a 30-second sample rather than failing. `ne-search` filters those
+rows out by default and labels them when asked not to (see NE_INCLUDE_VIP), so the honest
+place to learn a track is restricted is the search row's `access`, before you play it.
+
+Exit codes: 0 ok · 1 usage/validation · 2+ propagated yt-dlp failure (see .reason)
+
+Environment:
+  Defaults for every knob below live in <checkout>/config, declared once for the whole
+  suite. Override per user in ${XDG_CONFIG_HOME:-~/.config}/uting/config (KEY=value, one
+  per line, # comments); UT_CONFIG relocates that file. Chain: flag > environment > your
+  config > the shipped defaults. See AS-BUILT-cli-contract.md「配置面」.
+  NE_COOKIE_BROWSER  Browser profile cookies are read from (default: chrome; "none" for
+                     anonymous). On this site login is what can unlock a higher stream tier —
+                     though a free account was measured getting exactly the anonymous ladder
+  NE_AUDIO_FORMAT    Format for every mode (default: ba/b) — this site serves audio only
+  NE_UA              User-Agent sent with the --transcript request. It is the ONLY verb here
+                     that sends a request of its own making — the others go through yt-dlp,
+                     which carries its own
+
+To search: ne-search <query>   ·   To play: ut-play --engine ne <song id>
+EOF
+}
+
+has_format=0
+positional=()
+while (($#)); do
+    case "$1" in
+    -h | --help)
+        print_usage
+        exit 0
+        ;;
+    -V | --version)
+        # Answered before ANY dependency gate: a version is the first thing a bug report
+        # needs, and needing yt-dlp installed to find out which version you have is backwards.
+        printf 'ne-resolve %s\n' "$UT_VERSION"
+        exit 0
+        ;;
+    -j | --json)
+        has_format=1
+        OUTPUT_MODE="json"
+        shift
+        ;;
+    -J | --json-full)
+        has_format=1
+        OUTPUT_MODE="json_full"
+        shift
+        ;;
+    -l | --list)
+        has_format=1
+        OUTPUT_MODE="list"
+        shift
+        ;;
+    --info)
+        ACTION="info"
+        shift
+        ;;
+    --transcript | --subtitles)
+        ACTION="transcript"
+        shift
+        ;;
+    --auth)
+        ACTION="auth"
+        shift
+        ;;
+    # Named rather than swept up by the unknown-flag arm: a caller reaching for a language
+    # chain is holding a reasonable expectation (the YouTube engine has one), and the useful
+    # answer is why this site cannot serve it — not "unknown flag".
+    #
+    # `--parts` gets the OPPOSITE treatment and falls through to the unknown-flag arm on
+    # purpose, even though a sentence would read better there too: an ABSENT VERB is
+    # discovered from that exact wording — `uting`'s refresh_engine_parts and
+    # tests/contract.sh's verb probe both read the unknown-flag line to learn what an engine
+    # accepts — so a friendly refusal here would advertise a `c` key that cannot work. The
+    # place to explain the absence is -h, which does. AS-BUILT-cli-contract.md「命令规格」.
+    --sub-lang | --sub-langs | --sub-lang=* | --sub-langs=*)
+        echo "ne-resolve: this site tags no lyric with a language — there is one track per song and ${1%%=*} has nothing to choose between" >&2
+        exit 1
+        ;;
+    --color=*)
+        COLOR_MODE="${1#*=}"
+        shift
+        ;;
+    --color)
+        [[ $# -ge 2 ]] || { echo "ne-resolve: $1 requires a value" >&2; exit 1; }
+        COLOR_MODE="$2"
+        shift 2
+        ;;
+    -f | --format-mode)
+        [[ $# -ge 2 ]] || { echo "ne-resolve: $1 requires a value" >&2; exit 1; }
+        FORMAT_FLAG="$1"
+        # Canonical modes only — the alias table (ba/bv/…) is ut-play's, which normalizes
+        # before it calls an engine (AS-BUILT-cli-contract.md「命令规格」).
+        validate_enum "$2" audio video fast ascii viz ||
+            die "-f must be one of: audio, video, fast, ascii, viz"
+        PLAYBACK_MODE="$2"
+        shift 2
+        ;;
+    -S)
+        [[ $# -ge 2 ]] || { echo "ne-resolve: $1 requires a value" >&2; exit 1; }
+        FORMAT_FLAG="$1"
+        FORMAT_SORT="$2"
+        shift 2
+        ;;
+    --quality)
+        [[ $# -ge 2 ]] || { echo "ne-resolve: $1 requires a value" >&2; exit 1; }
+        FORMAT_FLAG="$1"
+        # Canonical tiers only — the alias table, if one ever grows one, is ut-play's (the
+        # same rule as -f: the engine seam carries canonical spellings).
+        validate_enum "$2" auto low medium high ||
+            die "--quality must be one of: auto, low, medium, high"
+        QUALITY="$2"
+        shift 2
+        ;;
+    # The gate. Resolution neither plays nor tracks a player, and it does not search: a caller
+    # holding the wrong verb is told which one it wants (AS-BUILT-cli-contract.md「门模型」).
+    -d | --detach | --status | --stop | --set-volume | --id | --all | --volume)
+        echo "ne-resolve: $1 is a playback flag — use ut-play for playback" >&2
+        exit 1
+        ;;
+    -n | -m | -M | -s)
+        echo "ne-resolve: $1 is a search flag — use ne-search for searching" >&2
+        exit 1
+        ;;
+    --)
+        shift
+        # `--` stops FLAG parsing, not argument validation: a handle beginning with '-' must
+        # survive, and a second handle is still an error. ARCHITECTURE.md「端到端控制流」.
+        while (($#)); do
+            positional+=("$1")
+            shift
+        done
+        break
+        ;;
+    -*)
+        echo "ne-resolve: unknown flag '$1' (resolve flags: -f -S --quality -j -J --info --transcript --auth)" >&2
+        exit 1
+        ;;
+    *)
+        positional+=("$1")
+        shift
+        ;;
+    esac
+done
+
+# --auth asks about the ENGINE, not about a handle, so it is the one verb here that takes no
+# positional — and a handle passed with it is rejected rather than ignored, the same way -f
+# next to --info is (AS-BUILT-cli-contract.md「门模型」).
+TARGET=""
+if [[ "$ACTION" == "auth" ]]; then
+    if ((${#positional[@]} > 0)); then
+        echo "ne-resolve: --auth takes no argument — it reports this engine's cookie decision, not a handle's" >&2
+        exit 1
+    fi
+else
+    if ((${#positional[@]} == 0)); then
+        echo "ne-resolve: a song id or URL is required (see 'ne-resolve -h')" >&2
+        exit 1
+    fi
+    if ((${#positional[@]} > 1)); then
+        echo "ne-resolve: takes exactly one song id or URL (got ${#positional[@]})" >&2
+        exit 1
+    fi
+    TARGET="${positional[0]}"
+fi
+
+# The default output is prose; -j/-J/-l override.
+((has_format)) || OUTPUT_MODE="list"
+
+if ! validate_enum "$COLOR_MODE" auto always never; then
+    die "--color must be one of: auto, always, never"
+fi
+# -f / -S / --quality pick a FORMAT, and only stream resolution resolves one. Next to --info
+# or --transcript they would be accepted and quietly do nothing, which is precisely what a
+# gating layer exists to reject rather than ignore (AS-BUILT-cli-contract.md「门模型」).
+if [[ -n "$FORMAT_FLAG" && "$ACTION" != "stream" ]]; then
+    die "$FORMAT_FLAG selects a stream format — it does not apply to --$ACTION"
+fi
+
+# -J is the RAW yt-dlp record, and --auth never runs yt-dlp: there is no raw record for it to
+# return. Rejected rather than silently downgraded to -j.
+if [[ "$ACTION" == "auth" && "$OUTPUT_MODE" == "json_full" ]]; then
+    die "-J returns the raw yt-dlp record — --auth runs no yt-dlp; use -j"
+fi
+
+# --auth answers ahead of the dependency gate and the handle grammar, the way -V does: it
+# reports configuration, so it must not need the tool it is reporting the configuration of.
+if [[ "$ACTION" == "auth" ]]; then
+    [[ "$OUTPUT_MODE" == "json" ]] && require_deps jq
+    resolve_auth
+    exit 0
+fi
+
+normalize_target "$TARGET"
+
+# --transcript runs NO yt-dlp — it is one plain HTTP request — so requiring the extractor for
+# it would be the same backwards gate --auth refuses above. curl is this verb's dependency and
+# jq parses what comes back; both are already required elsewhere in the engine pair.
+if [[ "$ACTION" == "transcript" ]]; then
+    require_deps curl jq
+    resolve_transcript
+    exit 0
+fi
+
+require_deps yt-dlp jq
+
+case "$ACTION" in
+info) resolve_info ;;
+*) resolve_stream ;;
+esac
+exit 0

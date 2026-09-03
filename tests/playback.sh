@@ -63,6 +63,19 @@ STATE_DIR="$TMPDIR/uting-$(id -u)"
 # real history — and unlike a player, a log is not something --stop takes back.
 export UT_STATE_DIR="$UT_TEST_TMP/state"
 
+# AND THE USER'S OWN CONFIG FILE, which is the third thing this run must not read — the one
+# that was missed. Every default this file leans on comes from the four-level chain, and the
+# user's own file wins over the shipped one: a `UT_DEFAULT_ENGINE=bili` written there by
+# `uting`'s own e key (it writes that key back) sends every YouTube handle below to
+# `bili-resolve`, which refuses the host, and 23 checks go red saying nothing whatsoever about
+# the player. That is not hypothetical — it is what this file did on the machine that added
+# the paragraph, and the failures named sockets and volumes rather than the config that
+# caused them. An EMPTY file, not an unset variable: unset means "read ~/.config/uting/config"
+# and empty means "the shipped defaults, and nothing a person happened to prefer".
+# contract.sh has isolated this from the start; this file had not.
+: >"$UT_TEST_TMP/config"
+export UT_CONFIG="$UT_TEST_TMP/config"
+
 # Two long, stable tracks. Silent at --volume 0; the point is the process, not the audio.
 U1=${YT_TEST_URL1:-https://www.youtube.com/watch?v=n61ULEU7CO0}
 U2=${YT_TEST_URL2:-https://www.youtube.com/watch?v=8S0FDjFBj8o}
@@ -319,6 +332,42 @@ if wait_for_sock "$sock3"; then
     fi
 else
     bad "the bili player's IPC socket never appeared — the header claim is untested"
+fi
+
+echo "── a third engine: a search row plays, end to end ─────────────────"
+# THE WHOLE PIPELINE ON ONE ENGINE, with nothing pinned: a real `ne-search` answers, its first
+# row's url goes straight to `ut-play -d --engine ne`, and the playhead moves. Three envelopes
+# have to agree for that to happen — search's row, resolve's stream_urls/http_headers, and the
+# player's record — and this is the only place all three are the same engine's and all three
+# are real.
+#
+# THE HANDLE IS SEARCHED FOR, NOT WRITTEN DOWN, and on this site that is not a style choice.
+# Roughly 43% of this catalogue is VIP-only, so a pinned song id is a check that goes red the
+# day someone else's licence changes. `ne-search` filters to access:"full" by default, so its
+# first row is by construction a track this account can really play — which makes "take row
+# one" both the cheapest handle and the correct one. `lofi` is the query because it measured
+# 98% playable; the row itself is asserted, so a query that stops returning one is a red with
+# a name on it rather than a mystery below.
+NE_ROW=$(shell/ne-search -j -n 5 -- lofi 2>/dev/null | jq -r '.results[0].url // empty')
+if [ -z "$NE_ROW" ]; then
+    bad "ne-search returned no playable row — the third engine's pipeline is untested"
+else
+    o6=$(shell/ut-play -d -j --volume 0 --engine ne -- "$NE_ROW" 2>/dev/null)
+    report "ne detach envelope" 0 \
+        "$(printf '%s' "$o6" | jq -e '.id and .pid and .sock' >/dev/null 2>&1; echo $?)"
+    id6=$(printf '%s' "$o6" | jq -r '.id // empty')
+    sock6=$(printf '%s' "$o6" | jq -r '.sock // empty')
+    report "the record names the engine that resolved it" "ne" \
+        "$(shell/ut-play --status -j | jq -r --arg i "$id6" '.players[] | select(.id == $i) | .engine // "null"')"
+    if wait_for_sock "$sock6"; then
+        if pos=$(wait_live "$id6" position); then
+            ok "ne audio flowed (position ${pos}s) — search row to playhead, one engine"
+        else
+            bad "ne position never left 0 — did the resolve envelope's stream url and headers reach mpv?"
+        fi
+    else
+        bad "the ne player's IPC socket never appeared — the third engine's pipeline is untested"
+    fi
 fi
 
 echo "── the quality tier rides the same path as -f ────────────────────"

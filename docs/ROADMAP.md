@@ -22,15 +22,21 @@
   （`ARCHITECTURE.md`「六条发现」第 1 条）。**重开 = 真的要单文件分发** —— 那要一个静态
   二进制，所以它开的其实是 Go 重写 NO。
 
-- **第三对引擎 NO** —— 不做喜马拉雅：`m` 端点要 `webtk`（每请求现算的令牌，住在 cookie jar
-  之外），"浏览器 profile → 导 jar → curl -b"在机制上够不到；而只有 resolve 没有 search
-  的不是引擎（`ARCHITECTURE.md`「八个平级动词」）。**死线索**（挡住重走）：换端点、参数八种
-  组合、先取首页 cookie、补 `xm-sign`、真登录重导 jar、SSR —— 全试过。**候选网易云**：
-  搜索半边验过（明文、零凭据、`fee` 在响应里），**resolve 半边没量过** —— 真开工第一步是
-  量它（`RESEARCH-tui-player.md` §9 记着这一层的气候是坏的）。**重开 = 喜马拉雅 `m` 侧不再答 `webtk缺失`**（上次实测 2026-08-28）。
+- **喜马拉雅 NO** —— `m` 端点要 `webtk`（每请求现算的令牌，住在 cookie jar 之外），
+  "浏览器 profile → 导 jar → curl -b"在机制上够不到；而只有 resolve 没有 search 的不是引擎
+  （`ARCHITECTURE.md`「平级动词，没有内核」）。**死线索**（挡住重走）：换端点、参数八种组合、
+  先取首页 cookie、补 `xm-sign`、真登录重导 jar、SSR —— 全试过。
+  **重开 = 喜马拉雅 `m` 侧不再答 `webtk缺失`**（上次实测 2026-08-28）。
+
+  这一条原本叫"第三对引擎 NO"，作用域其实只有喜马拉雅：同一条里点名的候选**网易云已经落地**
+  （`ne-search` + `ne-resolve`，2026-09-02），所以标题改成它真正拦住的那个站。落地过程中
+  这条记的两件事被实测推翻，就地更正而不是留着：搜索半边**不再是明文**（旧的
+  `/api/search/get/web` 返回加密块，走的是 weapi + 两道 AES，openssl 因此成了 `ne-search`
+  一个文件的依赖），而"resolve 半边没量过"已经量过了 —— yt-dlp 的 `netease:song` 够用，
+  半边一行自研代码都不必写。为什么这样切、代价是什么，在 `AS-BUILT-engine.md`。
 
 - **ut-search NO** —— 它存在的理由只有 fan-out + 合并信封，砍掉即第二拼法
-  （`ARCHITECTURE.md`「八个平级动词」直接毙）；代价（多一个命令、冻结面上一种新信封形状）
+  （`ARCHITECTURE.md`「平级动词，没有内核」直接毙）；代价（多一个命令、冻结面上一种新信封形状）
   压过收益。**重开 = 第三对引擎落地** —— 先修三处把信封级 `engine` 当行 engine 的地方
   （`ut-playlist` 的 `results` 分支、`uting` 的 `build_all_rows` 与 `FOCUSED_PAYLOAD`）。
 
@@ -60,7 +66,7 @@
   字节，而且只在换行时付一次、不是每帧** —— `base64`/`fold` 都在 `/usr/bin`，不是新依赖；
   mpv 在那条管线里只当解码器，一个转义序列都不发。所以贵的是这条**路线**，不是这件事。
   **顺带钉死两条别再重提**：chafa / img2sixel / ueberzugpp / kitty 的 `icat` 一律是**新增
-  运行时依赖**，撞 `CLAUDE.md` 的硬规则；而缩略图 URL **不是契约缺口** —— 两个引擎的 `-J`
+  运行时依赖**，撞 `CLAUDE.md` 的硬规则；而缩略图 URL **不是契约缺口** —— 引擎的 `-J`
   现在就带着（`yt-search` 的 thumbnail arrays、`bili-search` 的 `pic`）。
   **重开 = mpv 长出一个不抢屏幕的放置模式**，或 `--vo-kitty-use-shm` / 图像 id 被实测证明
   把载荷压到手写发射器的量级（怎么量见「本轮没能确定的问号」）。
@@ -120,9 +126,14 @@
 - **一条搜索结果 ≠ 一个可播对象：合集与专辑容器要在信封里说清。** 实测搜"周杰伦"前三条全是
   数小时的长合集，这是该站音乐消费的主流形态而非 bug。这是**引擎的**活：由 `<engine>-search`
   在信封里说，不让 `uting` 猜 —— 只在 TUI 加标记就是漏掉 agent 面的半个功能。**面已经在了**
-  （行带必填的 `kind`/`access`），缺的是**信号**：两个在产引擎都无从算起、恒印 `track`/`full`
-  （`AS-BUILT-engine.md`「`kind` 与 `access`」记着那次实测）。本条等一个带真信号的引擎 ——
-  网易云的 `fee` 是量过的那个。（多 P 那一形态有 `bili-resolve --parts`；
+  （行带必填的 `kind`/`access`），缺的是**信号**。
+
+  **`access` 那一半已经交付了**：`ne-search` 从站点自己的 `fee` 算出 `full`/`preview`/
+  `paywalled`，在已经取回的那一页里，零额外请求（`AS-BUILT-engine.md`「`kind` 与 `access`」）。
+  这条等的"带真信号的引擎"就是它。**还欠的是 `kind`**：三个引擎至今都恒印 `track`，
+  而合集/专辑容器正是它要说的那件事 —— 实测搜"周杰伦"前三条全是数小时的长合集。
+  网易云能不能答这一半没量过：它的搜索是 `type:1`（单曲），专辑与歌单是另外的 type，
+  开工第一步是量"一次请求能不能同时带回容器行"。（多 P 那一形态有 `bili-resolve --parts`；
   本条只剩容器类结果本身。）
 
 - **B 站音频区（`au` 号）的歌词，走已有的字幕管线。** yt-dlp 的 `BilibiliAudioIE` 把

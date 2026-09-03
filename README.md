@@ -3,13 +3,15 @@
 **u-ting / 你听** — an agent-first media engine with a terminal face.
 
 Search a source, play it through mpv detached from your terminal, and keep controlling it — from
-a TUI if you are a human, from a single-line JSON contract if you are a program. Two sources ship
-(YouTube, Bilibili); a third is a new pair of scripts and no change anywhere else.
+a TUI if you are a human, from a single-line JSON contract if you are a program. Three sources
+ship (YouTube, Bilibili, NetEase Cloud Music); a fourth is a new pair of scripts and no change
+anywhere else — the third one was.
 
 ```sh
 uting                                  # interactive: search, browse, play, control
 yt-search -j -n 25 -- "lofi hip hop"   # machine: one line of JSON out
 bili-search -j -n 25 -- "周杰伦"        # machine: the second source, the same envelope
+ne-search -j -n 25 -- "钢琴"            # machine: the third; rows carry a real `access`
 ut-play -d -j -- "<url>"               # machine: launch detached, get {id, pid, sock}
 ut-play -d --start 601 -- "<url>"      # machine: open at 601s (a link's own &t= does this too)
 yt-resolve --transcript -j -- "<url>"  # machine: captions as clean text + timed segments
@@ -57,6 +59,16 @@ sets for you.
   already maintains. The seam between an engine and the player is the **envelope**, never the tool
   behind it. There is no `--transcript` here: the site has no captions, and an engine says what it
   cannot do by not having the verb.
+- **`ne-search` + `ne-resolve`** — the NetEase Cloud Music *engine*, the third pair, and the one
+  that pays the sentence off twice. Nothing outside these two files changed to admit it: the
+  player found it by name, the TUI's `e` key offered it, and the test suite's cross-engine
+  invariants covered it the moment the pair landed. And it is the first engine whose search rows
+  carry a **real `access`** — this site publishes a `fee` per track, so a row says whether it is
+  fully playable, a 30-second sample, or an album purchase, in the page already fetched. The two
+  halves use different primitives again, and for a blunter reason than Bilibili's: the site's
+  plaintext search endpoint is gone, so `ne-search` speaks the browser's encrypted `weapi` — two
+  AES passes through `openssl`, which is a dependency of that **one file** and of nothing else in
+  the suite. Its `--transcript` is the song's lyrics.
 - **`ut-playlist`** — the playlist store, and the first piece of state the suite keeps *after* a
   reboot. Durable, user-level, engine-agnostic: it holds `{engine, url, title, …}` records under
   `${XDG_STATE_HOME:-~/.local/state}/uting/playlists/`, one file per list, written atomically
@@ -100,8 +112,10 @@ a playlist with a fixed name. A downloader and channel subscriptions are unsched
   refuse.
 - `yt-dlp`, `jq`, `mpv`, a unix-socket netcat (BSD `nc` ships with macOS), `curl`.
   They are not all needed by all of it: `yt-dlp` belongs to the engines, `mpv` and the netcat
-  to the player, `jq` to both. **`curl` is required by `bili-search`** — it IS that engine's transport —
-  and optional everywhere else (the YouTube engine's play-time client probe).
+  to the player, `jq` to both. **`curl` is required by `bili-search` and by the netease pair** —
+  it IS their transport — and optional everywhere else (the YouTube engine's play-time client
+  probe). **`openssl` is needed by `ne-search` alone**, for the encrypted search payload that
+  site now insists on; without it that one command refuses and the other nine are unaffected.
 - bash 3.2 — the version macOS ships. The suite is written to that floor on purpose; see
   `docs/ARCHITECTURE.md`「可移植性契约」.
 
@@ -110,7 +124,7 @@ Nothing is vendored. Install yt-dlp and mpv however you normally would.
 ## Configuration
 
 Every default value in the suite lives in one tracked file at the root of the checkout,
-`config`, declared once for all eight entry points. It is **not optional** — a checkout
+`config`, declared once for all ten entry points. It is **not optional** — a checkout
 without it exits 2 and says so, rather than letting an unset variable surface 100 lines
 later.
 
@@ -139,7 +153,7 @@ Extensionless and flat, the same spelling `yt-dlp` uses for `~/.config/yt-dlp/co
 dependency it refuses.
 
 Both files are **read as data, never sourced**, so `UT_X=$(cmd)` stores those characters
-instead of running anything, and only `UT_`/`YT_`/`BILI_` keys are read — no config can
+instead of running anything, and only `UT_`/`YT_`/`BILI_`/`NE_` keys are read — no config can
 reach `PATH`, `TMPDIR` or `LD_PRELOAD`. Nothing in the suite ever writes either file.
 
 `UT_CONFIG` relocates your file, from the environment only. Three knobs are deliberately
@@ -166,6 +180,8 @@ ln -s "$PWD/shell/yt-search"    ~/bin/yt-search
 ln -s "$PWD/shell/yt-resolve"   ~/bin/yt-resolve
 ln -s "$PWD/shell/bili-search"  ~/bin/bili-search
 ln -s "$PWD/shell/bili-resolve" ~/bin/bili-resolve
+ln -s "$PWD/shell/ne-search"    ~/bin/ne-search
+ln -s "$PWD/shell/ne-resolve"   ~/bin/ne-resolve
 ln -s "$PWD/shell/ut-playlist"  ~/bin/ut-playlist
 ln -s "$PWD/shell/ut-history"   ~/bin/ut-history
 ```
@@ -178,7 +194,7 @@ The human face carries the project's own name, so `~/bin/uting` is a plain symli
 `shell/uting` — same word at both ends, no alias in between. Want something shorter to type?
 Make one — `alias ut=uting`, or a symlink of your own. Nothing reads its own `argv[0]`, so any
 name works. The suite ships no short form itself, because a second official spelling is a second
-thing to keep in sync (`docs/ARCHITECTURE.md`「八个平级动词」).
+thing to keep in sync (`docs/ARCHITECTURE.md`「平级动词，没有内核」).
 
 `uting --version` (or `-V`) answers before any dependency check, so it works on a machine that
 has not installed yt-dlp or mpv yet — which is exactly when you want to know what you have. Every
@@ -264,14 +280,14 @@ one runs, or it is not claimed. Each file's header says what it proves; run eith
 |---|---|
 | `tests/contract.sh` | The CLI contract, asserted by running it: the search and resolve envelopes, the player's engine seam (an unknown engine is usage, a dead media id is a propagated failure that still carries a reason), every documented rejection, the host gate stated as an invariant over every **discovered** engine (a real URL is claimed by exactly one; a confusable is refused by all), `--transcript` both ways, the idle lifecycle verbs (including the queue verbs, where a
 payload this process cannot use is a usage error and a well-formed one with nothing playing is
-"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. It also runs three of the four pipelines `docs/AS-BUILT-cli-contract.md`「调用面」 prints, rather than leaving them as prose nothing executes — the fourth launches a player and belongs below. ~60s and 322 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 224 of those checks in ~20s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
+"did not take effect"), the tombstone record for a player that died unasked, the exit-code taxonomy, the playlist store (driven under a disposable `UT_STATE_DIR`, including eight concurrent writers against the lock), the listening log's own contract in the same disposable store (an 8 KB title truncated and MEASURED, because "every line under 4096 bytes" is the premise its lock-free append rests on), and the TUI booting / surviving a resize / leaving on `q` under tmux — and leaving no player behind when it goes, because `uting` stops its playback on exit, so a TUI that did not leave is a TUI still holding one. It also runs three of the four pipelines `docs/AS-BUILT-cli-contract.md`「调用面」 prints, rather than leaving them as prose nothing executes — the fourth launches a player and belongs below. ~80s and 378 checks in full; **`--offline` runs the hermetic prefix** — every gate, both stores, the lifecycle and the death record, 256 of those checks in ~30s with no packet sent, which is what makes "run it before every commit" a rule and not a wish. |
 | `tests/playback.sh` | The detached-player lifecycle, whose bugs are **processes**: detach returns before mpv is up, two players, an ambiguous mutation → exit 4 *and* `status:"ambiguous"` (4 alone is also what an idle call answers, so the field is the half that separates them), a targeted one moves only its target, and zero orphan mpv at the end. It also owns the **live read** — the `--status` fields off a real mpv socket, `paused:false` distinguished from `paused:null`, and a really-running player whose socket is really removed degrading to nulls with volume off the record — because the peer has no stand-in and never will. It drives a **queue** end to end for the same reason — a mock engine would skip the
 resolve between two tracks, which is the thing most likely to break: `--queue` launches —
 from a real `ut-playlist --show -j` envelope, so the documented pipeline is what starts the
 player rather than an array written to look like one —
 `--enqueue` appends (six concurrent writers, no lost update), `--next` moves the position and
 the player follows, and a track reaching its own end starts the next. It also plays a real
-Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. And it owns the **listening log's wiring**, since only here does a real track really end: a 19-second handle is played out, and the row that appears for it carries no reason — which is what separates a history from a death record. Starts real players at `--volume 0` in a state dir of its own, and points `UT_STATE_DIR` somewhere disposable too, so it never touches what you are listening to nor what you listened to; ~82s, and it needs the network — of which ~30s is seven real engine resolves and ~19s is one 19-second track played out to its own end, so what is left is not waiting. |
+Bilibili track — the one check that proves the player *applies* an engine's `http_headers` rather than merely receiving them, because that site's CDN answers 403 without them while YouTube would keep working. And it owns the **listening log's wiring**, since only here does a real track really end: a 19-second handle is played out, and the row that appears for it carries no reason — which is what separates a history from a death record. Starts real players at `--volume 0` in a state dir of its own, and points `UT_STATE_DIR` somewhere disposable too, so it never touches what you are listening to nor what you listened to; ~88s, and it needs the network — of which ~35s is eight real engine resolves and ~19s is one 19-second track played out to its own end, so what is left is not waiting. |
 
 One more file in `tests/` is not a suite and asserts nothing. `tests/drive.sh` is a **driver** for the TUI, which needs a real tty and so cannot be run from
 a pipe. It launches tmux at a declared geometry, waits on the ready marker, optionally sends

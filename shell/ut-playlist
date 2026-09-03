@@ -44,7 +44,7 @@ fi
 
 # CONFIGURATION — the chain is flag > environment > the user's config > the shipped defaults
 # in `<checkout>/config`, which is where every default value in the suite is declared once.
-# Duplicated VERBATIM in all eight entry points — see the same block in ut-play for why, and
+# Duplicated VERBATIM in all ten entry points — see the same block in ut-play for why, and
 # AS-BUILT-cli-contract.md「配置面」 for the keys.
 UT_CONFIG="${UT_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/uting/config}"
 UT_DEFAULTS="$SCRIPT_DIR/../config"
@@ -60,7 +60,7 @@ ut_read_config() {
         val="${line#*=}"
         while [[ "$key" == *[[:space:]] ]]; do key="${key%[[:space:]]}"; done
         while [[ "$val" == [[:space:]]* ]]; do val="${val#[[:space:]]}"; done
-        [[ "$key" =~ ^(UT|YT|BILI)_[A-Z0-9_]+$ ]] || continue
+        [[ "$key" =~ ^(UT|YT|BILI|NE)_[A-Z0-9_]+$ ]] || continue
         case "$key" in
         UT_CONFIG | UT_DEFAULTS | UT_VERSION | YT_IPC_SOCK | YT_DETACHED | YT_PLAYER_ID | YT_DETACHED_LOG) continue ;;
         esac
@@ -607,7 +607,7 @@ while (($#)); do
         ;;
     # One spelling each. --playlists and --delete used to be accepted as second names for
     # --ls and --del; a second official spelling is a second thing to keep in sync and it
-    # doubles the surface a small model has to choose from (CLAUDE.md, ARCHITECTURE.md「八个平级动词」).
+    # doubles the surface a small model has to choose from (CLAUDE.md, ARCHITECTURE.md「平级动词，没有内核」).
     --ls) set_action ls; shift ;;
     --show | --add | --rm | --del)
         [[ $# -ge 2 ]] || { echo "ut-playlist: $1 requires a playlist name" >&2; exit 1; }
