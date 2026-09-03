@@ -2616,6 +2616,37 @@ else
     backed=$(poll_until 10 pane_lacks 'New search')
     report "Esc leaves the prompt the paste opened" 1 "$backed"
 
+    # ── A row is reached by TYPING its number: <digits>j ────────────────────────────────
+    # `08` is the discriminating input, and it discriminates because a row number is a run of
+    # digit LITERALS with `0` a legal leading one (it stopped meaning "the tenth" when the
+    # jump went absolute). Without an explicit base, $((08)) on the 3.2 floor is not a wrong
+    # answer but
+    #     bash: ((: 08: value too great for base (error token is "08")
+    # and MEASURED against a deliberately broken copy, 2026-09-02: the TUI does not survive
+    # it. The whole pane goes, which is why the witness is the `n` prompt rather than the
+    # error text — a dead pane captures empty and greps clean, so a check looking for that
+    # message would go green on the very build it exists to catch.
+    #
+    # Where the cursor LANDED is deliberately not asserted: that is a claim about a picture,
+    # and tests/drive.sh drives it while capture-pane proves it. There is likewise no check
+    # here for an out-of-range number — a build with no bound test lands `selected` past the
+    # end, the renderer clamps it, and the TUI lives, so nothing this file may assert on can
+    # tell the two apart. AS-BUILT-tui.md says so where a reader will look for it.
+    tmux send-keys -t "$TS" 0
+    tmux send-keys -t "$TS" 8
+    tmux send-keys -t "$TS" j
+    tmux send-keys -t "$TS" n
+    jumped=$(poll_until 10 pane_has 'New search')
+    report "a leading zero in a row number is read base-10" 1 "$jumped"
+    if [ "$jumped" != 1 ]; then
+        echo "  ---- pane after 08j (empty means the TUI took the octal down) ----" >&2
+        tmux capture-pane -t "$TS" -p -J >&2 2>/dev/null
+        echo "  ---- end of pane ----" >&2
+    fi
+    tmux send-keys -t "$TS" Escape
+    backed=$(poll_until 10 pane_lacks 'New search')
+    report "…and the prompt it opened closes again" 1 "$backed"
+
     # `q` used to be asserted by waiting for tmux to tear the session down, which proves the
     # pty is not wedged but says nothing about the status or about what was handed back. The
     # pane now outlives the TUI, so both come out of the same exit.
