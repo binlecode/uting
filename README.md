@@ -208,12 +208,13 @@ the packaging NO in `docs/ROADMAP.md` says what would change that.
 
 ## Keys
 
-`↑/↓` (or `j`/`k`) select · `0`–`9` jump to that row of the window · `←/→` page · `Enter` play · `/` filter ·
+`↑/↓` (or `j`/`k`) select · `<digits>j` jump to that row · `←/→` page · `Enter` play · `/` filter ·
 `?` more / fewer keys · `n` new search ·
 `o` sort · `v` playback mode · `f` quality tier · `e` switch source · `a` add to playlist ·
 `b` open a playlist · `d` remove from the playlist on screen · `h` listening history ·
 `c` the focused row's parts · `i` the focused row's chapters · `+` add to the queue · `>` next track ·
-`Space` pause · `-`/`=` volume · `#` row numbers · `Tab` list mode ·
+`Space` pause · `-`/`=` volume · `#` row numbers (the jump's partner: it prints the
+number `Nj` takes) · `Tab` list mode ·
 `[`/`]` seek · `s` stop · `l` language · `t` theme · `q` quit
 
 **The hint block has two tiers and `?` is the door.** `core` — the shipped default — prints

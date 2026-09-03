@@ -544,14 +544,19 @@ Keys (List View):
   ↑/↓      move selection              ←/→  change page (→ past the last page
            fetches one batch more; ← on page 1 drops one, no re-fetch)
   j / k    the same two, for the hand that already lives on them (List View only —
-           with / open they are text you are typing)
+           with / open they are text you are typing). `j` is also what ends a row
+           number typed with the digits — see 0 - 9 below
   Enter    play / switch track (non-blocking background playback); on a chapter row,
            play FROM that chapter — a seek if that item is already playing
   Space    pause / resume playback
   s        stop playback
   - / =    volume down / up (via IPC)
-  0 - 9    jump the cursor to that row of the visible window (0 = the tenth)
-  #        row numbers on / off (UT_ROW_INDEX; the digit keys work either way)
+  0 - 9    type a row number; `j` jumps to it — `12j` goes to row 12, `3j` to row 3.
+           The number is the ABSOLUTE one `#` prints, counted from the top of the
+           list and not of the window; out of range does nothing. There is no
+           timeout: any other key drops the number and then does its own job
+  #        row numbers on / off (UT_ROW_INDEX). It is the jump's partner: the
+           address `Nj` takes is only on screen while this is on
   Tab      list mode: scroll <-> page (UT_LIST_MODE)
   [ / ]    seek backward / forward 10s (via IPC)
   v        cycle playback mode: audio → video → fast (applies to next play)
@@ -2916,11 +2921,11 @@ term_size; LINES_N=$TERM_LINES
 PAGE_SIZE=$PAGE_OPT
 # scroll mode's window: the ABSOLUTE index of the first visible row. It is the mode's whole
 # state — there is no page number and no page count — and the renderer pulls it to wherever
-# the cursor is, never the other way round. VIEW_START is what the renderer actually drew
-# from, in EITHER mode, so a caller that needs to know what is on screen (jump_to_row, the
-# menu loop's clamp) asks one variable instead of re-deriving the window two more times.
+# the cursor is, never the other way round. It is the only window state published outside the
+# renderer in this mode, and page mode publishes only page_index: the one caller that used to
+# ask a third variable for "the first visible row" was jump_to_row, and absolute row numbers
+# left it with one bound and no window at all.
 VIEW_TOP=0
-VIEW_START=0
 # The visible row the player is on, or -1. Resolved once per redraw ahead of the row loop and
 # read inside it; declared here so it is a global by intent rather than by the accident of
 # being assigned inside a function.
@@ -3480,11 +3485,11 @@ display_list_menu() {
     # into a loop (the plan's I-2).
     [[ "$LIST_MODE" == "page" ]] && nav_items+=("$GL_AH	$S_PAGE")
     nav_items+=("$GL_ENTER	$S_PLAY")
-    # The digits are a movement key, so they print next to the arrows rather than with
-    # the playback cluster — and they are `full` because the arrows already say how to
-    # move: this is the shortcut, not the way. Three cells wide either tier, so the pair
-    # of them cannot move this block from one line to two on its own.
-    keys_full && nav_items+=("0-9	$S_JUMP" "#	$S_ROWNUM" "Tab	$S_LISTMODE")
+    # The jump prints next to the arrows rather than with the playback cluster — it is a
+    # movement key — and it is `full` because the arrows already say how to move: this is the
+    # shortcut, not the way. `Nj` is two cells, one NARROWER than the `0-9` it replaced, so
+    # the pair of them still cannot move this block from one line to two on its own.
+    keys_full && nav_items+=("Nj	$S_JUMP" "#	$S_ROWNUM" "Tab	$S_LISTMODE")
     keys_full && nav_items+=("v	$S_MODE" "f	$S_QUALITY" "n	$S_SEARCH")
     # `o` re-sorts the SEARCH and refetches it, so on a store's rows it can only answer
     # "search rows only" (cycle_sort's own first line). A key whose whole effect is a notice
@@ -3896,11 +3901,10 @@ display_list_menu() {
         ((page < 1)) && page=1
         start=$(( (page - 1) * PAGE_SIZE ))
     fi
-    # Handed back to the menu loop, which reads them on the next iteration: the renderer owns
-    # the window geometry in both modes, and VIEW_START is the one answer to "what is on
-    # screen" that every other caller asks rather than deriving a third time.
+    # Handed back to the menu loop, which reads it on the next iteration: the renderer owns
+    # the window geometry in both modes, and the page number is the half of it anything
+    # outside this function still asks for.
     page_index=$page
-    VIEW_START=$start
     end=$(( start + PAGE_SIZE - 1 ))
     if ((NUM_ENTRIES > 0)); then
         ((selected < start)) && selected=$start
@@ -3916,16 +3920,18 @@ display_list_menu() {
     else
         # The marker gets its own 2-cell slot in front of the row — the cursor glyph where
         # the cursor is, two spaces everywhere else — and the number, when it is on, is not
-        # the selection's to take: it is what the user types to reach a row (the digit keys),
+        # the selection's to take: it is what the user types to reach a row (`12j`),
         # and blanking it on the row under the cursor removes the one label saying which row
         # that is.
         #
         # The numbers are OFF by default and `#` toggles them. Most of the time the cursor
         # is the answer to "which row", and a right-aligned column of ordinals on every line
         # is chrome charged to every row to serve the one press in ten that jumps. The keys
-        # do NOT depend on the toggle: 0-9 jump whether or not the number is drawn, because a
-        # key whose meaning followed a display state would be a second keymap wearing this
-        # one's clothes. The toggle decides whether you have to count.
+        # do NOT depend on the toggle: `Nj` jumps whether or not the number is drawn, because
+        # a key whose meaning followed a display state would be a second keymap wearing this
+        # one's clothes — which is also why typing a digit does not switch the column on for
+        # you. What the toggle decides is whether the address is VISIBLE: the number is an
+        # absolute one, so with the column off it can only be counted on the first screenful.
         #
         # What the field fixes is alignment, not content. The prefixes used to be per-row
         # literals ("> 1. " / "  1. "), so their width was 4 + <digits> and a page that
@@ -4148,6 +4154,34 @@ display_list_menu() {
         cursor_show
     else
         printf '\033[J'
+        # ── The pending row number, vim's showcmd ────────────────────────────────────────
+        # Right-flushed on the cursor's parking row, and that row for three reasons that are
+        # each on their own sufficient. (1) The frame height must not change: an echo on a
+        # line of its own would take a result row away on the first digit and hand it back on
+        # `j`, flickering once per jump — and worse, it would make a block's height depend on
+        # something learned after the budget was struck, which is exactly what the four-step
+        # chain forbids. This row is already charged to LAYOUT_CURSOR_ROW, so it costs no
+        # cell. (2) It is never reclaimed: the footer sheds the gaps, the hint gap and the
+        # filter note by value, and the parking row is the one thing under them that never
+        # goes — so this canvas exists at 24x24 too. (3) The filter takes the other branch
+        # above, where a digit is query text and there is no count to draw.
+        #
+        # \033[J has already run, so erasing the previous count is free — nothing to clear
+        # when JUMP_COUNT is empty, and no branch needed for it either.
+        #
+        # CHA to right_edge - width + 1, the house right-flush (the status segment in the
+        # header uses the same expression against the same local). NOT to right_edge itself:
+        # that is where the LAST cell goes, and starting there would run every digit after
+        # the first past nav_cols — a wrap on the bottom line is a newline, which scrolls the
+        # screen and costs the header, the very failure this placement exists to avoid.
+        if [[ -n "$JUMP_COUNT" ]]; then
+            local sc_col=$((right_edge - ${#JUMP_COUNT} + 1))
+            ((sc_col < 1)) && sc_col=1
+            printf '\033[%dG%s%s%s\033[1G' "$sc_col" "$C_DIM" "$JUMP_COUNT" "$C_RESET"
+        fi
+        # No trailing newline, here or above: filling the last row and emitting its newline
+        # scrolls the whole screen by one and the header goes off the top (the note on
+        # LAYOUT_CURSOR_ROW). The cursor is parked back at column 1 of this row instead.
         cursor_hide
     fi
 }
@@ -5561,6 +5595,19 @@ READ_NAV_KEY=""
 PENDING_KEY=""
 PENDING_ESC=0
 
+# The row-jump count register: the digits typed so far, "" when there are none. A global for
+# the reason PENDING_KEY is one — it is an intent that outlives the keypress that made it,
+# not a value some function computed — and it is read and written by the LIST VIEW case block
+# alone, plus the one clearing point in front of both blocks. Never by the universal block:
+# with `/` open a digit is query text (`2026` is a real query) and filter_live runs its own
+# reader that reaches neither block, so keeping the digits out of the universal case is what
+# makes the filter safe by construction rather than by a guard someone has to remember.
+#
+# There is no timer anywhere near it. The count is ended by a KEY (`j`), which is why 1-9 and
+# 10+ are one rule instead of two: `3j` costs a keystroke more than `3` did, and buys a
+# keyboard with one jump gesture on it instead of two.
+JUMP_COUNT=""
+
 # The byte after an Esc, or nothing — the ONE question whose answer used to cost a second.
 #
 # A lone Esc is only known to be lone once the terminal has been given a chance to send what
@@ -5838,28 +5885,41 @@ read_query_input() {
     done
 }
 
-# A digit names a row of the VISIBLE window, never of the whole list: 1-9 pick that row and
-# 0 picks the tenth, which is why the key is `0` and not `10`. The window is whatever the
-# renderer last drew from — VIEW_START, which is the page's first row in page mode and the
-# scroll window's top in the other — so this needs no idea of which mode it is in and there
-# is one notion of "what is on screen" rather than three.
+# `$1` is an ABSOLUTE row number, 1-based — the very number the row-index column prints when
+# `#` is on. It used to be a single digit naming a row of the VISIBLE window, with `0` meaning
+# the tenth; that spelling could not name row 12 at all, and it disagreed with the column
+# beside it, which has always counted from the top of the LIST. One notion of "row 12" now.
 #
-# Out of range is a SILENT no-op, matching ← on page 1 of a store: a window holding seven
-# rows has no eighth to jump to, and a measured block does not spend a line saying no.
+# Out of range is a SILENT no-op, matching ← on page 1 of a store: a list holding 71 rows has
+# no 999th to jump to, and a measured block does not spend a line saying no. A row that has
+# not been FETCHED yet is out of range by the same test — fetching is ←/→'s axis, and a jump
+# key that quietly lengthened the list would make "row 12" mean two different rows one frame
+# apart.
 #
 # It does NOT depend on whether the row numbers are being printed. A key whose meaning
 # changed with a display toggle would be a second keymap wearing one keymap's clothes;
-# the toggle decides whether the user has to count, not whether the digit acts.
+# the toggle decides whether the user can SEE the address, not whether the key acts.
 jump_to_row() {
-    local n=$1 top target
-    # if, not `((n == 0)) && n=10`: fine here either way, but the assignment form is the
-    # house rule for arithmetic under set -e and this function has no other guard.
-    if ((n == 0)); then n=10; fi
-    top=$VIEW_START
-    target=$(( top + n - 1 ))
-    ((target < NUM_ENTRIES)) || return 0
-    ((target < top + PAGE_SIZE)) || return 0
-    selected=$target
+    # 10# is a guard, not a style: JUMP_COUNT is a run of digit literals and `0` is a legal
+    # leading one, so `010` reads as octal 8 — and `08` is worse, because on the 3.2 floor it
+    # is not a wrong answer but
+    #     bash: ((: 08: value too great for base (error token is "08")
+    # on stderr, into the frame, from an expansion that then fails the assignment carrying it.
+    # MEASURED against a deliberately broken copy, 2026-09-02: the TUI does not survive `08j`
+    # — the whole pane goes. Which is also why contract.sh watches for the pane still taking
+    # keys afterwards rather than for that message: a dead pane captures empty and greps
+    # clean, so the obvious check would go green on the one build it exists to catch.
+    local n=$((10#$1))
+    ((n >= 1)) || return 0                  # 0j and 00j land here, by the same rule as 999j
+    ((n <= NUM_ENTRIES)) || return 0        # …and so does a row that has not been fetched
+    # Page mode has to be carried by hand. The menu loop clamps `selected` into the current
+    # page BEFORE display_menu (the `page_min`/`page_max` block), and the jump happens at the
+    # END of the previous turn — so a jump to row 12 with page_index still 1 is clamped back
+    # to row 10 before anything renders, and display_list_menu's "derive the page from
+    # selected" runs after that clamp and cannot undo it. move_selection's page branch keeps
+    # page_index for exactly this reason.
+    [[ "$LIST_MODE" == "page" ]] && page_index=$(( (n - 1) / PAGE_SIZE + 1 ))
+    selected=$((n - 1))
     return 0
 }
 
@@ -6048,6 +6108,18 @@ while true; do
 
     if ! read_nav_input; then continue; fi
 
+    # The jump count dies on any key that is not building it or ending it — vim's rule, and
+    # the reason it is HERE, in front of both case blocks, is that the universal block's arms
+    # all end in `continue`: Space, s, -, =, [, ], ?, # and Tab never reach the list block at
+    # all, so a clearing point after it would let `1` `=` `j` jump to row 1. One point rather
+    # than a clear in every arm, which is a list to maintain and a register that survives
+    # whichever key gets forgotten. This does not read or write the count from a universal
+    # arm — it runs before either block picks a key up.
+    case "$READ_NAV_KEY" in
+    [0-9] | j | J) ;;
+    *) JUMP_COUNT="" ;;
+    esac
+
     # Universal controls (active in all views): playback, and the key-hint tier.
     case "$READ_NAV_KEY" in
     " ") toggle_pause; continue ;;
@@ -6088,19 +6160,37 @@ while true; do
     # arrows and deliberately does not add them: with `/` open they are text the user is
     # typing into the query, and a navigation key that ate a letter would be unusable.
     "[A" | "OA" | "["*A | "O"*A | "[B" | "OB" | "["*B | "O"*B | \
-    "[C" | "OC" | "["*C | "O"*C | "[D" | "OD" | "["*D | "O"*D | j | J | k | K)
+    "[C" | "OC" | "["*C | "O"*C | "[D" | "OD" | "["*D | "O"*D | k | K)
         move_selection "$READ_NAV_KEY" ;;
+    # `j` is two keys in one, told apart by the register and never by a clock: with a count
+    # pending it ENDS the count and jumps, with none it is the down-arrow it has always been.
+    # It has to be lifted out of the arrow pattern above to be either — bash's case takes the
+    # FIRST matching arm, so a `j` left up there makes this one dead code and `12j` silently
+    # does nothing at all. The vim reading of `3j` is "down three", not "to row 3"; that is a
+    # known and accepted mis-read, taken because `j` is where the hand already is.
+    j | J)
+        if [[ -n "$JUMP_COUNT" ]]; then
+            jump_to_row "$JUMP_COUNT"
+            JUMP_COUNT=""
+        else
+            move_selection "$READ_NAV_KEY"
+        fi ;;
     # Enter → start/switch track in background. A chapter row means the same thing with an
     # offset, and says so through play_chapter's two branches.
     "" | $'\n' | $'\r')
         if [[ "$LIST_SOURCE" == "chapters" ]]; then play_chapter || true; else play_selected || true; fi ;;
-    # 0-9 jump the cursor inside the visible window. In THIS case block and deliberately
-    # not the universal one above: with `/` open a digit is query text the user is typing
-    # (`2026` is a real query), and filter_live runs its own reader that reaches neither
-    # block — so keeping the digits out of the universal case is what makes the filter
-    # safe by construction instead of by a guard that has to be remembered. Same trap
-    # j/k already walked into.
-    [0-9]) jump_to_row "$READ_NAV_KEY" ;;
+    # A digit does not move anything: it appends to the pending row number, which `j` then
+    # ends. In THIS case block and deliberately not the universal one above — with `/` open a
+    # digit is query text the user is typing (`2026` is a real query), and filter_live runs
+    # its own reader that reaches neither block, so keeping the digits out of the universal
+    # case is what makes the filter safe by construction instead of by a guard that has to be
+    # remembered. Same trap j/k already walked into.
+    #
+    # Six digits is an ARITHMETIC guard and not a semantic one: a 20-digit run overflows the
+    # 64-bit $(( )) that reads it. Everything past the sixth is dropped in silence; being out
+    # of range is jump_to_row's business, not this line's.
+    [0-9])
+        if ((${#JUMP_COUNT} < 6)); then JUMP_COUNT="$JUMP_COUNT$READ_NAV_KEY"; fi ;;
     n | N) new_search ;;      # new search (non-blocking: music continues)
     # A paste is a QUERY, and it opens the same prompt `n` does with the text already in it.
     # Beside `n` rather than in the universal block above for the reason the digits are: the
