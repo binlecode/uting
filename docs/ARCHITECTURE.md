@@ -1,7 +1,7 @@
 # ARCHITECTURE —— uting
 
-`ut-play` · `yt-search` · `yt-resolve` · `bili-search` · `bili-resolve` · `ut-playlist` ·
-`ut-history` · `uting` —— 一套"搜索 + 终端播放"的 CLI 套件，为 **LLM/agent 调用方**设计的程度
+`ut-play` · `yt-search` · `yt-resolve` · `bili-search` · `bili-resolve` · `ne-search` · `ne-resolve` ·
+`ut-playlist` · `ut-history` · `uting` —— 一套"搜索 + 终端播放"的 CLI 套件，为 **LLM/agent 调用方**设计的程度
 不亚于为人设计。范围是整套套件，这份是伞状的那一份：**图、流程、伪码与决定**。
 具体怎么落地，各面各住一份，本文的引用一律指过去：
 
@@ -37,7 +37,7 @@
 *就是*可用性与安全的边界。下面每一个设计选择，都是"把这份契约当作产品"推出来的结果。
 
 **定位**：一个 **agent 优先的媒体引擎**（一个不认识任何站点的播放器 + 一对一对可插拔的引擎），
-外加**一张给人的终端脸**。音源数量不属于定位 —— 今天两个（YouTube、B 站），站点知识只住在引擎
+外加**一张给人的终端脸**。音源数量不属于定位 —— 今天三个（YouTube、B 站、网易云），站点知识只住在引擎
 对里，加一个不改这一段。
 
 **差异化是三件与渲染无关的东西**，加任何功能都不许动它们：单行 JSON envelope 契约、退出码分类、
@@ -69,7 +69,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
    在**风险**维度成立，在**分发**维度不成立 —— 而分发才是唯一能兑现的外部收益。
 
 3. **agent 对接的是窄动词的 argv + 它们背后的契约。** 没有壳可言 —— 窄动词就是实现本身，
-   `ut-play` 与四个引擎都是平级 peer。所以真要换语言，能换的单位也只有**播放器**，
+   `ut-play` 与六个引擎命令都是平级 peer。所以真要换语言，能换的单位也只有**播放器**，
    而引擎整条留在 shell：它们才是随外部网站变动而频繁改的那一半（第 6 条）。
    **但"守护进程 + CLI 动词 + JSON"这个形状不是本项目独有的**
    （`RESEARCH-tui-player.md` §3.3）：`spotify-player` 用不同音源做了同一件事且早于本项目。
@@ -204,7 +204,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
   给不出就恒印默认值 —— 两种都是合法状态，而**恒印默认值必须是实测结论，不是占位**。
   （AS-BUILT-engine.md「`kind` 与 `access`」、AS-BUILT-cli-contract.md「数据契约」）
 - **按 site 切不按 stack 切**：stack 会变、site 不会（`engine` 是被持久化的路由键）；
-  样板重复是"一对自足文件"的代价。（「命令拓扑」、「命令拓扑」、「命令拓扑」）
+  样板重复是"一对自足文件"的代价。（「命令拓扑」）
 
 ### 两个存储 —— 播放列表与收听历史（接口：`--ls`/`--show`/`--add…` 与 `-j` 行，一行就是一次调用；AS-BUILT-player.md「持久状态层」到「收听日志」）
 
@@ -284,6 +284,8 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
         ├── yt-resolve   → <checkout>/shell/yt-resolve     agent 面
         ├── bili-search  → <checkout>/shell/bili-search    agent 面
         ├── bili-resolve → <checkout>/shell/bili-resolve   agent 面
+        ├── ne-search    → <checkout>/shell/ne-search      agent 面
+        ├── ne-resolve   → <checkout>/shell/ne-resolve     agent 面
         ├── ut-playlist  → <checkout>/shell/ut-playlist    agent 面（可选）
         └── ut-history   → <checkout>/shell/ut-history     agent 面（可选）
               一个命令一个名字；不发短名（「平级动词，没有内核」）
@@ -320,7 +322,7 @@ ROADMAP 那条 Go 重写 NO 的全部账**：收益只剩"删渲染负债"，分
 装了一半的引擎不算引擎），它交给 `ut-play` 的 `--engine` 永远来自信封自己的 `engine` 字段，
 绝不来自某个默认值。机制与规则住在 `AS-BUILT-tui.md`。
 
-**为什么是四个引擎命令，而不是 `yt search|resolve` 子命令。** 一个窄动词的 flag 面也窄，
+**为什么一个引擎是两个命令（`<name>-search` / `<name>-resolve`），而不是 `yt search|resolve` 子命令。** 一个窄动词的 flag 面也窄，
 而这正是小模型敢调它的原因：`yt-search` 从字面上就不可能接受 `--detach`，
 `ut-play` 从字面上就不可能去搜索。子命令分发器会把这些面重新并回一套 argv 文法，
 并把门重新塞回程序内部 —— 那正是拆分之前门所在的位置。`resolve` 是暴露出来的，
@@ -560,7 +562,7 @@ AS-BUILT-cli-contract.md「命令规格」）。
 ```
 
 `yt-resolve --transcript` 是同样的形状（一次 `yt-dlp --skip-download --no-simulate`，
-AS-BUILT-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--transcript` 那一半（「站点知识的边界」）。
+AS-BUILT-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--transcript` 那一半（「站点知识的边界」）；`ne-resolve` 有，但走的是一次 `curl`（歌词即字幕），不是 yt-dlp。
 
 **B. 播放 —— 播放器问一个引擎，然后播一条直链**
 
@@ -647,6 +649,8 @@ AS-BUILT-cli-contract.md「数据契约」）。`bili-resolve` 根本没有 `--t
 | 5 | `resolve_info` | `yt-dlp --dump-single-json --skip-download` | 引擎 | `--info` 信封 |
 | 6 | `resolve_transcript`（`yt-resolve`） | `yt-dlp --skip-download --no-simulate` | 引擎 | 字幕文件 → 文本 |
 | 7 | `fetch_view_once` / `fetch_pagelist_once`（`bili-resolve`） | 对 view 端点的 `curl`，被拒则改打 pagelist（无 yt-dlp） | 引擎 | `--parts` 信封（分 P 列表） |
+| 8 | `fetch_page_once`（`ne-search`） | 对 weapi 搜索端点的 `curl`，载荷经 `openssl` 两道 AES（`weapi_params`） | 引擎 | 搜索信封 |
+| 9 | `fetch_lyric_once`（`ne-resolve`） | 对歌词端点的一次 `curl`（无 yt-dlp） | 引擎 | `--transcript` 信封（歌词即该站的字幕） |
 
 **三个值得明说的后果**
 
