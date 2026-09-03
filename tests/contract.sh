@@ -1518,9 +1518,19 @@ else
     # inherits the tmux SERVER's environment, not this shell's, so the value is passed into
     # the command line rather than exported — the same reason the TUI section spells it out.
     PS_STATE=$(mktemp -d "${TMPDIR:-/tmp}/uting-paste.XXXXXX")
+    # UT_CONFIG rides along for the same reason and one more: the three greps below name an
+    # ENGLISH chrome string, and this pane's language comes from whichever config it reads.
+    # The export at the top of this file reaches a pane only when THIS run happens to start
+    # the tmux server; a developer who already had tmux open gets a server without it, the
+    # pane reads their own config, and a `YT_LANG=zh` in it draws 搜索 where the grep wants
+    # Search — three checks red on their machine and green here (reproduced 2026-09-03 with
+    # `env -u UT_CONFIG tmux -L … new-session`). YT_LANG=en is pinned beside it because the
+    # config is only one of the two ways the language is decided: blank means auto-detect,
+    # so a zh* locale would draw the same 搜索 through an empty file. Both spelled out, the
+    # way the TUI section spells its knobs out, so the pane's language is an input.
     tmux kill-session -t "$PS_TS" 2>/dev/null
     tmux new-session -d -s "$PS_TS" -x 80 -y 20 \
-        "UT_STATE_DIR='$PS_STATE' TMPDIR='$TMPDIR' UT_HISTORY=0 '$PWD/shell/uting'; echo __GONE__; sleep 5" 2>/dev/null
+        "UT_STATE_DIR='$PS_STATE' TMPDIR='$TMPDIR' UT_CONFIG='$UT_CONFIG' YT_LANG=en UT_HISTORY=0 '$PWD/shell/uting'; echo __GONE__; sleep 5" 2>/dev/null
     pasted=0
     i=0
     while [ $i -lt 100 ]; do
