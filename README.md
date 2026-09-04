@@ -154,13 +154,25 @@ dependency it refuses.
 
 Both files are **read as data, never sourced**, so `UT_X=$(cmd)` stores those characters
 instead of running anything, and only `UT_`/`YT_`/`BILI_`/`NE_` keys are read — no config can
-reach `PATH`, `TMPDIR` or `LD_PRELOAD`. Nothing in the suite ever writes either file.
+reach `PATH`, `TMPDIR` or `LD_PRELOAD`.
+
+The shipped `config` is **never written by any command**. Your own file is: `uting` writes
+ten preference keys back to it as you change them at runtime — the engine, sort field, play
+mode, quality tier, theme, language, result count, key-hint tier, row numbers and list mode,
+each behind the key that changes it. The edit is in place, one pass and one rename, so your
+comments and layout survive; a value that would not read back unchanged is not written at
+all, and a key already pinned in your environment is left alone with a note rather than
+written to a file that could never win against it.
 
 `UT_CONFIG` relocates your file, from the environment only. Three knobs are deliberately
 absent from the shipped defaults because their unset state *is* an auto-detection that a
 value would defeat: `YT_LANG` (zh under a zh\* locale), `YT_ASCII` (on under a non-UTF-8
 locale) and `UT_STATE_DIR` (its default chains through `XDG_STATE_HOME`). Set those in your
-own config or the environment. Every key is listed in `docs/AS-BUILT-cli-contract.md`「配置面」.
+own config or the environment.
+
+The shipped `config` enumerates every key, with its default and a comment saying what it
+does — read that file to see them all. `docs/AS-BUILT-cli-contract.md`「配置面」 explains the
+chain, the write-back and the rules that span files, rather than restating the list.
 
 ## Try it
 
