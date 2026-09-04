@@ -788,7 +788,7 @@ report "ut-play --quality keeps the engine gate" 1 \
 # And the claim is the MESSAGE, not the exit code: every one of these exits 1 and so does the
 # TTY gate a few lines further down the same file, so an exit code alone cannot separate
 # "refused the value" from "refused the pipe" and the check could not fail.
-for spec in UT_PLAY_QUALITY=bogus UT_KEYS=bogus YT_BG=sideways UT_RESOURCE=maybe UT_RESOURCE_TICKS=fast; do
+for spec in UT_PLAY_QUALITY=bogus UT_KEYS=bogus YT_BG=sideways UT_RESOURCE=maybe UT_RESOURCE_TICKS=fast UT_IMAGE=bogus; do
     KNOB_OUT=$(env "$spec" shell/uting </dev/null 2>&1 || true)
     case "$KNOB_OUT" in
     *"${spec%%=*}"*) KNOB_HIT=yes ;;
@@ -2265,7 +2265,25 @@ else
     # below need to name one (the `i` view's own label, and a field the list cannot hold), so
     # the language becomes an input rather than an accident. Nothing else in the
     # section reads a chrome string, so nothing else changes.
-    TUI_CMD="cd '$PWD' && env YT_SYNC=0 TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance YT_LANG=en shell/uting 'lofi hip hop'"
+    # UT_IMAGE=on, and it is the discriminating value rather than the realistic one: `auto`
+    # under tmux returns before sending a byte, so it would prove nothing, while `on` runs
+    # the whole cover path — the cell-size query, the fetch, the transcode, the emit — on a
+    # pane this block already drives through a resize, a filter and nine preference keys.
+    #
+    # WHAT IT CATCHES IS NOT THE PICTURE, and the picture is exactly what it cannot see:
+    # tmux does not pass graphics escapes through, so a "no \033_G in the capture" check
+    # would be one that cannot fail (CLAUDE.md's testing rules). What it catches is the
+    # cover path BREAKING THE TUI, and on the day the draw path landed it caught three
+    # separate ways, none of them predicted:
+    #   · `ls … | head -1` on a cold cache — an unmatched pipeline under pipefail carries
+    #     ITS status, `set -e` takes the process, and the frame dies mid-detail-block;
+    #   · the transcode's mpv sharing this tty and EATING KEYS, so # and v stopped toggling
+    #     (--really-quiet does not cover it: that is output, this is input — --no-terminal);
+    #   · a 39KB base64 write interrupted by SIGCHLD/SIGWINCH — `printf: write error:
+    #     Interrupted system call` — again fatal under set -e.
+    # Every one of them shows up here as this block's own boot / key / quit assertions going
+    # red, which is why the value of forcing `on` is not that it draws but that it runs.
+    TUI_CMD="cd '$PWD' && env YT_SYNC=0 UT_IMAGE=on TMPDIR='$TMPDIR' UT_STATE_DIR='$TUI_STATE' UT_CONFIG='$TUI_CFG' UT_SORT_FIELD=relevance YT_LANG=en shell/uting 'lofi hip hop'"
     TUI_CMD="$TUI_CMD"'; printf "RC=%s\n" $?'
     TUI_CMD="$TUI_CMD"'; stty -a </dev/tty | tr " " "\n" | grep -E "^-?(echo|icanon)$" | tr "\n" " " | sed "s/^/FLAGS= /"; echo; sleep 20'
     tmux new-session -d -s "$TS" -x 100 -y 30 "$TUI_CMD"

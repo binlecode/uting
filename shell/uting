@@ -621,6 +621,9 @@ Environment:
                    query, then dark. For minimal/mono, light swaps cyan for blue; for
                    community themes it picks the theme's own light variant.
   YT_SYNC=0|1|auto  Synchronized redraws (DCS 1q/2q; default auto: on, off under tmux).
+  UT_IMAGE=auto|on|off  Cover art for the focused row, over the terminal's graphics
+                    protocol. auto probes the terminal and is off under tmux; off sends
+                    no byte at all.
   YT_ICON=note|phones  Which glyph fills the header's two-cell icon slot: ♫ (padded to
                    two) or 🎧. Unset, it is a coin flip per startup — pin it when a
                    frame has to come out the same twice. ASCII mode (YT_ASCII=1) drops
@@ -724,6 +727,7 @@ BG_MODE="auto"           # YT_BG override: auto | light | dark (accent hue selec
 BG="dark"
 [[ -n "${YT_THEME:-}" ]] && THEME="$YT_THEME"
 [[ -n "${YT_BG:-}" ]] && BG_MODE="$YT_BG"
+IMAGE_MODE="${UT_IMAGE:-auto}"   # auto | on | off — the focused row's cover art
 # ROWS PER SCREEN PAGE — the display page, which is a different thing from both the fetch
 # batch above and bili-search's PAGE_SIZE (the remote API's own page, which is not a knob at
 # all). It is only a request: display_list_menu reflows it down against terminal height.
@@ -914,6 +918,12 @@ esac
 # The resource readout's two knobs ride the same door. Config-only, no flag: whether the
 # chrome shows the player's cpu/ram is set-once tuning, not a per-request choice.
 case "$UT_RESOURCE" in 0 | 1) ;; *) die "UT_RESOURCE must be 0 or 1" ;; esac
+# The cover art's one knob, and it is a KNOB rather than a key: whether this terminal draws
+# pictures is set once for a terminal, not chosen per row (CLAUDE.md's flag/config split).
+# The door is HERE, with the other scalar doors and before the TTY gate, so a mistyped value
+# in a config file is answered by name instead of surfacing as a screen that quietly never
+# draws — the failure mode a capability knob defaulting to `auto` is most likely to hide in.
+case "$IMAGE_MODE" in auto | on | off) ;; *) die "UT_IMAGE must be one of: auto, on, off (got '$IMAGE_MODE')" ;; esac
 is_uint "$UT_RESOURCE_TICKS" && ((UT_RESOURCE_TICKS > 0)) || die "UT_RESOURCE_TICKS must be a positive integer"
 
 # A unix-socket netcat as well as jq: every transport key (pause, seek, volume) and every
@@ -1088,6 +1098,352 @@ init_sync() {
     *) die "YT_SYNC must be 0, 1 or auto (got '$YT_SYNC')" ;;
     esac
 }
+
+# ── The cover art's capability layer: two queries, once, at startup ──────────────────────
+# Both read the terminal the way detect_bg's OSC 11 query already does — write, then collect
+# the reply byte by byte (bash 3.2 has no `read -d`), capped, with `read -t 1` as the only
+# timeout the floor offers. The cost of an unanswered probe is therefore ONE SECOND, once,
+# which is why neither runs under tmux or on a dumb terminal and why the answers are cached
+# in globals rather than re-asked on the render path.
+IMAGE_ON=0
+# The fallback cell, and it is a real terminal's, not a neutral number: 8x16 is the classic
+# VGA text cell and what a terminal that will not answer XTWINOPS most likely has. It is only
+# ever a fallback — a cover sized from a guessed cell is the WRONG SIZE, not a smaller one.
+IMAGE_CW=8
+IMAGE_CH=16
+# Does this terminal speak the kitty graphics protocol? The query is the protocol's own
+# `a=q`: transmit one RGB pixel and ask about it, which a terminal that implements it answers
+# `OK` and every other terminal ignores entirely. Nothing is displayed either way.
+image_probe() {
+    local resp="" b
+    printf '\033_Gi=99,s=1,v=1,a=q,t=d,f=24;AAAA\033\\'
+    while IFS= read -rsn1 -t 1 b; do
+        resp+="$b"
+        case "$resp" in *$'\033\\'*) break ;; esac
+        if ((${#resp} > 64)); then break; fi
+    done
+    case "$resp" in *";OK"*) return 0 ;; esac
+    return 1
+}
+# HOW BIG IS ONE CELL, in pixels. Measured 2026-09-03 on Ghostty at 16x36 — NOT the 8x16 the
+# arithmetic "a cell is about twice as tall as it is wide" predicts, and not close enough to
+# it to round: sizing the cover from the guess would draw it 12 cells wide where 24 was asked
+# for, a quarter of the intended box, because the transcode target is in PIXELS and the
+# placement is in CELLS. So it is asked, not derived. XTWINOPS `CSI 16 t` answers
+# `CSI 6 ; <height> ; <width> t`, and a terminal that does not implement it stays silent —
+# which is what the 8x16 fallback above is for.
+image_cell_px() {
+    local resp="" b code="" h="" w=""
+    printf '\033[16t'
+    while IFS= read -rsn1 -t 1 b; do
+        resp+="$b"
+        case "$resp" in *t) break ;; esac
+        if ((${#resp} > 64)); then break; fi
+    done
+    # `6` is the reply's own discriminator — XTWINOPS answers 6 for the CELL size and 4/8 for
+    # the window and text area, and a terminal that answered a DIFFERENT question must not have
+    # its answer read as this one. Split on ';' rather than with ${var#*[…]} patterns: `[` opens
+    # a bracket expression in a glob, so the obvious strip is a pattern that means something else.
+    resp="${resp#*\[}"
+    resp="${resp%t*}"
+    IFS=';' read -r code h w <<<"$resp" || true
+    if [[ "$code" == 6 ]] && is_uint "$h" && is_uint "$w" && ((h > 0 && w > 0)); then
+        IMAGE_CH="$h"; IMAGE_CW="$w"
+    fi
+}
+# `auto` resolves in the SAME ORDER, and every step is separately decidable — which is what
+# makes each one a check that can go red on its own.
+#
+# The tmux step is YT_SYNC's precedent followed, not a new rule invented: a multiplexer needs
+# the escape passed through, it commonly is not, and the honest default there is off. `on` is
+# the door for the user who has configured passthrough themselves — it skips tmux, TERM and
+# the probe alike, because a user who set it has already answered the question the probe asks.
+init_image() {
+    case "$IMAGE_MODE" in
+    off) IMAGE_ON=0; return 0 ;;
+    on) IMAGE_ON=1 ;;
+    auto)
+        if [[ -n "${TMUX:-}" || "${TERM:-}" == dumb ]]; then
+            IMAGE_ON=0
+            return 0
+        fi
+        if image_probe; then IMAGE_ON=1; else IMAGE_ON=0; return 0; fi
+        ;;
+    esac
+    # Only once we are going to draw — an unanswered XTWINOPS query costs the same second the
+    # capability probe does, and there is no reason to spend it on a terminal we will not draw on.
+    image_cell_px
+}
+
+# ── The cover art itself: cache, transcode, emit ─────────────────────────────────────────
+# THE BOX is 24 columns by 7 rows, and both numbers are constants rather than knobs: it is
+# sized to the detail block it hangs off, and a second way to say how big a picture is would
+# be a second thing to keep in step with the budget gate below.
+IMAGE_BOX_COLS=24
+IMAGE_BOX_ROWS=7
+# The two floors, and both are stated in what they PROTECT rather than in a terminal size:
+# 50 columns of detail text, and 10 rows of list. Ten is UT_PAGE_ROWS's shipped value, which
+# is this file's existing answer to "enough list to browse"; fifty is what the block needs
+# for a wrapped description to read as prose rather than as a column. Under either floor
+# there is no cover at all — never a smaller one, because a second size means a second
+# transcode target and a second layout to keep in step with the budget.
+IMAGE_MIN_TEXT_COLS=50
+IMAGE_MIN_ROWS=10
+# ONE image is ever on screen, so its id is a constant. That is what lets the delete name
+# this image (`d=i,i=`) instead of taking the `d` default, which is EVERY placement on the
+# screen — inside a multiplexer, other applications' pictures included.
+IMAGE_ID=99
+IMAGE_GATE=0        # this frame is drawing a cover (charged to detail_h either way)
+IMAGE_DIRTY=0       # the focused row has a cover that is not in the cache yet
+IMAGE_DRAWN=0       # something is on the screen and has to be deleted before anything else
+IMAGE_DIR=""
+IMAGE_KEY_URL=""    # the row image_png/image_cols were resolved for — the memo, not a cache
+IMAGE_JOB_PID=""    # the fetch+transcode running off the key loop, if one is
+IMAGE_JOB_URL=""    # …and which row it is for
+IMAGE_FAIL_URL=""   # the one row already tried and not gettable: tried once, never again
+IMAGE_PNG=""        # the file this frame should emit; "" = nothing to emit
+IMAGE_COLS=0        # how many columns that file will take, for the right flush
+
+# The cache lives under TMPDIR, NOT under $UT_STATE_DIR, and the distinction is the suite's
+# own: the state dir holds what a person saved and what a player played, and its layout
+# belongs to the two store commands (the note beside PLAYLIST_BIN says this file never
+# touches it). A cover is neither — it is a CDN url's bytes, regenerable in 0.15s and
+# expiring on someone else's schedule, which is the definition of a cache and not of state.
+# Every other scratch file in this file is already ${TMPDIR:-/tmp}; this one is too.
+image_cache_dir() {
+    local f
+    [[ -n "$IMAGE_DIR" ]] && return 0
+    IMAGE_DIR="${TMPDIR:-/tmp}/uting-covers-$(id -u 2>/dev/null || echo 0)"
+    mkdir -p "$IMAGE_DIR" 2>/dev/null || { IMAGE_DIR=""; return 1; }
+    chmod 700 "$IMAGE_DIR" 2>/dev/null || true
+    # Trimmed ONCE, here, and never on the render path: 200 files of this size is a few MB,
+    # and a prune that ran per frame would be a `ls` fork per keypress to reclaim nothing.
+    # `|| true` for the same pipefail reason as the two globs below: an empty cache dir is
+    # the normal first run, not a failure, and it must not end the process.
+    { ls -t "$IMAGE_DIR" 2>/dev/null | tail -n +201 | while IFS= read -r f; do
+        [[ -n "$f" ]] && rm -f "$IMAGE_DIR/$f"
+    done; } || true
+    return 0
+}
+
+# A url to a filename, without a hash — bash 3.2 has no builtin one and shasum/md5 are a
+# cross-platform divergence to maintain for a cache key. Keeping only the alphanumerics of
+# the url is enough: two different urls that collide would have to differ in punctuation
+# alone. Written as an anchored walk rather than ${url//[!A-Za-z0-9]/}, which is quadratic
+# on 3.2 (the portability contract), and run once per SELECTION rather than once per frame.
+IMAGE_KEY=""
+image_key() {
+    local u=$1 c out=""
+    while [[ -n "$u" ]]; do
+        c="${u:0:1}"
+        u="${u:1}"
+        case "$c" in [A-Za-z0-9]) out="$out$c" ;; esac
+    done
+    # The tail, not the head: every url from one site shares its head, and 80 characters of
+    # `httpswwwyoutubecomwatchv` is a filename that says nothing.
+    #
+    # GUARDED, because `${out: -40}` on a string SHORTER than 40 evaluates to the EMPTY
+    # STRING on the 3.2 floor (measured) rather than to the whole string — and an empty key
+    # is one cache file that every short url would share.
+    if ((${#out} > 40)); then IMAGE_KEY="${out: -40}"; else IMAGE_KEY="$out"; fi
+}
+
+# The PNG's own width, read from the PNG header rather than asked of a tool: bytes 16-19 are
+# the IHDR width, big-endian. `od -tx1` is endian-safe where `-tu4` is not, and this runs
+# once per TRANSCODE, never per frame — which is why the column count is baked into the
+# cached file's NAME and not recomputed by anyone who wants to draw it.
+image_png_cols() {
+    local f=$1 b1 b2 b3 b4 w
+    read -r b1 b2 b3 b4 <<<"$(od -An -tx1 -j16 -N4 "$f" 2>/dev/null)" || return 1
+    [[ -n "$b4" ]] || return 1
+    w=$(( (16#$b1 << 24) + (16#$b2 << 16) + (16#$b3 << 8) + 16#$b4 ))
+    ((w > 0)) || return 1
+    printf '%s' $(( (w + IMAGE_CW - 1) / IMAGE_CW ))
+}
+
+# Fetch and transcode, and it is called from the CLOCK, never from a frame — both halves are
+# blocking (a request, then an mpv) and a keypress must not wait on either. On any failure at
+# all the answer is silence: no cover for this row, no message, no retry. A cover is the one
+# thing on this screen whose absence costs the user nothing.
+image_prepare() {
+    local url=$1 tmp png cols f
+    image_cache_dir || return 1
+    image_key "$url"
+    tmp="$IMAGE_DIR/$IMAGE_KEY.src"
+    # 5 seconds, not 3: a cover really can be 2MB (measured 2026-09-03, a 1400x1400 NetEase
+    # album cover). A timeout is not an error path here, it is "no cover this time".
+    curl -fsSL --max-time 5 -o "$tmp" "$url" 2>/dev/null || { rm -f "$tmp"; return 1; }
+    # NO FORMAT SNIFFING, and that is the whole design: the extension lies (YouTube serves
+    # WebP from a .jpg url) and so may the Content-Type, so the bytes go to the one dependency
+    # that already knows every format the sites use. What mpv decodes, we draw; what it does
+    # not, we do not. There is no mimetype table to maintain because there is no mimetype.
+    #
+    # The box is in PIXELS and comes from the cell size this terminal reported, not from a
+    # constant: at 8x16 the box is 192x112 and at the 16x36 measured here it is 384x252, and
+    # a cover transcoded to the wrong one is drawn at the wrong SIZE, not merely resampled.
+    # force_original_aspect_ratio=decrease is what keeps a square album cover square and a
+    # 16:9 still wide — the image is fitted INSIDE the box, never stretched to it.
+    rm -f "$IMAGE_DIR/$IMAGE_KEY".*.png 2>/dev/null || true
+    rm -rf "$IMAGE_DIR/$IMAGE_KEY.out" 2>/dev/null || true
+    mkdir -p "$IMAGE_DIR/$IMAGE_KEY.out" 2>/dev/null || true
+    # --no-terminal AND stdin from /dev/null, and this is the pair that makes running mpv
+    # underneath a live TUI safe at all. mpv's default terminal handling puts the tty into
+    # its own mode and READS KEYS FROM IT — sharing a terminal with the app that owns it, it
+    # eats the user's keystrokes. Measured: with this transcode running in the background,
+    # `tests/contract.sh` saw # and v stop toggling, because the bytes went to mpv. It costs
+    # nothing here (this mpv has no user, it writes a file), and --really-quiet alone does
+    # NOT cover it: that silences output, and the problem is input.
+    mpv "$tmp" --frames=1 --no-audio --no-config --no-terminal \
+        --vf="scale=w=$((IMAGE_BOX_COLS * IMAGE_CW)):h=$((IMAGE_BOX_ROWS * IMAGE_CH)):force_original_aspect_ratio=decrease" \
+        --vo=image --vo-image-format=png --vo-image-outdir="$IMAGE_DIR/$IMAGE_KEY.out" \
+        --really-quiet </dev/null >/dev/null 2>&1 || true
+    rm -f "$tmp"
+    # A GLOB, not `ls … | head -1`: with `set -o pipefail` a pipeline whose first command
+    # finds nothing carries ITS status, the assignment inherits it, and `set -e` kills the
+    # process — which is how the first version of this file quit mid-frame the moment a row
+    # had no cached cover yet (the common case: every first look at a row).
+    png=""
+    for f in "$IMAGE_DIR/$IMAGE_KEY.out"/*.png; do
+        [[ -e "$f" ]] || continue
+        png="$f"
+        break
+    done
+    [[ -n "$png" ]] || { rm -rf "$IMAGE_DIR/$IMAGE_KEY.out"; return 1; }
+    cols=$(image_png_cols "$png") || cols=""
+    [[ -n "$cols" ]] || cols=$IMAGE_BOX_COLS
+    mv "$png" "$IMAGE_DIR/$IMAGE_KEY.$cols.png" 2>/dev/null || true
+    rm -rf "$IMAGE_DIR/$IMAGE_KEY.out"
+    return 0
+}
+
+# OFF THE KEY LOOP, and this is a correctness rule rather than a speed one. The two halves
+# of getting a cover are a request and an mpv, and the request alone is allowed five seconds
+# — run inline on the clock, that is a UI that stops answering the keyboard for five seconds
+# the first time the cursor lands on a row. It is not hypothetical: it is what
+# `tests/contract.sh` saw the moment the draw path landed, as a filter that would not narrow
+# and a store key that would not open, because the keys were queued behind a download.
+#
+# ONE JOB AT A TIME. Holding a key down would otherwise start a fetch per row and the
+# machine would spend its bandwidth on rows the user has already left; the frame that wants
+# a cover simply asks again on the next tick, and the tick is one second.
+#
+# `trap -` INSIDE THE SUBSHELL, and it is not optional: a bash subshell inherits the EXIT
+# trap, so without this every finished fetch would run cleanup_on_exit — restoring the tty
+# mid-session, flushing preferences, and STOPPING THE USER'S PLAYER — from a child whose only
+# job was to write a PNG.
+image_prepare_bg() {
+    local url=$1
+    [[ -n "$url" ]] || return 0
+    if [[ -n "$IMAGE_JOB_PID" ]] && kill -0 "$IMAGE_JOB_PID" 2>/dev/null; then return 0; fi
+    IMAGE_JOB_URL="$url"
+    ( trap - EXIT INT TERM HUP; image_prepare "$url" ) </dev/null >/dev/null 2>&1 &
+    IMAGE_JOB_PID=$!
+    return 0
+}
+
+# What the CURRENT frame can draw, memoised on the row's url so the glob below costs one
+# stat per SELECTION rather than one per keypress. It never fetches: a frame that finds no
+# cached cover says so by raising IMAGE_DIRTY, and the clock picks it up.
+image_focus() {
+    local url=$1 f c
+    [[ "$url" == "$IMAGE_KEY_URL" ]] && return 0
+    IMAGE_KEY_URL="$url"
+    IMAGE_PNG=""
+    IMAGE_COLS=0
+    IMAGE_DIRTY=0
+    [[ -n "$url" ]] || return 0
+    image_cache_dir || return 0
+    image_key "$url"
+    # A glob and not `ls`, for the reason image_prepare states: an unmatched pipeline under
+    # pipefail + set -e ends the process. It is also the cheaper of the two on a path that
+    # runs once per selection — a glob is a builtin, `ls | head` is two forks.
+    f=""
+    for c in "$IMAGE_DIR/$IMAGE_KEY".*.png; do
+        [[ -e "$c" ]] || continue
+        f="$c"
+        break
+    done
+    if [[ -n "$f" ]]; then
+        IMAGE_PNG="$f"
+        IMAGE_COLS="${f%.png}"; IMAGE_COLS="${IMAGE_COLS##*.}"
+        is_uint "$IMAGE_COLS" || IMAGE_COLS=$IMAGE_BOX_COLS
+    elif [[ -n "$IMAGE_FAIL_URL" && "$url" == "$IMAGE_FAIL_URL" ]]; then
+        # Tried once, and the answer was no — a dead url, an undecodable byte stream, a
+        # timeout. Leaving IMAGE_DIRTY clear is what stops that row arming the clock once a
+        # second forever. Moving off the row and back is what retries it.
+        IMAGE_DIRTY=0
+    else
+        IMAGE_DIRTY=1
+    fi
+    return 0
+}
+
+# Delete OUR placement, and only ours. `d=i` is not optional decoration: the `d` key defaults
+# to `a`, which means every placement visible on the screen — inside tmux or a terminal with
+# another program drawing, that is someone else's picture. Nothing else erases these: a kitty
+# image is not in the character grid, so \033[K and \033[J go straight past it, which is why
+# this has to be called from the redraw, from the resize and from the exit trap alike.
+image_clear() {
+    ((IMAGE_DRAWN)) || return 0
+    printf '\033_Ga=d,d=i,i=%s\033\\' "$IMAGE_ID"
+    IMAGE_DRAWN=0
+    return 0
+}
+
+# Emit the cached PNG at the cursor's current row, right-flushed inside the gutter.
+# `C=1` is load-bearing twice over: without it a=T advances the cursor past the placement,
+# which at the bottom of a frame SCROLLS the screen and costs the header — the exact failure
+# the reflow exists to prevent, arriving from underneath — and it also means this function
+# does not have to put the cursor back, so the caller keeps writing where it was.
+# `q=2` is load-bearing once: it tells the terminal to answer nothing at all, and an answer
+# would arrive in read_nav_input as the user having pressed several keys.
+# EVERY WRITE HERE IS ALLOWED TO FAIL, and that is the one thing this function must get
+# right. A cover is ~39KB of base64 in 13 chunks — by a wide margin the largest write this
+# program makes, and the only one long enough to be sitting in write(2) when a signal
+# arrives. Two arrive routinely: SIGCHLD when the background transcode finishes, and
+# SIGWINCH on every column of a drag-resize. The write then returns EINTR, `printf` reports
+# a non-zero status, and under `set -e` the TUI DIES — which is exactly what it did, as
+#   uting: line …: printf: write error: Interrupted system call
+# caught in tests/contract.sh's tmux block, one frame after a resize.
+#
+# So a failed write is not an error, it is "no cover on this frame": the partial upload is
+# deleted rather than left half-drawn, IMAGE_DRAWN stays 0, and the very next frame — one
+# keypress or one tick away — emits it again from the same cached file. Nothing is retried
+# here, because the redraw IS the retry.
+image_emit() {
+    local right_col=$1 first=1 line col ok=1
+    [[ -n "$IMAGE_PNG" ]] || return 0
+    col=$((right_col - IMAGE_COLS + 1))
+    ((col < 1)) && col=1
+    printf '\033[%dG' "$col" || ok=0
+    while IFS= read -r line; do
+        ((ok)) || break
+        if ((first)); then
+            printf '\033_Ga=T,f=100,i=%s,r=%s,q=2,C=1,m=1;%s\033\\' "$IMAGE_ID" "$IMAGE_BOX_ROWS" "$line" || ok=0
+            first=0
+        else
+            printf '\033_Gm=1;%s\033\\' "$line" || ok=0
+        fi
+    done < <(base64 < "$IMAGE_PNG" 2>/dev/null | fold -w 4096)
+    if ((first)); then
+        # base64 produced nothing: a truncated or unreadable cache file. Nothing was sent.
+        printf '\033[1G' || true
+        return 0
+    fi
+    if ((ok)); then
+        printf '\033_Gm=0;\033\\' || ok=0
+    fi
+    printf '\033[1G' || true
+    if ((ok)); then
+        IMAGE_DRAWN=1
+    else
+        # A half-sent image is not an image. Take the id back so the terminal is not holding
+        # a truncated upload, and leave IMAGE_DRAWN clear so the next frame starts over.
+        printf '\033_Ga=d,d=I,i=%s\033\\' "$IMAGE_ID" || true
+        IMAGE_DRAWN=0
+    fi
+    return 0
+}
 detect_bg() {
     local fgbg b resp="" rgb rr gg bb
     case "$BG_MODE" in
@@ -1139,6 +1495,7 @@ init_theme() {
     init_sync
     init_colorterm
     init_colors
+    init_image
 }
 init_theme
 
@@ -2907,6 +3264,17 @@ stop_current_playback() {
 cleanup_on_exit() {
     cursor_show
     tty_echo_restore
+    # The cover goes back with the cursor and the echo, and for the same reason: a self-drawn
+    # UI owns the terminal state it changed for the length of the session and hands all of it
+    # back from one place. A kitty placement is not in the character grid, so quitting does
+    # not remove it and neither does the shell's own clear — this is the only thing that does.
+    image_clear
+    # And the cover job goes with it. It is a curl and an mpv writing into a cache nobody is
+    # going to read now, and leaving them running would outlive the session that started them.
+    if [[ -n "$IMAGE_JOB_PID" ]]; then
+        kill "$IMAGE_JOB_PID" 2>/dev/null || true
+        IMAGE_JOB_PID=""
+    fi
     # The other flush point. After the echo is back and before the player goes, so the one
     # line a failed write prints lands on a terminal that is behaving again.
     flush_prefs
@@ -3030,7 +3398,8 @@ build_all_rows() {
           ($e // ""),
           "",
           (.description // "" | clean),
-          ""
+          "",
+          (.thumbnail // "")
         ] | join("\u001f")')
 }
 
@@ -3061,7 +3430,14 @@ build_playlist_rows() {
           (.engine // ""),
           (.rail // ""),
           (.description // "" | clean),
-          (if .n == null then "" else (.n | tostring) end)
+          (if .n == null then "" else (.n | tostring) end),
+          # ELEVENTH FIELD, empty here for every source this builder serves. Neither store
+          # keeps a cover (a CDN url outlives nothing — AS-BUILT-cli-contract.md「数据契约」),
+          # and a part list is the parts of one video. An absent cover is not a defect: the
+          # frame reserves the same space either way, so a row without one is a row with a
+          # blank there rather than a different layout.
+          # NO APOSTROPHE ANYWHERE IN THIS BLOCK — it is inside a single-quoted jq program.
+          ""
         ] | join("\u001f")')
 }
 
@@ -3223,9 +3599,9 @@ apply_search_results() {
 load_rows() {
     urls=()
     R_TITLE=(); R_DUR=(); R_VIEWS=(); R_CHAN=(); R_LIVE=(); R_ENGINE=(); R_RAIL=()
-    R_DESC=(); R_N=()
-    local url title dur views chan live engine rail desc n
-    while IFS="$US" read -r url title dur views chan live engine rail desc n; do
+    R_DESC=(); R_N=(); R_THUMB=()
+    local url title dur views chan live engine rail desc n thumb
+    while IFS="$US" read -r url title dur views chan live engine rail desc n thumb; do
         [[ -n "$url" ]] || continue
         urls+=("$url")
         R_TITLE+=("$title")
@@ -3237,6 +3613,7 @@ load_rows() {
         R_RAIL+=("$rail")
         R_DESC+=("$desc")
         R_N+=("$n")
+        R_THUMB+=("$thumb")
     done <<<"$1"
     NUM_ENTRIES=${#urls[@]}
     NUM_PAGES=$(( (NUM_ENTRIES + PAGE_SIZE - 1) / PAGE_SIZE ))
@@ -3837,12 +4214,42 @@ display_list_menu() {
     # (the block takes the space it needs; no fixed reservation, no cap on the title).
     ((selected < 0)) && selected=0
     ((NUM_ENTRIES > 0 && selected > NUM_ENTRIES - 1)) && selected=$((NUM_ENTRIES - 1))
-    local detail_h=0 show_details=0
+    local detail_h=0 show_details=0 detail_w=$nav_cols
+    # ── The cover's budget gate, struck BEFORE the detail block is measured ─────────────
+    # A cover pins detail_h to 7 rows whether or not this row has one, and in `scroll` mode
+    # those rows come straight out of the LIST — 19 rows become 15 at 100x30. So the gate
+    # asks the list's question first: after paying 7 rows, are there still 10 to browse? Ten
+    # is UT_PAGE_ROWS's shipped value, which is this file's existing answer to "enough list".
+    # Under either floor the answer is no cover at all — never a smaller one, because a
+    # smaller one means a second transcode target and a second layout to keep in step.
+    #
+    # It is decided HERE, before print_details is measured, because the detail text wraps to
+    # a narrower width when the gate is open: measuring at one width and printing at another
+    # is how a block comes to be a different height than the budget was told.
+    IMAGE_GATE=0
+    if ((IMAGE_ON && NUM_ENTRIES > 0)); then
+        # The text's width is derived from right_edge, not from nav_cols, for the reason
+        # every other flush on this screen is: right_edge is THE right edge, and the cover is
+        # flushed to it so its edge and the duration rail's are one column. One blank column
+        # between the text and the picture, so the two never touch at any width.
+        detail_w=$((right_edge - IMAGE_BOX_COLS - 1))
+        if ((detail_w >= IMAGE_MIN_TEXT_COLS &&
+             LINES_N - chrome_h - foot_h - LAYOUT_CURSOR_ROW - IMAGE_BOX_ROWS >= IMAGE_MIN_ROWS)); then
+            IMAGE_GATE=1
+        else
+            detail_w=$nav_cols
+        fi
+    fi
     if ((NUM_ENTRIES > 0)); then
         DETAIL_MEASURE=1
-        print_details "$nav_cols" "$selected"
+        print_details "$detail_w" "$selected"
         DETAIL_MEASURE=0
         detail_h=$DETAIL_LINES
+        # THE COVER IS CHARGED WHETHER OR NOT THIS ROW HAS ONE. The block is 7 rows tall the
+        # moment the gate is open, so a row with no cover leaves the gutter blank instead of
+        # changing the layout — otherwise every arrow keypress that crossed from a row with a
+        # cover to a row without one would reflow the list and the text's wrap width at once.
+        ((IMAGE_GATE)) && detail_h=$IMAGE_BOX_ROWS
         # A terminal too short to pay for both drops the block and keeps the rows — the same
         # trade the navigation hints make above, and the reason "no cap on the title" is
         # safe. What has to survive underneath it is LAYOUT_DETAIL_KEEP.
@@ -3850,6 +4257,7 @@ display_list_menu() {
             show_details=1
         else
             detail_h=0
+            IMAGE_GATE=0
         fi
     fi
     # LAYOUT_CURSOR_ROW is charged here and by every other budget that ends in rows.
@@ -4153,8 +4561,43 @@ display_list_menu() {
     # costs no line and appears only in the mode that has one; where you are in the list is
     # now said continuously, by the scrollbar in the gutter.
 
-    # Details for the selected row, in its own section under the rows.
-    ((show_details)) && print_details "$nav_cols" "$selected"
+    # Details for the selected row, in its own section under the rows — and, when the gate
+    # above is open, the focused row's cover in the gutter to its right.
+    #
+    # THE COVER IS EMITTED FIRST, at the cursor's own row, which is the detail block's first
+    # line: a kitty placement lands where the cursor is, so nothing here needs to know its
+    # absolute row number — the one thing this frame cannot compute without duplicating the
+    # whole budget. `C=1` leaves the cursor untouched, so the text below prints exactly as it
+    # did before; and because a placement is not in the character grid, the \033[K each of
+    # those lines ends with erases the cells UNDER it without touching the picture.
+    #
+    # The old placement is deleted whatever happens next, including when this frame is not
+    # going to draw at all (the gate closed on a resize, the row has no cover, the terminal
+    # got too small). Nothing else removes it: \033[J does not.
+    # NOT DRAWING MEANS NOT WANTING, and the dirty bit has to be told. It is raised by
+    # image_focus, which only runs when the gate is open — so a frame that closes the gate
+    # (the terminal got short, UT_IMAGE went off) would leave a 1 behind, and that 1 arms the
+    # one-second clock in read_nav_input for the rest of the session: a wake-up per second,
+    # each one starting a fetch for a cover no frame is going to draw.
+    ((IMAGE_GATE)) || IMAGE_DIRTY=0
+    if ((show_details)); then
+        image_clear
+        if ((IMAGE_GATE)); then
+            image_focus "${R_THUMB[$selected]:-}"
+            image_emit "$right_edge"
+            print_details "$detail_w" "$selected"
+            # Pad to the cover's full height so the blocks below start where the budget said
+            # they would. DETAIL_LINES is what print_details actually printed.
+            while ((DETAIL_LINES < IMAGE_BOX_ROWS)); do
+                printf '\033[K\n'
+                DETAIL_LINES=$((DETAIL_LINES + 1))
+            done
+        else
+            print_details "$nav_cols" "$selected"
+        fi
+    else
+        image_clear
+    fi
 
     # ── The key block, at the bottom of the frame ──────────────────────────────────────
     # Its height was charged in the lower band, its content was decided before the banner
@@ -5537,7 +5980,7 @@ cycle_sort() {
 
 # ── FILTER action (key: /) — LIVE incremental narrow ─────────────────────────────────────
 apply_filter() {
-    local q="$1" url title dur views chan live engine rail desc n hay tok ok matched="" tokens=()
+    local q="$1" url title dur views chan live engine rail desc n thumb hay tok ok matched="" tokens=()
     selected=0
     page_index=1
     if [[ "$q" != *[![:space:]]* ]]; then
@@ -5548,12 +5991,12 @@ apply_filter() {
     FILTER_LABEL="$q"
     read -ra tokens <<<"$q"
     shopt -s nocasematch
-    # EIGHT fields, and the count is load-bearing. `read` gives the last variable everything
+    # ELEVEN fields, and the count is load-bearing. `read` gives the last variable everything
     # that is left, so with six names `live` arrived as "is_live<US>yt" and the is_live test
     # below could never be true — the LIVE token matched nothing for as long as the engine
     # field was the unnamed one. The re-emit hid it: pasting that trailing variable back
     # produced a byte-identical row, so every row survived and only the haystack was wrong.
-    while IFS="$US" read -r url title dur views chan live engine rail desc n; do
+    while IFS="$US" read -r url title dur views chan live engine rail desc n thumb; do
         [[ -n "$url" ]] || continue
         # The haystack is SYNTHESIZED here, not carried as a seventh field: the row already
         # has the pieces, it is never printed, and a stored key would be one more thing to
@@ -5580,7 +6023,7 @@ apply_filter() {
         done
         # Re-emitted unchanged, so ALL_ROWS stays the one source and a filter never
         # degrades a row.
-        ((ok)) && matched+="${url}${US}${title}${US}${dur}${US}${views}${US}${chan}${US}${live}${US}${engine}${US}${rail}${US}${desc}${US}${n}"$'\n'
+        ((ok)) && matched+="${url}${US}${title}${US}${dur}${US}${views}${US}${chan}${US}${live}${US}${engine}${US}${rail}${US}${desc}${US}${n}${US}${thumb}"$'\n'
     done <<<"$ALL_ROWS"
     shopt -u nocasematch
     load_rows "$matched"
@@ -5706,6 +6149,35 @@ nav_tick() {
     # playing must land too. What ARMS the timeout that gets us here when
     # nothing is playing is the PREF_DIRTY test in read_nav_input.
     flush_prefs
+    # THE COVER IS FETCHED HERE AND NOWHERE ELSE, and that is the performance premise rather
+    # than an optimisation to make later. A frame is redrawn on every keypress, and the two
+    # halves of getting a cover are a request and an mpv (0.15s measured) — holding `j` down
+    # through ten rows would be ten of each, and the nine covers in the middle would never be
+    # looked at. On the clock it is one, for the row the cursor actually stopped on: the
+    # intermediate frames simply have nothing to draw, which is also why the cover cannot
+    # flicker — it was never drawn in the states being passed through.
+    #
+    # The caller redraws as soon as this returns (both key loops `continue` into
+    # display_menu), so the frame that finds the cover in the cache is the very next one.
+    if ((IMAGE_DIRTY)); then
+        local iu="$IMAGE_KEY_URL"
+        if [[ -n "$IMAGE_JOB_PID" ]] && kill -0 "$IMAGE_JOB_PID" 2>/dev/null; then
+            : # still working — the next tick asks again, which is what the 1 s clock is for
+        else
+            # A job that has FINISHED for this very row, with the frame still finding no
+            # file, is a row that cannot be got. Recorded so it is tried once and not once a
+            # second (image_focus reads it).
+            if [[ -n "$IMAGE_JOB_PID" && -n "$iu" && "$IMAGE_JOB_URL" == "$iu" ]]; then
+                IMAGE_FAIL_URL="$iu"
+                IMAGE_DIRTY=0
+            fi
+            IMAGE_JOB_PID=""
+            [[ -n "$iu" && "$iu" != "$IMAGE_FAIL_URL" ]] && image_prepare_bg "$iu"
+        fi
+        # Force the next frame to look at the cache again: the memo is keyed on the url, and
+        # the file it answered "absent" for may have landed since.
+        IMAGE_KEY_URL=""
+    fi
     if [[ -z "$CURRENT_PLAY_ID" ]]; then return 0; fi
     fetch_play_times
     return 0
@@ -5938,7 +6410,11 @@ read_nav_input() {
     # playing, nav_tick never runs, and a change made in a silent session would sit in memory
     # until the user quit. One extra wake-up per burst of cycle keys, and the burst is what
     # the deferral exists to absorb.
-    if [[ -n "$CURRENT_PLAY_ID" ]] || ((CURRENT_PLAY_LOADING)) || [[ -n "$PREF_DIRTY" ]]; then
+    # A pending COVER arms the same clock, for the same reason a pending preference does and
+    # by the same one-clause addition: with nothing playing this read blocks outright, so a
+    # cover the frame could not draw would wait for the user's next keypress to appear —
+    # which is to say it would appear one row late, on the row they had already left.
+    if [[ -n "$CURRENT_PLAY_ID" ]] || ((CURRENT_PLAY_LOADING)) || [[ -n "$PREF_DIRTY" ]] || ((IMAGE_DIRTY)); then
         t_opt=(-t 1)
     fi
     # The resize gate is armed for THIS read only — the wait that owns the whole screen —

@@ -128,6 +128,15 @@ UT_ACCENT=                          # the `custom` palette's accent. 0xRRGGBB (2
 UT_ACCENT_LIGHT=                    # …the light-background rung. Empty = use UT_ACCENT
 YT_BG=auto                          # auto | light | dark
 YT_SYNC=auto                        # synchronised redraw: 0 | 1 | auto (off under tmux)
+UT_IMAGE=auto                       # auto | on | off: the focused row's cover art, drawn
+                                    # with the terminal's own graphics protocol. auto asks
+                                    # the terminal whether it speaks it and stays off under
+                                    # tmux (a multiplexer has to pass the escape through and
+                                    # commonly does not) — the same default YT_SYNC takes,
+                                    # for the same reason. on forces it for a user who has
+                                    # configured passthrough themselves; off sends no byte.
+                                    # A row whose engine gave no cover simply has none —
+                                    # the layout does not change either way
 YT_ICON=                            # note | phones — the header's two-cell icon slot:
                                      # note = ♫, phones = 🎧. Unset = one coin flip per
                                      # startup; pin it whenever a frame must repeat exactly
