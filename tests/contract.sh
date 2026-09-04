@@ -2270,11 +2270,17 @@ else
     # the whole cover path — the cell-size query, the fetch, the transcode, the emit — on a
     # pane this block already drives through a resize, a filter and nine preference keys.
     #
-    # WHAT IT CATCHES IS NOT THE PICTURE, and the picture is exactly what it cannot see:
-    # tmux does not pass graphics escapes through, so a "no \033_G in the capture" check
-    # would be one that cannot fail (CLAUDE.md's testing rules). What it catches is the
-    # cover path BREAKING THE TUI, and on the day the draw path landed it caught three
-    # separate ways, none of them predicted:
+    # WHAT IT CANNOT SEE IS WHAT THE PICTURE LOOKS LIKE — not whether one was sent. The
+    # distinction is `capture-pane` versus `pipe-pane`, and this comment used to get it
+    # wrong: capture-pane renders the GRID, and a placement is not in the grid, so a check
+    # written against it could never fail; pipe-pane copies the bytes the program WROTE
+    # before tmux decides what to do with them, so the escapes are readable even though tmux
+    # forwards none of them. Two checks further down use exactly that. What stays out of
+    # reach is the rendering — position, scale, whether it is the right image — which is a
+    # picture and not a byte, and no suite here proves it.
+    #
+    # What forcing `on` catches is the cover path BREAKING THE TUI, and on the day the draw
+    # path landed it caught three separate ways, none of them predicted:
     #   · `ls … | head -1` on a cold cache — an unmatched pipeline under pipefail carries
     #     ITS status, `set -e` takes the process, and the frame dies mid-detail-block;
     #   · the transcode's mpv sharing this tty and EATING KEYS, so # and v stopped toggling
@@ -2392,12 +2398,44 @@ else
     # reached move_selection's real arms rather than an arm of their own that forgot the
     # paging arithmetic. The walk back is asserted too: a k bound to the wrong direction
     # would leave the pane on page 2 and the first check would still be green.
+    # THE COVER IS READ OFF THE WIRE HERE, and it retires this section's own stated blind
+    # spot. `capture-pane` renders the GRID, and a kitty placement is not in the grid — which
+    # is why the note above says the picture is the one thing this block cannot see, and why
+    # forcing UT_IMAGE=on was worth doing only for what it RUNS. `pipe-pane` is the other
+    # end: it copies the bytes the program WROTE, before tmux decides what to do with them,
+    # so the graphics escapes are readable even though tmux never passes them on. Nothing is
+    # simulated and no key is added — the two windows below wrap keystrokes this block was
+    # already sending, and the whole cost is four tmux calls and two greps.
+    #
+    # WHY A WINDOW AROUND THE WALK: it is the liveness half. `#` below asserts that nothing
+    # was sent, and a pane that never drew a cover at all — no network for the thumbnail, a
+    # gate that closed — would pass that by having nothing to re-send. So the walk is asked
+    # for the opposite: twenty keypresses across ten rows and back must put a cover on the
+    # wire at least once, and the zero underneath it only means something after this does.
+    IMG_WALK="$UT_TEST_TMP/tui-cover-walk.raw"
+    : >"$IMG_WALK"
+    tmux pipe-pane -o -t "$TS" "cat >> '$IMG_WALK'"
     tmux send-keys -t "$TS" j j j j j j j j j j
     turned=$(poll_until 10 pane_has '^[[:space:]>▶]*11\. ')
     report "j walks the selection onto the next page" 1 "$turned"
     tmux send-keys -t "$TS" k k k k k k k k k k
     back=$(poll_until 10 pane_lacks '^[[:space:]>▶]*11\. ')
     report "and k walks it back" 1 "$back"
+    # POLLED, NOT SLEPT THROUGH, and the two conditions are why the walk is where this
+    # window lives. A cover is fetched on the one-second clock and transcoded by an mpv, so
+    # the last `k` returns long before the picture it asks for exists — a window that closed
+    # on the pane's own settle read zero every time and blamed the emitter for the clock
+    # (measured 2026-09-03: this check went red on its first live run for exactly that).
+    # And the stream has to be QUIET as well as non-empty, because the next window asserts a
+    # zero: a cover still in flight when the walk's window closes lands inside the toggle's
+    # and reads as a re-send. `a=T` is the transmit-and-place escape, and image_emit is the
+    # only thing in the suite that writes one.
+    img_sent()  { LC_ALL=C /usr/bin/grep -aq '_Ga=T' "$IMG_WALK" 2>/dev/null; }
+    img_still() { local a b; a=$(wc -c <"$IMG_WALK" 2>/dev/null); sleep 0.4
+                  b=$(wc -c <"$IMG_WALK" 2>/dev/null); [ "$a" = "$b" ]; }
+    img_drew=$(poll_until 12 img_sent)
+    poll_until 5 img_still >/dev/null
+    tmux pipe-pane -t "$TS"
 
     # The NINTH preference key, and the one display toggle among them. Asserted in both
     # directions on the pane AND in both directions in the file, the way the tier above is:
@@ -2408,6 +2446,20 @@ else
     # The row marker is the discriminator and it costs nothing: with the numbers off there
     # is no `1.` on any row, and no other line on this screen begins with an ordinal and a
     # dot. An implementation that bound # to nothing leaves them there and goes red here.
+    #
+    # AND IT IS THE DISCRIMINATING INPUT FOR THE COVER'S REDRAW, which is why the second
+    # window is here and not somewhere a player is running. `#` repaints the whole frame —
+    # every row's prefix changes — while moving nothing the cover depends on: same file,
+    # same right flush, same number of lines above the detail block. So a build that deletes
+    # and re-uploads its cover on every frame is separated from one that leaves it alone by
+    # a keystroke this block was already sending, with no player, no clock and no network.
+    # Measured 2026-09-03 against the build that shipped the cover: four transmissions and
+    # four deletes across these two presses, ~39KB of base64 each. The flicker a user sees
+    # is the gap between the delete and the re-arrival, and while a track plays the same
+    # redraw runs once a second forever — 193KB/s at the pane for a picture nobody moved.
+    IMG_TOG="$UT_TEST_TMP/tui-cover-toggle.raw"
+    : >"$IMG_TOG"
+    tmux pipe-pane -o -t "$TS" "cat >> '$IMG_TOG'"
     tmux send-keys -t "$TS" '#'
     gone=$(poll_until 10 pane_lacks '^[[:space:]>▶]*1\. ')
     report "# takes the row numbers off" 1 "$gone"
@@ -2418,6 +2470,20 @@ else
     report "# puts them back" 1 "$shown"
     wrote=$(poll_until 10 cfg_has '^UT_ROW_INDEX=on$')
     report "…and the file follows it back" 1 "$wrote"
+    tmux pipe-pane -t "$TS"
+    # A SKIP AND NOT A RED when the walk drew nothing, and the line above is why: getting a
+    # cover onto this pane needs the thumbnail CDN to answer and mpv to decode what it sent,
+    # neither of which is this suite's subject. A machine that could not get one has no way
+    # to tell a build that leaves its cover alone from one that re-sends it every frame —
+    # that is coverage this run does not have, and saying so beats a red somebody has to
+    # look at and then blame on the network. The same shape as the two row-source walks
+    # further down, which report only when they meet the row they need.
+    if [ "$img_drew" = 1 ]; then
+        report "a redraw that cannot move the cover does not re-send it" 0 \
+            "$(LC_ALL=C /usr/bin/grep -ao '_Ga=T' "$IMG_TOG" 2>/dev/null | wc -l | tr -d ' ')"
+    else
+        echo "  skip  (no cover reached the pane — nothing to prove about redrawing one)"
+    fi
 
     # The TENTH preference key, and the one that changes what the other chrome says. Tab was
     # unbound for as long as there was one renderer; it now switches the WINDOWING of that
