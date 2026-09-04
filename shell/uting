@@ -4614,7 +4614,18 @@ display_list_menu() {
     # (the terminal got short, UT_IMAGE went off) would leave a 1 behind, and that 1 arms the
     # one-second clock in read_nav_input for the rest of the session: a wake-up per second,
     # each one starting a fetch for a cover no frame is going to draw.
-    ((IMAGE_GATE)) || IMAGE_DIRTY=0
+    #
+    # AND THE MEMO GOES WITH IT. image_focus is keyed on the row's url and returns early
+    # when it has already answered for that row — so a gate that closes and reopens on the
+    # SAME row would never ask again, and whatever the closed frames left behind is what the
+    # row keeps. That is a stranded cover, not a missing one: resize small while the first
+    # fetch is still running and back again, and the row shows nothing for the rest of the
+    # session because IMAGE_DIRTY was cleared here while IMAGE_PNG was still empty, and the
+    # memo says the question is settled. Measured 2026-09-03 at 100x30 through 62x20 and
+    # 26x24 and back: twelve seconds of ticks, no cover, and the bytes already in the cache.
+    # Clearing the key costs one glob on the frame that reopens the gate and nothing on any
+    # other — image_focus is not called at all while it is shut.
+    ((IMAGE_GATE)) || { IMAGE_DIRTY=0; IMAGE_KEY_URL=""; }
     if ((show_details)); then
         if ((IMAGE_GATE)); then
             image_focus "${R_THUMB[$selected]:-}"
