@@ -362,9 +362,12 @@ surface.
   on, kept separate so the decision records hold decisions rather than data. Two halves, and it opens
   by saying which is which: **one half is measured** — the name screening, what comparable
   projects do by GitHub API, what publishing this shell version costs, and how ready it is;
-  **the other is read, not run** — how other terminal players are built along five orthogonal
-  design axes, the five playback architectures they pick from, and the four routes to a
-  playable URL on the Chinese side. It labels its own gaps.
+  **the other started as read, not run** — how other terminal players are built along five
+  orthogonal design axes, the five playback architectures they pick from, and the four routes
+  to a playable URL on the Chinese side. The 2026-09-03 pass measured the parts that carry
+  weight (how long a signed stream URL lives on each of the three sites, and how two of these
+  players really talk to their backends) and says which claims are still only read. It labels
+  its own gaps.
 - [`docs/RESEARCH-terminal-graphics.md`](docs/RESEARCH-terminal-graphics.md) — the second survey:
   showing pictures in a terminal. What the protocols settled on, what the comparable Chinese
   projects actually ship, and — **measured on this machine** — how far mpv alone gets you before
