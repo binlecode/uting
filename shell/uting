@@ -1196,6 +1196,7 @@ IMAGE_ID=99
 IMAGE_GATE=0        # this frame is drawing a cover (charged to detail_h either way)
 IMAGE_DIRTY=0       # the focused row has a cover that is not in the cache yet
 IMAGE_DRAWN=0       # something is on the screen and has to be deleted before anything else
+IMAGE_PLACED=""     # …and WHAT: the file, the column and the row it was placed at
 IMAGE_DIR=""
 IMAGE_KEY_URL=""    # the row image_png/image_cols were resolved for — the memo, not a cache
 IMAGE_JOB_PID=""    # the fetch+transcode running off the key loop, if one is
@@ -1384,6 +1385,7 @@ image_focus() {
 # image is not in the character grid, so \033[K and \033[J go straight past it, which is why
 # this has to be called from the redraw, from the resize and from the exit trap alike.
 image_clear() {
+    IMAGE_PLACED=""
     ((IMAGE_DRAWN)) || return 0
     printf '\033_Ga=d,d=i,i=%s\033\\' "$IMAGE_ID"
     IMAGE_DRAWN=0
@@ -1442,6 +1444,37 @@ image_emit() {
         printf '\033_Ga=d,d=I,i=%s\033\\' "$IMAGE_ID" || true
         IMAGE_DRAWN=0
     fi
+    return 0
+}
+
+# THE FRAME'S ENTRY POINT, and the reason it exists is that a redraw is not a change.
+# image_emit used to be called unconditionally, straight after image_clear, on every frame —
+# and a frame is drawn once a second for as long as a track plays, because the rail is live.
+# So a cover nobody had moved was DELETED and re-sent, 39KB of base64 at a time, once a
+# second; the gap between the delete and the re-arrival of the placement is the flicker.
+# Measured 2026-09-03 at 100x30, six idle seconds with the cursor untouched: six deletes,
+# six transmissions, 1.16MB written at the pane for a picture that never changed.
+#
+# The cover is still PLACED by the cursor — that is image_emit's whole design, and nothing
+# here knows the block's absolute row in order to draw it. The row is computed only to
+# decide whether the picture already on the screen is still in the right place, and the
+# frame prints exactly three things above this block: the chrome (chrome_h lines, counted
+# by the same accounting the reflow budget rests on), one line per visible row (vis of
+# them), and the spacer. A placement is not in the character grid, so a repaint that draws
+# the same layout leaves it exactly where it was — which is what makes doing nothing the
+# correct redraw. Anything that could move it moves one of those three numbers, or the
+# right flush, or the file itself; all five are in the signature, so a stale picture cannot
+# survive a change and an unchanged one is never sent twice.
+image_place() {
+    local right_col=$1 row=$2 sig
+    sig="$IMAGE_PNG|$right_col|$row"
+    ((IMAGE_DRAWN)) && [[ "$sig" == "$IMAGE_PLACED" ]] && return 0
+    image_clear
+    image_emit "$right_col"
+    # Only a whole picture is on the screen. A write interrupted mid-upload leaves
+    # IMAGE_DRAWN clear, and recording the signature anyway would tell the next frame that
+    # the thing it just failed to draw is already there.
+    ((IMAGE_DRAWN)) && IMAGE_PLACED="$sig"
     return 0
 }
 detect_bg() {
@@ -4571,9 +4604,11 @@ display_list_menu() {
     # did before; and because a placement is not in the character grid, the \033[K each of
     # those lines ends with erases the cells UNDER it without touching the picture.
     #
-    # The old placement is deleted whatever happens next, including when this frame is not
-    # going to draw at all (the gate closed on a resize, the row has no cover, the terminal
-    # got too small). Nothing else removes it: \033[J does not.
+    # The old placement is deleted the moment this frame draws anything ELSE, including
+    # nothing at all — the gate closed on a resize, the row has no cover, the terminal got
+    # too small. Nothing else removes it: \033[J does not. What it is NOT deleted for is a
+    # frame that would only put it back unchanged, which is every frame the one-second clock
+    # draws while a track plays; image_place is where that is decided.
     # NOT DRAWING MEANS NOT WANTING, and the dirty bit has to be told. It is raised by
     # image_focus, which only runs when the gate is open — so a frame that closes the gate
     # (the terminal got short, UT_IMAGE went off) would leave a 1 behind, and that 1 arms the
@@ -4581,10 +4616,12 @@ display_list_menu() {
     # each one starting a fetch for a cover no frame is going to draw.
     ((IMAGE_GATE)) || IMAGE_DIRTY=0
     if ((show_details)); then
-        image_clear
         if ((IMAGE_GATE)); then
             image_focus "${R_THUMB[$selected]:-}"
-            image_emit "$right_edge"
+            # chrome_h + vis + row_gap is what this frame has printed above this line, and
+            # so the row the placement lands on. It is passed for the COMPARISON only —
+            # see image_place; the cursor is still what puts the picture anywhere.
+            image_place "$right_edge" $((chrome_h + ${vis:-0} + row_gap))
             print_details "$detail_w" "$selected"
             # Pad to the cover's full height so the blocks below start where the budget said
             # they would. DETAIL_LINES is what print_details actually printed.
@@ -4593,6 +4630,7 @@ display_list_menu() {
                 DETAIL_LINES=$((DETAIL_LINES + 1))
             done
         else
+            image_clear
             print_details "$nav_cols" "$selected"
         fi
     else
