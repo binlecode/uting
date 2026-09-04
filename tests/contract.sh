@@ -1868,6 +1868,57 @@ for e in yt-zh bili-zh ne-vip ne-novip $(for n in $ENGINES; do echo "cap-$n dflt
     [ -s "$LIVE/$e.out" ] || continue
     report "$e rows are calls" 0 "$(jqv "$ROW_IS_A_CALL" "$(out "$e")")"
 done
+# THE COVER, over every discovered engine and BOTH envelope shapes — no extra request, the
+# same envelopes the clause above already read.
+#
+# Two claims, and the second is the one with teeth. Presence is the cheap half: the key must
+# be there on every row of both shapes, string or null, which is the suite's standing rule
+# for a field an engine may not know (AS-BUILT-cli-contract.md「数据契约」). BOTH shapes,
+# because `kind`/`access` were wrong in exactly this way once — projected into -j alone, so
+# the caller who asked for MORE data got LESS, and every -j check stayed green.
+#
+# The scheme is the discriminating half, and the input for it exists today on two of the
+# three engines (measured 2026-09-03): Bilibili serves `pic` PROTOCOL-RELATIVE
+# (`//i0.hdslb.com/…`) and NetEase serves `.al.picUrl` over PLAIN http — so an engine that
+# passes the site's string through untouched hands a TUI a URL curl cannot fetch, or one it
+# fetches over a downgraded connection. Neither failure is visible in the envelope's shape;
+# both are visible here. yt needs no rewrite and is held to the same line, which is what
+# makes this an invariant rather than two site-specific patches.
+THUMB_IS_FETCHABLE='(.results|length)>0 and all(.results[];
+      has("thumbnail")
+      and ((.thumbnail|type)=="null" or (.thumbnail|type)=="string")
+      and ((.thumbnail|type)=="null" or (.thumbnail|startswith("https://"))))'
+for n in $ENGINES; do
+    report "$n-search -j covers are fetchable" 0 \
+        "$(jqv "$THUMB_IS_FETCHABLE" "$(out "search-$n")")"
+    report "$n-search -J covers are fetchable" 0 \
+        "$(jqv "$THUMB_IS_FETCHABLE" "$(out "searchJ-$n")")"
+done
+
+# WHICH cover, and this one can only be asked of the engine whose site offers a CHOICE.
+# YouTube publishes a `thumbnails[]` array per flat entry — measured 2026-09-03: 360x202 and
+# 720x404 on `lofi hip hop`, every row — and the display box is ~192px across, so the answer
+# is the smallest at or above 200px. `.[0]`, `.[-1]` and "the biggest" are the three
+# plausible wrong implementations and all three are separated by this input: the first two
+# only by accident of order, the third by 3x the escape payload for a worse downscale.
+#
+# Not stated over $ENGINES: `pick_thumb` is NOT one duplicated function here. Each site
+# hands its engine a different shape — an array, a protocol-relative string, an http string
+# — so there is no cross-engine invariant to state, only the one above (what a cover must BE)
+# which every engine already answers. The vacuity guard is `($c|length) > 0`: if this query
+# ever stops carrying a row that offers two sizes, the check goes red instead of passing on
+# an empty set.
+if [ -n "$YT_SJ" ]; then
+    report "yt picks the smallest cover at or above 200px" "true" \
+        "$( printf '%s' "$YT_SJ" | jq -r '
+            [ .results[]
+              | select((.thumbnails|type)=="array")
+              | select([.thumbnails[]|select((.width//0)>=200)]|length > 0)
+              | {got: .thumbnail,
+                 want: ([.thumbnails[]|select((.width//0)>=200)]|sort_by(.width)|first|.url)} ] as $c
+            | ($c|length) > 0 and all($c[]; .got == .want)' 2>/dev/null)"
+fi
+
 # `access` IS A COMPUTED FIELD ON ONE ENGINE, and only a live search can show it. The
 # invariant above holds every engine to the closed enum, which a row hardcoding "full"
 # satisfies — and both shipping engines DO hardcode it, honestly, because their search

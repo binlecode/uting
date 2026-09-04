@@ -267,6 +267,23 @@ def fmt_dur:
   end;
 def ne_secs:
   if type != "number" then null else (. / 1000 | floor) end;
+# THE COVER, normalised to one directly-GETtable https URL — the site field name stops here.
+# `.al.picUrl` is what this site calls it, and a caller must never learn that (CLAUDE.md:
+# site knowledge lives in an engine). Measured 2026-09-03: it arrives over PLAIN http on
+# every row (`http://p3.music.126.net/…jpg`), and the host serves the identical bytes over
+# https — so the scheme is upgraded rather than passed through, because a TUI that fetches
+# it must not be the one place in the suite that downgrades a connection.
+#
+# The cover is SQUARE here (album art), not 16:9 like the two video sites. Nothing in this
+# engine acts on that — an aspect ratio is a rendering fact and belongs to whoever draws —
+# but it is why the field is a URL and not a promised shape.
+def pick_thumb:
+  (.al.picUrl // "") as $p
+  | if ($p | type) != "string" or $p == "" then null
+    elif ($p | startswith("http://")) then ($p | sub("^http://"; "https://"))
+    elif ($p | startswith("https://")) then $p
+    else null
+    end;
 '
 
 # THE `fee` -> `access` MAP, and the reason this engine exists at all beyond being a third
@@ -458,7 +475,7 @@ fetch_page() {
 # ONE jq program does the whole shaping, and the page loop below runs THIS — never a second
 # predicate of its own — to decide whether to fetch again. The normalised fields are merged
 # OVER the raw record rather than replacing it, so -J keeps every field the site sent while -j
-# projects the same eleven keys the other two engines project.
+# projects the same twelve keys the other two engines project.
 #
 # Field by field, and the two that are deliberately null:
 #   view_count  ALWAYS null. The response carries `.pop`, which is a 0-100 popularity SCORE,
@@ -492,7 +509,8 @@ JQ_SHAPE='
           description: (.al.name // "") }
   | . + { duration_fmt: (.duration | fmt_dur),
           kind: "track",
-          access: (.fee | ne_access) }
+          access: (.fee | ne_access),
+          thumbnail: pick_thumb }
   | select(.url != null)
   | select($vip or .access == "full") ]
 '
@@ -590,7 +608,7 @@ emit_search_json() {
         printf '%s' "$FILTERED_JSON" | jq -c --arg e "$ENGINE_NAME" --arg q "$QUERY" \
             '{status: "ok", engine: $e, query: $q, count: length,
               results: map({id, title, url, channel, duration, duration_fmt, view_count,
-                            live_status, description, kind, access})}'
+                            live_status, description, kind, access, thumbnail})}'
     fi
 }
 
@@ -622,7 +640,8 @@ Options:
   -V       Print the suite version
 
 Output (JSON, -j): {"status","engine","query","count","results":[{id,title,url,channel,
-                    duration,duration_fmt,view_count,live_status,description,kind,access}, ...]}
+                    duration,duration_fmt,view_count,live_status,description,kind,access,
+                    thumbnail}, ...]}
   Identical to yt-search's and bili-search's envelope, field for field. results[].id is a
   numeric song id — the input to `ne-resolve`. view_count and live_status are always null:
   this search cannot know either, and kind is always "track".

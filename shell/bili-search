@@ -269,6 +269,21 @@ def bili_secs:
       elif ($p | length) == 1 then $p[0]
       else null end
   end;
+# THE COVER, normalised to one directly-GETtable https URL — the site field name stops here.
+# `pic` is what this site calls it, and a caller must never learn that (CLAUDE.md: site
+# knowledge lives in an engine); it arrives PROTOCOL-RELATIVE — measured 2026-09-01 and
+# again 2026-09-03, `//i0.hdslb.com/bfs/archive/<hash>.jpg` on every row of every query —
+# so the scheme is not optional decoration, it is the difference between a URL curl can
+# fetch and a path it cannot. Anything that is not a non-empty string is null, and the key
+# stays present (AS-BUILT-cli-contract.md「数据契约」).
+def pick_thumb:
+  (.pic // "") as $p
+  | if ($p | type) != "string" or $p == "" then null
+    elif ($p | startswith("//")) then "https:" + $p
+    elif ($p | startswith("http://")) then ($p | sub("^http://"; "https://"))
+    elif ($p | startswith("https://")) then $p
+    else null
+    end;
 '
 
 # Titles come back as SEARCH-RESULT HTML, not as text: the matched query is wrapped in
@@ -552,7 +567,7 @@ fetch_results() {
 
     # ONE jq program does the whole shaping. The normalised fields are merged OVER the raw
     # record rather than replacing it, so -J keeps every field the site sent while -j
-    # projects the same ten fields yt-search projects — and `title` and `duration` are
+    # projects the same twelve fields yt-search projects — and `title` and `duration` are
     # the cleaned, correctly-typed values in BOTH, so no surface can ever be handed the
     # HTML or the "MM:SS" string.
     #
@@ -594,7 +609,8 @@ fetch_results() {
                                 then (.description | clean_title | gsub("\\s+"; " ")
                                       | sub("^ "; "") | sub(" $"; ""))
                                 else "" end) }
-          | . + { duration_fmt: (.duration | fmt_dur), kind: "track", access: "full" }
+          | . + { duration_fmt: (.duration | fmt_dur), kind: "track", access: "full",
+                  thumbnail: pick_thumb }
           | select(.url != null)
           | select('"$bounds"') ]'"$sort_expr"' | .[0:'"$wanted"']' "$all")
 }
@@ -613,7 +629,7 @@ print_list() {
 }
 
 # Structured search output for agent callers. The envelope is the one yt-search publishes,
-# field for field — {status, engine, query, count, results} with the same ten keys per
+# field for field — {status, engine, query, count, results} with the same twelve keys per
 # result — because a caller that has to branch on which engine answered is a caller for
 # whom the contract has already failed. `engine` is what lets it route a chosen result back
 # to the matching <engine>-resolve without pattern-matching a URL.
@@ -627,7 +643,7 @@ emit_search_json() {
         printf '%s' "$FILTERED_JSON" | jq -c --arg e "$ENGINE_NAME" --arg q "$QUERY" \
             '{status: "ok", engine: $e, query: $q, count: length,
               results: map({id, title, url, channel, duration, duration_fmt, view_count,
-                            live_status, description, kind, access})}'
+                            live_status, description, kind, access, thumbnail})}'
     fi
 }
 
@@ -659,7 +675,8 @@ Options:
   -V       Print the suite version
 
 Output (JSON, -j): {"status","engine","query","count","results":[{id,title,url,channel,
-                    duration,duration_fmt,view_count,live_status,description,kind,access}, ...]}
+                    duration,duration_fmt,view_count,live_status,description,kind,access,
+                    thumbnail}, ...]}
   Identical to yt-search's envelope, field for field. results[].id is a BV id — the input
   to `bili-resolve`. live_status is always null: this search cannot know it, and
   kind/access are always track/full: search_type=video carries neither signal — see
